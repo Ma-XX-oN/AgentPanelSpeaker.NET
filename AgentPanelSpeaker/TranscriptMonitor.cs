@@ -82,6 +82,14 @@ internal sealed class TranscriptMonitor : IDisposable
         "The idle timeout must be positive.");
     }
 
+    DiagnosticLog.Write("monitor.start_requested", new
+    {
+      target = target.Describe(),
+      pollMilliseconds = pollInterval.TotalMilliseconds,
+      idleMilliseconds = idleTimeout.TotalMilliseconds,
+      speakExistingText
+    });
+
     lock (_sync)
     {
       if (_thread is not null)
@@ -126,8 +134,10 @@ internal sealed class TranscriptMonitor : IDisposable
       return;
     }
 
+    DiagnosticLog.Write("monitor.stop_requested");
     cancellation.Cancel();
-    thread.Join(TimeSpan.FromSeconds(2));
+    bool joined = thread.Join(TimeSpan.FromSeconds(2));
+    DiagnosticLog.Write("monitor.stop_join", new { joined });
 
     lock (_sync)
     {
@@ -177,6 +187,11 @@ internal sealed class TranscriptMonitor : IDisposable
     IReadOnlyList<string> previousTail = Array.Empty<string>();
     bool hasPreviousTail = false;
     StatusChanged?.Invoke("Monitoring.");
+    DiagnosticLog.Write("monitor.thread_started", new
+    {
+      apartment = Thread.CurrentThread.GetApartmentState().ToString(),
+      target = target.Describe()
+    });
 
     try
     {
@@ -184,16 +199,42 @@ internal sealed class TranscriptMonitor : IDisposable
       {
         DateTime nowUtc = DateTime.UtcNow;
         IReadOnlyList<string> tail = _reader.ReadTail(target);
+        bool tailChanged = !hasPreviousTail ||
+          !TailsEqual(previousTail, tail);
 
-        if (!hasPreviousTail || !TailsEqual(previousTail, tail))
+        if (tailChanged)
         {
           previousTail = tail.ToArray();
           hasPreviousTail = true;
           TailChanged?.Invoke(previousTail);
+          DiagnosticLog.Write("monitor.tail_changed", new
+          {
+            target = target.Describe(),
+            source = _reader.LastReadSource,
+            details = _reader.LastReadDetails,
+            tail = previousTail,
+            trackerBefore = tracker.DescribeState()
+          });
         }
 
-        Emit(tracker.Observe(tail, nowUtc));
-        Emit(tracker.FlushIfIdle(nowUtc, idleTimeout));
+        IReadOnlyList<string> observed = tracker.Observe(tail, nowUtc);
+        IReadOnlyList<string> idle = tracker.FlushIfIdle(
+          nowUtc,
+          idleTimeout);
+
+        if (tailChanged || observed.Count != 0 || idle.Count != 0)
+        {
+          DiagnosticLog.Write("monitor.tracker_result", new
+          {
+            tracker.LastDecision,
+            trackerAfter = tracker.DescribeState(),
+            observed,
+            idle
+          });
+        }
+
+        Emit(observed, "observe");
+        Emit(idle, "idle");
 
         if (token.WaitHandle.WaitOne(pollInterval))
         {
@@ -203,18 +244,37 @@ internal sealed class TranscriptMonitor : IDisposable
     }
     catch (ElementNotAvailableException exception)
     {
+      DiagnosticLog.Write("monitor.fault", new
+      {
+        type = exception.GetType().FullName,
+        exception = exception.ToString()
+      });
       Faulted?.Invoke(exception);
     }
     catch (InvalidOperationException exception)
     {
+      DiagnosticLog.Write("monitor.fault", new
+      {
+        type = exception.GetType().FullName,
+        exception = exception.ToString()
+      });
       Faulted?.Invoke(exception);
     }
     catch (COMException exception)
     {
+      DiagnosticLog.Write("monitor.fault", new
+      {
+        type = exception.GetType().FullName,
+        exception = exception.ToString()
+      });
       Faulted?.Invoke(exception);
     }
     finally
     {
+      DiagnosticLog.Write("monitor.thread_ending", new
+      {
+        cancelled = token.IsCancellationRequested
+      });
       lock (_sync)
       {
         if (ReferenceEquals(Thread.CurrentThread, _thread))
@@ -260,12 +320,20 @@ internal sealed class TranscriptMonitor : IDisposable
   /// Raises TextReady for each non-empty speech fragment.
   /// </summary>
   /// <param name="fragments">Speech fragments.</param>
-  private void Emit(IReadOnlyList<string> fragments)
+  /// <param name="source">Tracker path that emitted the fragments.</param>
+  private void Emit(
+    IReadOnlyList<string> fragments,
+    string source)
   {
     foreach (string fragment in fragments)
     {
       if (fragment.Length != 0)
       {
+        DiagnosticLog.Write("monitor.emit", new
+        {
+          source,
+          text = fragment
+        });
         TextReady?.Invoke(fragment);
       }
     }

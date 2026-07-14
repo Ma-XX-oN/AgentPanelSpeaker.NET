@@ -33,6 +33,13 @@ internal sealed class RegionSelectionForm : Form
     ShowInTaskbar = false;
     StartPosition = FormStartPosition.Manual;
     TopMost = true;
+
+    DiagnosticLog.Write("selection.overlay_created", new
+    {
+      bounds = RectangleToString(Bounds),
+      virtualScreen = RectangleToString(SystemInformation.VirtualScreen),
+      deviceDpi = DeviceDpi
+    });
   }
 
   /// <summary>
@@ -54,6 +61,12 @@ internal sealed class RegionSelectionForm : Form
     }
 
     _startScreenPoint = GetPhysicalCursorPosition();
+    DiagnosticLog.Write("selection.drag_started", new
+    {
+      point = PointToString(_startScreenPoint),
+      deviceDpi = DeviceDpi,
+      bounds = RectangleToString(Bounds)
+    });
     _selection = System.Drawing.Rectangle.Empty;
     _screenSelection = System.Drawing.Rectangle.Empty;
     _dragging = true;
@@ -101,6 +114,12 @@ internal sealed class RegionSelectionForm : Form
     }
 
     SelectedRegion = _screenSelection;
+    DiagnosticLog.Write("selection.drag_completed", new
+    {
+      physicalRegion = RectangleToString(SelectedRegion),
+      overlayClientRegion = RectangleToString(_selection),
+      deviceDpi = DeviceDpi
+    });
     DialogResult = DialogResult.OK;
     Close();
   }
@@ -113,6 +132,7 @@ internal sealed class RegionSelectionForm : Form
   {
     if (eventArgs.KeyCode == Keys.Escape)
     {
+      DiagnosticLog.Write("selection.cancelled");
       DialogResult = DialogResult.Cancel;
       Close();
       return;
@@ -204,6 +224,28 @@ internal sealed class RegionSelectionForm : Form
     }
 
     return point.ToDrawingPoint();
+  }
+
+  /// <summary>
+  /// Formats a rectangle for diagnostics.
+  /// </summary>
+  /// <param name="rectangle">Rectangle to format.</param>
+  /// <returns>Left, top, width, and height.</returns>
+  private static string RectangleToString(
+    System.Drawing.Rectangle rectangle)
+  {
+    return $"{rectangle.Left},{rectangle.Top} " +
+      $"{rectangle.Width}x{rectangle.Height}";
+  }
+
+  /// <summary>
+  /// Formats a point for diagnostics.
+  /// </summary>
+  /// <param name="point">Point to format.</param>
+  /// <returns>X and Y coordinates.</returns>
+  private static string PointToString(System.Drawing.Point point)
+  {
+    return $"{point.X},{point.Y}";
   }
 
   /// <summary>

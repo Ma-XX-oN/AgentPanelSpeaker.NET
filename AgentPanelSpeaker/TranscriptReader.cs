@@ -15,6 +15,16 @@ internal sealed class TranscriptReader
   private const int MaxTailParagraphs = 3;
 
   /// <summary>
+  /// Gets the source used by the most recent read.
+  /// </summary>
+  public string LastReadSource { get; private set; } = "none";
+
+  /// <summary>
+  /// Gets provider and candidate details for the most recent read.
+  /// </summary>
+  public string LastReadDetails { get; private set; } = string.Empty;
+
+  /// <summary>
   /// Reads the final meaningful transcript paragraphs inside the selected
   /// region.
   /// </summary>
@@ -27,13 +37,25 @@ internal sealed class TranscriptReader
     AutomationElement root = target.GetAutomationRoot();
     System.Drawing.Rectangle region = target.GetScreenRegion();
 
-    IReadOnlyList<string> paragraphs = ReadTextPatternTail(root, region);
+    IReadOnlyList<string> paragraphs = ReadTextPatternTail(
+      root,
+      region,
+      out string textPatternDetails);
     if (paragraphs.Count != 0)
     {
+      LastReadSource = "TextPattern";
+      LastReadDetails = textPatternDetails;
       return paragraphs;
     }
 
-    return ReadVisibleTextTail(root, region);
+    IReadOnlyList<string> fallback = ReadVisibleTextTail(
+      root,
+      region,
+      out string visibleTextDetails);
+    LastReadSource = "VisibleText";
+    LastReadDetails = $"TextPattern: {textPatternDetails}; " +
+      $"VisibleText: {visibleTextDetails}";
+    return fallback;
   }
 
   /// <summary>
@@ -45,8 +67,10 @@ internal sealed class TranscriptReader
   /// <returns>The meaningful tail, or an empty list when unavailable.</returns>
   private static IReadOnlyList<string> ReadTextPatternTail(
     AutomationElement root,
-    System.Drawing.Rectangle region)
+    System.Drawing.Rectangle region,
+    out string details)
   {
+    details = string.Empty;
     var condition = new PropertyCondition(
       AutomationElement.IsTextPatternAvailableProperty,
       true);
@@ -60,6 +84,7 @@ internal sealed class TranscriptReader
     }
     catch (ElementNotAvailableException)
     {
+      details = "provider collection unavailable";
       return Array.Empty<string>();
     }
 
@@ -89,11 +114,15 @@ internal sealed class TranscriptReader
         }
 
         double providerArea = bounds.Width * bounds.Height;
+        string providerName = NormalizeParagraph(provider.Current.Name);
+        string controlType = provider.Current.ControlType.ProgrammaticName;
         var candidate = new TextProviderCandidate(
           (TextPattern)rawPattern,
           bounds,
           overlap,
-          providerArea);
+          providerArea,
+          providerName,
+          controlType);
         if (selected is null || candidate.IsBetterThan(selected))
         {
           selected = candidate;
@@ -107,9 +136,24 @@ internal sealed class TranscriptReader
       }
     }
 
-    return selected is null
-      ? Array.Empty<string>()
-      : ReadParagraphs(selected.Pattern, selected.Bounds, region);
+    if (selected is null)
+    {
+      details = $"providers={providers.Count}; selected=none";
+      return Array.Empty<string>();
+    }
+
+    IReadOnlyList<string> tail = ReadParagraphs(
+      selected.Pattern,
+      selected.Bounds,
+      region);
+    details = $"providers={providers.Count}; " +
+      $"selectedType={selected.ControlType}; " +
+      $"selectedName={selected.Name}; " +
+      $"bounds={RectangleToString(selected.Bounds)}; " +
+      $"overlap={selected.OverlapArea:R}; " +
+      $"providerArea={selected.ProviderArea:R}; " +
+      $"paragraphs={tail.Count}";
+    return tail;
   }
 
   /// <summary>
@@ -245,8 +289,10 @@ internal sealed class TranscriptReader
   /// <returns>The final visible meaningful text blocks.</returns>
   private static IReadOnlyList<string> ReadVisibleTextTail(
     AutomationElement root,
-    System.Drawing.Rectangle region)
+    System.Drawing.Rectangle region,
+    out string details)
   {
+    details = string.Empty;
     var condition = new PropertyCondition(
       AutomationElement.ControlTypeProperty,
       ControlType.Text);
@@ -260,6 +306,7 @@ internal sealed class TranscriptReader
     }
     catch (ElementNotAvailableException)
     {
+      details = "text element collection unavailable";
       return Array.Empty<string>();
     }
 
@@ -310,9 +357,12 @@ internal sealed class TranscriptReader
 
     candidates.Sort(TextCandidate.Compare);
     IReadOnlyList<string> lines = MergeCandidatesIntoLines(candidates);
-    return lines.Count <= MaxTailParagraphs
+    IReadOnlyList<string> tail = lines.Count <= MaxTailParagraphs
       ? lines
       : lines.Skip(lines.Count - MaxTailParagraphs).ToArray();
+    details = $"elements={elements.Count}; candidates={candidates.Count}; " +
+      $"lines={lines.Count}; paragraphs={tail.Count}";
+    return tail;
   }
 
   /// <summary>
@@ -417,12 +467,84 @@ internal sealed class TranscriptReader
         trimmed.StartsWith("You've used ",
           StringComparison.OrdinalIgnoreCase) ||
         IsThoughtDuration(trimmed) ||
+        IsWorkingDuration(trimmed) ||
         IsToolHeading(trimmed))
     {
       return true;
     }
 
-    return IsOneWordEllipsisStatus(trimmed);
+    return IsKnownTransientStatus(trimmed) ||
+      IsOneWordEllipsisStatus(trimmed);
+  }
+
+  /// <summary>
+  /// Detects labels such as "Working for 1m 5s".
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a work-duration label.</returns>
+  private static bool IsWorkingDuration(string text)
+  {
+    return text.StartsWith("Working for ",
+      StringComparison.OrdinalIgnoreCase) &&
+      text.Length <= 40;
+  }
+
+  /// <summary>
+  /// Detects known one-word animated status labels even when an accessibility
+  /// icon is appended after the word.
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a known transient status.</returns>
+  private static bool IsKnownTransientStatus(string text)
+  {
+    int start = 0;
+    while (start < text.Length && !char.IsLetter(text[start]))
+    {
+      ++start;
+    }
+
+    int end = text.Length;
+    while (end > start &&
+           !char.IsLetter(text[end - 1]) &&
+           text[end - 1] != '-')
+    {
+      --end;
+    }
+
+    if (start == end)
+    {
+      return false;
+    }
+
+    string candidate = text[start..end];
+    if (candidate.Any(character =>
+          !char.IsLetter(character) && character != '-'))
+    {
+      return false;
+    }
+
+    string[] statuses =
+    {
+      "Analyzing",
+      "Analysing",
+      "Baking",
+      "Considering",
+      "Creating",
+      "Editing",
+      "Generating",
+      "Planning",
+      "Processing",
+      "Reading",
+      "Running",
+      "Searching",
+      "Thinking",
+      "Waiting",
+      "Working",
+      "Writing"
+    };
+
+    return statuses.Contains(candidate,
+      StringComparer.OrdinalIgnoreCase);
   }
 
   /// <summary>
@@ -571,6 +693,17 @@ internal sealed class TranscriptReader
   }
 
   /// <summary>
+  /// Formats a UI Automation rectangle for diagnostics.
+  /// </summary>
+  /// <param name="rectangle">Rectangle to format.</param>
+  /// <returns>Left, top, width, and height.</returns>
+  private static string RectangleToString(System.Windows.Rect rectangle)
+  {
+    return $"{rectangle.Left:R},{rectangle.Top:R} " +
+      $"{rectangle.Width:R}x{rectangle.Height:R}";
+  }
+
+  /// <summary>
   /// Calculates the overlap area between a UI Automation rectangle and a
   /// drawing rectangle.
   /// </summary>
@@ -625,7 +758,9 @@ internal sealed class TranscriptReader
   /// Collapses whitespace for stable comparison and speech.
   /// </summary>
   /// <param name="text">Text to normalize.</param>
-  /// <returns>Trimmed text with each whitespace run replaced by one space.</returns>
+  /// <returns>
+  /// Trimmed text with each whitespace run replaced by one space.
+  /// </returns>
   private static string NormalizeParagraph(string text)
   {
     if (string.IsNullOrWhiteSpace(text))
@@ -677,7 +812,9 @@ internal sealed class TranscriptReader
     TextPattern Pattern,
     System.Windows.Rect Bounds,
     double OverlapArea,
-    double ProviderArea)
+    double ProviderArea,
+    string Name,
+    string ControlType)
   {
     /// <summary>
     /// Determines whether this provider is a better region match.

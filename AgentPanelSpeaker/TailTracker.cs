@@ -11,6 +11,7 @@ internal sealed class TailTracker
   private int _spokenLength;
   private DateTime _lastChangeUtc;
   private bool _initialized;
+  private string _lastDecision = "not initialized";
 
   /// <summary>
   /// Initializes a tracker.
@@ -21,6 +22,26 @@ internal sealed class TailTracker
   public TailTracker(bool speakExistingText)
   {
     _speakExistingText = speakExistingText;
+  }
+
+  /// <summary>
+  /// Gets the latest reconciliation decision for diagnostics.
+  /// </summary>
+  public string LastDecision => _lastDecision;
+
+  /// <summary>
+  /// Creates a compact snapshot of the current tracking state.
+  /// </summary>
+  /// <returns>Current anchors, spoken offset, and timing state.</returns>
+  public string DescribeState()
+  {
+    return $"initialized={_initialized}; " +
+      $"previous={Abbreviate(_previousParagraph)}; " +
+      $"current={Abbreviate(_currentParagraph)}; " +
+      $"spokenLength={_spokenLength}; " +
+      $"currentLength={_currentParagraph.Length}; " +
+      $"lastChangeUtc={_lastChangeUtc:O}; " +
+      $"decision={_lastDecision}";
   }
 
   /// <summary>
@@ -39,18 +60,21 @@ internal sealed class TailTracker
     IReadOnlyList<string> cleanTail = RemoveEmptyAdjacentDuplicates(tail);
     if (cleanTail.Count == 0)
     {
+      _lastDecision = "empty tail";
       return output;
     }
 
     if (!_initialized)
     {
       Initialize(cleanTail, nowUtc, output);
+      _lastDecision = "initialized from observed tail";
       return output;
     }
 
     int currentIndex = FindCurrentAnchor(cleanTail);
     if (currentIndex >= 0)
     {
+      _lastDecision = $"current anchor at index {currentIndex}";
       UpdateCurrent(cleanTail[currentIndex], nowUtc, output);
       AdvanceThroughNewParagraphs(
         cleanTail,
@@ -63,6 +87,7 @@ internal sealed class TailTracker
     int previousIndex = FindExact(cleanTail, _previousParagraph);
     if (previousIndex >= 0 && previousIndex + 1 < cleanTail.Count)
     {
+      _lastDecision = $"previous anchor at index {previousIndex}";
       string next = cleanTail[previousIndex + 1];
       if (CanSafelyReplaceCurrent(next))
       {
@@ -84,11 +109,13 @@ internal sealed class TailTracker
     string latest = cleanTail[^1];
     if (CanSafelyReplaceCurrent(latest))
     {
+      _lastDecision = "safe latest-paragraph replacement";
       ReplaceCurrent(latest, nowUtc, output);
       return output;
     }
 
-    RecoverAfterLostAnchor(cleanTail, nowUtc, output);
+    RebaseAfterLostAnchor(cleanTail, nowUtc);
+    _lastDecision = "lost anchors; rebased without speech";
     return output;
   }
 
@@ -119,6 +146,7 @@ internal sealed class TailTracker
 
     var output = new List<string>(1);
     FlushCurrent(output);
+    _lastDecision = "idle timeout flush";
     return output;
   }
 
@@ -332,27 +360,20 @@ internal sealed class TailTracker
   }
 
   /// <summary>
-  /// Recovers when virtual scrolling removes both stored anchors.
+  /// Rebinds to a completely different visible tail without speaking text
+  /// that may already have been emitted before virtual scrolling removed the
+  /// stored anchors.
   /// </summary>
   /// <param name="tail">The new unanchored tail.</param>
   /// <param name="nowUtc">The current UTC time.</param>
-  /// <param name="output">Destination for speech.</param>
-  private void RecoverAfterLostAnchor(
+  private void RebaseAfterLostAnchor(
     IReadOnlyList<string> tail,
-    DateTime nowUtc,
-    List<string> output)
+    DateTime nowUtc)
   {
-    FlushCurrent(output);
-
-    int first = Math.Max(0, tail.Count - 2);
-    _previousParagraph = _currentParagraph;
-    _currentParagraph = string.Empty;
-    _spokenLength = 0;
-
-    for (int index = first; index < tail.Count; ++index)
-    {
-      AdvanceToParagraph(tail[index], nowUtc, output);
-    }
+    _previousParagraph = tail.Count >= 2 ? tail[^2] : string.Empty;
+    _currentParagraph = tail[^1];
+    _spokenLength = _currentParagraph.Length;
+    _lastChangeUtc = nowUtc;
   }
 
   /// <summary>
@@ -447,6 +468,27 @@ internal sealed class TailTracker
     {
       output.Add(trimmed);
     }
+  }
+
+  /// <summary>
+  /// Truncates text for one-line tracker diagnostics.
+  /// </summary>
+  /// <param name="text">Text to abbreviate.</param>
+  /// <returns>A quoted diagnostic value.</returns>
+  private static string Abbreviate(string text)
+  {
+    const int maximumLength = 120;
+    string escaped = text
+      .Replace("\\", "\\\\", StringComparison.Ordinal)
+      .Replace("\r", "\\r", StringComparison.Ordinal)
+      .Replace("\n", "\\n", StringComparison.Ordinal)
+      .Replace(";", "\\;", StringComparison.Ordinal);
+    if (escaped.Length > maximumLength)
+    {
+      escaped = escaped[..maximumLength] + "…";
+    }
+
+    return $"\"{escaped}\"";
   }
 
   /// <summary>

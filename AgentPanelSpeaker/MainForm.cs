@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
   private readonly Button _stopButton = new();
   private readonly Button _cancelSpeechButton = new();
   private readonly Button _testVoiceButton = new();
+  private readonly Button _openLogButton = new();
   private readonly TextBox _logTextBox = new();
 
   private TranscriptTarget? _target;
@@ -44,6 +45,10 @@ internal sealed class MainForm : Form
     _stopButton.Click += StopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
     _testVoiceButton.Click += TestVoiceButtonClicked;
+    _openLogButton.Click += OpenLogButtonClicked;
+    DpiChanged += MainFormDpiChanged;
+    ResizeEnd += MainFormResizeEnded;
+    Shown += MainFormShown;
     FormClosing += MainFormClosing;
 
     _monitor.TextReady += MonitorTextReady;
@@ -52,6 +57,7 @@ internal sealed class MainForm : Form
     _monitor.Faulted += MonitorFaulted;
 
     UpdateControlState();
+    AppendLog($"Diagnostic log: {DiagnosticLog.FilePath}");
   }
 
   /// <summary>
@@ -59,7 +65,9 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker";
+    Text = "Agent Panel Speaker v8 diagnostic";
+    AutoScaleDimensions = new SizeF(96.0f, 96.0f);
+    AutoScaleMode = AutoScaleMode.Dpi;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(760, 620);
     Size = new Size(920, 760);
@@ -78,6 +86,7 @@ internal sealed class MainForm : Form
     ConfigureButton(_stopButton, "Stop");
     ConfigureButton(_cancelSpeechButton, "Cancel speech");
     ConfigureButton(_testVoiceButton, "Test voice");
+    ConfigureButton(_openLogButton, "Open diagnostic log");
 
     _targetLabel.AutoSize = true;
     _targetLabel.Text = "Target: none";
@@ -146,7 +155,8 @@ internal sealed class MainForm : Form
       _startButton,
       _stopButton,
       _cancelSpeechButton,
-      _testVoiceButton
+      _testVoiceButton,
+      _openLogButton
     });
 
     var layout = new TableLayoutPanel
@@ -359,6 +369,7 @@ internal sealed class MainForm : Form
     EventArgs eventArgs)
   {
     _speech.CancelAll();
+    DiagnosticLog.Write("speech.cancel_all");
     AppendLog("Speech cancelled.");
   }
 
@@ -373,6 +384,7 @@ internal sealed class MainForm : Form
     {
       ConfigureSpeech();
       _speech.Speak("Agent panel speech is working.");
+      DiagnosticLog.Write("speech.test");
     }
     catch (Exception exception) when (
       exception is ArgumentException or
@@ -380,6 +392,79 @@ internal sealed class MainForm : Form
     {
       AppendLog($"Voice test failed: {exception.Message}");
     }
+  }
+
+
+  /// <summary>
+  /// Opens the current structured diagnostic log in File Explorer.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void OpenLogButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    try
+    {
+      DiagnosticLog.OpenCurrentLogInExplorer();
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or
+      System.ComponentModel.Win32Exception)
+    {
+      AppendLog($"Unable to open diagnostic log: {exception.Message}");
+    }
+  }
+
+  /// <summary>
+  /// Applies the DPI-suggested window rectangle and records the transition.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">DPI-change arguments.</param>
+  private void MainFormDpiChanged(
+    object? sender,
+    DpiChangedEventArgs eventArgs)
+  {
+    DiagnosticLog.Write("ui.dpi_changed", new
+    {
+      oldDpi = eventArgs.DeviceDpiOld,
+      newDpi = eventArgs.DeviceDpiNew,
+      beforeBounds = RectangleToString(Bounds),
+      suggestedBounds = RectangleToString(eventArgs.SuggestedRectangle),
+      screen = Screen.FromControl(this).DeviceName
+    });
+
+    Bounds = eventArgs.SuggestedRectangle;
+    PerformLayout();
+    WriteLayoutDiagnostic("ui.layout_after_dpi");
+  }
+
+  /// <summary>
+  /// Records the completed move or resize of the main window.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void MainFormResizeEnded(object? sender, EventArgs eventArgs)
+  {
+    WriteLayoutDiagnostic("ui.resize_end");
+  }
+
+  /// <summary>
+  /// Records the initial monitor layout after the form is displayed.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void MainFormShown(object? sender, EventArgs eventArgs)
+  {
+    DiagnosticLog.Write("ui.screens", new
+    {
+      screens = Screen.AllScreens.Select(screen => new
+      {
+        screen.DeviceName,
+        bounds = RectangleToString(screen.Bounds),
+        workingArea = RectangleToString(screen.WorkingArea),
+        screen.Primary
+      }).ToArray()
+    });
+    WriteLayoutDiagnostic("ui.shown");
   }
 
   /// <summary>
@@ -392,6 +477,7 @@ internal sealed class MainForm : Form
     FormClosingEventArgs eventArgs)
   {
     _closing = true;
+    DiagnosticLog.Write("app.closing");
     _monitor.Dispose();
     _speech.Dispose();
   }
@@ -418,6 +504,7 @@ internal sealed class MainForm : Form
       {
         ConfigureSpeech();
         _speech.Speak(text);
+        DiagnosticLog.Write("speech.queued", new { text });
         AppendLog($"Speak: {text}");
       }
       catch (Exception exception) when (
@@ -513,6 +600,11 @@ internal sealed class MainForm : Form
     }
 
     _target = target;
+    DiagnosticLog.Write("target.selected", new
+    {
+      description = target?.Describe(),
+      selectedRegion = RectangleToString(region)
+    });
     await RefreshTargetDisplayAsync();
   }
 
@@ -538,6 +630,13 @@ internal sealed class MainForm : Form
       IReadOnlyList<string> tail = await Task.Run(() =>
         _reader.ReadTail(target));
       _previewTextBox.Text = FormatPreview(tail);
+      DiagnosticLog.Write("preview.read", new
+      {
+        target = target.Describe(),
+        source = _reader.LastReadSource,
+        details = _reader.LastReadDetails,
+        tail
+      });
 
       if (tail.Count == 0)
       {
@@ -575,6 +674,39 @@ internal sealed class MainForm : Form
       Environment.NewLine + Environment.NewLine,
       tail.Select((paragraph, index) =>
         $"[{index + 1}] {paragraph}"));
+  }
+
+
+  /// <summary>
+  /// Records the form and major child-control geometry.
+  /// </summary>
+  /// <param name="eventName">Diagnostic event identifier.</param>
+  private void WriteLayoutDiagnostic(string eventName)
+  {
+    DiagnosticLog.Write(eventName, new
+    {
+      dpi = DeviceDpi,
+      formBounds = RectangleToString(Bounds),
+      clientSize = $"{ClientSize.Width}x{ClientSize.Height}",
+      screen = Screen.FromControl(this).DeviceName,
+      font = Font.ToString(),
+      instructions = RectangleToString(_instructionsLabel.Bounds),
+      target = RectangleToString(_targetLabel.Bounds),
+      preview = RectangleToString(_previewTextBox.Bounds),
+      voice = RectangleToString(_voiceComboBox.Bounds),
+      activity = RectangleToString(_logTextBox.Bounds)
+    });
+  }
+
+  /// <summary>
+  /// Formats a rectangle for compact diagnostic output.
+  /// </summary>
+  /// <param name="rectangle">Rectangle to format.</param>
+  /// <returns>Left, top, width, and height.</returns>
+  private static string RectangleToString(Rectangle rectangle)
+  {
+    return $"{rectangle.Left},{rectangle.Top} " +
+      $"{rectangle.Width}x{rectangle.Height}";
   }
 
   /// <summary>
