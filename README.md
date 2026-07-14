@@ -1,131 +1,73 @@
-# Agent Panel Speaker
+# Agent Panel Speaker v9
 
-Agent Panel Speaker reads newly exposed text from a selected Claude Code or
-Codex panel region in Visual Studio Code and speaks it with an installed
-Windows voice.
-
-## Version 8 changes
-
-- Writes a structured JSON Lines diagnostic log for:
-  - selected window and transcript region;
-  - UI Automation provider selection;
-  - every changed transcript tail;
-  - tracker anchors, decisions, and emitted fragments;
-  - speech queued by the application;
-  - monitor failures;
-  - main-window DPI, screen, move, and resize events.
-- Adds **Open diagnostic log**.
-- Applies the DPI-suggested window bounds when moving between monitors.
-- Uses DPI-based form autoscaling.
-- Ignores one-word agent status labels even when UI Automation appends an icon,
-  including `Thinking`, `Considering`, `Creating`, and `Baking`.
-- Ignores `Working for ...` duration labels.
-- When virtual scrolling removes both stored paragraph anchors, the tracker now
-  rebinds without replaying the visible tail.  This prevents a known source of
-  repeated speech.
-
-## Region-based monitoring
-
-The application does not retain an accessibility text node or one of its
-parents.  Electron replaces and virtualizes those nodes while the agent is
-streaming.
-
-Instead, the user drags a rectangle around the transcript output area.  The
-application stores:
-
-- the owning top-level Visual Studio Code window;
-- the owning process identifier;
-- the selected rectangle relative to that window.
-
-On every poll it reacquires the current UI Automation tree from the window and
-reads the bottom of the selected region.  Moving or resizing Visual Studio Code
-updates the absolute screen rectangle automatically.
-
-The reader prefers `TextPattern` paragraph ranges.  It falls back to currently
-visible `ControlType.Text` fragments and reconstructs visual lines.
+Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
+Visual Studio Code through Windows UI Automation and speaks new text through
+installed Windows voices.
 
 ## Requirements
 
 - Windows 11
 - .NET 10 SDK
-- Visual Studio Code running at the same privilege level as this application
-- Internet access during the first restore of the `System.Speech` package
+- Visual Studio Code and the agent panel running at the same privilege level
+  as Agent Panel Speaker
 
 Visual Studio is not required.
 
 ## Build
 
-From the extracted directory:
+From PowerShell in the extracted directory:
 
-```bat
-dotnet restore AgentPanelSpeaker\AgentPanelSpeaker.csproj ^
-  --configfile NuGet.Config
-
-dotnet build AgentPanelSpeaker\AgentPanelSpeaker.csproj ^
-  -c Release ^
-  --no-restore
+```powershell
+.\build.cmd
 ```
 
-Or run:
+Run it with:
 
-```bat
-build.cmd
+```powershell
+.\run.cmd
 ```
 
-## Run
+The project includes `NuGet.Config` and restores `System.Speech` from
+NuGet.org.
 
-```bat
-run.cmd
-```
+## Use
 
-## Select the transcript
-
-1. Keep the Claude Code or Codex panel visible.
+1. Open the Claude Code or Codex panel and keep its transcript visible.
 2. Select **Select transcript region**.
-3. Drag around the transcript output area.  Include the prose output but omit
-   the panel tabs, prompt input box, and side editor.
-4. Check **Detected transcript tail**.
+3. Drag around the transcript output area. Exclude the message-entry box and
+   unrelated editor content.
+4. Confirm that **Detected transcript tail** shows the correct content.
 5. Select **Start**.
 
-The preview updates while monitoring.  Press Escape while selecting to cancel.
+The inactivity timeout speaks an unfinished trailing fragment after the text
+has remained unchanged for the configured period. Complete sentences ending
+in `.`, `?`, or `!` are queued immediately.
 
-## Speech behaviour
+## v9 changes
 
-- Complete sentences ending in `.`, `?`, or `!` are spoken immediately.
-- An unfinished suffix is spoken after the configured idle timeout.
-- Only unspoken suffixes are queued.
-- The previous and current meaningful paragraphs are retained to reconcile
-  virtual scrolling.
-- A completely lost anchor is rebased silently rather than replayed.
+- Reads up to 64 meaningful transcript nodes instead of only three.
+- Walks farther back through the selected TextPattern document, including
+  nodes outside the currently visible portion of the selected region.
+- Uses bounded normalized sentence history to suppress repeats when Electron
+  replaces or re-creates accessibility nodes.
+- Reconciles node identities separately for **Rewind sentence** and
+  **Rewind node**.
+- Joins text across accessibility-node boundaries before finding sentence
+  endings, preventing fragments such as `In` from being spoken alone.
+- Filters Codex/Claude tool cards such as `Ran ...`, `Running ...`,
+  `Edited ...`, duration labels, clocks, and transient thinking statuses.
+- Leaves per-monitor DPI scaling to WinForms instead of applying the suggested
+  window rectangle a second time.
+- Retains structured diagnostic logging under:
 
-## Diagnostic log
+  `%LOCALAPPDATA%\AgentPanelSpeaker\Logs`
 
-The application displays the active log path in **Activity** at startup.
-Select **Open diagnostic log** to open File Explorer with the file selected.
-The default directory is:
+Diagnostic logs contain transcript text. Review them before sharing.
 
-```text
-%LOCALAPPDATA%\AgentPanelSpeaker\Logs
+## Publish a self-contained executable
+
+```powershell
+.\publish-win-x64.cmd
 ```
 
-The file name includes the start time and process ID.  It uses `.jsonl`: one
-JSON object per line.
-
-To diagnose a repeat or monitor-switch problem:
-
-1. Start the application.
-2. Reproduce the issue once.
-3. Stop monitoring.
-4. Select **Open diagnostic log**.
-5. Send the newest `.jsonl` file.
-
-The diagnostic log contains transcript text that was visible in the selected
-region.  Review it before sharing it when the transcript is sensitive.
-
-## Publish a standalone executable
-
-```bat
-publish-win-x64.cmd
-```
-
-The result is written to `publish\win-x64` and contains the .NET runtime.
+The output is placed in `publish\win-x64`.

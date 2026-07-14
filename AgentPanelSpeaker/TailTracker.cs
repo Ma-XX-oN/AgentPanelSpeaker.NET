@@ -1,15 +1,25 @@
+using System.Text;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Reconciles a virtualized two-paragraph transcript tail and emits new speech.
+/// Reconciles a virtualized transcript window, emits unseen sentences, and
+/// suppresses text already spoken before accessibility nodes are replaced.
 /// </summary>
 internal sealed class TailTracker
 {
+  private const int MaximumRememberedSentences = 512;
+  private const int MinimumPrefixMatch = 16;
+
   private readonly bool _speakExistingText;
-  private string _previousParagraph = string.Empty;
-  private string _currentParagraph = string.Empty;
-  private int _spokenLength;
+  private readonly Queue<string> _sentenceHistory = new();
+  private readonly HashSet<string> _sentenceSet = new(
+    StringComparer.Ordinal);
+  private List<NodeState> _nodes = new();
+  private string _snapshotText = string.Empty;
+  private string _spokenPartial = string.Empty;
   private DateTime _lastChangeUtc;
+  private long _nextNodeId = 1;
   private bool _initialized;
   private string _lastDecision = "not initialized";
 
@@ -17,7 +27,7 @@ internal sealed class TailTracker
   /// Initializes a tracker.
   /// </summary>
   /// <param name="speakExistingText">
-  /// Whether text already present at startup should be spoken.
+  /// Whether text already visible on the first observation should be spoken.
   /// </param>
   public TailTracker(bool speakExistingText)
   {
@@ -30,102 +40,93 @@ internal sealed class TailTracker
   public string LastDecision => _lastDecision;
 
   /// <summary>
-  /// Creates a compact snapshot of the current tracking state.
+  /// Creates a compact snapshot of the tracking state.
   /// </summary>
-  /// <returns>Current anchors, spoken offset, and timing state.</returns>
+  /// <returns>Current node, history, partial, and timing state.</returns>
   public string DescribeState()
   {
     return $"initialized={_initialized}; " +
-      $"previous={Abbreviate(_previousParagraph)}; " +
-      $"current={Abbreviate(_currentParagraph)}; " +
-      $"spokenLength={_spokenLength}; " +
-      $"currentLength={_currentParagraph.Length}; " +
+      $"nodes={_nodes.Count}; " +
+      $"snapshotLength={_snapshotText.Length}; " +
+      $"rememberedSentences={_sentenceHistory.Count}; " +
+      $"spokenPartial={Abbreviate(_spokenPartial)}; " +
       $"lastChangeUtc={_lastChangeUtc:O}; " +
       $"decision={_lastDecision}";
   }
 
   /// <summary>
-  /// Reconciles a newly observed transcript tail.
+  /// Reconciles a newly observed transcript window.
   /// </summary>
-  /// <param name="tail">Up to the final visible transcript paragraphs.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  /// <returns>New complete speech fragments.</returns>
-  public IReadOnlyList<string> Observe(
-    IReadOnlyList<string> tail,
+  /// <param name="paragraphs">Meaningful transcript paragraphs.</param>
+  /// <param name="nowUtc">Current UTC time.</param>
+  /// <returns>New sentence fragments in transcript order.</returns>
+  public IReadOnlyList<SpeechFragment> Observe(
+    IReadOnlyList<string> paragraphs,
     DateTime nowUtc)
   {
-    ArgumentNullException.ThrowIfNull(tail);
+    ArgumentNullException.ThrowIfNull(paragraphs);
 
-    var output = new List<string>();
-    IReadOnlyList<string> cleanTail = RemoveEmptyAdjacentDuplicates(tail);
-    if (cleanTail.Count == 0)
+    IReadOnlyList<string> clean = NormalizeParagraphs(paragraphs);
+    if (clean.Count == 0)
     {
-      _lastDecision = "empty tail";
-      return output;
+      _lastDecision = "empty observation";
+      return Array.Empty<SpeechFragment>();
     }
+
+    _nodes = ReconcileNodes(clean);
+    Snapshot snapshot = BuildSnapshot(_nodes);
+    bool changed = !string.Equals(
+      snapshot.Text,
+      _snapshotText,
+      StringComparison.Ordinal);
 
     if (!_initialized)
     {
-      Initialize(cleanTail, nowUtc, output);
-      _lastDecision = "initialized from observed tail";
-      return output;
-    }
+      _initialized = true;
+      _snapshotText = snapshot.Text;
+      _lastChangeUtc = nowUtc;
 
-    int currentIndex = FindCurrentAnchor(cleanTail);
-    if (currentIndex >= 0)
-    {
-      _lastDecision = $"current anchor at index {currentIndex}";
-      UpdateCurrent(cleanTail[currentIndex], nowUtc, output);
-      AdvanceThroughNewParagraphs(
-        cleanTail,
-        currentIndex + 1,
-        nowUtc,
-        output);
-      return output;
-    }
+      IReadOnlyList<SentenceSpan> initialSentences =
+        ExtractCompleteSentences(snapshot);
+      if (!_speakExistingText)
+      {
+        foreach (SentenceSpan sentence in initialSentences)
+        {
+          RememberSentence(sentence.CanonicalText);
+        }
 
-    int previousIndex = FindExact(cleanTail, _previousParagraph);
-    if (previousIndex >= 0 && previousIndex + 1 < cleanTail.Count)
-    {
-      _lastDecision = $"previous anchor at index {previousIndex}";
-      string next = cleanTail[previousIndex + 1];
-      if (CanSafelyReplaceCurrent(next))
-      {
-        ReplaceCurrent(next, nowUtc, output);
-      }
-      else
-      {
-        AdvanceToParagraph(next, nowUtc, output);
+        _spokenPartial = GetTrailingFragment(snapshot).CanonicalText;
+        _lastDecision = "initialized and marked visible text as spoken";
+        return Array.Empty<SpeechFragment>();
       }
 
-      AdvanceThroughNewParagraphs(
-        cleanTail,
-        previousIndex + 2,
-        nowUtc,
-        output);
-      return output;
+      _lastDecision = "initialized and emitted visible sentences";
+      return EmitUnseen(initialSentences);
     }
 
-    string latest = cleanTail[^1];
-    if (CanSafelyReplaceCurrent(latest))
+    if (!changed)
     {
-      _lastDecision = "safe latest-paragraph replacement";
-      ReplaceCurrent(latest, nowUtc, output);
-      return output;
+      _lastDecision = "unchanged observation";
+      return Array.Empty<SpeechFragment>();
     }
 
-    RebaseAfterLostAnchor(cleanTail, nowUtc);
-    _lastDecision = "lost anchors; rebased without speech";
+    _snapshotText = snapshot.Text;
+    _lastChangeUtc = nowUtc;
+    IReadOnlyList<SpeechFragment> output = EmitUnseen(
+      ExtractCompleteSentences(snapshot));
+    _lastDecision = output.Count == 0
+      ? "changed observation; no unseen complete sentence"
+      : $"changed observation; emitted {output.Count} sentence(s)";
     return output;
   }
 
   /// <summary>
-  /// Emits an unfinished suffix after the configured inactivity period.
+  /// Emits an unfinished trailing fragment after the inactivity timeout.
   /// </summary>
-  /// <param name="nowUtc">The current UTC time.</param>
+  /// <param name="nowUtc">Current UTC time.</param>
   /// <param name="idleTimeout">Required unchanged duration.</param>
-  /// <returns>An unfinished speech fragment, when one is ready.</returns>
-  public IReadOnlyList<string> FlushIfIdle(
+  /// <returns>An unspoken trailing fragment, when one exists.</returns>
+  public IReadOnlyList<SpeechFragment> FlushIfIdle(
     DateTime nowUtc,
     TimeSpan idleTimeout)
   {
@@ -138,313 +139,449 @@ internal sealed class TailTracker
     }
 
     if (!_initialized ||
-        _spokenLength >= _currentParagraph.Length ||
-        nowUtc - _lastChangeUtc < idleTimeout)
+        nowUtc - _lastChangeUtc < idleTimeout ||
+        _nodes.Count == 0)
     {
-      return Array.Empty<string>();
+      return Array.Empty<SpeechFragment>();
     }
 
-    var output = new List<string>(1);
-    FlushCurrent(output);
-    _lastDecision = "idle timeout flush";
+    Snapshot snapshot = BuildSnapshot(_nodes);
+    SentenceSpan trailing = GetTrailingFragment(snapshot);
+    if (trailing.CanonicalText.Length == 0)
+    {
+      return Array.Empty<SpeechFragment>();
+    }
+
+    string suffix = GetUnspokenPartialSuffix(trailing.CanonicalText);
+    if (suffix.Length == 0)
+    {
+      return Array.Empty<SpeechFragment>();
+    }
+
+    _spokenPartial = trailing.CanonicalText;
+    _lastDecision = "idle timeout emitted trailing fragment";
+    return new[] { new SpeechFragment(trailing.NodeId, suffix) };
+  }
+
+  /// <summary>
+  /// Emits complete sentences not present in bounded speech history.
+  /// </summary>
+  /// <param name="sentences">Current complete sentences.</param>
+  /// <returns>Unseen speech fragments.</returns>
+  private IReadOnlyList<SpeechFragment> EmitUnseen(
+    IReadOnlyList<SentenceSpan> sentences)
+  {
+    var output = new List<SpeechFragment>();
+
+    foreach (SentenceSpan sentence in sentences)
+    {
+      if (_sentenceSet.Contains(sentence.CanonicalText))
+      {
+        continue;
+      }
+
+      string text = sentence.Text;
+      if (_spokenPartial.Length != 0 &&
+          sentence.CanonicalText.StartsWith(
+            _spokenPartial,
+            StringComparison.Ordinal))
+      {
+        text = GetCanonicalSuffix(
+          sentence.CanonicalText,
+          _spokenPartial.Length);
+      }
+
+      RememberSentence(sentence.CanonicalText);
+      _spokenPartial = string.Empty;
+      if (HasSpeakableCharacters(text))
+      {
+        output.Add(new SpeechFragment(sentence.NodeId, text));
+      }
+    }
+
     return output;
   }
 
   /// <summary>
-  /// Initializes state from the first observed tail.
+  /// Reconciles current paragraphs with the previous node identities.
   /// </summary>
-  /// <param name="tail">The initial transcript tail.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  /// <param name="output">Destination for immediate speech.</param>
-  private void Initialize(
-    IReadOnlyList<string> tail,
-    DateTime nowUtc,
-    List<string> output)
+  /// <param name="paragraphs">Current normalized paragraphs.</param>
+  /// <returns>Current nodes in transcript order.</returns>
+  private List<NodeState> ReconcileNodes(
+    IReadOnlyList<string> paragraphs)
   {
-    _previousParagraph = tail.Count >= 2 ? tail[^2] : string.Empty;
-    _currentParagraph = tail[^1];
-    _spokenLength = _speakExistingText ? 0 : _currentParagraph.Length;
-    _lastChangeUtc = nowUtc;
-    _initialized = true;
+    var result = new List<NodeState>(paragraphs.Count);
+    var used = new bool[_nodes.Count];
 
-    if (_speakExistingText)
+    for (int newIndex = 0; newIndex < paragraphs.Count; ++newIndex)
     {
-      ExtractCompleteSentences(output);
-    }
-  }
+      string text = paragraphs[newIndex];
+      int bestIndex = -1;
+      int bestScore = 0;
 
-  /// <summary>
-  /// Finds the paragraph that represents the stored current paragraph.
-  /// </summary>
-  /// <param name="tail">The newly observed transcript tail.</param>
-  /// <returns>The matching index, or -1.</returns>
-  private int FindCurrentAnchor(IReadOnlyList<string> tail)
-  {
-    for (int index = tail.Count - 1; index >= 0; --index)
-    {
-      string candidate = tail[index];
-      if (string.Equals(candidate, _currentParagraph,
-            StringComparison.Ordinal) ||
-          candidate.StartsWith(_currentParagraph,
-            StringComparison.Ordinal))
+      for (int oldIndex = 0; oldIndex < _nodes.Count; ++oldIndex)
       {
-        return index;
+        if (used[oldIndex])
+        {
+          continue;
+        }
+
+        int score = CalculateNodeMatchScore(
+          _nodes[oldIndex].Text,
+          text,
+          Math.Abs(oldIndex - newIndex));
+        if (score > bestScore)
+        {
+          bestScore = score;
+          bestIndex = oldIndex;
+        }
       }
 
-      if (_spokenLength != 0 &&
-          _spokenLength <= _currentParagraph.Length &&
-          candidate.Length >= _spokenLength &&
-          candidate.StartsWith(
-            _currentParagraph[.._spokenLength],
-            StringComparison.Ordinal))
+      if (bestIndex >= 0)
       {
-        return index;
+        used[bestIndex] = true;
+        result.Add(new NodeState(_nodes[bestIndex].Id, text));
+      }
+      else
+      {
+        result.Add(new NodeState(_nextNodeId++, text));
       }
     }
 
-    return -1;
+    return result;
   }
 
   /// <summary>
-  /// Finds an exact paragraph match.
+  /// Scores exact and streaming-prefix relationships between two nodes.
   /// </summary>
-  /// <param name="tail">The observed tail.</param>
-  /// <param name="value">The paragraph to find.</param>
-  /// <returns>The matching index, or -1.</returns>
-  private static int FindExact(
-    IReadOnlyList<string> tail,
-    string value)
+  /// <param name="oldText">Previous node text.</param>
+  /// <param name="newText">Current node text.</param>
+  /// <param name="indexDistance">Distance between list positions.</param>
+  /// <returns>Zero for no match, otherwise a larger-is-better score.</returns>
+  private static int CalculateNodeMatchScore(
+    string oldText,
+    string newText,
+    int indexDistance)
   {
-    if (value.Length == 0)
+    if (string.Equals(oldText, newText, StringComparison.Ordinal))
     {
-      return -1;
+      return 1_000_000 - indexDistance;
     }
 
-    for (int index = tail.Count - 1; index >= 0; --index)
+    int common = CommonPrefixLength(oldText, newText);
+    int shorter = Math.Min(oldText.Length, newText.Length);
+    if (common == shorter && shorter >= MinimumPrefixMatch)
     {
-      if (string.Equals(tail[index], value, StringComparison.Ordinal))
+      return 500_000 + shorter - indexDistance;
+    }
+
+    return common >= 32
+      ? common - indexDistance
+      : 0;
+  }
+
+  /// <summary>
+  /// Builds one text stream while retaining node spans for rewind grouping.
+  /// </summary>
+  /// <param name="nodes">Current nodes.</param>
+  /// <returns>Combined text and source spans.</returns>
+  private static Snapshot BuildSnapshot(IReadOnlyList<NodeState> nodes)
+  {
+    var builder = new StringBuilder();
+    var spans = new List<NodeSpan>(nodes.Count);
+
+    foreach (NodeState node in nodes)
+    {
+      if (builder.Length != 0)
       {
-        return index;
+        builder.Append(' ');
       }
+
+      int start = builder.Length;
+      builder.Append(node.Text);
+      spans.Add(new NodeSpan(start, builder.Length, node.Id));
     }
 
-    return -1;
+    return new Snapshot(builder.ToString(), spans);
   }
 
   /// <summary>
-  /// Updates the current paragraph after an append or pending-text rewrite.
+  /// Extracts every punctuation-complete sentence in display order.
   /// </summary>
-  /// <param name="observed">The observed current paragraph.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  /// <param name="output">Destination for complete speech.</param>
-  private void UpdateCurrent(
-    string observed,
-    DateTime nowUtc,
-    List<string> output)
+  /// <param name="snapshot">Current transcript snapshot.</param>
+  /// <returns>Complete sentences with source node identifiers.</returns>
+  private static IReadOnlyList<SentenceSpan> ExtractCompleteSentences(
+    Snapshot snapshot)
   {
-    if (string.Equals(observed, _currentParagraph,
-          StringComparison.Ordinal))
+    var result = new List<SentenceSpan>();
+    int start = 0;
+
+    for (int index = 0; index < snapshot.Text.Length; ++index)
     {
-      return;
-    }
-
-    if (observed.StartsWith(_currentParagraph,
-          StringComparison.Ordinal))
-    {
-      _currentParagraph = observed;
-      _lastChangeUtc = nowUtc;
-      ExtractCompleteSentences(output);
-      return;
-    }
-
-    ReplaceCurrent(observed, nowUtc, output);
-  }
-
-  /// <summary>
-  /// Replaces a rewritten current paragraph without repeating spoken text.
-  /// </summary>
-  /// <param name="replacement">The replacement paragraph.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  /// <param name="output">Destination for complete speech.</param>
-  private void ReplaceCurrent(
-    string replacement,
-    DateTime nowUtc,
-    List<string> output)
-  {
-    if (string.Equals(replacement, _currentParagraph,
-          StringComparison.Ordinal))
-    {
-      return;
-    }
-
-    bool spokenPrefixPreserved =
-      _spokenLength <= replacement.Length &&
-      _spokenLength <= _currentParagraph.Length &&
-      replacement.StartsWith(
-        _currentParagraph[.._spokenLength],
-        StringComparison.Ordinal);
-
-    _currentParagraph = replacement;
-    _lastChangeUtc = nowUtc;
-
-    if (!spokenPrefixPreserved)
-    {
-      _spokenLength = replacement.Length;
-      return;
-    }
-
-    ExtractCompleteSentences(output);
-  }
-
-  /// <summary>
-  /// Processes all paragraphs that follow the current anchor.
-  /// </summary>
-  /// <param name="tail">The observed tail.</param>
-  /// <param name="startIndex">The first new paragraph index.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  /// <param name="output">Destination for speech.</param>
-  private void AdvanceThroughNewParagraphs(
-    IReadOnlyList<string> tail,
-    int startIndex,
-    DateTime nowUtc,
-    List<string> output)
-  {
-    for (int index = startIndex; index < tail.Count; ++index)
-    {
-      AdvanceToParagraph(tail[index], nowUtc, output);
-    }
-  }
-
-  /// <summary>
-  /// Completes the old paragraph and begins tracking a new paragraph.
-  /// </summary>
-  /// <param name="paragraph">The new paragraph.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  /// <param name="output">Destination for speech.</param>
-  private void AdvanceToParagraph(
-    string paragraph,
-    DateTime nowUtc,
-    List<string> output)
-  {
-    if (string.Equals(paragraph, _currentParagraph,
-          StringComparison.Ordinal))
-    {
-      return;
-    }
-
-    FlushCurrent(output);
-    _previousParagraph = _currentParagraph;
-    _currentParagraph = paragraph;
-    _spokenLength = 0;
-    _lastChangeUtc = nowUtc;
-    ExtractCompleteSentences(output);
-  }
-
-  /// <summary>
-  /// Determines whether a current rewrite preserves all spoken characters.
-  /// </summary>
-  /// <param name="candidate">The replacement candidate.</param>
-  /// <returns>True when replacing the current paragraph is safe.</returns>
-  private bool CanSafelyReplaceCurrent(string candidate)
-  {
-    if (_spokenLength == 0)
-    {
-      return true;
-    }
-
-    return _spokenLength <= candidate.Length &&
-      _spokenLength <= _currentParagraph.Length &&
-      candidate.StartsWith(
-        _currentParagraph[.._spokenLength],
-        StringComparison.Ordinal);
-  }
-
-  /// <summary>
-  /// Rebinds to a completely different visible tail without speaking text
-  /// that may already have been emitted before virtual scrolling removed the
-  /// stored anchors.
-  /// </summary>
-  /// <param name="tail">The new unanchored tail.</param>
-  /// <param name="nowUtc">The current UTC time.</param>
-  private void RebaseAfterLostAnchor(
-    IReadOnlyList<string> tail,
-    DateTime nowUtc)
-  {
-    _previousParagraph = tail.Count >= 2 ? tail[^2] : string.Empty;
-    _currentParagraph = tail[^1];
-    _spokenLength = _currentParagraph.Length;
-    _lastChangeUtc = nowUtc;
-  }
-
-  /// <summary>
-  /// Emits all complete sentences in the unspoken suffix.
-  /// </summary>
-  /// <param name="output">Destination for speech.</param>
-  private void ExtractCompleteSentences(List<string> output)
-  {
-    int end = FindLastSentenceBoundary(
-      _currentParagraph,
-      _spokenLength);
-    if (end <= _spokenLength)
-    {
-      return;
-    }
-
-    AddSpeech(
-      _currentParagraph[_spokenLength..end],
-      output);
-    _spokenLength = SkipWhitespace(_currentParagraph, end);
-  }
-
-  /// <summary>
-  /// Emits the complete remaining suffix of the current paragraph.
-  /// </summary>
-  /// <param name="output">Destination for speech.</param>
-  private void FlushCurrent(List<string> output)
-  {
-    if (_spokenLength >= _currentParagraph.Length)
-    {
-      return;
-    }
-
-    AddSpeech(_currentParagraph[_spokenLength..], output);
-    _spokenLength = _currentParagraph.Length;
-  }
-
-  /// <summary>
-  /// Finds the final sentence terminator followed by whitespace or text end.
-  /// </summary>
-  /// <param name="text">The current paragraph.</param>
-  /// <param name="start">The first unspoken character.</param>
-  /// <returns>The exclusive speech boundary, or the original start.</returns>
-  private static int FindLastSentenceBoundary(string text, int start)
-  {
-    int boundary = start;
-
-    for (int index = start; index < text.Length; ++index)
-    {
-      char character = text[index];
-      if (character != '.' && character != '?' && character != '!')
+      char character = snapshot.Text[index];
+      if (character is not ('.' or '?' or '!'))
       {
         continue;
       }
 
       int next = index + 1;
-      if (next == text.Length || char.IsWhiteSpace(text[next]))
+      if (next != snapshot.Text.Length &&
+          !char.IsWhiteSpace(snapshot.Text[next]))
       {
-        boundary = next;
+        continue;
       }
+
+      AddSentence(snapshot, start, next, result);
+      start = SkipWhitespace(snapshot.Text, next);
+      index = start - 1;
     }
 
-    return boundary;
+    return result;
   }
 
   /// <summary>
-  /// Skips whitespace after a spoken boundary.
+  /// Returns the incomplete text after the final sentence boundary.
   /// </summary>
-  /// <param name="text">The paragraph.</param>
-  /// <param name="start">The first candidate character.</param>
-  /// <returns>The first non-whitespace character or text length.</returns>
+  /// <param name="snapshot">Current transcript snapshot.</param>
+  /// <returns>Trailing fragment and source node.</returns>
+  private static SentenceSpan GetTrailingFragment(Snapshot snapshot)
+  {
+    int start = 0;
+    for (int index = 0; index < snapshot.Text.Length; ++index)
+    {
+      char character = snapshot.Text[index];
+      if (character is not ('.' or '?' or '!'))
+      {
+        continue;
+      }
+
+      int next = index + 1;
+      if (next == snapshot.Text.Length ||
+          char.IsWhiteSpace(snapshot.Text[next]))
+      {
+        start = SkipWhitespace(snapshot.Text, next);
+      }
+    }
+
+    string text = NormalizeSpeechText(snapshot.Text[start..]);
+    return new SentenceSpan(
+      FindNodeId(snapshot.Spans, Math.Max(start, snapshot.Text.Length - 1)),
+      text,
+      Canonicalize(text));
+  }
+
+  /// <summary>
+  /// Adds one normalized sentence range.
+  /// </summary>
+  /// <param name="snapshot">Current transcript snapshot.</param>
+  /// <param name="start">Inclusive source index.</param>
+  /// <param name="end">Exclusive source index.</param>
+  /// <param name="result">Destination list.</param>
+  private static void AddSentence(
+    Snapshot snapshot,
+    int start,
+    int end,
+    List<SentenceSpan> result)
+  {
+    string text = NormalizeSpeechText(snapshot.Text[start..end]);
+    string canonical = Canonicalize(text);
+    if (canonical.Length == 0)
+    {
+      return;
+    }
+
+    result.Add(new SentenceSpan(
+      FindNodeId(snapshot.Spans, Math.Max(start, end - 1)),
+      text,
+      canonical));
+  }
+
+  /// <summary>
+  /// Finds the node containing a character position.
+  /// </summary>
+  /// <param name="spans">Ordered node spans.</param>
+  /// <param name="position">Character position.</param>
+  /// <returns>The containing or nearest node identifier.</returns>
+  private static long FindNodeId(
+    IReadOnlyList<NodeSpan> spans,
+    int position)
+  {
+    foreach (NodeSpan span in spans)
+    {
+      if (position >= span.Start && position < span.End)
+      {
+        return span.NodeId;
+      }
+    }
+
+    return spans.Count == 0 ? 0 : spans[^1].NodeId;
+  }
+
+  /// <summary>
+  /// Remembers a sentence while bounding duplicate-suppression memory.
+  /// </summary>
+  /// <param name="canonical">Canonical sentence text.</param>
+  private void RememberSentence(string canonical)
+  {
+    if (canonical.Length == 0 || !_sentenceSet.Add(canonical))
+    {
+      return;
+    }
+
+    _sentenceHistory.Enqueue(canonical);
+    while (_sentenceHistory.Count > MaximumRememberedSentences)
+    {
+      string removed = _sentenceHistory.Dequeue();
+      _sentenceSet.Remove(removed);
+    }
+  }
+
+  /// <summary>
+  /// Returns only the new suffix of an idle-flushed partial fragment.
+  /// </summary>
+  /// <param name="current">Current canonical trailing fragment.</param>
+  /// <returns>Unspoken suffix or empty text.</returns>
+  private string GetUnspokenPartialSuffix(string current)
+  {
+    if (string.Equals(current, _spokenPartial, StringComparison.Ordinal))
+    {
+      return string.Empty;
+    }
+
+    if (_spokenPartial.Length != 0 &&
+        current.StartsWith(_spokenPartial, StringComparison.Ordinal))
+    {
+      return GetCanonicalSuffix(current, _spokenPartial.Length);
+    }
+
+    return current;
+  }
+
+  /// <summary>
+  /// Returns a canonical suffix after skipping separating whitespace.
+  /// </summary>
+  /// <param name="text">Canonical full text.</param>
+  /// <param name="offset">Already spoken prefix length.</param>
+  /// <returns>Remaining text.</returns>
+  private static string GetCanonicalSuffix(string text, int offset)
+  {
+    int index = Math.Clamp(offset, 0, text.Length);
+    while (index < text.Length && char.IsWhiteSpace(text[index]))
+    {
+      ++index;
+    }
+
+    return text[index..].Trim();
+  }
+
+  /// <summary>
+  /// Normalizes paragraphs and removes adjacent duplicates.
+  /// </summary>
+  /// <param name="paragraphs">Raw paragraphs.</param>
+  /// <returns>Normalized paragraphs.</returns>
+  private static IReadOnlyList<string> NormalizeParagraphs(
+    IReadOnlyList<string> paragraphs)
+  {
+    var result = new List<string>(paragraphs.Count);
+    foreach (string paragraph in paragraphs)
+    {
+      string normalized = NormalizeSpeechText(paragraph);
+      if (normalized.Length == 0)
+      {
+        continue;
+      }
+
+      if (result.Count != 0 &&
+          string.Equals(result[^1], normalized, StringComparison.Ordinal))
+      {
+        continue;
+      }
+
+      result.Add(normalized);
+    }
+
+    return result;
+  }
+
+  /// <summary>
+  /// Removes accessibility placeholders, backticks, and excess whitespace.
+  /// </summary>
+  /// <param name="text">Text to normalize.</param>
+  /// <returns>Speakable normalized text.</returns>
+  private static string NormalizeSpeechText(string text)
+  {
+    var builder = new StringBuilder(text.Length);
+    bool previousWasWhitespace = false;
+
+    foreach (char character in text)
+    {
+      if (character is '\uFFFC' or '\u200B' or '\uFEFF' or '`')
+      {
+        continue;
+      }
+
+      if (char.IsWhiteSpace(character))
+      {
+        if (!previousWasWhitespace && builder.Length != 0)
+        {
+          builder.Append(' ');
+        }
+
+        previousWasWhitespace = true;
+        continue;
+      }
+
+      builder.Append(character);
+      previousWasWhitespace = false;
+    }
+
+    return builder.ToString().Trim();
+  }
+
+  /// <summary>
+  /// Creates a stable duplicate-suppression representation.
+  /// </summary>
+  /// <param name="text">Normalized speech text.</param>
+  /// <returns>Canonical text.</returns>
+  private static string Canonicalize(string text)
+  {
+    return NormalizeSpeechText(text);
+  }
+
+  /// <summary>
+  /// Determines whether a fragment contains something other than punctuation.
+  /// </summary>
+  /// <param name="text">Candidate speech text.</param>
+  /// <returns>True when the synthesizer should receive it.</returns>
+  private static bool HasSpeakableCharacters(string text)
+  {
+    return text.Any(char.IsLetterOrDigit);
+  }
+
+  /// <summary>
+  /// Counts the common prefix of two strings.
+  /// </summary>
+  /// <param name="left">First string.</param>
+  /// <param name="right">Second string.</param>
+  /// <returns>Number of equal leading characters.</returns>
+  private static int CommonPrefixLength(string left, string right)
+  {
+    int limit = Math.Min(left.Length, right.Length);
+    int index = 0;
+    while (index < limit && left[index] == right[index])
+    {
+      ++index;
+    }
+
+    return index;
+  }
+
+  /// <summary>
+  /// Skips whitespace after a sentence boundary.
+  /// </summary>
+  /// <param name="text">Source text.</param>
+  /// <param name="start">First candidate index.</param>
+  /// <returns>First non-whitespace index.</returns>
   private static int SkipWhitespace(string text, int start)
   {
     int index = start;
@@ -457,21 +594,7 @@ internal sealed class TailTracker
   }
 
   /// <summary>
-  /// Adds a non-empty speech fragment.
-  /// </summary>
-  /// <param name="text">Text to add.</param>
-  /// <param name="output">Destination list.</param>
-  private static void AddSpeech(string text, List<string> output)
-  {
-    string trimmed = text.Trim();
-    if (trimmed.Length != 0)
-    {
-      output.Add(trimmed);
-    }
-  }
-
-  /// <summary>
-  /// Truncates text for one-line tracker diagnostics.
+  /// Truncates text for one-line diagnostics.
   /// </summary>
   /// <param name="text">Text to abbreviate.</param>
   /// <returns>A quoted diagnostic value.</returns>
@@ -492,33 +615,27 @@ internal sealed class TailTracker
   }
 
   /// <summary>
-  /// Removes empty values and adjacent duplicate paragraphs.
+  /// Stores one reconciled accessibility node.
   /// </summary>
-  /// <param name="tail">Raw observed paragraphs.</param>
-  /// <returns>A compact tail.</returns>
-  private static IReadOnlyList<string> RemoveEmptyAdjacentDuplicates(
-    IReadOnlyList<string> tail)
-  {
-    var result = new List<string>(tail.Count);
+  private sealed record NodeState(long Id, string Text);
 
-    foreach (string paragraph in tail)
-    {
-      if (string.IsNullOrWhiteSpace(paragraph))
-      {
-        continue;
-      }
+  /// <summary>
+  /// Stores a node's range in combined snapshot text.
+  /// </summary>
+  private sealed record NodeSpan(int Start, int End, long NodeId);
 
-      string trimmed = paragraph.Trim();
-      if (result.Count != 0 &&
-          string.Equals(result[^1], trimmed,
-            StringComparison.Ordinal))
-      {
-        continue;
-      }
+  /// <summary>
+  /// Stores combined transcript text and node ranges.
+  /// </summary>
+  private sealed record Snapshot(
+    string Text,
+    IReadOnlyList<NodeSpan> Spans);
 
-      result.Add(trimmed);
-    }
-
-    return result;
-  }
+  /// <summary>
+  /// Stores a complete sentence or trailing fragment.
+  /// </summary>
+  private sealed record SentenceSpan(
+    long NodeId,
+    string Text,
+    string CanonicalText);
 }

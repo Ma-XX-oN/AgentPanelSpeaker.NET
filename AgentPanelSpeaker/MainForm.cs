@@ -24,6 +24,8 @@ internal sealed class MainForm : Form
   private readonly Button _startButton = new();
   private readonly Button _stopButton = new();
   private readonly Button _cancelSpeechButton = new();
+  private readonly Button _rewindSentenceButton = new();
+  private readonly Button _rewindNodeButton = new();
   private readonly Button _testVoiceButton = new();
   private readonly Button _openLogButton = new();
   private readonly TextBox _logTextBox = new();
@@ -44,6 +46,8 @@ internal sealed class MainForm : Form
     _startButton.Click += StartButtonClicked;
     _stopButton.Click += StopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
+    _rewindSentenceButton.Click += RewindSentenceButtonClicked;
+    _rewindNodeButton.Click += RewindNodeButtonClicked;
     _testVoiceButton.Click += TestVoiceButtonClicked;
     _openLogButton.Click += OpenLogButtonClicked;
     DpiChanged += MainFormDpiChanged;
@@ -65,7 +69,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v8 diagnostic";
+    Text = "Agent Panel Speaker v9";
     AutoScaleDimensions = new SizeF(96.0f, 96.0f);
     AutoScaleMode = AutoScaleMode.Dpi;
     StartPosition = FormStartPosition.CenterScreen;
@@ -85,6 +89,8 @@ internal sealed class MainForm : Form
     ConfigureButton(_startButton, "Start");
     ConfigureButton(_stopButton, "Stop");
     ConfigureButton(_cancelSpeechButton, "Cancel speech");
+    ConfigureButton(_rewindSentenceButton, "Rewind sentence");
+    ConfigureButton(_rewindNodeButton, "Rewind node");
     ConfigureButton(_testVoiceButton, "Test voice");
     ConfigureButton(_openLogButton, "Open diagnostic log");
 
@@ -105,7 +111,7 @@ internal sealed class MainForm : Form
     ConfigureNumeric(_pollNumeric, 100, 2000, 300, 80);
 
     _speakExistingCheckBox.AutoSize = true;
-    _speakExistingCheckBox.Text = "Speak current paragraph on start";
+    _speakExistingCheckBox.Text = "Speak text already visible on start";
 
     _logTextBox.Multiline = true;
     _logTextBox.ReadOnly = true;
@@ -155,6 +161,8 @@ internal sealed class MainForm : Form
       _startButton,
       _stopButton,
       _cancelSpeechButton,
+      _rewindSentenceButton,
+      _rewindNodeButton,
       _testVoiceButton,
       _openLogButton
     });
@@ -374,6 +382,38 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
+  /// Replays the preceding spoken sentence.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void RewindSentenceButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    if (_speech.TryRewindSentence(out string text))
+    {
+      DiagnosticLog.Write("speech.rewind_sentence", new { text });
+      AppendLog($"Rewind sentence: {text}");
+    }
+  }
+
+  /// <summary>
+  /// Replays the preceding spoken accessibility node.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void RewindNodeButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    if (_speech.TryRewindNode(out string text))
+    {
+      DiagnosticLog.Write("speech.rewind_node", new { text });
+      AppendLog($"Rewind node: {text}");
+    }
+  }
+
+  /// <summary>
   /// Speaks a short test phrase with the selected settings.
   /// </summary>
   /// <param name="sender">Unused event sender.</param>
@@ -383,7 +423,7 @@ internal sealed class MainForm : Form
     try
     {
       ConfigureSpeech();
-      _speech.Speak("Agent panel speech is working.");
+      _speech.SpeakUntracked("Agent panel speech is working.");
       DiagnosticLog.Write("speech.test");
     }
     catch (Exception exception) when (
@@ -415,7 +455,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Applies the DPI-suggested window rectangle and records the transition.
+  /// Records a DPI transition after WinForms performs automatic scaling.
   /// </summary>
   /// <param name="sender">Unused event sender.</param>
   /// <param name="eventArgs">DPI-change arguments.</param>
@@ -427,14 +467,16 @@ internal sealed class MainForm : Form
     {
       oldDpi = eventArgs.DeviceDpiOld,
       newDpi = eventArgs.DeviceDpiNew,
-      beforeBounds = RectangleToString(Bounds),
+      currentBounds = RectangleToString(Bounds),
       suggestedBounds = RectangleToString(eventArgs.SuggestedRectangle),
       screen = Screen.FromControl(this).DeviceName
     });
 
-    Bounds = eventArgs.SuggestedRectangle;
-    PerformLayout();
-    WriteLayoutDiagnostic("ui.layout_after_dpi");
+    BeginInvoke((Action)(() =>
+    {
+      PerformLayout();
+      WriteLayoutDiagnostic("ui.layout_after_dpi");
+    }));
   }
 
   /// <summary>
@@ -495,17 +537,22 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Marshals a speech fragment from the monitor thread to the UI thread.
   /// </summary>
-  /// <param name="text">Text ready for speech.</param>
-  private void MonitorTextReady(string text)
+  /// <param name="fragment">Text and node ready for speech.</param>
+  private void MonitorTextReady(SpeechFragment fragment)
   {
     PostToUi(() =>
     {
       try
       {
         ConfigureSpeech();
-        _speech.Speak(text);
-        DiagnosticLog.Write("speech.queued", new { text });
-        AppendLog($"Speak: {text}");
+        _speech.SpeakLive(fragment);
+        DiagnosticLog.Write("speech.queued", new
+        {
+          fragment.NodeId,
+          text = fragment.Text
+        });
+        AppendLog($"Speak: {fragment.Text}");
+        UpdateControlState();
       }
       catch (Exception exception) when (
         exception is ArgumentException or
@@ -776,5 +823,7 @@ internal sealed class MainForm : Form
     _idleNumeric.Enabled = !running;
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
+    _rewindSentenceButton.Enabled = _speech.HasHistory;
+    _rewindNodeButton.Enabled = _speech.HasHistory;
   }
 }

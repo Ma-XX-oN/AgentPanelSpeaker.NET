@@ -10,9 +10,9 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class TranscriptReader
 {
-  private const int MaxParagraphSearch = 32;
-  private const int MaxTailCharacters = 32_768;
-  private const int MaxTailParagraphs = 3;
+  private const int MaxParagraphSearch = 512;
+  private const int MaxTailCharacters = 262_144;
+  private const int MaxTailParagraphs = 64;
 
   /// <summary>
   /// Gets the source used by the most recent read.
@@ -227,7 +227,6 @@ internal sealed class TranscriptReader
 
       previousFingerprint = fingerprint;
       if (paragraph.Length != 0 &&
-          RangeIntersectsRegion(rectangles, region) &&
           !IsIgnoredText(paragraph) &&
           (reverse.Count == 0 ||
            !string.Equals(
@@ -456,7 +455,9 @@ internal sealed class TranscriptReader
       return true;
     }
 
-    if (trimmed.Equals("Queue another message...",
+    if (IsToolActivity(trimmed) ||
+        IsClockLabel(trimmed) ||
+        trimmed.Equals("Queue another message...",
           StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("Edit automatically",
           StringComparison.OrdinalIgnoreCase) ||
@@ -475,6 +476,56 @@ internal sealed class TranscriptReader
 
     return IsKnownTransientStatus(trimmed) ||
       IsOneWordEllipsisStatus(trimmed);
+  }
+
+
+  /// <summary>
+  /// Detects Codex and Claude tool activity cards.
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is tool activity rather than prose.</returns>
+  private static bool IsToolActivity(string text)
+  {
+    if (text.StartsWith("Ran ", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("Running ", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("Read ", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("Wrote ", StringComparison.OrdinalIgnoreCase))
+    {
+      return text.Length <= 500;
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Detects time labels such as "3:16 PM".
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a standalone clock label.</returns>
+  private static bool IsClockLabel(string text)
+  {
+    string candidate = text.Trim();
+    int colon = candidate.IndexOf(':');
+    if (colon is < 1 or > 2)
+    {
+      return false;
+    }
+
+    int suffixStart = candidate.Length - 2;
+    if (suffixStart <= colon ||
+        !(candidate.EndsWith("AM", StringComparison.OrdinalIgnoreCase) ||
+          candidate.EndsWith("PM", StringComparison.OrdinalIgnoreCase)))
+    {
+      return false;
+    }
+
+    string hour = candidate[..colon];
+    string minute = candidate[(colon + 1)..suffixStart].Trim();
+    return int.TryParse(hour, out int parsedHour) &&
+      parsedHour is >= 1 and <= 12 &&
+      int.TryParse(minute, out int parsedMinute) &&
+      parsedMinute is >= 0 and <= 59;
   }
 
   /// <summary>
@@ -773,6 +824,11 @@ internal sealed class TranscriptReader
 
     foreach (char character in text)
     {
+      if (character is '\uFFFC' or '\u200B' or '\uFEFF')
+      {
+        continue;
+      }
+
       if (char.IsWhiteSpace(character))
       {
         if (!previousWasWhitespace && builder.Length != 0)

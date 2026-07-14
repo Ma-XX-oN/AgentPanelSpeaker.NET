@@ -3,11 +3,15 @@ using System.Speech.Synthesis;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Queues text through the installed Windows SAPI voices.
+/// Queues Windows SAPI speech and retains sentence and node replay history.
 /// </summary>
 internal sealed class SpeechService : IDisposable
 {
+  private const int MaximumHistoryEntries = 1000;
+
   private readonly SpeechSynthesizer _synthesizer = new();
+  private readonly List<SpeechFragment> _history = new();
+  private int _rewindIndex;
   private bool _disposed;
 
   /// <summary>
@@ -19,7 +23,12 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Gets the installed enabled voice names.
+  /// Gets whether replay history contains any live transcript speech.
+  /// </summary>
+  public bool HasHistory => _history.Count != 0;
+
+  /// <summary>
+  /// Gets installed enabled voice names.
   /// </summary>
   /// <returns>Voice names in display order.</returns>
   public IReadOnlyList<string> GetInstalledVoiceNames()
@@ -60,10 +69,31 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Queues text for asynchronous speech.
+  /// Queues a live transcript fragment and records it for replay.
+  /// </summary>
+  /// <param name="fragment">Live fragment.</param>
+  public void SpeakLive(SpeechFragment fragment)
+  {
+    ArgumentNullException.ThrowIfNull(fragment);
+    ThrowIfDisposed();
+
+    string text = fragment.Text.Trim();
+    if (text.Length == 0)
+    {
+      return;
+    }
+
+    _history.Add(fragment with { Text = text });
+    TrimHistory();
+    _rewindIndex = _history.Count;
+    _synthesizer.SpeakAsync(text);
+  }
+
+  /// <summary>
+  /// Queues untracked text, such as the voice test phrase.
   /// </summary>
   /// <param name="text">Text to speak.</param>
-  public void Speak(string text)
+  public void SpeakUntracked(string text)
   {
     ThrowIfDisposed();
 
@@ -71,6 +101,73 @@ internal sealed class SpeechService : IDisposable
     {
       _synthesizer.SpeakAsync(text.Trim());
     }
+  }
+
+  /// <summary>
+  /// Cancels queued speech and replays the previous sentence.
+  /// </summary>
+  /// <param name="text">Replayed sentence.</param>
+  /// <returns>True when sentence history was available.</returns>
+  public bool TryRewindSentence(out string text)
+  {
+    ThrowIfDisposed();
+    text = string.Empty;
+
+    int candidate = _rewindIndex >= _history.Count
+      ? _history.Count - 1
+      : _rewindIndex - 1;
+    if (candidate < 0)
+    {
+      return false;
+    }
+
+    _rewindIndex = candidate;
+    text = _history[candidate].Text;
+    Replay(text);
+    return true;
+  }
+
+  /// <summary>
+  /// Cancels queued speech and replays the previous accessibility node.
+  /// </summary>
+  /// <param name="text">Replayed node text.</param>
+  /// <returns>True when node history was available.</returns>
+  public bool TryRewindNode(out string text)
+  {
+    ThrowIfDisposed();
+    text = string.Empty;
+
+    int candidate = _rewindIndex >= _history.Count
+      ? _history.Count - 1
+      : _rewindIndex - 1;
+    if (candidate < 0)
+    {
+      return false;
+    }
+
+    long nodeId = _history[candidate].NodeId;
+    int first = candidate;
+    while (first > 0 && _history[first - 1].NodeId == nodeId)
+    {
+      --first;
+    }
+
+    int last = candidate;
+    while (last + 1 < _history.Count &&
+           _history[last + 1].NodeId == nodeId)
+    {
+      ++last;
+    }
+
+    _rewindIndex = first;
+    text = string.Join(
+      " ",
+      _history
+        .Skip(first)
+        .Take(last - first + 1)
+        .Select(fragment => fragment.Text));
+    Replay(text);
+    return true;
   }
 
   /// <summary>
@@ -95,6 +192,31 @@ internal sealed class SpeechService : IDisposable
     _synthesizer.SpeakAsyncCancelAll();
     _synthesizer.Dispose();
     _disposed = true;
+  }
+
+  /// <summary>
+  /// Cancels pending speech and speaks one historical selection.
+  /// </summary>
+  /// <param name="text">Historical text to replay.</param>
+  private void Replay(string text)
+  {
+    _synthesizer.SpeakAsyncCancelAll();
+    _synthesizer.SpeakAsync(text);
+  }
+
+  /// <summary>
+  /// Bounds replay history while preserving the rewind cursor.
+  /// </summary>
+  private void TrimHistory()
+  {
+    int excess = _history.Count - MaximumHistoryEntries;
+    if (excess <= 0)
+    {
+      return;
+    }
+
+    _history.RemoveRange(0, excess);
+    _rewindIndex = Math.Max(0, _rewindIndex - excess);
   }
 
   /// <summary>

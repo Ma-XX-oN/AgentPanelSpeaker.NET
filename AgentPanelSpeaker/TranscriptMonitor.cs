@@ -17,7 +17,7 @@ internal sealed class TranscriptMonitor : IDisposable
   /// <summary>
   /// Raised when a new text fragment is ready to speak.
   /// </summary>
-  public event Action<string>? TextReady;
+  public event Action<SpeechFragment>? TextReady;
 
   /// <summary>
   /// Raised when the visible transcript tail changes.
@@ -217,8 +217,8 @@ internal sealed class TranscriptMonitor : IDisposable
           });
         }
 
-        IReadOnlyList<string> observed = tracker.Observe(tail, nowUtc);
-        IReadOnlyList<string> idle = tracker.FlushIfIdle(
+        IReadOnlyList<SpeechFragment> observed = tracker.Observe(tail, nowUtc);
+        IReadOnlyList<SpeechFragment> idle = tracker.FlushIfIdle(
           nowUtc,
           idleTimeout);
 
@@ -322,17 +322,18 @@ internal sealed class TranscriptMonitor : IDisposable
   /// <param name="fragments">Speech fragments.</param>
   /// <param name="source">Tracker path that emitted the fragments.</param>
   private void Emit(
-    IReadOnlyList<string> fragments,
+    IReadOnlyList<SpeechFragment> fragments,
     string source)
   {
-    foreach (string fragment in fragments)
+    foreach (SpeechFragment fragment in fragments)
     {
-      if (fragment.Length != 0)
+      if (fragment.Text.Length != 0)
       {
         DiagnosticLog.Write("monitor.emit", new
         {
           source,
-          text = fragment
+          fragment.NodeId,
+          text = fragment.Text
         });
         TextReady?.Invoke(fragment);
       }
