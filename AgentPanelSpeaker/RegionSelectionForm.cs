@@ -12,8 +12,9 @@ internal sealed class RegionSelectionForm : Form
   private readonly System.Drawing.Brush _selectionBrush =
     new System.Drawing.SolidBrush(
       System.Drawing.Color.FromArgb(60, System.Drawing.Color.Red));
-  private System.Drawing.Point _startPoint;
+  private System.Drawing.Point _startScreenPoint;
   private System.Drawing.Rectangle _selection;
+  private System.Drawing.Rectangle _screenSelection;
   private bool _dragging;
 
   /// <summary>
@@ -52,8 +53,9 @@ internal sealed class RegionSelectionForm : Form
       return;
     }
 
-    _startPoint = eventArgs.Location;
+    _startScreenPoint = GetPhysicalCursorPosition();
     _selection = System.Drawing.Rectangle.Empty;
+    _screenSelection = System.Drawing.Rectangle.Empty;
     _dragging = true;
     Invalidate();
   }
@@ -71,7 +73,7 @@ internal sealed class RegionSelectionForm : Form
       return;
     }
 
-    _selection = NormalizeRectangle(_startPoint, eventArgs.Location);
+    UpdateSelection(GetPhysicalCursorPosition());
     Invalidate();
   }
 
@@ -89,15 +91,16 @@ internal sealed class RegionSelectionForm : Form
     }
 
     _dragging = false;
-    _selection = NormalizeRectangle(_startPoint, eventArgs.Location);
-    if (_selection.Width < 20 || _selection.Height < 20)
+    UpdateSelection(GetPhysicalCursorPosition());
+    if (_screenSelection.Width < 20 || _screenSelection.Height < 20)
     {
       _selection = System.Drawing.Rectangle.Empty;
+      _screenSelection = System.Drawing.Rectangle.Empty;
       Invalidate();
       return;
     }
 
-    SelectedRegion = RectangleToScreen(_selection);
+    SelectedRegion = _screenSelection;
     DialogResult = DialogResult.OK;
     Close();
   }
@@ -164,6 +167,43 @@ internal sealed class RegionSelectionForm : Form
     }
 
     base.Dispose(disposing);
+  }
+
+  /// <summary>
+  /// Updates both the physical screen selection and its client-area drawing
+  /// rectangle.
+  /// </summary>
+  /// <param name="currentScreenPoint">Current physical cursor position.</param>
+  private void UpdateSelection(System.Drawing.Point currentScreenPoint)
+  {
+    _screenSelection = NormalizeRectangle(
+      _startScreenPoint,
+      currentScreenPoint);
+
+    System.Drawing.Point topLeft = PointToClient(
+      _screenSelection.Location);
+    System.Drawing.Point bottomRight = PointToClient(
+      new System.Drawing.Point(
+        _screenSelection.Right,
+        _screenSelection.Bottom));
+    _selection = NormalizeRectangle(topLeft, bottomRight);
+  }
+
+  /// <summary>
+  /// Reads the cursor in the same physical coordinate system used by UI
+  /// Automation bounding rectangles.
+  /// </summary>
+  /// <returns>The current physical screen position.</returns>
+  private static System.Drawing.Point GetPhysicalCursorPosition()
+  {
+    if (!NativeMethods.GetPhysicalCursorPos(out var point))
+    {
+      throw new System.ComponentModel.Win32Exception(
+        System.Runtime.InteropServices.Marshal.GetLastWin32Error(),
+        "The physical cursor position could not be read.");
+    }
+
+    return point.ToDrawingPoint();
   }
 
   /// <summary>

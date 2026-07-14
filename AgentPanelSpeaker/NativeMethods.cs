@@ -19,6 +19,15 @@ internal static class NativeMethods
   internal static extern IntPtr WindowFromPoint(NativePoint point);
 
   /// <summary>
+  /// Reads the cursor position in physical screen pixels.
+  /// </summary>
+  /// <param name="point">Destination physical screen coordinate.</param>
+  /// <returns>True on success.</returns>
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  internal static extern bool GetPhysicalCursorPos(out NativePoint point);
+
+  /// <summary>
   /// Returns an ancestor of a window.
   /// </summary>
   /// <param name="window">Starting window.</param>
@@ -63,10 +72,10 @@ internal static class NativeMethods
   /// Stores a Win32 screen coordinate.
   /// </summary>
   [StructLayout(LayoutKind.Sequential)]
-  internal readonly struct NativePoint
+  internal struct NativePoint
   {
-    internal readonly int X;
-    internal readonly int Y;
+    internal int X;
+    internal int Y;
 
     /// <summary>
     /// Initializes a coordinate.
@@ -77,6 +86,15 @@ internal static class NativeMethods
     {
       X = x;
       Y = y;
+    }
+
+    /// <summary>
+    /// Converts this coordinate to a drawing point.
+    /// </summary>
+    /// <returns>The equivalent drawing point.</returns>
+    internal readonly System.Drawing.Point ToDrawingPoint()
+    {
+      return new System.Drawing.Point(X, Y);
     }
   }
 
