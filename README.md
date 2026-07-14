@@ -1,4 +1,4 @@
-# Agent Panel Speaker v10
+# Agent Panel Speaker v11
 
 Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
 Visual Studio Code through Windows UI Automation and speaks new text through
@@ -42,6 +42,14 @@ NuGet.org.
 The inactivity timeout speaks an unfinished trailing fragment after the text
 has remained unchanged for the configured period. Complete sentences ending
 in `.`, `?`, or `!` are queued immediately.
+
+## v11 changes
+
+- **Stop** now cancels current and queued speech before waiting for the
+  monitoring thread to exit.
+- Speech fragments already posted to the UI queue are tagged with their
+  monitoring session and discarded after **Stop**, so they cannot restart
+  the voice after cancellation.
 
 ## v10 changes
 

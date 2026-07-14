@@ -31,6 +31,7 @@ internal sealed class MainForm : Form
   private readonly TextBox _logTextBox = new();
 
   private TranscriptTarget? _target;
+  private int _monitorSession;
   private bool _closing;
 
   /// <summary>
@@ -69,7 +70,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v10";
+    Text = "Agent Panel Speaker v11";
     AutoScaleDimensions = new SizeF(96.0f, 96.0f);
     AutoScaleMode = AutoScaleMode.Dpi;
     StartPosition = FormStartPosition.CenterScreen;
@@ -338,6 +339,7 @@ internal sealed class MainForm : Form
     try
     {
       ConfigureSpeech();
+      Interlocked.Increment(ref _monitorSession);
       _monitor.Start(
         target,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
@@ -362,8 +364,11 @@ internal sealed class MainForm : Form
   /// <param name="eventArgs">Unused event arguments.</param>
   private void StopButtonClicked(object? sender, EventArgs eventArgs)
   {
+    Interlocked.Increment(ref _monitorSession);
+    _speech.CancelAll();
+    DiagnosticLog.Write("speech.cancel_all", new { source = "stop" });
     _monitor.Stop();
-    AppendLog("Monitoring stopped.");
+    AppendLog("Monitoring and speech stopped.");
     UpdateControlState();
   }
 
@@ -540,8 +545,22 @@ internal sealed class MainForm : Form
   /// <param name="fragment">Text and node ready for speech.</param>
   private void MonitorTextReady(SpeechFragment fragment)
   {
+    int session = Volatile.Read(ref _monitorSession);
     PostToUi(() =>
     {
+      if (!_monitor.IsRunning ||
+          session != Volatile.Read(ref _monitorSession))
+      {
+        DiagnosticLog.Write("speech.skipped_after_stop", new
+        {
+          fragment.NodeId,
+          text = fragment.Text,
+          session,
+          currentSession = Volatile.Read(ref _monitorSession)
+        });
+        return;
+      }
+
       try
       {
         ConfigureSpeech();
