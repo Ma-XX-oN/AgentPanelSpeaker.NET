@@ -115,7 +115,7 @@ internal sealed class MainForm : Form
 
     ConfigureNumeric(_rateNumeric, -10, 10, 0, 50);
     ConfigureNumeric(_idleNumeric, 100, 5000, 1000, 80);
-    ConfigureNumeric(_pollNumeric, 100, 2000, 300, 80);
+    ConfigureNumeric(_pollNumeric, 100, 2000, 150, 80);
 
     _speakExistingCheckBox.AutoSize = true;
     _speakExistingCheckBox.Text = "Speak text already visible on start";
@@ -347,6 +347,8 @@ internal sealed class MainForm : Form
     try
     {
       ConfigureSpeech();
+      _speech.BeginLiveSession();
+      DiagnosticLog.Write("speech.session_started");
       Interlocked.Increment(ref _monitorSession);
       _monitor.Start(
         target,

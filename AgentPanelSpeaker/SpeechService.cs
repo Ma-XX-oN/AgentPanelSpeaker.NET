@@ -91,6 +91,27 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Starts a new monitored transcript session with empty replay history.
+  /// </summary>
+  public void BeginLiveSession()
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+
+      _history.Clear();
+      _pendingHistoryIndex = null;
+      _pendingUntrackedText = null;
+      _activeHistoryIndex = -1;
+      _nextHistoryIndex = 0;
+      if (_activeKind != ActiveSpeechKind.None)
+      {
+        _synthesizer.SpeakAsyncCancelAll();
+      }
+    }
+  }
+
+  /// <summary>
   /// Queues a live transcript fragment and records it for playback.
   /// </summary>
   /// <param name="fragment">Live fragment.</param>

@@ -11,8 +11,8 @@ namespace AgentPanelSpeaker;
 internal sealed class TranscriptReader
 {
   private const int MaxParagraphSearch = 512;
-  private const int MaxTailCharacters = 262_144;
-  private const int MaxTailParagraphs = 64;
+  private const int MaxTailParagraphs = 96;
+  private const int RegionLookBehindParagraphs = 12;
 
   /// <summary>
   /// Gets the source used by the most recent read.
@@ -193,13 +193,13 @@ internal sealed class TranscriptReader
     }
     catch (InvalidOperationException)
     {
-      filterDetails = "paragraph navigation unavailable; document fallback";
-      return ReadDocumentTail(pattern);
+      filterDetails = "paragraph navigation unavailable";
+      return Array.Empty<string>();
     }
     catch (ArgumentException)
     {
-      filterDetails = "paragraph point invalid; document fallback";
-      return ReadDocumentTail(pattern);
+      filterDetails = "paragraph point invalid";
+      return Array.Empty<string>();
     }
 
     var reverse = new List<ParagraphCandidate>(MaxParagraphSearch);
@@ -238,7 +238,8 @@ internal sealed class TranscriptReader
           paragraph,
           IsRangeHidden(range),
           rectangles.Any(HasUsableBounds),
-          RangeIntersectsRegion(rectangles, region)));
+          RangeIntersectsRegion(rectangles, region),
+          GetRangeBounds(rectangles)));
       }
 
       int moved;
@@ -258,31 +259,9 @@ internal sealed class TranscriptReader
     }
 
     reverse.Reverse();
-    return FilterTextPatternParagraphs(reverse, out filterDetails);
+    return FilterTextPatternParagraphs(reverse, region, out filterDetails);
   }
 
-
-  /// <summary>
-  /// Falls back to the provider's document text when paragraph navigation is
-  /// unavailable.
-  /// </summary>
-  /// <param name="pattern">Selected text provider.</param>
-  /// <returns>The final meaningful lines.</returns>
-  private static IReadOnlyList<string> ReadDocumentTail(TextPattern pattern)
-  {
-    string text;
-    try
-    {
-      text = pattern.DocumentRange.GetText(-1);
-    }
-    catch (InvalidOperationException)
-    {
-      return Array.Empty<string>();
-    }
-
-    text = TakeLastCharacters(text, MaxTailCharacters);
-    return SplitIntoMeaningfulLines(text);
-  }
 
   /// <summary>
   /// Reconstructs a fallback tail from currently visible text elements in the
@@ -414,57 +393,55 @@ internal sealed class TranscriptReader
   }
 
   /// <summary>
-  /// Splits raw provider text into meaningful normalized lines.
-  /// </summary>
-  /// <param name="text">Raw provider text.</param>
-  /// <returns>The final meaningful lines.</returns>
-  private static IReadOnlyList<string> SplitIntoMeaningfulLines(string text)
-  {
-    string normalizedNewlines = text
-      .Replace("\r\n", "\n", StringComparison.Ordinal)
-      .Replace('\r', '\n');
-
-    var paragraphs = new List<ParagraphCandidate>();
-    foreach (string rawLine in normalizedNewlines.Split('\n'))
-    {
-      string line = NormalizeParagraph(rawLine);
-      if (line.Length == 0)
-      {
-        continue;
-      }
-
-      paragraphs.Add(new ParagraphCandidate(
-        line,
-        false,
-        false,
-        false));
-    }
-
-    return FilterTextPatternParagraphs(paragraphs, out _);
-  }
-
-  /// <summary>
   /// Removes hidden and tool-card text while preserving agent narration.
   /// </summary>
   /// <param name="paragraphs">
   /// Paragraphs in forward transcript order.
   /// </param>
+  /// <param name="region">Selected transcript region.</param>
   /// <param name="details">Filtering counters for diagnostics.</param>
   /// <returns>The final bounded narration tail.</returns>
   private static IReadOnlyList<string> FilterTextPatternParagraphs(
     IReadOnlyList<ParagraphCandidate> paragraphs,
+    System.Drawing.Rectangle region,
     out string details)
   {
-    var result = new List<string>(paragraphs.Count);
+    int firstVisible = -1;
+    int lastVisible = -1;
+    for (int index = 0; index < paragraphs.Count; ++index)
+    {
+      ParagraphCandidate candidate = paragraphs[index];
+      if (!candidate.IsHidden && candidate.IntersectsRegion)
+      {
+        firstVisible = firstVisible < 0 ? index : firstVisible;
+        lastVisible = index;
+      }
+    }
+
+    if (firstVisible < 0)
+    {
+      details = $"raw={paragraphs.Count}; visible=0; retained=0";
+      return Array.Empty<string>();
+    }
+
+    int windowStart = Math.Max(
+      0,
+      firstVisible - RegionLookBehindParagraphs);
+    int windowEnd = lastVisible;
+    var result = new List<string>(windowEnd - windowStart + 1);
     int hiddenCount = 0;
     int toolCount = 0;
     int unboundedCount = 0;
     int outsideRegionCount = 0;
     int ignoredCount = 0;
-    bool insideToolBlock = false;
+    int userBubbleCount = 0;
+    bool insideToolBlock = StartsInsideToolBlock(
+      paragraphs,
+      windowStart);
 
-    foreach (ParagraphCandidate candidate in paragraphs)
+    for (int index = windowStart; index <= windowEnd; ++index)
     {
+      ParagraphCandidate candidate = paragraphs[index];
       string text = candidate.Text;
       if (!candidate.IntersectsRegion)
       {
@@ -474,6 +451,12 @@ internal sealed class TranscriptReader
       if (candidate.IsHidden)
       {
         ++hiddenCount;
+        continue;
+      }
+
+      if (IsLikelyUserBubble(candidate, region))
+      {
+        ++userBubbleCount;
         continue;
       }
 
@@ -498,7 +481,11 @@ internal sealed class TranscriptReader
         insideToolBlock = false;
       }
 
-      if (!candidate.HasUsableBounds && !narration)
+      bool insideVisibleSpan = index >= firstVisible &&
+        index <= lastVisible;
+      if (!candidate.HasUsableBounds &&
+          !insideVisibleSpan &&
+          !narration)
       {
         ++unboundedCount;
         continue;
@@ -522,11 +509,71 @@ internal sealed class TranscriptReader
     IReadOnlyList<string> tail = result.Count <= MaxTailParagraphs
       ? result
       : result.Skip(result.Count - MaxTailParagraphs).ToArray();
-    details = $"raw={paragraphs.Count}; hidden={hiddenCount}; " +
-      $"tool={toolCount}; unbounded={unboundedCount}; " +
+    details = $"raw={paragraphs.Count}; " +
+      $"visible={lastVisible - firstVisible + 1}; " +
+      $"window={windowStart}..{windowEnd}; hidden={hiddenCount}; " +
+      $"tool={toolCount}; user={userBubbleCount}; " +
+      $"unbounded={unboundedCount}; " +
       $"outsideRegion={outsideRegionCount}; ignored={ignoredCount}; " +
       $"retained={tail.Count}";
     return tail;
+  }
+
+  /// <summary>
+  /// Detects a short right-aligned user-message bubble.
+  /// </summary>
+  /// <param name="candidate">Paragraph candidate.</param>
+  /// <param name="region">Selected transcript region.</param>
+  /// <returns>True when the geometry matches a user bubble.</returns>
+  private static bool IsLikelyUserBubble(
+    ParagraphCandidate candidate,
+    System.Drawing.Rectangle region)
+  {
+    if (!candidate.HasUsableBounds ||
+        !HasUsableBounds(candidate.Bounds) ||
+        !candidate.IntersectsRegion)
+    {
+      return false;
+    }
+
+    double leftThreshold = region.Left + region.Width * 0.42;
+    double rightThreshold = region.Left + region.Width * 0.72;
+    double maximumWidth = region.Width * 0.62;
+    return candidate.Bounds.Left >= leftThreshold &&
+      candidate.Bounds.Right >= rightThreshold &&
+      candidate.Bounds.Width <= maximumWidth;
+  }
+
+  /// <summary>
+  /// Determines whether a bounded window starts inside expanded tool details.
+  /// </summary>
+  /// <param name="paragraphs">All paragraphs in document order.</param>
+  /// <param name="windowStart">First paragraph retained for filtering.</param>
+  /// <returns>
+  /// True when a preceding tool heading has not reached narration.
+  /// </returns>
+  private static bool StartsInsideToolBlock(
+    IReadOnlyList<ParagraphCandidate> paragraphs,
+    int windowStart)
+  {
+    int lowerBound = Math.Max(0, windowStart - 24);
+    for (int index = windowStart - 1; index >= lowerBound; --index)
+    {
+      string text = paragraphs[index].Text;
+      if (IsToolActivity(text) ||
+          IsToolHeading(text) ||
+          IsToolGroupSummary(text))
+      {
+        return true;
+      }
+
+      if (LooksLikeAgentNarration(text))
+      {
+        return false;
+      }
+    }
+
+    return false;
   }
 
   /// <summary>
@@ -603,7 +650,9 @@ internal sealed class TranscriptReader
   /// Detects sentence-like agent narration that can end a tool-detail block.
   /// </summary>
   /// <param name="text">Normalized paragraph text.</param>
-  /// <returns>True when the paragraph is narration rather than tool detail.</returns>
+  /// <returns>
+  /// True when the paragraph is narration rather than tool detail.
+  /// </returns>
   private static bool LooksLikeAgentNarration(string text)
   {
     string candidate = text.Trim();
@@ -657,7 +706,9 @@ internal sealed class TranscriptReader
   /// Detects shell, source, and diff text that is not agent narration.
   /// </summary>
   /// <param name="text">Normalized paragraph text.</param>
-  /// <returns>True when the text looks like a command or source fragment.</returns>
+  /// <returns>
+  /// True when the text looks like a command or source fragment.
+  /// </returns>
   private static bool IsCommandLikeText(string text)
   {
     string candidate = text.TrimStart();
@@ -786,6 +837,8 @@ internal sealed class TranscriptReader
           StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("IN", StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("OUT", StringComparison.OrdinalIgnoreCase) ||
+        IsEditorChrome(trimmed) ||
+        IsDiagnosticMarker(trimmed) ||
         trimmed.StartsWith("You've used ",
           StringComparison.OrdinalIgnoreCase) ||
         IsThoughtDuration(trimmed) ||
@@ -800,6 +853,80 @@ internal sealed class TranscriptReader
       IsOneWordEllipsisStatus(trimmed);
   }
 
+
+  /// <summary>
+  /// Detects VS Code chrome that can leak from the enclosing document.
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is editor or panel chrome.</returns>
+  private static bool IsEditorChrome(string text)
+  {
+    string[] exact =
+    {
+      "C++",
+      "LF",
+      "UTF-8",
+      "Not Committed Yet",
+      "Check Claude transcript",
+      "No tasks in progress"
+    };
+    if (exact.Any(value => text.Equals(
+          value,
+          StringComparison.OrdinalIgnoreCase)))
+    {
+      return true;
+    }
+
+    string[] prefixes =
+    {
+      "Lns: ",
+      "Wds: ",
+      "Pos: ",
+      "Ln ",
+      "Spaces: ",
+      "Search returned ",
+      "TabOut"
+    };
+    if (prefixes.Any(prefix => text.StartsWith(
+          prefix,
+          StringComparison.OrdinalIgnoreCase)))
+    {
+      return true;
+    }
+
+    int index = 0;
+    while (index < text.Length && char.IsDigit(text[index]))
+    {
+      ++index;
+    }
+
+    if (index > 0)
+    {
+      string suffix = text[index..].TrimStart();
+      if (suffix.StartsWith("task in progress",
+            StringComparison.OrdinalIgnoreCase) ||
+          suffix.StartsWith("tasks in progress",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        return true;
+      }
+    }
+
+    return !text.Any(char.IsLetterOrDigit);
+  }
+
+  /// <summary>
+  /// Detects timing/debug markers injected by transcript helpers.
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is diagnostic metadata.</returns>
+  private static bool IsDiagnosticMarker(string text)
+  {
+    return text.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("START=", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("END=", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("ELAPSED=", StringComparison.OrdinalIgnoreCase);
+  }
 
   /// <summary>
   /// Detects Codex and Claude tool activity cards.
@@ -1021,6 +1148,30 @@ internal sealed class TranscriptReader
   }
 
   /// <summary>
+  /// Returns the union of all usable range rectangles.
+  /// </summary>
+  /// <param name="rectangles">Range rectangles.</param>
+  /// <returns>The union, or an empty rectangle when none are usable.</returns>
+  private static System.Windows.Rect GetRangeBounds(
+    IReadOnlyList<System.Windows.Rect> rectangles)
+  {
+    System.Windows.Rect result = System.Windows.Rect.Empty;
+    foreach (System.Windows.Rect bounds in rectangles)
+    {
+      if (!HasUsableBounds(bounds))
+      {
+        continue;
+      }
+
+      result = result.IsEmpty
+        ? bounds
+        : System.Windows.Rect.Union(result, bounds);
+    }
+
+    return result;
+  }
+
+  /// <summary>
   /// Determines whether a TextPattern range overlaps the selected region.
   /// </summary>
   /// <param name="rectangles">Range rectangles.</param>
@@ -1202,7 +1353,8 @@ internal sealed class TranscriptReader
     string Text,
     bool IsHidden,
     bool HasUsableBounds,
-    bool IntersectsRegion);
+    bool IntersectsRegion,
+    System.Windows.Rect Bounds);
 
   /// <summary>
   /// Stores and ranks a TextPattern provider.

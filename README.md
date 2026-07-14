@@ -1,4 +1,4 @@
-# Agent Panel Speaker v12
+# Agent Panel Speaker v13
 
 Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
 Visual Studio Code through Windows UI Automation and speaks new text through
@@ -42,6 +42,22 @@ NuGet.org.
 The inactivity timeout speaks an unfinished trailing fragment after the text
 has remained unchanged for the configured period. Complete sentences ending
 in `.`, `?`, or `!` are queued immediately.
+
+## v13 changes
+
+- Restricts TextPattern reads to the selected on-screen transcript region plus
+  twelve paragraphs of look-behind. It no longer reads the final 64 paragraphs
+  from the entire VS Code accessibility document.
+- Silently rebases when consecutive observations have no stable overlap instead
+  of treating older transcript or editor text as new speech.
+- Filters user-message bubbles, VS Code status-bar text, panel headings, task
+  counters, and transcript timing/debug markers.
+- Clears replay history whenever **Start** begins a new monitoring session, so
+  rewind cannot enter an earlier run.
+- Reduces the default polling interval from 300 ms to 150 ms to reduce the
+  chance that a rapid response scrolls through the visible window between reads.
+- Removes the whole-document fallback; when paragraph navigation is unavailable,
+  the reader uses only visible text elements inside the selected region.
 
 ## v12 changes
 

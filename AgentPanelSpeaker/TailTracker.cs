@@ -21,6 +21,8 @@ internal sealed class TailTracker
   private DateTime _lastChangeUtc;
   private long _nextNodeId = 1;
   private bool _initialized;
+  private int _lastOverlapCount;
+  private int _lastOverlapEnd;
   private string _lastDecision = "not initialized";
 
   /// <summary>
@@ -49,6 +51,7 @@ internal sealed class TailTracker
       $"nodes={_nodes.Count}; " +
       $"snapshotLength={_snapshotText.Length}; " +
       $"rememberedSentences={_sentenceHistory.Count}; " +
+      $"overlap={_lastOverlapCount}@{_lastOverlapEnd}; " +
       $"spokenPartial={Abbreviate(_spokenPartial)}; " +
       $"lastChangeUtc={_lastChangeUtc:O}; " +
       $"decision={_lastDecision}";
@@ -73,12 +76,18 @@ internal sealed class TailTracker
       return Array.Empty<SpeechFragment>();
     }
 
-    _nodes = ReconcileNodes(clean);
-    Snapshot snapshot = BuildSnapshot(_nodes);
+    ObservationOverlap overlap = _initialized
+      ? FindObservationOverlap(_nodes, clean)
+      : ObservationOverlap.None;
+    _lastOverlapCount = overlap.Count;
+    _lastOverlapEnd = overlap.CurrentEndIndex;
+    List<NodeState> reconciledNodes = ReconcileNodes(clean);
+    Snapshot snapshot = BuildSnapshot(reconciledNodes);
     bool changed = !string.Equals(
       snapshot.Text,
       _snapshotText,
       StringComparison.Ordinal);
+    _nodes = reconciledNodes;
 
     if (!_initialized)
     {
@@ -90,12 +99,7 @@ internal sealed class TailTracker
         ExtractCompleteSentences(snapshot);
       if (!_speakExistingText)
       {
-        foreach (SentenceSpan sentence in initialSentences)
-        {
-          RememberSentence(sentence.CanonicalText);
-        }
-
-        _spokenPartial = GetTrailingFragment(snapshot).CanonicalText;
+        MarkSnapshotAsSpoken(snapshot);
         _lastDecision = "initialized and marked visible text as spoken";
         return Array.Empty<SpeechFragment>();
       }
@@ -112,8 +116,19 @@ internal sealed class TailTracker
 
     _snapshotText = snapshot.Text;
     _lastChangeUtc = nowUtc;
+    if (_lastOverlapCount == 0)
+    {
+      MarkSnapshotAsSpoken(snapshot);
+      _lastDecision =
+        "lost observation overlap; rebased without speech";
+      return Array.Empty<SpeechFragment>();
+    }
+
+    int speechStart = Math.Max(0, overlap.CurrentEndIndex - 1);
+    Snapshot speechSnapshot = BuildSnapshot(
+      _nodes.Skip(speechStart).ToArray());
     IReadOnlyList<SpeechFragment> output = EmitUnseen(
-      ExtractCompleteSentences(snapshot));
+      ExtractCompleteSentences(speechSnapshot));
     _lastDecision = output.Count == 0
       ? "changed observation; no unseen complete sentence"
       : $"changed observation; emitted {output.Count} sentence(s)";
@@ -161,6 +176,92 @@ internal sealed class TailTracker
     _spokenPartial = trailing.CanonicalText;
     _lastDecision = "idle timeout emitted trailing fragment";
     return new[] { new SpeechFragment(trailing.NodeId, suffix) };
+  }
+
+  /// <summary>
+  /// Marks every sentence and trailing partial in a snapshot as already read.
+  /// </summary>
+  /// <param name="snapshot">Snapshot to absorb without speaking.</param>
+  private void MarkSnapshotAsSpoken(Snapshot snapshot)
+  {
+    foreach (SentenceSpan sentence in ExtractCompleteSentences(snapshot))
+    {
+      RememberSentence(sentence.CanonicalText);
+    }
+
+    _spokenPartial = GetTrailingFragment(snapshot).CanonicalText;
+  }
+
+  /// <summary>
+  /// Finds a stable contiguous overlap between consecutive observations.
+  /// </summary>
+  /// <param name="previous">Previously reconciled nodes.</param>
+  /// <param name="current">Current normalized paragraphs.</param>
+  /// <returns>The strongest overlap and its current forward edge.</returns>
+  private static ObservationOverlap FindObservationOverlap(
+    IReadOnlyList<NodeState> previous,
+    IReadOnlyList<string> current)
+  {
+    int bestCount = 0;
+    int bestCharacters = 0;
+    int bestCurrentEnd = 0;
+
+    for (int oldStart = 0; oldStart < previous.Count; ++oldStart)
+    {
+      for (int newStart = 0; newStart < current.Count; ++newStart)
+      {
+        int oldIndex = oldStart;
+        int newIndex = newStart;
+        int count = 0;
+        int characters = 0;
+
+        while (oldIndex < previous.Count && newIndex < current.Count)
+        {
+          if (!ParagraphsOverlap(
+                previous[oldIndex].Text,
+                current[newIndex],
+                out int matchedCharacters))
+          {
+            break;
+          }
+
+          ++count;
+          characters += matchedCharacters;
+          ++oldIndex;
+          ++newIndex;
+        }
+
+        if (count > bestCount ||
+            (count == bestCount && characters > bestCharacters))
+        {
+          bestCount = count;
+          bestCharacters = characters;
+          bestCurrentEnd = newStart + count;
+        }
+      }
+    }
+
+    return bestCount >= 2 || bestCharacters >= 32
+      ? new ObservationOverlap(bestCount, bestCurrentEnd)
+      : ObservationOverlap.None;
+  }
+
+  /// <summary>
+  /// Determines whether two paragraphs are equal or one is a streaming prefix.
+  /// </summary>
+  /// <param name="left">Previous paragraph.</param>
+  /// <param name="right">Current paragraph.</param>
+  /// <param name="matchedCharacters">Stable prefix length.</param>
+  /// <returns>True when the paragraphs overlap safely.</returns>
+  private static bool ParagraphsOverlap(
+    string left,
+    string right,
+    out int matchedCharacters)
+  {
+    matchedCharacters = CommonPrefixLength(left, right);
+    int shorter = Math.Min(left.Length, right.Length);
+    return matchedCharacters == shorter &&
+      shorter >= MinimumPrefixMatch;
   }
 
   /// <summary>
@@ -633,6 +734,19 @@ internal sealed class TailTracker
     }
 
     return $"\"{escaped}\"";
+  }
+
+  /// <summary>
+  /// Stores the strongest overlap between consecutive observations.
+  /// </summary>
+  private sealed record ObservationOverlap(
+    int Count,
+    int CurrentEndIndex)
+  {
+    /// <summary>
+    /// Gets an empty overlap.
+    /// </summary>
+    public static ObservationOverlap None { get; } = new(0, 0);
   }
 
   /// <summary>
