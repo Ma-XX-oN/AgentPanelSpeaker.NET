@@ -20,6 +20,11 @@ internal sealed class TranscriptMonitor : IDisposable
   public event Action<string>? TextReady;
 
   /// <summary>
+  /// Raised when the visible transcript tail changes.
+  /// </summary>
+  public event Action<IReadOnlyList<string>>? TailChanged;
+
+  /// <summary>
   /// Raised when monitor status changes.
   /// </summary>
   public event Action<string>? StatusChanged;
@@ -169,6 +174,8 @@ internal sealed class TranscriptMonitor : IDisposable
     CancellationToken token)
   {
     var tracker = new TailTracker(speakExistingText);
+    IReadOnlyList<string> previousTail = Array.Empty<string>();
+    bool hasPreviousTail = false;
     StatusChanged?.Invoke("Monitoring.");
 
     try
@@ -177,6 +184,13 @@ internal sealed class TranscriptMonitor : IDisposable
       {
         DateTime nowUtc = DateTime.UtcNow;
         IReadOnlyList<string> tail = _reader.ReadTail(target);
+
+        if (!hasPreviousTail || !TailsEqual(previousTail, tail))
+        {
+          previousTail = tail.ToArray();
+          hasPreviousTail = true;
+          TailChanged?.Invoke(previousTail);
+        }
 
         Emit(tracker.Observe(tail, nowUtc));
         Emit(tracker.FlushIfIdle(nowUtc, idleTimeout));
@@ -211,6 +225,35 @@ internal sealed class TranscriptMonitor : IDisposable
         }
       }
     }
+  }
+
+  /// <summary>
+  /// Determines whether two observed tails contain the same text.
+  /// </summary>
+  /// <param name="left">The previous tail.</param>
+  /// <param name="right">The current tail.</param>
+  /// <returns>True when both tails are identical.</returns>
+  private static bool TailsEqual(
+    IReadOnlyList<string> left,
+    IReadOnlyList<string> right)
+  {
+    if (left.Count != right.Count)
+    {
+      return false;
+    }
+
+    for (int index = 0; index < left.Count; ++index)
+    {
+      if (!string.Equals(
+            left[index],
+            right[index],
+            StringComparison.Ordinal))
+      {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /// <summary>

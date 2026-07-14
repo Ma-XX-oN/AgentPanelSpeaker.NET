@@ -13,7 +13,8 @@ internal sealed class TranscriptReader
   private const int MaxTailParagraphs = 3;
 
   /// <summary>
-  /// Reads up to the final three logical text blocks exposed by the target.
+  /// Reads up to the final three visible logical text blocks exposed by the
+  /// target.
   /// </summary>
   /// <param name="target">The selected transcript container.</param>
   /// <returns>The normalized text blocks in display order.</returns>
@@ -21,22 +22,22 @@ internal sealed class TranscriptReader
   {
     ArgumentNullException.ThrowIfNull(target);
 
-    string textPatternText = ReadBestTextPattern(target);
-    IReadOnlyList<string> paragraphs = SplitIntoParagraphs(textPatternText);
-    if (paragraphs.Count != 0)
+    IReadOnlyList<string> visibleText = ReadTextElementNames(target);
+    if (visibleText.Count != 0)
     {
-      return paragraphs;
+      return visibleText;
     }
 
-    return ReadTextElementNames(target);
+    string textPatternText = ReadBottomTextPattern(target);
+    return SplitIntoParagraphs(textPatternText);
   }
 
   /// <summary>
-  /// Finds the most substantial TextPattern provider beneath the target.
+  /// Finds the lowest visible TextPattern provider beneath the target.
   /// </summary>
   /// <param name="target">The selected transcript container.</param>
-  /// <returns>Text from the strongest provider, or an empty string.</returns>
-  private static string ReadBestTextPattern(AutomationElement target)
+  /// <returns>Text from the lowest provider, or an empty string.</returns>
+  private static string ReadBottomTextPattern(AutomationElement target)
   {
     var condition = new PropertyCondition(
       AutomationElement.IsTextPatternAvailableProperty,
@@ -55,15 +56,24 @@ internal sealed class TranscriptReader
     }
 
     string bestText = string.Empty;
+    double bestBottom = double.NegativeInfinity;
     int bestParagraphCount = 0;
 
     foreach (AutomationElement provider in providers)
     {
       try
       {
-        if (!provider.TryGetCurrentPattern(
+        if (provider.Current.IsOffscreen ||
+            !provider.TryGetCurrentPattern(
               TextPattern.Pattern,
               out object rawPattern))
+        {
+          continue;
+        }
+
+        System.Windows.Rect bounds =
+          provider.Current.BoundingRectangle;
+        if (!HasUsableBounds(bounds))
         {
           continue;
         }
@@ -76,11 +86,16 @@ internal sealed class TranscriptReader
         }
 
         int paragraphCount = CountNonEmptyLines(candidate);
-        if (paragraphCount > bestParagraphCount ||
-            (paragraphCount == bestParagraphCount &&
-             candidate.Length > bestText.Length))
+        bool isLower = bounds.Bottom > bestBottom;
+        bool isEquivalentPosition = bounds.Bottom == bestBottom;
+        if (isLower ||
+            (isEquivalentPosition &&
+             (paragraphCount > bestParagraphCount ||
+              (paragraphCount == bestParagraphCount &&
+               candidate.Length > bestText.Length))))
         {
           bestText = candidate;
+          bestBottom = bounds.Bottom;
           bestParagraphCount = paragraphCount;
         }
       }
@@ -174,6 +189,12 @@ internal sealed class TranscriptReader
         }
 
         System.Windows.Rect bounds = element.Current.BoundingRectangle;
+        if (!HasUsableBounds(bounds))
+        {
+          ++ordinal;
+          continue;
+        }
+
         candidates.Add(new TextCandidate(
           text,
           bounds.Top,
@@ -209,6 +230,22 @@ internal sealed class TranscriptReader
       ? result
       : result.GetRange(result.Count - MaxTailParagraphs,
         MaxTailParagraphs);
+  }
+
+  /// <summary>
+  /// Determines whether a UI Automation bounding rectangle can be ordered.
+  /// </summary>
+  /// <param name="bounds">The rectangle to validate.</param>
+  /// <returns>True when the rectangle has finite, positive dimensions.</returns>
+  private static bool HasUsableBounds(System.Windows.Rect bounds)
+  {
+    return !bounds.IsEmpty &&
+      bounds.Width > 0.0 &&
+      bounds.Height > 0.0 &&
+      double.IsFinite(bounds.Top) &&
+      double.IsFinite(bounds.Left) &&
+      double.IsFinite(bounds.Bottom) &&
+      double.IsFinite(bounds.Right);
   }
 
   /// <summary>

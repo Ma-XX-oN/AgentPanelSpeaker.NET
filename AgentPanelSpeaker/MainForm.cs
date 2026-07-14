@@ -52,6 +52,7 @@ internal sealed class MainForm : Form
     FormClosing += MainFormClosing;
 
     _monitor.TextReady += MonitorTextReady;
+    _monitor.TailChanged += MonitorTailChanged;
     _monitor.StatusChanged += MonitorStatusChanged;
     _monitor.Faulted += MonitorFaulted;
 
@@ -72,8 +73,9 @@ internal sealed class MainForm : Form
     _instructionsLabel.MaximumSize = new Size(850, 0);
     _instructionsLabel.Text =
       "1. Select under pointer, then move the mouse over transcript text.  " +
-      "2. Use Parent until the preview shows the transcript tail rather " +
-      "than one text line.  3. Start monitoring.";
+      "2. Use Parent until the preview shows the bottom of the visible " +
+      "transcript rather than one text line.  3. Start monitoring; the " +
+      "preview then updates live.";
 
     ConfigureButton(_captureButton, "Select under pointer (3 s)");
     ConfigureButton(_parentButton, "Parent");
@@ -460,6 +462,16 @@ internal sealed class MainForm : Form
     _closing = true;
     _monitor.Dispose();
     _speech.Dispose();
+  }
+
+  /// <summary>
+  /// Updates the live preview when the monitored visible tail changes.
+  /// </summary>
+  /// <param name="tail">The latest visible transcript tail.</param>
+  private void MonitorTailChanged(IReadOnlyList<string> tail)
+  {
+    string preview = FormatPreview(tail);
+    PostToUi(() => _previewTextBox.Text = preview);
   }
 
   /// <summary>

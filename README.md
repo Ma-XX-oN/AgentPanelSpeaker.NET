@@ -98,3 +98,11 @@ inject code into the VS Code extension.
 - **Cancel speech** stops both current and queued speech.
 - Run Agent Panel Speaker at the same elevation level as VS Code.  When VS Code
   is elevated, this application must also be elevated for reliable access.
+
+## Transcript-tail selection
+
+Version 4 reads visible `ControlType.Text` elements first and orders them by
+their screen position.  It uses `TextPattern` only as a fallback.  This avoids
+selecting a larger, stale text provider located above the visible bottom of a
+virtualized transcript.  The detected-tail preview updates live after
+monitoring starts.
