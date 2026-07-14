@@ -1,4 +1,4 @@
-# Agent Panel Speaker v9
+# Agent Panel Speaker v10
 
 Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
 Visual Studio Code through Windows UI Automation and speaks new text through
@@ -43,22 +43,19 @@ The inactivity timeout speaks an unfinished trailing fragment after the text
 has remained unchanged for the configured period. Complete sentences ending
 in `.`, `?`, or `!` are queued immediately.
 
-## v9 changes
+## v10 changes
 
-- Reads up to 64 meaningful transcript nodes instead of only three.
-- Walks farther back through the selected TextPattern document, including
-  nodes outside the currently visible portion of the selected region.
-- Uses bounded normalized sentence history to suppress repeats when Electron
-  replaces or re-creates accessibility nodes.
-- Reconciles node identities separately for **Rewind sentence** and
-  **Rewind node**.
-- Joins text across accessibility-node boundaries before finding sentence
-  endings, preventing fragments such as `In` from being spoken alone.
-- Filters Codex/Claude tool cards such as `Ran ...`, `Running ...`,
-  `Edited ...`, duration labels, clocks, and transient thinking statuses.
-- Leaves per-monitor DPI scaling to WinForms instead of applying the suggested
-  window rectangle a second time.
-- Retains structured diagnostic logging under:
+- Excludes text ranges that UI Automation explicitly marks as hidden.
+- Treats `Ran ...`, `Edited ...`, shell headings, and their expandable child
+  details as one tool block, while preserving the next agent narration.
+- Excludes tool output without usable screen bounds unless it is recognizable
+  agent narration recovered after rapid scrolling.
+- Filters `Worked for ...` and `Context automatically compacted` status text.
+- Suppresses repeats when Electron inserts or removes whitespace at an
+  accessibility boundary.
+- Reads up to 64 narration nodes while scanning up to 512 raw paragraphs.
+- Retains **Rewind sentence**, **Rewind node**, per-monitor DPI handling, and
+  structured diagnostic logging under:
 
   `%LOCALAPPDATA%\AgentPanelSpeaker\Logs`
 

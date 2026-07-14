@@ -175,7 +175,8 @@ internal sealed class TailTracker
 
     foreach (SentenceSpan sentence in sentences)
     {
-      if (_sentenceSet.Contains(sentence.CanonicalText))
+      if (_sentenceSet.Contains(
+            CreateDuplicateKey(sentence.CanonicalText)))
       {
         continue;
       }
@@ -423,12 +424,13 @@ internal sealed class TailTracker
   /// <param name="canonical">Canonical sentence text.</param>
   private void RememberSentence(string canonical)
   {
-    if (canonical.Length == 0 || !_sentenceSet.Add(canonical))
+    string duplicateKey = CreateDuplicateKey(canonical);
+    if (duplicateKey.Length == 0 || !_sentenceSet.Add(duplicateKey))
     {
       return;
     }
 
-    _sentenceHistory.Enqueue(canonical);
+    _sentenceHistory.Enqueue(duplicateKey);
     while (_sentenceHistory.Count > MaximumRememberedSentences)
     {
       string removed = _sentenceHistory.Dequeue();
@@ -546,6 +548,25 @@ internal sealed class TailTracker
   private static string Canonicalize(string text)
   {
     return NormalizeSpeechText(text);
+  }
+
+  /// <summary>
+  /// Creates a duplicate key that tolerates UI Automation whitespace changes.
+  /// </summary>
+  /// <param name="canonical">Canonical sentence or fragment text.</param>
+  /// <returns>Case-insensitive text with all whitespace removed.</returns>
+  private static string CreateDuplicateKey(string canonical)
+  {
+    var builder = new StringBuilder(canonical.Length);
+    foreach (char character in canonical)
+    {
+      if (!char.IsWhiteSpace(character))
+      {
+        builder.Append(char.ToUpperInvariant(character));
+      }
+    }
+
+    return builder.ToString();
   }
 
   /// <summary>

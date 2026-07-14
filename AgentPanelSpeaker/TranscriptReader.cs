@@ -145,14 +145,15 @@ internal sealed class TranscriptReader
     IReadOnlyList<string> tail = ReadParagraphs(
       selected.Pattern,
       selected.Bounds,
-      region);
+      region,
+      out string paragraphDetails);
     details = $"providers={providers.Count}; " +
       $"selectedType={selected.ControlType}; " +
       $"selectedName={selected.Name}; " +
       $"bounds={RectangleToString(selected.Bounds)}; " +
       $"overlap={selected.OverlapArea:R}; " +
       $"providerArea={selected.ProviderArea:R}; " +
-      $"paragraphs={tail.Count}";
+      $"paragraphs={tail.Count}; {paragraphDetails}";
     return tail;
   }
 
@@ -162,11 +163,13 @@ internal sealed class TranscriptReader
   /// <param name="pattern">Selected text provider.</param>
   /// <param name="providerBounds">Provider screen bounds.</param>
   /// <param name="region">Selected transcript region.</param>
+  /// <param name="filterDetails">Filtering counters for diagnostics.</param>
   /// <returns>The final meaningful paragraphs.</returns>
   private static IReadOnlyList<string> ReadParagraphs(
     TextPattern pattern,
     System.Windows.Rect providerBounds,
-    System.Drawing.Rectangle region)
+    System.Drawing.Rectangle region,
+    out string filterDetails)
   {
     System.Drawing.Rectangle providerRectangle = ToDrawingRectangle(
       providerBounds);
@@ -175,6 +178,7 @@ internal sealed class TranscriptReader
       region);
     if (intersection.Width <= 0 || intersection.Height <= 0)
     {
+      filterDetails = "range intersection empty";
       return Array.Empty<string>();
     }
 
@@ -189,18 +193,20 @@ internal sealed class TranscriptReader
     }
     catch (InvalidOperationException)
     {
+      filterDetails = "paragraph navigation unavailable; document fallback";
       return ReadDocumentTail(pattern);
     }
     catch (ArgumentException)
     {
+      filterDetails = "paragraph point invalid; document fallback";
       return ReadDocumentTail(pattern);
     }
 
-    var reverse = new List<string>(MaxTailParagraphs);
+    var reverse = new List<ParagraphCandidate>(MaxParagraphSearch);
     string previousFingerprint = string.Empty;
 
     for (int attempt = 0;
-         attempt < MaxParagraphSearch && reverse.Count < MaxTailParagraphs;
+         attempt < MaxParagraphSearch;
          ++attempt)
     {
       string rawText;
@@ -226,15 +232,13 @@ internal sealed class TranscriptReader
       }
 
       previousFingerprint = fingerprint;
-      if (paragraph.Length != 0 &&
-          !IsIgnoredText(paragraph) &&
-          (reverse.Count == 0 ||
-           !string.Equals(
-             reverse[^1],
-             paragraph,
-             StringComparison.Ordinal)))
+      if (paragraph.Length != 0)
       {
-        reverse.Add(paragraph);
+        reverse.Add(new ParagraphCandidate(
+          paragraph,
+          IsRangeHidden(range),
+          rectangles.Any(HasUsableBounds),
+          RangeIntersectsRegion(rectangles, region)));
       }
 
       int moved;
@@ -254,8 +258,9 @@ internal sealed class TranscriptReader
     }
 
     reverse.Reverse();
-    return reverse;
+    return FilterTextPatternParagraphs(reverse, out filterDetails);
   }
+
 
   /// <summary>
   /// Falls back to the provider's document text when paragraph navigation is
@@ -419,27 +424,341 @@ internal sealed class TranscriptReader
       .Replace("\r\n", "\n", StringComparison.Ordinal)
       .Replace('\r', '\n');
 
-    var lines = new List<string>();
+    var paragraphs = new List<ParagraphCandidate>();
     foreach (string rawLine in normalizedNewlines.Split('\n'))
     {
       string line = NormalizeParagraph(rawLine);
-      if (line.Length == 0 || IsIgnoredText(line))
+      if (line.Length == 0)
       {
         continue;
       }
 
-      if (lines.Count != 0 &&
-          string.Equals(lines[^1], line, StringComparison.Ordinal))
-      {
-        continue;
-      }
-
-      lines.Add(line);
+      paragraphs.Add(new ParagraphCandidate(
+        line,
+        false,
+        false,
+        false));
     }
 
-    return lines.Count <= MaxTailParagraphs
-      ? lines
-      : lines.Skip(lines.Count - MaxTailParagraphs).ToArray();
+    return FilterTextPatternParagraphs(paragraphs, out _);
+  }
+
+  /// <summary>
+  /// Removes hidden and tool-card text while preserving agent narration.
+  /// </summary>
+  /// <param name="paragraphs">
+  /// Paragraphs in forward transcript order.
+  /// </param>
+  /// <param name="details">Filtering counters for diagnostics.</param>
+  /// <returns>The final bounded narration tail.</returns>
+  private static IReadOnlyList<string> FilterTextPatternParagraphs(
+    IReadOnlyList<ParagraphCandidate> paragraphs,
+    out string details)
+  {
+    var result = new List<string>(paragraphs.Count);
+    int hiddenCount = 0;
+    int toolCount = 0;
+    int unboundedCount = 0;
+    int outsideRegionCount = 0;
+    int ignoredCount = 0;
+    bool insideToolBlock = false;
+
+    foreach (ParagraphCandidate candidate in paragraphs)
+    {
+      string text = candidate.Text;
+      if (!candidate.IntersectsRegion)
+      {
+        ++outsideRegionCount;
+      }
+
+      if (candidate.IsHidden)
+      {
+        ++hiddenCount;
+        continue;
+      }
+
+      if (IsToolActivity(text) ||
+          IsToolHeading(text) ||
+          IsToolGroupSummary(text))
+      {
+        insideToolBlock = true;
+        ++toolCount;
+        continue;
+      }
+
+      bool narration = LooksLikeAgentNarration(text);
+      if (insideToolBlock)
+      {
+        if (!narration)
+        {
+          ++toolCount;
+          continue;
+        }
+
+        insideToolBlock = false;
+      }
+
+      if (!candidate.HasUsableBounds && !narration)
+      {
+        ++unboundedCount;
+        continue;
+      }
+
+      if (IsIgnoredText(text))
+      {
+        ++ignoredCount;
+        continue;
+      }
+
+      if (result.Count != 0 &&
+          string.Equals(result[^1], text, StringComparison.Ordinal))
+      {
+        continue;
+      }
+
+      result.Add(text);
+    }
+
+    IReadOnlyList<string> tail = result.Count <= MaxTailParagraphs
+      ? result
+      : result.Skip(result.Count - MaxTailParagraphs).ToArray();
+    details = $"raw={paragraphs.Count}; hidden={hiddenCount}; " +
+      $"tool={toolCount}; unbounded={unboundedCount}; " +
+      $"outsideRegion={outsideRegionCount}; ignored={ignoredCount}; " +
+      $"retained={tail.Count}";
+    return tail;
+  }
+
+  /// <summary>
+  /// Reads the UI Automation hidden-text attribute for one paragraph range.
+  /// </summary>
+  /// <param name="range">Paragraph text range.</param>
+  /// <returns>True only when the provider explicitly marks it hidden.</returns>
+  private static bool IsRangeHidden(TextPatternRange range)
+  {
+    ArgumentNullException.ThrowIfNull(range);
+
+    try
+    {
+      object value = range.GetAttributeValue(TextPattern.IsHiddenAttribute);
+      return value is bool isHidden && isHidden;
+    }
+    catch (InvalidOperationException)
+    {
+      return false;
+    }
+    catch (ElementNotAvailableException)
+    {
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Detects aggregate tool cards that own expandable child details.
+  /// </summary>
+  /// <param name="text">Normalized paragraph text.</param>
+  /// <returns>True when the paragraph starts a tool-detail block.</returns>
+  private static bool IsToolGroupSummary(string text)
+  {
+    string candidate = text.Trim();
+    string[] prefixes =
+    {
+      "Ran ",
+      "Edited ",
+      "Read ",
+      "Wrote "
+    };
+
+    foreach (string prefix in prefixes)
+    {
+      if (!candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+      {
+        continue;
+      }
+
+      int numberStart = prefix.Length;
+      int numberEnd = numberStart;
+      while (numberEnd < candidate.Length &&
+             char.IsDigit(candidate[numberEnd]))
+      {
+        ++numberEnd;
+      }
+
+      if (numberEnd == numberStart)
+      {
+        return false;
+      }
+
+      string suffix = candidate[numberEnd..].TrimStart();
+      return suffix.StartsWith("command",
+          StringComparison.OrdinalIgnoreCase) ||
+        suffix.StartsWith("file",
+          StringComparison.OrdinalIgnoreCase);
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Detects sentence-like agent narration that can end a tool-detail block.
+  /// </summary>
+  /// <param name="text">Normalized paragraph text.</param>
+  /// <returns>True when the paragraph is narration rather than tool detail.</returns>
+  private static bool LooksLikeAgentNarration(string text)
+  {
+    string candidate = text.Trim();
+    if (candidate.Length < 12 ||
+        IsIgnoredText(candidate) ||
+        IsCommandLikeText(candidate))
+    {
+      return false;
+    }
+
+    int wordCount = CountWords(candidate);
+    if (wordCount < 4)
+    {
+      return false;
+    }
+
+    if (candidate.IndexOfAny(new[] { '.', '?', '!' }) >= 0)
+    {
+      return true;
+    }
+
+    string[] prefixes =
+    {
+      "I ",
+      "I'm ",
+      "I’m ",
+      "I've ",
+      "I’ve ",
+      "I'll ",
+      "I’ll ",
+      "The ",
+      "This ",
+      "That ",
+      "There ",
+      "We ",
+      "We're ",
+      "We’re ",
+      "Now ",
+      "Next ",
+      "First ",
+      "My ",
+      "It "
+    };
+
+    return prefixes.Any(prefix => candidate.StartsWith(
+      prefix,
+      StringComparison.OrdinalIgnoreCase));
+  }
+
+  /// <summary>
+  /// Detects shell, source, and diff text that is not agent narration.
+  /// </summary>
+  /// <param name="text">Normalized paragraph text.</param>
+  /// <returns>True when the text looks like a command or source fragment.</returns>
+  private static bool IsCommandLikeText(string text)
+  {
+    string candidate = text.TrimStart();
+    string[] prefixes =
+    {
+      "$ ",
+      "PS ",
+      "git ",
+      "rg ",
+      "cmake ",
+      "ctest ",
+      "Get-",
+      "Set-",
+      "Write-",
+      "if (",
+      "foreach (",
+      "for (",
+      "while (",
+      "class ",
+      "struct ",
+      "template<",
+      "inline ",
+      "constexpr ",
+      "using ",
+      "namespace ",
+      "#include",
+      "{",
+      "}",
+      "};"
+    };
+
+    if (prefixes.Any(prefix => candidate.StartsWith(
+          prefix,
+          StringComparison.OrdinalIgnoreCase)) ||
+        IsFileChangeSummary(candidate))
+    {
+      return true;
+    }
+
+    if (candidate.All(character =>
+          char.IsDigit(character) ||
+          char.IsWhiteSpace(character) ||
+          character is ':' or '-' or '+' or '.'))
+    {
+      return true;
+    }
+
+    int punctuation = candidate.Count(character =>
+      character is '{' or '}' or '[' or ']' or '(' or ')' or
+        '<' or '>' or '=' or ';' or '\\');
+    return punctuation >= 6 && punctuation * 4 >= candidate.Length;
+  }
+
+  /// <summary>
+  /// Detects compact file-change labels such as "Config.hpp+43-2".
+  /// </summary>
+  /// <param name="text">Normalized candidate text.</param>
+  /// <returns>True when the text is a compact file-change label.</returns>
+  private static bool IsFileChangeSummary(string text)
+  {
+    if (text.Any(char.IsWhiteSpace))
+    {
+      return false;
+    }
+
+    int plus = text.LastIndexOf('+');
+    int minus = plus < 0
+      ? -1
+      : text.IndexOf('-', plus + 1);
+    if (plus <= 0 || minus <= plus + 1 || minus == text.Length - 1)
+    {
+      return false;
+    }
+
+    return text[(plus + 1)..minus].All(char.IsDigit) &&
+      text[(minus + 1)..].All(char.IsDigit) &&
+      text[..plus].Contains('.');
+  }
+
+  /// <summary>
+  /// Counts word starts in normalized text.
+  /// </summary>
+  /// <param name="text">Text to inspect.</param>
+  /// <returns>Number of word starts.</returns>
+  private static int CountWords(string text)
+  {
+    int count = 0;
+    bool insideWord = false;
+
+    foreach (char character in text)
+    {
+      bool isWord = char.IsLetterOrDigit(character);
+      if (isWord && !insideWord)
+      {
+        ++count;
+      }
+
+      insideWord = isWord;
+    }
+
+    return count;
   }
 
   /// <summary>
@@ -463,12 +782,15 @@ internal sealed class TranscriptReader
           StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("View usage",
           StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Equals("Context automatically compacted",
+          StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("IN", StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("OUT", StringComparison.OrdinalIgnoreCase) ||
         trimmed.StartsWith("You've used ",
           StringComparison.OrdinalIgnoreCase) ||
         IsThoughtDuration(trimmed) ||
         IsWorkingDuration(trimmed) ||
+        IsWorkedDuration(trimmed) ||
         IsToolHeading(trimmed))
     {
       return true;
@@ -486,16 +808,11 @@ internal sealed class TranscriptReader
   /// <returns>True when the text is tool activity rather than prose.</returns>
   private static bool IsToolActivity(string text)
   {
-    if (text.StartsWith("Ran ", StringComparison.OrdinalIgnoreCase) ||
-        text.StartsWith("Running ", StringComparison.OrdinalIgnoreCase) ||
-        text.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase) ||
-        text.StartsWith("Read ", StringComparison.OrdinalIgnoreCase) ||
-        text.StartsWith("Wrote ", StringComparison.OrdinalIgnoreCase))
-    {
-      return text.Length <= 500;
-    }
-
-    return false;
+    return text.StartsWith("Ran ", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("Running ", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("Read ", StringComparison.OrdinalIgnoreCase) ||
+      text.StartsWith("Wrote ", StringComparison.OrdinalIgnoreCase);
   }
 
   /// <summary>
@@ -536,6 +853,18 @@ internal sealed class TranscriptReader
   private static bool IsWorkingDuration(string text)
   {
     return text.StartsWith("Working for ",
+      StringComparison.OrdinalIgnoreCase) &&
+      text.Length <= 40;
+  }
+
+  /// <summary>
+  /// Detects completed duration labels such as "Worked for 1m 38s".
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a completed-work duration label.</returns>
+  private static bool IsWorkedDuration(string text)
+  {
+    return text.StartsWith("Worked for ",
       StringComparison.OrdinalIgnoreCase) &&
       text.Length <= 40;
   }
@@ -619,6 +948,11 @@ internal sealed class TranscriptReader
   /// <returns>True when the text is a tool-card heading.</returns>
   private static bool IsToolHeading(string text)
   {
+    if (text.Equals("Shell", StringComparison.OrdinalIgnoreCase))
+    {
+      return true;
+    }
+
     if (text.Length > 100)
     {
       return false;
@@ -698,7 +1032,7 @@ internal sealed class TranscriptReader
   {
     if (rectangles.Count == 0)
     {
-      return true;
+      return false;
     }
 
     foreach (System.Windows.Rect bounds in rectangles)
@@ -860,6 +1194,15 @@ internal sealed class TranscriptReader
       ? text
       : text[^maximumLength..];
   }
+
+  /// <summary>
+  /// Stores one TextPattern paragraph and its visibility information.
+  /// </summary>
+  private sealed record ParagraphCandidate(
+    string Text,
+    bool IsHidden,
+    bool HasUsableBounds,
+    bool IntersectsRegion);
 
   /// <summary>
   /// Stores and ranks a TextPattern provider.
