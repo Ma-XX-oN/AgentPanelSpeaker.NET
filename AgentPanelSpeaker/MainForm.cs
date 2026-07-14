@@ -25,7 +25,9 @@ internal sealed class MainForm : Form
   private readonly Button _stopButton = new();
   private readonly Button _cancelSpeechButton = new();
   private readonly Button _rewindSentenceButton = new();
+  private readonly Button _forwardSentenceButton = new();
   private readonly Button _rewindNodeButton = new();
+  private readonly Button _forwardNodeButton = new();
   private readonly Button _testVoiceButton = new();
   private readonly Button _openLogButton = new();
   private readonly TextBox _logTextBox = new();
@@ -48,7 +50,9 @@ internal sealed class MainForm : Form
     _stopButton.Click += StopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
     _rewindSentenceButton.Click += RewindSentenceButtonClicked;
+    _forwardSentenceButton.Click += ForwardSentenceButtonClicked;
     _rewindNodeButton.Click += RewindNodeButtonClicked;
+    _forwardNodeButton.Click += ForwardNodeButtonClicked;
     _testVoiceButton.Click += TestVoiceButtonClicked;
     _openLogButton.Click += OpenLogButtonClicked;
     DpiChanged += MainFormDpiChanged;
@@ -70,7 +74,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v11";
+    Text = "Agent Panel Speaker v12";
     AutoScaleDimensions = new SizeF(96.0f, 96.0f);
     AutoScaleMode = AutoScaleMode.Dpi;
     StartPosition = FormStartPosition.CenterScreen;
@@ -91,7 +95,9 @@ internal sealed class MainForm : Form
     ConfigureButton(_stopButton, "Stop");
     ConfigureButton(_cancelSpeechButton, "Cancel speech");
     ConfigureButton(_rewindSentenceButton, "Rewind sentence");
+    ConfigureButton(_forwardSentenceButton, "Forward sentence");
     ConfigureButton(_rewindNodeButton, "Rewind node");
+    ConfigureButton(_forwardNodeButton, "Forward node");
     ConfigureButton(_testVoiceButton, "Test voice");
     ConfigureButton(_openLogButton, "Open diagnostic log");
 
@@ -163,7 +169,9 @@ internal sealed class MainForm : Form
       _stopButton,
       _cancelSpeechButton,
       _rewindSentenceButton,
+      _forwardSentenceButton,
       _rewindNodeButton,
+      _forwardNodeButton,
       _testVoiceButton,
       _openLogButton
     });
@@ -398,7 +406,31 @@ internal sealed class MainForm : Form
     if (_speech.TryRewindSentence(out string text))
     {
       DiagnosticLog.Write("speech.rewind_sentence", new { text });
-      AppendLog($"Rewind sentence: {text}");
+      AppendLog($"Rewind sentence and continue: {text}");
+    }
+    else
+    {
+      AppendLog("No earlier sentence is available.");
+    }
+  }
+
+  /// <summary>
+  /// Moves forward one spoken sentence and continues from there.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void ForwardSentenceButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    if (_speech.TryForwardSentence(out string text))
+    {
+      DiagnosticLog.Write("speech.forward_sentence", new { text });
+      AppendLog($"Forward sentence and continue: {text}");
+    }
+    else
+    {
+      AppendLog("No later sentence is available.");
     }
   }
 
@@ -414,7 +446,31 @@ internal sealed class MainForm : Form
     if (_speech.TryRewindNode(out string text))
     {
       DiagnosticLog.Write("speech.rewind_node", new { text });
-      AppendLog($"Rewind node: {text}");
+      AppendLog($"Rewind node and continue: {text}");
+    }
+    else
+    {
+      AppendLog("No earlier node is available.");
+    }
+  }
+
+  /// <summary>
+  /// Moves forward one spoken accessibility node and continues from there.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Unused event arguments.</param>
+  private void ForwardNodeButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    if (_speech.TryForwardNode(out string text))
+    {
+      DiagnosticLog.Write("speech.forward_node", new { text });
+      AppendLog($"Forward node and continue: {text}");
+    }
+    else
+    {
+      AppendLog("No later node is available.");
     }
   }
 
@@ -843,6 +899,8 @@ internal sealed class MainForm : Form
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
     _rewindSentenceButton.Enabled = _speech.HasHistory;
+    _forwardSentenceButton.Enabled = _speech.HasHistory;
     _rewindNodeButton.Enabled = _speech.HasHistory;
+    _forwardNodeButton.Enabled = _speech.HasHistory;
   }
 }

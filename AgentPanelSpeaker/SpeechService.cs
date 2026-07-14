@@ -3,15 +3,21 @@ using System.Speech.Synthesis;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Queues Windows SAPI speech and retains sentence and node replay history.
+/// Serializes Windows SAPI speech and retains sentence and node playback
+/// history.
 /// </summary>
 internal sealed class SpeechService : IDisposable
 {
   private const int MaximumHistoryEntries = 1000;
 
+  private readonly object _sync = new();
   private readonly SpeechSynthesizer _synthesizer = new();
   private readonly List<SpeechFragment> _history = new();
-  private int _rewindIndex;
+  private ActiveSpeechKind _activeKind;
+  private int _activeHistoryIndex = -1;
+  private int _nextHistoryIndex;
+  private int? _pendingHistoryIndex;
+  private string? _pendingUntrackedText;
   private bool _disposed;
 
   /// <summary>
@@ -20,12 +26,22 @@ internal sealed class SpeechService : IDisposable
   public SpeechService()
   {
     _synthesizer.SetOutputToDefaultAudioDevice();
+    _synthesizer.SpeakCompleted += SynthesizerSpeakCompleted;
   }
 
   /// <summary>
   /// Gets whether replay history contains any live transcript speech.
   /// </summary>
-  public bool HasHistory => _history.Count != 0;
+  public bool HasHistory
+  {
+    get
+    {
+      lock (_sync)
+      {
+        return _history.Count != 0;
+      }
+    }
+  }
 
   /// <summary>
   /// Gets installed enabled voice names.
@@ -33,14 +49,17 @@ internal sealed class SpeechService : IDisposable
   /// <returns>Voice names in display order.</returns>
   public IReadOnlyList<string> GetInstalledVoiceNames()
   {
-    ThrowIfDisposed();
+    lock (_sync)
+    {
+      ThrowIfDisposed();
 
-    return _synthesizer
-      .GetInstalledVoices()
-      .Where(voice => voice.Enabled)
-      .Select(voice => voice.VoiceInfo.Name)
-      .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
-      .ToArray();
+      return _synthesizer
+        .GetInstalledVoices()
+        .Where(voice => voice.Enabled)
+        .Select(voice => voice.VoiceInfo.Name)
+        .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
+        .ToArray();
+    }
   }
 
   /// <summary>
@@ -50,32 +69,34 @@ internal sealed class SpeechService : IDisposable
   /// <param name="rate">Speech rate from -10 through 10.</param>
   public void Configure(string voiceName, int rate)
   {
-    ThrowIfDisposed();
-
-    if (rate is < -10 or > 10)
+    lock (_sync)
     {
-      throw new ArgumentOutOfRangeException(
-        nameof(rate),
-        rate,
-        "Speech rate must be between -10 and 10.");
-    }
+      ThrowIfDisposed();
 
-    if (!string.IsNullOrWhiteSpace(voiceName))
-    {
-      _synthesizer.SelectVoice(voiceName);
-    }
+      if (rate is < -10 or > 10)
+      {
+        throw new ArgumentOutOfRangeException(
+          nameof(rate),
+          rate,
+          "Speech rate must be between -10 and 10.");
+      }
 
-    _synthesizer.Rate = rate;
+      if (!string.IsNullOrWhiteSpace(voiceName))
+      {
+        _synthesizer.SelectVoice(voiceName);
+      }
+
+      _synthesizer.Rate = rate;
+    }
   }
 
   /// <summary>
-  /// Queues a live transcript fragment and records it for replay.
+  /// Queues a live transcript fragment and records it for playback.
   /// </summary>
   /// <param name="fragment">Live fragment.</param>
   public void SpeakLive(SpeechFragment fragment)
   {
     ArgumentNullException.ThrowIfNull(fragment);
-    ThrowIfDisposed();
 
     string text = fragment.Text.Trim();
     if (text.Length == 0)
@@ -83,100 +104,170 @@ internal sealed class SpeechService : IDisposable
       return;
     }
 
-    _history.Add(fragment with { Text = text });
-    TrimHistory();
-    _rewindIndex = _history.Count;
-    _synthesizer.SpeakAsync(text);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+
+      _history.Add(fragment with { Text = text });
+      TrimHistoryLocked();
+      StartPendingOrNextLocked();
+    }
   }
 
   /// <summary>
-  /// Queues untracked text, such as the voice test phrase.
+  /// Cancels transcript playback and speaks untracked text such as the voice
+  /// test phrase.
   /// </summary>
   /// <param name="text">Text to speak.</param>
   public void SpeakUntracked(string text)
   {
-    ThrowIfDisposed();
-
-    if (!string.IsNullOrWhiteSpace(text))
+    if (string.IsNullOrWhiteSpace(text))
     {
-      _synthesizer.SpeakAsync(text.Trim());
+      return;
+    }
+
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+
+      _pendingHistoryIndex = null;
+      _pendingUntrackedText = text.Trim();
+      _nextHistoryIndex = _history.Count;
+      RestartPendingLocked();
     }
   }
 
   /// <summary>
-  /// Cancels queued speech and replays the previous sentence.
+  /// Moves one sentence backward and continues through all later history.
   /// </summary>
-  /// <param name="text">Replayed sentence.</param>
-  /// <returns>True when sentence history was available.</returns>
+  /// <param name="text">Sentence at the new playback position.</param>
+  /// <returns>True when an earlier playback position was available.</returns>
   public bool TryRewindSentence(out string text)
   {
-    ThrowIfDisposed();
-    text = string.Empty;
-
-    int candidate = _rewindIndex >= _history.Count
-      ? _history.Count - 1
-      : _rewindIndex - 1;
-    if (candidate < 0)
+    lock (_sync)
     {
-      return false;
-    }
+      ThrowIfDisposed();
+      text = string.Empty;
 
-    _rewindIndex = candidate;
-    text = _history[candidate].Text;
-    Replay(text);
-    return true;
+      int anchor = GetNavigationAnchorLocked();
+      int candidate = anchor >= _history.Count
+        ? _history.Count - 1
+        : anchor - 1;
+      if (candidate < 0)
+      {
+        return false;
+      }
+
+      text = _history[candidate].Text;
+      RestartHistoryLocked(candidate);
+      return true;
+    }
   }
 
   /// <summary>
-  /// Cancels queued speech and replays the previous accessibility node.
+  /// Moves one sentence forward and continues through all later history.
   /// </summary>
-  /// <param name="text">Replayed node text.</param>
-  /// <returns>True when node history was available.</returns>
+  /// <param name="text">Sentence at the new playback position.</param>
+  /// <returns>True when a later playback position was available.</returns>
+  public bool TryForwardSentence(out string text)
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      text = string.Empty;
+
+      int anchor = GetNavigationAnchorLocked();
+      int candidate = anchor + 1;
+      if (anchor >= _history.Count || candidate >= _history.Count)
+      {
+        return false;
+      }
+
+      text = _history[candidate].Text;
+      RestartHistoryLocked(candidate);
+      return true;
+    }
+  }
+
+  /// <summary>
+  /// Moves to the previous accessibility node and continues through all later
+  /// history.
+  /// </summary>
+  /// <param name="text">Node text at the new playback position.</param>
+  /// <returns>True when a previous node was available.</returns>
   public bool TryRewindNode(out string text)
   {
-    ThrowIfDisposed();
-    text = string.Empty;
-
-    int candidate = _rewindIndex >= _history.Count
-      ? _history.Count - 1
-      : _rewindIndex - 1;
-    if (candidate < 0)
+    lock (_sync)
     {
-      return false;
-    }
+      ThrowIfDisposed();
+      text = string.Empty;
 
-    long nodeId = _history[candidate].NodeId;
-    int first = candidate;
-    while (first > 0 && _history[first - 1].NodeId == nodeId)
-    {
-      --first;
-    }
+      int anchor = GetNavigationAnchorLocked();
+      int candidate = anchor >= _history.Count
+        ? _history.Count - 1
+        : anchor - 1;
+      if (candidate < 0)
+      {
+        return false;
+      }
 
-    int last = candidate;
-    while (last + 1 < _history.Count &&
-           _history[last + 1].NodeId == nodeId)
-    {
-      ++last;
+      int first = FindNodeStartLocked(candidate);
+      int last = FindNodeEndLocked(first);
+      text = JoinHistoryLocked(first, last);
+      RestartHistoryLocked(first);
+      return true;
     }
-
-    _rewindIndex = first;
-    text = string.Join(
-      " ",
-      _history
-        .Skip(first)
-        .Take(last - first + 1)
-        .Select(fragment => fragment.Text));
-    Replay(text);
-    return true;
   }
 
   /// <summary>
-  /// Cancels current and queued speech.
+  /// Moves to the next accessibility node and continues through all later
+  /// history.
+  /// </summary>
+  /// <param name="text">Node text at the new playback position.</param>
+  /// <returns>True when a later node was available.</returns>
+  public bool TryForwardNode(out string text)
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      text = string.Empty;
+
+      int anchor = GetNavigationAnchorLocked();
+      if (anchor >= _history.Count)
+      {
+        return false;
+      }
+
+      int candidate = FindNodeEndLocked(anchor) + 1;
+      if (candidate >= _history.Count)
+      {
+        return false;
+      }
+
+      int last = FindNodeEndLocked(candidate);
+      text = JoinHistoryLocked(candidate, last);
+      RestartHistoryLocked(candidate);
+      return true;
+    }
+  }
+
+  /// <summary>
+  /// Cancels current and queued speech and returns playback to the live end.
   /// </summary>
   public void CancelAll()
   {
-    ThrowIfDisposed();
-    _synthesizer.SpeakAsyncCancelAll();
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+
+      _pendingHistoryIndex = null;
+      _pendingUntrackedText = null;
+      _nextHistoryIndex = _history.Count;
+      if (_activeKind != ActiveSpeechKind.None)
+      {
+        _synthesizer.SpeakAsyncCancelAll();
+      }
+    }
   }
 
   /// <summary>
@@ -184,30 +275,186 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   public void Dispose()
   {
-    if (_disposed)
+    lock (_sync)
+    {
+      if (_disposed)
+      {
+        return;
+      }
+
+      _disposed = true;
+      _pendingHistoryIndex = null;
+      _pendingUntrackedText = null;
+      _synthesizer.SpeakCompleted -= SynthesizerSpeakCompleted;
+      _synthesizer.SpeakAsyncCancelAll();
+      _synthesizer.Dispose();
+    }
+  }
+
+  /// <summary>
+  /// Advances the serialized playback queue after one prompt completes or is
+  /// cancelled.
+  /// </summary>
+  /// <param name="sender">Unused event sender.</param>
+  /// <param name="eventArgs">Speech completion information.</param>
+  private void SynthesizerSpeakCompleted(
+    object? sender,
+    SpeakCompletedEventArgs eventArgs)
+  {
+    lock (_sync)
+    {
+      if (_disposed)
+      {
+        return;
+      }
+
+      _activeKind = ActiveSpeechKind.None;
+      _activeHistoryIndex = -1;
+      TrimHistoryLocked();
+      StartPendingOrNextLocked();
+    }
+  }
+
+  /// <summary>
+  /// Restarts serialized playback from one history entry.
+  /// </summary>
+  /// <param name="index">History entry to speak first.</param>
+  private void RestartHistoryLocked(int index)
+  {
+    _pendingUntrackedText = null;
+    _pendingHistoryIndex = index;
+    _nextHistoryIndex = index;
+    RestartPendingLocked();
+  }
+
+  /// <summary>
+  /// Cancels the active prompt or starts a pending request immediately.
+  /// </summary>
+  private void RestartPendingLocked()
+  {
+    if (_activeKind != ActiveSpeechKind.None)
+    {
+      _synthesizer.SpeakAsyncCancelAll();
+      return;
+    }
+
+    StartPendingOrNextLocked();
+  }
+
+  /// <summary>
+  /// Starts pending untracked text, a pending history restart, or the next
+  /// sequential history entry.
+  /// </summary>
+  private void StartPendingOrNextLocked()
+  {
+    if (_activeKind != ActiveSpeechKind.None)
     {
       return;
     }
 
-    _synthesizer.SpeakAsyncCancelAll();
-    _synthesizer.Dispose();
-    _disposed = true;
+    if (_pendingUntrackedText is not null)
+    {
+      string text = _pendingUntrackedText;
+      _pendingUntrackedText = null;
+      _activeKind = ActiveSpeechKind.Untracked;
+      _synthesizer.SpeakAsync(text);
+      return;
+    }
+
+    if (_pendingHistoryIndex is int pendingIndex)
+    {
+      _nextHistoryIndex = pendingIndex;
+      _pendingHistoryIndex = null;
+    }
+
+    if (_nextHistoryIndex >= _history.Count)
+    {
+      return;
+    }
+
+    _activeHistoryIndex = _nextHistoryIndex;
+    ++_nextHistoryIndex;
+    _activeKind = ActiveSpeechKind.History;
+    _synthesizer.SpeakAsync(_history[_activeHistoryIndex].Text);
   }
 
   /// <summary>
-  /// Cancels pending speech and speaks one historical selection.
+  /// Finds the history entry that navigation should use as its current
+  /// position.
   /// </summary>
-  /// <param name="text">Historical text to replay.</param>
-  private void Replay(string text)
+  /// <returns>The active, pending, next, or end history index.</returns>
+  private int GetNavigationAnchorLocked()
   {
-    _synthesizer.SpeakAsyncCancelAll();
-    _synthesizer.SpeakAsync(text);
+    if (_pendingHistoryIndex is int pendingIndex)
+    {
+      return pendingIndex;
+    }
+
+    if (_activeKind == ActiveSpeechKind.History)
+    {
+      return _activeHistoryIndex;
+    }
+
+    return _nextHistoryIndex < _history.Count
+      ? _nextHistoryIndex
+      : _history.Count;
   }
 
   /// <summary>
-  /// Bounds replay history while preserving the rewind cursor.
+  /// Finds the first history entry belonging to one accessibility node.
   /// </summary>
-  private void TrimHistory()
+  /// <param name="index">An entry within the node.</param>
+  /// <returns>The first entry index for that node.</returns>
+  private int FindNodeStartLocked(int index)
+  {
+    long nodeId = _history[index].NodeId;
+    int first = index;
+    while (first > 0 && _history[first - 1].NodeId == nodeId)
+    {
+      --first;
+    }
+
+    return first;
+  }
+
+  /// <summary>
+  /// Finds the final history entry belonging to one accessibility node.
+  /// </summary>
+  /// <param name="index">An entry within the node.</param>
+  /// <returns>The final entry index for that node.</returns>
+  private int FindNodeEndLocked(int index)
+  {
+    long nodeId = _history[index].NodeId;
+    int last = index;
+    while (last + 1 < _history.Count &&
+           _history[last + 1].NodeId == nodeId)
+    {
+      ++last;
+    }
+
+    return last;
+  }
+
+  /// <summary>
+  /// Joins an inclusive history range for activity logging.
+  /// </summary>
+  /// <param name="first">First history entry.</param>
+  /// <param name="last">Last history entry.</param>
+  /// <returns>Joined history text.</returns>
+  private string JoinHistoryLocked(int first, int last)
+  {
+    return string.Join(
+      " ",
+      _history
+        .Skip(first)
+        .Take(last - first + 1)
+        .Select(fragment => fragment.Text));
+  }
+
+  /// <summary>
+  /// Bounds completed history without removing an active or pending entry.
+  /// </summary>
+  private void TrimHistoryLocked()
   {
     int excess = _history.Count - MaximumHistoryEntries;
     if (excess <= 0)
@@ -215,8 +462,36 @@ internal sealed class SpeechService : IDisposable
       return;
     }
 
-    _history.RemoveRange(0, excess);
-    _rewindIndex = Math.Max(0, _rewindIndex - excess);
+    int protectedIndex = _history.Count;
+    if (_activeKind == ActiveSpeechKind.History)
+    {
+      protectedIndex = Math.Min(protectedIndex, _activeHistoryIndex);
+    }
+
+    if (_pendingHistoryIndex is int pendingIndex)
+    {
+      protectedIndex = Math.Min(protectedIndex, pendingIndex);
+    }
+
+    protectedIndex = Math.Min(protectedIndex, _nextHistoryIndex);
+    int removable = Math.Min(excess, protectedIndex);
+    if (removable <= 0)
+    {
+      return;
+    }
+
+    _history.RemoveRange(0, removable);
+    if (_activeKind == ActiveSpeechKind.History)
+    {
+      _activeHistoryIndex -= removable;
+    }
+
+    if (_pendingHistoryIndex is int adjustedPending)
+    {
+      _pendingHistoryIndex = adjustedPending - removable;
+    }
+
+    _nextHistoryIndex = Math.Max(0, _nextHistoryIndex - removable);
   }
 
   /// <summary>
@@ -225,5 +500,15 @@ internal sealed class SpeechService : IDisposable
   private void ThrowIfDisposed()
   {
     ObjectDisposedException.ThrowIf(_disposed, this);
+  }
+
+  /// <summary>
+  /// Identifies the one prompt currently owned by the serialized player.
+  /// </summary>
+  private enum ActiveSpeechKind
+  {
+    None,
+    History,
+    Untracked
   }
 }

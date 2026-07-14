@@ -1,4 +1,4 @@
-# Agent Panel Speaker v11
+# Agent Panel Speaker v12
 
 Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
 Visual Studio Code through Windows UI Automation and speaks new text through
@@ -42,6 +42,18 @@ NuGet.org.
 The inactivity timeout speaks an unfinished trailing fragment after the text
 has remained unchanged for the configured period. Complete sentences ending
 in `.`, `?`, or `!` are queued immediately.
+
+## v12 changes
+
+- Rewind now restarts playback from the selected sentence or accessibility
+  node and continues through every later history entry instead of speaking
+  only the selected item.
+- Adds **Forward sentence** and **Forward node** controls for correcting an
+  over-rewind while preserving continuous playback.
+- Serializes speech one history entry at a time so the application always
+  knows the current navigation position.
+- New live transcript fragments append to the active replay and are spoken
+  after the historical entries catch up.
 
 ## v11 changes
 
