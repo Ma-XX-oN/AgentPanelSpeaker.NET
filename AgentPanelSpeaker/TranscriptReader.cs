@@ -5,39 +5,47 @@ using System.Windows.Automation.Text;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Reads the visible tail of a selected UI Automation subtree.
+/// Reacquires the current UI Automation tree and reads the meaningful tail of
+/// a selected transcript screen region.
 /// </summary>
 internal sealed class TranscriptReader
 {
+  private const int MaxParagraphSearch = 32;
   private const int MaxTailCharacters = 32_768;
   private const int MaxTailParagraphs = 3;
 
   /// <summary>
-  /// Reads up to the final three visible logical text blocks exposed by the
-  /// target.
+  /// Reads the final meaningful transcript paragraphs inside the selected
+  /// region.
   /// </summary>
-  /// <param name="target">The selected transcript container.</param>
-  /// <returns>The normalized text blocks in display order.</returns>
-  public IReadOnlyList<string> ReadTail(AutomationElement target)
+  /// <param name="target">Stable window and region target.</param>
+  /// <returns>The normalized transcript tail in display order.</returns>
+  public IReadOnlyList<string> ReadTail(TranscriptTarget target)
   {
     ArgumentNullException.ThrowIfNull(target);
 
-    IReadOnlyList<string> visibleText = ReadTextElementNames(target);
-    if (visibleText.Count != 0)
+    AutomationElement root = target.GetAutomationRoot();
+    System.Drawing.Rectangle region = target.GetScreenRegion();
+
+    IReadOnlyList<string> paragraphs = ReadTextPatternTail(root, region);
+    if (paragraphs.Count != 0)
     {
-      return visibleText;
+      return paragraphs;
     }
 
-    string textPatternText = ReadBottomTextPattern(target);
-    return SplitIntoParagraphs(textPatternText);
+    return ReadVisibleTextTail(root, region);
   }
 
   /// <summary>
-  /// Finds the lowest visible TextPattern provider beneath the target.
+  /// Chooses the most specific TextPattern provider overlapping the selected
+  /// region and walks backward from the region's bottom.
   /// </summary>
-  /// <param name="target">The selected transcript container.</param>
-  /// <returns>Text from the lowest provider, or an empty string.</returns>
-  private static string ReadBottomTextPattern(AutomationElement target)
+  /// <param name="root">Current top-level UI Automation root.</param>
+  /// <param name="region">Current transcript screen region.</param>
+  /// <returns>The meaningful tail, or an empty list when unavailable.</returns>
+  private static IReadOnlyList<string> ReadTextPatternTail(
+    AutomationElement root,
+    System.Drawing.Rectangle region)
   {
     var condition = new PropertyCondition(
       AutomationElement.IsTextPatternAvailableProperty,
@@ -46,19 +54,16 @@ internal sealed class TranscriptReader
     AutomationElementCollection providers;
     try
     {
-      providers = target.FindAll(
+      providers = root.FindAll(
         TreeScope.Element | TreeScope.Descendants,
         condition);
     }
     catch (ElementNotAvailableException)
     {
-      return string.Empty;
+      return Array.Empty<string>();
     }
 
-    string bestText = string.Empty;
-    double bestBottom = double.NegativeInfinity;
-    int bestParagraphCount = 0;
-
+    TextProviderCandidate? selected = null;
     foreach (AutomationElement provider in providers)
     {
       try
@@ -71,32 +76,27 @@ internal sealed class TranscriptReader
           continue;
         }
 
-        System.Windows.Rect bounds =
-          provider.Current.BoundingRectangle;
+        System.Windows.Rect bounds = provider.Current.BoundingRectangle;
         if (!HasUsableBounds(bounds))
         {
           continue;
         }
 
-        var pattern = (TextPattern)rawPattern;
-        string candidate = ReadTextPatternTail(pattern);
-        if (string.IsNullOrWhiteSpace(candidate))
+        double overlap = CalculateOverlapArea(bounds, region);
+        if (overlap <= 0.0)
         {
           continue;
         }
 
-        int paragraphCount = CountNonEmptyLines(candidate);
-        bool isLower = bounds.Bottom > bestBottom;
-        bool isEquivalentPosition = bounds.Bottom == bestBottom;
-        if (isLower ||
-            (isEquivalentPosition &&
-             (paragraphCount > bestParagraphCount ||
-              (paragraphCount == bestParagraphCount &&
-               candidate.Length > bestText.Length))))
+        double providerArea = bounds.Width * bounds.Height;
+        var candidate = new TextProviderCandidate(
+          (TextPattern)rawPattern,
+          bounds,
+          overlap,
+          providerArea);
+        if (selected is null || candidate.IsBetterThan(selected))
         {
-          bestText = candidate;
-          bestBottom = bounds.Bottom;
-          bestParagraphCount = paragraphCount;
+          selected = candidate;
         }
       }
       catch (ElementNotAvailableException)
@@ -107,50 +107,145 @@ internal sealed class TranscriptReader
       }
     }
 
-    return bestText;
+    return selected is null
+      ? Array.Empty<string>()
+      : ReadParagraphs(selected.Pattern, selected.Bounds, region);
   }
 
   /// <summary>
-  /// Reads the final section of a TextPattern document range.
+  /// Reads paragraph units backward from the bottom of a selected region.
   /// </summary>
-  /// <param name="pattern">The text provider.</param>
-  /// <returns>The final available text from the provider.</returns>
-  private static string ReadTextPatternTail(TextPattern pattern)
+  /// <param name="pattern">Selected text provider.</param>
+  /// <param name="providerBounds">Provider screen bounds.</param>
+  /// <param name="region">Selected transcript region.</param>
+  /// <returns>The final meaningful paragraphs.</returns>
+  private static IReadOnlyList<string> ReadParagraphs(
+    TextPattern pattern,
+    System.Windows.Rect providerBounds,
+    System.Drawing.Rectangle region)
   {
-    TextPatternRange document = pattern.DocumentRange;
-    TextPatternRange tail = document.Clone();
+    System.Drawing.Rectangle providerRectangle = ToDrawingRectangle(
+      providerBounds);
+    System.Drawing.Rectangle intersection = System.Drawing.Rectangle.Intersect(
+      providerRectangle,
+      region);
+    if (intersection.Width <= 0 || intersection.Height <= 0)
+    {
+      return Array.Empty<string>();
+    }
 
+    double x = intersection.Left + Math.Min(16.0, intersection.Width / 2.0);
+    double y = intersection.Bottom - 2.0;
+
+    TextPatternRange range;
     try
     {
-      tail.MoveEndpointByRange(
-        TextPatternRangeEndpoint.Start,
-        document,
-        TextPatternRangeEndpoint.End);
-      tail.MoveEndpointByUnit(
-        TextPatternRangeEndpoint.Start,
-        TextUnit.Character,
-        -MaxTailCharacters);
-      return tail.GetText(-1);
+      range = pattern.RangeFromPoint(new System.Windows.Point(x, y));
+      range.ExpandToEnclosingUnit(TextUnit.Paragraph);
     }
     catch (InvalidOperationException)
     {
-      string allText = document.GetText(-1);
-      return TakeLastCharacters(allText, MaxTailCharacters);
+      return ReadDocumentTail(pattern);
     }
     catch (ArgumentException)
     {
-      string allText = document.GetText(-1);
-      return TakeLastCharacters(allText, MaxTailCharacters);
+      return ReadDocumentTail(pattern);
     }
+
+    var reverse = new List<string>(MaxTailParagraphs);
+    string previousFingerprint = string.Empty;
+
+    for (int attempt = 0;
+         attempt < MaxParagraphSearch && reverse.Count < MaxTailParagraphs;
+         ++attempt)
+    {
+      string rawText;
+      System.Windows.Rect[] rectangles;
+      try
+      {
+        rawText = range.GetText(-1);
+        rectangles = range.GetBoundingRectangles();
+      }
+      catch (InvalidOperationException)
+      {
+        break;
+      }
+
+      string paragraph = NormalizeParagraph(rawText);
+      string fingerprint = BuildRangeFingerprint(paragraph, rectangles);
+      if (string.Equals(
+            fingerprint,
+            previousFingerprint,
+            StringComparison.Ordinal))
+      {
+        break;
+      }
+
+      previousFingerprint = fingerprint;
+      if (paragraph.Length != 0 &&
+          RangeIntersectsRegion(rectangles, region) &&
+          !IsIgnoredText(paragraph) &&
+          (reverse.Count == 0 ||
+           !string.Equals(
+             reverse[^1],
+             paragraph,
+             StringComparison.Ordinal)))
+      {
+        reverse.Add(paragraph);
+      }
+
+      int moved;
+      try
+      {
+        moved = range.Move(TextUnit.Paragraph, -1);
+      }
+      catch (InvalidOperationException)
+      {
+        break;
+      }
+
+      if (moved == 0)
+      {
+        break;
+      }
+    }
+
+    reverse.Reverse();
+    return reverse;
   }
 
   /// <summary>
-  /// Falls back to visible UI Automation text element names.
+  /// Falls back to the provider's document text when paragraph navigation is
+  /// unavailable.
   /// </summary>
-  /// <param name="target">The selected transcript container.</param>
-  /// <returns>The final normalized text elements.</returns>
-  private static IReadOnlyList<string> ReadTextElementNames(
-    AutomationElement target)
+  /// <param name="pattern">Selected text provider.</param>
+  /// <returns>The final meaningful lines.</returns>
+  private static IReadOnlyList<string> ReadDocumentTail(TextPattern pattern)
+  {
+    string text;
+    try
+    {
+      text = pattern.DocumentRange.GetText(-1);
+    }
+    catch (InvalidOperationException)
+    {
+      return Array.Empty<string>();
+    }
+
+    text = TakeLastCharacters(text, MaxTailCharacters);
+    return SplitIntoMeaningfulLines(text);
+  }
+
+  /// <summary>
+  /// Reconstructs a fallback tail from currently visible text elements in the
+  /// selected region.
+  /// </summary>
+  /// <param name="root">Current top-level UI Automation root.</param>
+  /// <param name="region">Selected transcript screen region.</param>
+  /// <returns>The final visible meaningful text blocks.</returns>
+  private static IReadOnlyList<string> ReadVisibleTextTail(
+    AutomationElement root,
+    System.Drawing.Rectangle region)
   {
     var condition = new PropertyCondition(
       AutomationElement.ControlTypeProperty,
@@ -159,7 +254,7 @@ internal sealed class TranscriptReader
     AutomationElementCollection elements;
     try
     {
-      elements = target.FindAll(
+      elements = root.FindAll(
         TreeScope.Element | TreeScope.Descendants,
         condition);
     }
@@ -181,15 +276,16 @@ internal sealed class TranscriptReader
           continue;
         }
 
-        string text = NormalizeParagraph(element.Current.Name);
-        if (text.Length == 0)
+        System.Windows.Rect bounds = element.Current.BoundingRectangle;
+        if (!HasUsableBounds(bounds) ||
+            CalculateOverlapArea(bounds, region) <= 0.0)
         {
           ++ordinal;
           continue;
         }
 
-        System.Windows.Rect bounds = element.Current.BoundingRectangle;
-        if (!HasUsableBounds(bounds))
+        string text = NormalizeParagraph(element.Current.Name);
+        if (text.Length == 0 || IsIgnoredText(text))
         {
           ++ordinal;
           continue;
@@ -199,6 +295,7 @@ internal sealed class TranscriptReader
           text,
           bounds.Top,
           bounds.Left,
+          bounds.Height,
           ordinal));
       }
       catch (ElementNotAvailableException)
@@ -212,115 +309,320 @@ internal sealed class TranscriptReader
     }
 
     candidates.Sort(TextCandidate.Compare);
+    IReadOnlyList<string> lines = MergeCandidatesIntoLines(candidates);
+    return lines.Count <= MaxTailParagraphs
+      ? lines
+      : lines.Skip(lines.Count - MaxTailParagraphs).ToArray();
+  }
 
-    var result = new List<string>(MaxTailParagraphs);
+  /// <summary>
+  /// Merges nearby text fragments that occupy the same visual line.
+  /// </summary>
+  /// <param name="candidates">Sorted visible text fragments.</param>
+  /// <returns>Reconstructed visual lines.</returns>
+  private static IReadOnlyList<string> MergeCandidatesIntoLines(
+    IReadOnlyList<TextCandidate> candidates)
+  {
+    var lines = new List<VisualLine>();
+
     foreach (TextCandidate candidate in candidates)
     {
-      if (result.Count != 0 &&
-          string.Equals(result[^1], candidate.Text,
-            StringComparison.Ordinal))
+      VisualLine? line = lines.Count == 0 ? null : lines[^1];
+      double tolerance = Math.Max(3.0, candidate.Height * 0.45);
+      if (line is null || Math.Abs(candidate.Top - line.Top) > tolerance)
+      {
+        line = new VisualLine(candidate.Top);
+        lines.Add(line);
+      }
+
+      line.Add(candidate);
+    }
+
+    var result = new List<string>(lines.Count);
+    foreach (VisualLine line in lines)
+    {
+      string text = line.BuildText();
+      if (text.Length == 0 || IsIgnoredText(text))
       {
         continue;
       }
 
-      result.Add(candidate.Text);
+      if (result.Count != 0 &&
+          string.Equals(result[^1], text, StringComparison.Ordinal))
+      {
+        continue;
+      }
+
+      result.Add(text);
     }
 
-    return result.Count <= MaxTailParagraphs
-      ? result
-      : result.GetRange(result.Count - MaxTailParagraphs,
-        MaxTailParagraphs);
+    return result;
   }
 
   /// <summary>
-  /// Determines whether a UI Automation bounding rectangle can be ordered.
+  /// Splits raw provider text into meaningful normalized lines.
   /// </summary>
-  /// <param name="bounds">The rectangle to validate.</param>
-  /// <returns>True when the rectangle has finite, positive dimensions.</returns>
+  /// <param name="text">Raw provider text.</param>
+  /// <returns>The final meaningful lines.</returns>
+  private static IReadOnlyList<string> SplitIntoMeaningfulLines(string text)
+  {
+    string normalizedNewlines = text
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+
+    var lines = new List<string>();
+    foreach (string rawLine in normalizedNewlines.Split('\n'))
+    {
+      string line = NormalizeParagraph(rawLine);
+      if (line.Length == 0 || IsIgnoredText(line))
+      {
+        continue;
+      }
+
+      if (lines.Count != 0 &&
+          string.Equals(lines[^1], line, StringComparison.Ordinal))
+      {
+        continue;
+      }
+
+      lines.Add(line);
+    }
+
+    return lines.Count <= MaxTailParagraphs
+      ? lines
+      : lines.Skip(lines.Count - MaxTailParagraphs).ToArray();
+  }
+
+  /// <summary>
+  /// Determines whether text is UI chrome or a transient one-word status.
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text must not be spoken.</returns>
+  private static bool IsIgnoredText(string text)
+  {
+    string trimmed = text.Trim();
+    if (trimmed.Length == 0)
+    {
+      return true;
+    }
+
+    if (trimmed.Equals("Queue another message...",
+          StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Equals("Edit automatically",
+          StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Equals("View usage",
+          StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Equals("IN", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Equals("OUT", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.StartsWith("You've used ",
+          StringComparison.OrdinalIgnoreCase) ||
+        IsThoughtDuration(trimmed) ||
+        IsToolHeading(trimmed))
+    {
+      return true;
+    }
+
+    return IsOneWordEllipsisStatus(trimmed);
+  }
+
+  /// <summary>
+  /// Detects labels such as "Thought for 1s".
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a thought-duration label.</returns>
+  private static bool IsThoughtDuration(string text)
+  {
+    return text.StartsWith("Thought for ",
+      StringComparison.OrdinalIgnoreCase) &&
+      text.EndsWith('s') &&
+      text.Length <= 40;
+  }
+
+  /// <summary>
+  /// Detects short tool-card headings without excluding ordinary prose such
+  /// as "Writing the new file now".
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a tool-card heading.</returns>
+  private static bool IsToolHeading(string text)
+  {
+    if (text.Length > 100)
+    {
+      return false;
+    }
+
+    string[] prefixes =
+    {
+      "Bash ",
+      "Read ",
+      "Write ",
+      "Edit ",
+      "Glob ",
+      "Grep ",
+      "Task "
+    };
+
+    return prefixes.Any(prefix => text.StartsWith(
+      prefix,
+      StringComparison.OrdinalIgnoreCase));
+  }
+
+  /// <summary>
+  /// Detects a single status word followed by an ellipsis, such as
+  /// "Considering..." or "Creating...".
+  /// </summary>
+  /// <param name="text">Normalized text.</param>
+  /// <returns>True when the text is a transient status.</returns>
+  private static bool IsOneWordEllipsisStatus(string text)
+  {
+    string candidate = text.TrimStart(
+      '•',
+      '*',
+      '+',
+      '-',
+      '›',
+      '>');
+    candidate = candidate.TrimStart();
+
+    if (candidate.EndsWith('…'))
+    {
+      candidate = candidate[..^1];
+    }
+    else if (candidate.EndsWith("...", StringComparison.Ordinal))
+    {
+      candidate = candidate[..^3];
+    }
+    else
+    {
+      return false;
+    }
+
+    if (candidate.Length == 0 || candidate.Length > 40)
+    {
+      return false;
+    }
+
+    foreach (char character in candidate)
+    {
+      if (!char.IsLetter(character) && character != '-')
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /// <summary>
+  /// Determines whether a TextPattern range overlaps the selected region.
+  /// </summary>
+  /// <param name="rectangles">Range rectangles.</param>
+  /// <param name="region">Selected region.</param>
+  /// <returns>True when any range rectangle overlaps the region.</returns>
+  private static bool RangeIntersectsRegion(
+    IReadOnlyList<System.Windows.Rect> rectangles,
+    System.Drawing.Rectangle region)
+  {
+    if (rectangles.Count == 0)
+    {
+      return true;
+    }
+
+    foreach (System.Windows.Rect bounds in rectangles)
+    {
+      if (HasUsableBounds(bounds) &&
+          CalculateOverlapArea(bounds, region) > 0.0)
+      {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Builds a small identity for detecting a TextPattern provider that did not
+  /// actually move to another paragraph.
+  /// </summary>
+  /// <param name="text">Normalized range text.</param>
+  /// <param name="rectangles">Range rectangles.</param>
+  /// <returns>A stable range fingerprint.</returns>
+  private static string BuildRangeFingerprint(
+    string text,
+    IReadOnlyList<System.Windows.Rect> rectangles)
+  {
+    var builder = new StringBuilder(text.Length + 96);
+    builder.Append(text);
+    int limit = Math.Min(rectangles.Count, 2);
+    for (int index = 0; index < limit; ++index)
+    {
+      System.Windows.Rect rectangle = rectangles[index];
+      builder.Append('|');
+      builder.Append(rectangle.X.ToString("R"));
+      builder.Append(',');
+      builder.Append(rectangle.Y.ToString("R"));
+      builder.Append(',');
+      builder.Append(rectangle.Width.ToString("R"));
+      builder.Append(',');
+      builder.Append(rectangle.Height.ToString("R"));
+    }
+
+    return builder.ToString();
+  }
+
+  /// <summary>
+  /// Calculates the overlap area between a UI Automation rectangle and a
+  /// drawing rectangle.
+  /// </summary>
+  /// <param name="bounds">UI Automation rectangle.</param>
+  /// <param name="region">Drawing rectangle.</param>
+  /// <returns>The overlap area in square pixels.</returns>
+  private static double CalculateOverlapArea(
+    System.Windows.Rect bounds,
+    System.Drawing.Rectangle region)
+  {
+    double left = Math.Max(bounds.Left, region.Left);
+    double top = Math.Max(bounds.Top, region.Top);
+    double right = Math.Min(bounds.Right, region.Right);
+    double bottom = Math.Min(bounds.Bottom, region.Bottom);
+    return right <= left || bottom <= top
+      ? 0.0
+      : (right - left) * (bottom - top);
+  }
+
+  /// <summary>
+  /// Determines whether a UI Automation bounding rectangle can be used.
+  /// </summary>
+  /// <param name="bounds">Rectangle to validate.</param>
+  /// <returns>True when it has finite, positive dimensions.</returns>
   private static bool HasUsableBounds(System.Windows.Rect bounds)
   {
     return !bounds.IsEmpty &&
       bounds.Width > 0.0 &&
       bounds.Height > 0.0 &&
-      double.IsFinite(bounds.Top) &&
       double.IsFinite(bounds.Left) &&
-      double.IsFinite(bounds.Bottom) &&
-      double.IsFinite(bounds.Right);
+      double.IsFinite(bounds.Top) &&
+      double.IsFinite(bounds.Right) &&
+      double.IsFinite(bounds.Bottom);
   }
 
   /// <summary>
-  /// Splits provider text into logical lines and returns its tail.
+  /// Converts a UI Automation rectangle to a drawing rectangle.
   /// </summary>
-  /// <param name="text">Raw provider text.</param>
-  /// <returns>The final normalized non-empty lines.</returns>
-  private static IReadOnlyList<string> SplitIntoParagraphs(string text)
+  /// <param name="bounds">UI Automation rectangle.</param>
+  /// <returns>The enclosing integer drawing rectangle.</returns>
+  private static System.Drawing.Rectangle ToDrawingRectangle(
+    System.Windows.Rect bounds)
   {
-    if (string.IsNullOrWhiteSpace(text))
-    {
-      return Array.Empty<string>();
-    }
-
-    string normalizedNewlines = text
-      .Replace("\r\n", "\n", StringComparison.Ordinal)
-      .Replace('\r', '\n');
-
-    var paragraphs = new List<string>();
-    foreach (string line in normalizedNewlines.Split('\n'))
-    {
-      string paragraph = NormalizeParagraph(line);
-      if (paragraph.Length == 0)
-      {
-        continue;
-      }
-
-      if (paragraphs.Count != 0 &&
-          string.Equals(paragraphs[^1], paragraph,
-            StringComparison.Ordinal))
-      {
-        continue;
-      }
-
-      paragraphs.Add(paragraph);
-    }
-
-    return paragraphs.Count <= MaxTailParagraphs
-      ? paragraphs
-      : paragraphs.GetRange(
-        paragraphs.Count - MaxTailParagraphs,
-        MaxTailParagraphs);
+    return System.Drawing.Rectangle.FromLTRB(
+      checked((int)Math.Floor(bounds.Left)),
+      checked((int)Math.Floor(bounds.Top)),
+      checked((int)Math.Ceiling(bounds.Right)),
+      checked((int)Math.Ceiling(bounds.Bottom)));
   }
 
   /// <summary>
-  /// Counts non-empty logical lines in raw provider text.
-  /// </summary>
-  /// <param name="text">Raw provider text.</param>
-  /// <returns>The number of non-empty lines.</returns>
-  private static int CountNonEmptyLines(string text)
-  {
-    int count = 0;
-    bool hasNonWhitespace = false;
-
-    foreach (char character in text)
-    {
-      if (character == '\r' || character == '\n')
-      {
-        if (hasNonWhitespace)
-        {
-          ++count;
-          hasNonWhitespace = false;
-        }
-
-        continue;
-      }
-
-      hasNonWhitespace |= !char.IsWhiteSpace(character);
-    }
-
-    return hasNonWhitespace ? count + 1 : count;
-  }
-
-  /// <summary>
-  /// Collapses whitespace for stable comparisons and speech.
+  /// Collapses whitespace for stable comparison and speech.
   /// </summary>
   /// <param name="text">Text to normalize.</param>
   /// <returns>Trimmed text with each whitespace run replaced by one space.</returns>
@@ -355,27 +657,58 @@ internal sealed class TranscriptReader
   }
 
   /// <summary>
-  /// Returns at most the requested number of trailing characters.
+  /// Returns at most the requested trailing characters.
   /// </summary>
   /// <param name="text">Source text.</param>
   /// <param name="maximumLength">Maximum returned length.</param>
-  /// <returns>The complete text or its final requested characters.</returns>
+  /// <returns>The complete text or its trailing requested characters.</returns>
   private static string TakeLastCharacters(string text, int maximumLength)
   {
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumLength);
-
     return text.Length <= maximumLength
       ? text
       : text[^maximumLength..];
   }
 
   /// <summary>
-  /// Stores a visible text element and its ordering data.
+  /// Stores and ranks a TextPattern provider.
+  /// </summary>
+  private sealed record TextProviderCandidate(
+    TextPattern Pattern,
+    System.Windows.Rect Bounds,
+    double OverlapArea,
+    double ProviderArea)
+  {
+    /// <summary>
+    /// Determines whether this provider is a better region match.
+    /// </summary>
+    /// <param name="other">Current best provider.</param>
+    /// <returns>True when this provider is preferred.</returns>
+    public bool IsBetterThan(TextProviderCandidate other)
+    {
+      const double tolerance = 0.5;
+      if (OverlapArea > other.OverlapArea + tolerance)
+      {
+        return true;
+      }
+
+      if (Math.Abs(OverlapArea - other.OverlapArea) <= tolerance)
+      {
+        return ProviderArea < other.ProviderArea;
+      }
+
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Stores a visible text fragment and display-order coordinates.
   /// </summary>
   private sealed record TextCandidate(
     string Text,
     double Top,
     double Left,
+    double Height,
     int Ordinal)
   {
     /// <summary>
@@ -401,35 +734,86 @@ internal sealed class TranscriptReader
         return 1;
       }
 
-      int topComparison = CompareCoordinate(left.Top, right.Top);
+      int topComparison = left.Top.CompareTo(right.Top);
       if (topComparison != 0)
       {
         return topComparison;
       }
 
-      int leftComparison = CompareCoordinate(left.Left, right.Left);
+      int leftComparison = left.Left.CompareTo(right.Left);
       return leftComparison != 0
         ? leftComparison
         : left.Ordinal.CompareTo(right.Ordinal);
     }
+  }
+
+  /// <summary>
+  /// Collects fragments that belong to one visual line.
+  /// </summary>
+  private sealed class VisualLine
+  {
+    private readonly List<TextCandidate> _candidates = new();
 
     /// <summary>
-    /// Compares coordinates while placing invalid values after valid values.
+    /// Initializes a visual line.
     /// </summary>
-    /// <param name="left">Left coordinate.</param>
-    /// <param name="right">Right coordinate.</param>
-    /// <returns>A standard comparison result.</returns>
-    private static int CompareCoordinate(double left, double right)
+    /// <param name="top">Approximate top coordinate.</param>
+    public VisualLine(double top)
     {
-      bool leftValid = double.IsFinite(left);
-      bool rightValid = double.IsFinite(right);
+      Top = top;
+    }
 
-      if (leftValid != rightValid)
+    /// <summary>
+    /// Gets the approximate top coordinate.
+    /// </summary>
+    public double Top { get; }
+
+    /// <summary>
+    /// Adds a text fragment.
+    /// </summary>
+    /// <param name="candidate">Fragment to add.</param>
+    public void Add(TextCandidate candidate)
+    {
+      ArgumentNullException.ThrowIfNull(candidate);
+      _candidates.Add(candidate);
+    }
+
+    /// <summary>
+    /// Builds the line in horizontal display order.
+    /// </summary>
+    /// <returns>The normalized line text.</returns>
+    public string BuildText()
+    {
+      _candidates.Sort((left, right) =>
       {
-        return leftValid ? -1 : 1;
+        int comparison = left.Left.CompareTo(right.Left);
+        return comparison != 0
+          ? comparison
+          : left.Ordinal.CompareTo(right.Ordinal);
+      });
+
+      var builder = new StringBuilder();
+      string previous = string.Empty;
+      foreach (TextCandidate candidate in _candidates)
+      {
+        if (string.Equals(
+              previous,
+              candidate.Text,
+              StringComparison.Ordinal))
+        {
+          continue;
+        }
+
+        if (builder.Length != 0)
+        {
+          builder.Append(' ');
+        }
+
+        builder.Append(candidate.Text);
+        previous = candidate.Text;
       }
 
-      return leftValid ? left.CompareTo(right) : 0;
+      return NormalizeParagraph(builder.ToString());
     }
   }
 }

@@ -1,108 +1,88 @@
 # Agent Panel Speaker
 
-A Windows 11 application that watches a selected UI Automation subtree and
-speaks newly displayed agent text through Windows SAPI voices.
+Agent Panel Speaker reads newly exposed text from a selected Claude Code or
+Codex panel region in Visual Studio Code and speaks it with an installed
+Windows voice.
 
-The monitor keeps the previous and current transcript paragraphs as anchors.
-It speaks through `.`, `?`, or `!` when the terminator is followed by
-whitespace or the end of the paragraph.  It flushes any remaining unspoken
-suffix after the configured unchanged-text timeout, which defaults to 1000 ms.
+## Version 5 design
+
+The application no longer stores a selected accessibility text node or one of
+its parents.  Electron replaces and virtualizes those nodes while the agent is
+streaming, so retaining them loses later paragraphs.
+
+Instead, the user drags a rectangle around the transcript output area.  The
+application stores:
+
+- the owning top-level VS Code window;
+- the owning process identifier;
+- the selected rectangle relative to that window.
+
+On every poll it reacquires the current UI Automation tree from the window and
+reads the bottom of the selected region.  Moving or resizing VS Code updates
+the absolute screen rectangle automatically.
+
+The reader prefers `TextPattern` paragraph ranges.  It falls back to currently
+visible `ControlType.Text` fragments and reconstructs visual lines.  It ignores
+UI chrome and one-word transient status lines such as `Considering...`,
+`Creating...`, and `Baking...`.
 
 ## Requirements
 
-- Windows 11, x64.
-- .NET 10 SDK to compile or run from source.
-- An installed Windows SAPI voice.
-- Internet access for the first NuGet restore.
+- Windows 11
+- .NET 10 SDK
+- Visual Studio Code running at the same privilege level as this application
+- Internet access during the first restore of the `System.Speech` package
 
-Install the SDK from an Administrator PowerShell or Command Prompt:
+Visual Studio is not required.
 
-```bat
-winget install Microsoft.DotNet.SDK.10
-```
+## Build
 
-Verify it:
+From the extracted directory:
 
 ```bat
-dotnet --info
+dotnet restore AgentPanelSpeaker\AgentPanelSpeaker.csproj ^
+  --configfile NuGet.Config
+
+dotnet build AgentPanelSpeaker\AgentPanelSpeaker.csproj ^
+  -c Release ^
+  --no-restore
 ```
 
-## Compile
-
-From this directory:
+Or run:
 
 ```bat
 build.cmd
 ```
 
-The executable is written beneath:
-
-```text
-AgentPanelSpeaker\bin\Release\net10.0-windows\
-```
-
-## Run from source
+## Run
 
 ```bat
 run.cmd
 ```
 
-## Publish a standalone x64 executable
+## Select the transcript
+
+1. Keep the Claude Code or Codex panel visible.
+2. Select **Select transcript region**.
+3. Drag around the transcript output area.  Include the prose output but omit
+   the panel tabs, prompt input box, and side editor.
+4. Check **Detected transcript tail**.
+5. Select **Start**.
+
+The preview updates while monitoring.  Press Escape while selecting to cancel.
+
+## Speech behaviour
+
+- Complete sentences ending in `.`, `?`, or `!` are spoken immediately.
+- An unfinished suffix is spoken after the configured idle timeout.
+- Only unspoken suffixes are queued.
+- The previous and current meaningful paragraphs are retained to reconcile
+  virtual scrolling.
+
+## Publish a standalone executable
 
 ```bat
 publish-win-x64.cmd
 ```
 
-The standalone files are written beneath:
-
-```text
-publish\win-x64\
-```
-
-The published build includes the .NET runtime, so that published copy does not
-require a separate .NET installation on the machine that runs it.
-
-## Select the transcript
-
-1. Keep the Claude Code or Codex transcript visible in VS Code.
-2. In Agent Panel Speaker, select **Select under pointer (3 s)**.
-3. Move the mouse over text in the agent transcript and leave it there.
-4. After the application returns, inspect **Detected transcript tail**.
-5. Select **Parent** until the preview contains the last transcript blocks and
-   continues to include a newly created paragraph.  **Back to child** reverses
-   one parent step.
-6. Select **Start**.
-
-The application establishes a baseline when monitoring starts, so existing
-text is not spoken by default.  Enable **Speak current paragraph on start** to
-speak the current paragraph immediately.
-
-## Selection guidance
-
-The selected subtree must contain both the current transcript paragraph and
-its next sibling.  Selecting one text leaf reads changes to that leaf but
-cannot see a newly created paragraph.  Selecting all of VS Code also works in
-principle, but it captures unrelated editor and interface text.  Use the
-smallest parent whose preview reliably contains the transcript tail.
-
-If the preview never shows transcript text, the panel is not exposing that
-content through Windows UI Automation.  This version does not use OCR or
-inject code into the VS Code extension.
-
-## Operational details
-
-- The application polls UI Automation because Electron panels do not
-  consistently emit useful text-change events.
-- The default polling interval is 200 ms.
-- The default no-change timeout is 1000 ms.
-- **Cancel speech** stops both current and queued speech.
-- Run Agent Panel Speaker at the same elevation level as VS Code.  When VS Code
-  is elevated, this application must also be elevated for reliable access.
-
-## Transcript-tail selection
-
-Version 4 reads visible `ControlType.Text` elements first and orders them by
-their screen position.  It uses `TextPattern` only as a fallback.  This avoids
-selecting a larger, stale text provider located above the visible bottom of a
-virtualized transcript.  The detected-tail preview updates live after
-monitoring starts.
+The result is written to `publish\win-x64` and contains the .NET runtime.

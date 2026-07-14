@@ -51,14 +51,14 @@ internal sealed class TranscriptMonitor : IDisposable
   /// <summary>
   /// Starts monitoring a selected target.
   /// </summary>
-  /// <param name="target">The selected transcript container.</param>
+  /// <param name="target">The selected transcript window and region.</param>
   /// <param name="pollInterval">UI Automation polling interval.</param>
   /// <param name="idleTimeout">Unchanged-text flush timeout.</param>
   /// <param name="speakExistingText">
   /// Whether the initial current paragraph should be spoken.
   /// </param>
   public void Start(
-    AutomationElement target,
+    TranscriptTarget target,
     TimeSpan pollInterval,
     TimeSpan idleTimeout,
     bool speakExistingText)
@@ -159,7 +159,7 @@ internal sealed class TranscriptMonitor : IDisposable
   /// <summary>
   /// Runs the polling loop on a dedicated MTA thread.
   /// </summary>
-  /// <param name="target">The selected transcript container.</param>
+  /// <param name="target">The selected transcript window and region.</param>
   /// <param name="pollInterval">UI Automation polling interval.</param>
   /// <param name="idleTimeout">Unchanged-text flush timeout.</param>
   /// <param name="speakExistingText">
@@ -167,7 +167,7 @@ internal sealed class TranscriptMonitor : IDisposable
   /// </param>
   /// <param name="token">Cancellation token.</param>
   private void Run(
-    AutomationElement target,
+    TranscriptTarget target,
     TimeSpan pollInterval,
     TimeSpan idleTimeout,
     bool speakExistingText,

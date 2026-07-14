@@ -3,19 +3,16 @@ using System.Windows.Automation;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Provides target selection, transcript monitoring, and speech controls.
+/// Provides transcript-region selection, monitoring, and speech controls.
 /// </summary>
 internal sealed class MainForm : Form
 {
   private readonly TranscriptReader _reader = new();
   private readonly TranscriptMonitor _monitor = new();
   private readonly SpeechService _speech = new();
-  private readonly List<AutomationElement> _targetHistory = new();
 
   private readonly Label _instructionsLabel = new();
   private readonly Button _captureButton = new();
-  private readonly Button _parentButton = new();
-  private readonly Button _childButton = new();
   private readonly Button _refreshPreviewButton = new();
   private readonly Label _targetLabel = new();
   private readonly TextBox _previewTextBox = new();
@@ -30,7 +27,7 @@ internal sealed class MainForm : Form
   private readonly Button _testVoiceButton = new();
   private readonly TextBox _logTextBox = new();
 
-  private int _targetHistoryIndex = -1;
+  private TranscriptTarget? _target;
   private bool _closing;
 
   /// <summary>
@@ -42,8 +39,6 @@ internal sealed class MainForm : Form
     PopulateVoices();
 
     _captureButton.Click += CaptureButtonClicked;
-    _parentButton.Click += ParentButtonClicked;
-    _childButton.Click += ChildButtonClicked;
     _refreshPreviewButton.Click += RefreshPreviewButtonClicked;
     _startButton.Click += StartButtonClicked;
     _stopButton.Click += StopButtonClicked;
@@ -72,14 +67,12 @@ internal sealed class MainForm : Form
     _instructionsLabel.AutoSize = true;
     _instructionsLabel.MaximumSize = new Size(850, 0);
     _instructionsLabel.Text =
-      "1. Select under pointer, then move the mouse over transcript text.  " +
-      "2. Use Parent until the preview shows the bottom of the visible " +
-      "transcript rather than one text line.  3. Start monitoring; the " +
-      "preview then updates live.";
+      "1. Select transcript region and drag around the Claude/Codex output " +
+      "area.  2. The program reacquires the current accessibility nodes on " +
+      "every poll, so virtual scrolling and replaced nodes are supported.  " +
+      "3. Confirm the preview and start monitoring.";
 
-    ConfigureButton(_captureButton, "Select under pointer (3 s)");
-    ConfigureButton(_parentButton, "Parent");
-    ConfigureButton(_childButton, "Back to child");
+    ConfigureButton(_captureButton, "Select transcript region");
     ConfigureButton(_refreshPreviewButton, "Refresh preview");
     ConfigureButton(_startButton, "Start");
     ConfigureButton(_stopButton, "Stop");
@@ -100,7 +93,7 @@ internal sealed class MainForm : Form
 
     ConfigureNumeric(_rateNumeric, -10, 10, 0, 50);
     ConfigureNumeric(_idleNumeric, 100, 5000, 1000, 80);
-    ConfigureNumeric(_pollNumeric, 50, 2000, 200, 80);
+    ConfigureNumeric(_pollNumeric, 100, 2000, 300, 80);
 
     _speakExistingCheckBox.AutoSize = true;
     _speakExistingCheckBox.Text = "Speak current paragraph on start";
@@ -120,8 +113,6 @@ internal sealed class MainForm : Form
     targetButtons.Controls.AddRange(new Control[]
     {
       _captureButton,
-      _parentButton,
-      _childButton,
       _refreshPreviewButton
     });
 
@@ -284,7 +275,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Begins delayed pointer-based target selection.
+  /// Opens the transcript-region selection overlay.
   /// </summary>
   /// <param name="sender">Unused event sender.</param>
   /// <param name="eventArgs">Unused event arguments.</param>
@@ -293,65 +284,6 @@ internal sealed class MainForm : Form
     EventArgs eventArgs)
   {
     await CaptureTargetAsync();
-  }
-
-  /// <summary>
-  /// Moves the selected target to its raw UI Automation parent.
-  /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private async void ParentButtonClicked(
-    object? sender,
-    EventArgs eventArgs)
-  {
-    AutomationElement? current = GetCurrentTarget();
-    if (current is null)
-    {
-      return;
-    }
-
-    try
-    {
-      AutomationElement? parent = TreeWalker.RawViewWalker.GetParent(current);
-      if (parent is null)
-      {
-        AppendLog("The selected element has no accessible parent.");
-        return;
-      }
-
-      if (_targetHistoryIndex + 1 < _targetHistory.Count)
-      {
-        _targetHistory.RemoveRange(
-          _targetHistoryIndex + 1,
-          _targetHistory.Count - _targetHistoryIndex - 1);
-      }
-
-      _targetHistory.Add(parent);
-      _targetHistoryIndex = _targetHistory.Count - 1;
-      await RefreshTargetDisplayAsync();
-    }
-    catch (ElementNotAvailableException exception)
-    {
-      AppendLog($"Target is no longer available: {exception.Message}");
-    }
-  }
-
-  /// <summary>
-  /// Returns to the previous child in target-selection history.
-  /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private async void ChildButtonClicked(
-    object? sender,
-    EventArgs eventArgs)
-  {
-    if (_targetHistoryIndex <= 0)
-    {
-      return;
-    }
-
-    --_targetHistoryIndex;
-    await RefreshTargetDisplayAsync();
   }
 
   /// <summary>
@@ -367,18 +299,18 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Starts monitoring the selected transcript target.
+  /// Starts monitoring the selected transcript region.
   /// </summary>
   /// <param name="sender">Unused event sender.</param>
   /// <param name="eventArgs">Unused event arguments.</param>
   private void StartButtonClicked(object? sender, EventArgs eventArgs)
   {
-    AutomationElement? target = GetCurrentTarget();
+    TranscriptTarget? target = _target;
     if (target is null)
     {
       MessageBox.Show(
         this,
-        "Select a transcript target first.",
+        "Select a transcript region first.",
         Text,
         MessageBoxButtons.OK,
         MessageBoxIcon.Information);
@@ -465,9 +397,9 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Updates the live preview when the monitored visible tail changes.
+  /// Updates the live preview when the monitored tail changes.
   /// </summary>
-  /// <param name="tail">The latest visible transcript tail.</param>
+  /// <param name="tail">Latest transcript tail.</param>
   private void MonitorTailChanged(IReadOnlyList<string> tail)
   {
     string preview = FormatPreview(tail);
@@ -511,7 +443,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Marshals a monitor failure from the worker thread to the UI thread.
+  /// Marshals a monitoring failure to the UI thread.
   /// </summary>
   /// <param name="exception">Monitoring exception.</param>
   private void MonitorFaulted(Exception exception)
@@ -524,8 +456,8 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Hides the application, waits three seconds, and captures the UI element
-  /// under the mouse pointer.
+  /// Hides this window, collects a screen rectangle, and binds it to the
+  /// top-level window beneath the rectangle's centre.
   /// </summary>
   private async Task CaptureTargetAsync()
   {
@@ -534,31 +466,44 @@ internal sealed class MainForm : Form
       return;
     }
 
-    AppendLog("Move the pointer over transcript text.  Capturing in 3 seconds.");
+    AppendLog("Drag around the transcript output area.  Press Esc to cancel.");
     Enabled = false;
     Hide();
+    await Task.Delay(150);
 
-    AutomationElement? element = null;
+    DialogResult result;
+    System.Drawing.Rectangle region;
+    using (var selector = new RegionSelectionForm())
+    {
+      result = selector.ShowDialog();
+      region = selector.SelectedRegion;
+    }
+
     Exception? failure = null;
+    TranscriptTarget? target = null;
+    if (result == DialogResult.OK)
+    {
+      try
+      {
+        await Task.Delay(100);
+        target = TranscriptTarget.Create(region);
+      }
+      catch (Exception exception) when (
+        exception is ArgumentException or
+        InvalidOperationException)
+      {
+        failure = exception;
+      }
+    }
 
-    try
+    Show();
+    Activate();
+    Enabled = true;
+
+    if (result != DialogResult.OK)
     {
-      await Task.Delay(TimeSpan.FromSeconds(3));
-      Point cursor = Cursor.Position;
-      element = AutomationElement.FromPoint(
-        new System.Windows.Point(cursor.X, cursor.Y));
-    }
-    catch (Exception exception) when (
-      exception is ElementNotAvailableException or
-      InvalidOperationException)
-    {
-      failure = exception;
-    }
-    finally
-    {
-      Show();
-      Activate();
-      Enabled = true;
+      AppendLog("Region selection cancelled.");
+      return;
     }
 
     if (failure is not null)
@@ -567,24 +512,16 @@ internal sealed class MainForm : Form
       return;
     }
 
-    if (element is null)
-    {
-      AppendLog("No UI Automation element was found under the pointer.");
-      return;
-    }
-
-    _targetHistory.Clear();
-    _targetHistory.Add(element);
-    _targetHistoryIndex = 0;
+    _target = target;
     await RefreshTargetDisplayAsync();
   }
 
   /// <summary>
-  /// Reads the selected target and updates its description and tail preview.
+  /// Reads the selected region and updates its description and tail preview.
   /// </summary>
   private async Task RefreshTargetDisplayAsync()
   {
-    AutomationElement? target = GetCurrentTarget();
+    TranscriptTarget? target = _target;
     if (target is null)
     {
       _targetLabel.Text = "Target: none";
@@ -597,7 +534,7 @@ internal sealed class MainForm : Form
 
     try
     {
-      _targetLabel.Text = DescribeTarget(target);
+      _targetLabel.Text = $"Target: {target.Describe()}";
       IReadOnlyList<string> tail = await Task.Run(() =>
         _reader.ReadTail(target));
       _previewTextBox.Text = FormatPreview(tail);
@@ -605,7 +542,7 @@ internal sealed class MainForm : Form
       if (tail.Count == 0)
       {
         AppendLog(
-          "No transcript text was found.  Try Parent and refresh again.");
+          "No transcript text was found inside the selected region.");
       }
     }
     catch (Exception exception) when (
@@ -619,40 +556,6 @@ internal sealed class MainForm : Form
     {
       SetSelectionButtonsEnabled(true);
       UpdateControlState();
-    }
-  }
-
-  /// <summary>
-  /// Returns the current target-history element.
-  /// </summary>
-  /// <returns>The selected target or null.</returns>
-  private AutomationElement? GetCurrentTarget()
-  {
-    return _targetHistoryIndex >= 0 &&
-      _targetHistoryIndex < _targetHistory.Count
-        ? _targetHistory[_targetHistoryIndex]
-        : null;
-  }
-
-  /// <summary>
-  /// Builds a readable UI Automation target description.
-  /// </summary>
-  /// <param name="target">Target element.</param>
-  /// <returns>A target description.</returns>
-  private static string DescribeTarget(AutomationElement target)
-  {
-    try
-    {
-      AutomationElement.AutomationElementInformation current = target.Current;
-      string name = string.IsNullOrWhiteSpace(current.Name)
-        ? "(unnamed)"
-        : current.Name;
-      string controlType = current.ControlType.ProgrammaticName;
-      return $"Target: {controlType}; {name}; PID {current.ProcessId}";
-    }
-    catch (ElementNotAvailableException)
-    {
-      return "Target: no longer available";
     }
   }
 
@@ -715,14 +618,12 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Enables or disables target-selection controls during preview work.
+  /// Enables or disables region-selection controls during preview work.
   /// </summary>
   /// <param name="enabled">Desired enabled state.</param>
   private void SetSelectionButtonsEnabled(bool enabled)
   {
     _captureButton.Enabled = enabled;
-    _parentButton.Enabled = enabled;
-    _childButton.Enabled = enabled;
     _refreshPreviewButton.Enabled = enabled;
   }
 
@@ -732,11 +633,9 @@ internal sealed class MainForm : Form
   private void UpdateControlState()
   {
     bool running = _monitor.IsRunning;
-    bool hasTarget = GetCurrentTarget() is not null;
+    bool hasTarget = _target is not null;
 
     _captureButton.Enabled = !running;
-    _parentButton.Enabled = !running && hasTarget;
-    _childButton.Enabled = !running && _targetHistoryIndex > 0;
     _refreshPreviewButton.Enabled = !running && hasTarget;
     _startButton.Enabled = !running && hasTarget;
     _stopButton.Enabled = running;
