@@ -13,17 +13,15 @@ namespace AgentPanelSpeaker;
 /// <param name="FollowLatest">Whether a newer session file can replace the current one.</param>
 /// <param name="SpeakExistingLastMessage">Speak the last existing eligible node at start.</param>
 /// <param name="PollInterval">File polling interval.</param>
-/// <param name="Extraction">Assistant-content selection.</param>
 internal sealed record MonitorSettings(
   AgentSource RequestedSource,
   string? ExplicitPath,
   bool FollowLatest,
   bool SpeakExistingLastMessage,
-  TimeSpan PollInterval,
-  ExtractionOptions Extraction);
+  TimeSpan PollInterval);
 
 /// <summary>
-/// Tails Claude or Codex session JSONL and emits only assistant-authored text.
+/// Tails Claude or Codex session JSONL and emits conversational text.
 /// </summary>
 internal sealed class JsonlSessionMonitor : IDisposable
 {
@@ -190,7 +188,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
       SpeechHistorySnapshot initialHistory = LoadExistingHistory(
         session,
-        settings.Extraction,
         settings.SpeakExistingLastMessage,
         ref nextNodeId,
         recentFingerprintQueue,
@@ -227,7 +224,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
             preview.Clear();
             SpeechHistorySnapshot switchedHistory = LoadExistingHistory(
               session,
-              settings.Extraction,
               speakLastExistingNode: false,
               ref nextNodeId,
               recentFingerprintQueue,
@@ -249,7 +245,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
             recentFingerprintQueue,
             recentFingerprintSet,
             preview,
-            settings.Extraction,
             tailReader.Offset);
         }
 
@@ -313,15 +308,13 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
-    ExtractionOptions options,
     long byteOffset)
   {
     try
     {
       ExtractionResult result = JsonlRecordExtractor.Extract(
         session.Source,
-        line,
-        options);
+        line);
       DiagnosticLog.Write("jsonl.record", new
       {
         session.Source,
@@ -342,8 +335,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           ref nextNodeId,
           recentFingerprintQueue,
           recentFingerprintSet,
-          preview,
-          options);
+          preview);
       }
     }
     catch (JsonException exception)
@@ -360,7 +352,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
   }
 
   /// <summary>
-  /// Cleans, deduplicates, previews, segments, and emits one assistant node.
+  /// Cleans, deduplicates, previews, segments, and emits one conversation node.
   /// </summary>
   private void ProcessNode(
     LocatedSession session,
@@ -369,14 +361,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
-    ExtractionOptions options,
     List<SpeechFragment>? history = null,
     bool emitLive = true)
   {
-    string cleaned = TextCleaner.CleanForSpeech(
-      node.Text,
-      options.SkipFencedCode);
-    if (string.IsNullOrWhiteSpace(cleaned))
+    IReadOnlyList<SpeechTextPart> parts = TextCleaner.ParseForSpeech(node.Text);
+    if (parts.Count == 0)
     {
       DiagnosticLog.Write("jsonl.node_skipped", new
       {
@@ -388,7 +377,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
       return;
     }
 
-    string fingerprint = CreateFingerprint(cleaned);
+    string fingerprint = CreateFingerprint(
+      node.Category + "|" + string.Join(
+        "|",
+        parts.Select(part =>
+          $"{part.Kind}:{part.FenceType}:{part.Text}")));
     if (recentFingerprintSet.Contains(fingerprint))
     {
       DiagnosticLog.Write("jsonl.node_skipped", new
@@ -397,7 +390,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
         session.Path,
         node.Kind,
         reason = "recent duplicate",
-        text = cleaned
+        text = string.Join(" ", parts.Select(part => part.Text))
       });
       return;
     }
@@ -407,9 +400,36 @@ internal sealed class JsonlSessionMonitor : IDisposable
       recentFingerprintQueue,
       recentFingerprintSet);
     long nodeId = nextNodeId++;
-    AddPreview(preview, $"[{session.Source} {node.Kind}] {cleaned}");
+    string previewText = string.Join(" ", parts.Select(part => part.Text));
+    AddPreview(
+      preview,
+      $"[{session.Source} {node.Category} {node.Kind}] {previewText}");
 
-    IReadOnlyList<string> sentences = SentenceSegmenter.Split(cleaned);
+    var fragments = new List<SpeechFragment>();
+    foreach (SpeechTextPart part in parts)
+    {
+      if (part.Kind == SpeechFragmentKind.Prose)
+      {
+        fragments.AddRange(SentenceSegmenter.Split(part.Text).Select(sentence =>
+          new SpeechFragment(
+            nodeId,
+            node.Category,
+            SpeechFragmentKind.Prose,
+            sentence)));
+      }
+      else
+      {
+        fragments.Add(new SpeechFragment(
+          nodeId,
+          node.Category,
+          SpeechFragmentKind.FencedCodeLine,
+          part.Text,
+          part.FenceType,
+          part.FenceBlockId,
+          part.FenceLineIndex,
+          part.FenceLineCount));
+      }
+    }
     DiagnosticLog.Write("jsonl.node_accepted", new
     {
       session.Source,
@@ -417,18 +437,20 @@ internal sealed class JsonlSessionMonitor : IDisposable
       node.Kind,
       node.Timestamp,
       nodeId,
-      sentenceCount = sentences.Count,
-      text = cleaned
+      fragmentCount = fragments.Count,
+      text = previewText
     });
 
-    foreach (string sentence in sentences)
+    foreach (SpeechFragment fragment in fragments)
     {
-      var fragment = new SpeechFragment(nodeId, sentence);
       DiagnosticLog.Write("monitor.emit", new
       {
         nodeId,
-        node.Kind,
-        text = sentence
+        nodeKind = node.Kind,
+        fragment.Category,
+        fragmentKind = fragment.Kind,
+        fragment.FenceType,
+        text = fragment.Text
       });
       history?.Add(fragment);
       if (emitLive)
@@ -449,7 +471,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   private SpeechHistorySnapshot LoadExistingHistory(
     LocatedSession session,
-    ExtractionOptions options,
     bool speakLastExistingNode,
     ref long nextNodeId,
     Queue<string> recentFingerprintQueue,
@@ -458,7 +479,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     bool playbackFromBeginning = false)
   {
     var fragments = new List<SpeechFragment>();
-    foreach (ExtractedNode node in ReadEligibleNodes(session, options))
+    foreach (ExtractedNode node in ReadEligibleNodes(session))
     {
       ProcessNode(
         session,
@@ -467,39 +488,31 @@ internal sealed class JsonlSessionMonitor : IDisposable
         recentFingerprintQueue,
         recentFingerprintSet,
         preview,
-        options,
         fragments,
         emitLive: false);
     }
 
-    int playbackStartIndex = fragments.Count;
-    if (playbackFromBeginning && fragments.Count != 0)
-    {
-      playbackStartIndex = 0;
-    }
-    else if (speakLastExistingNode && fragments.Count != 0)
-    {
-      long lastNodeId = fragments[^1].NodeId;
-      playbackStartIndex = fragments.FindIndex(
-        fragment => fragment.NodeId == lastNodeId);
-    }
+    PlaybackStartMode startMode = playbackFromBeginning
+      ? PlaybackStartMode.Beginning
+      : speakLastExistingNode
+        ? PlaybackStartMode.LastEnabledNode
+        : PlaybackStartMode.LiveEnd;
 
     DiagnosticLog.Write("monitor.history_loaded", new
     {
       session.Source,
       session.Path,
       fragmentCount = fragments.Count,
-      playbackStartIndex
+      startMode
     });
-    return new SpeechHistorySnapshot(fragments, playbackStartIndex);
+    return new SpeechHistorySnapshot(fragments, startMode);
   }
 
   /// <summary>
-  /// Reads all currently present eligible assistant nodes.
+  /// Reads all currently present conversational nodes.
   /// </summary>
   private static IReadOnlyList<ExtractedNode> ReadEligibleNodes(
     LocatedSession session,
-    ExtractionOptions options,
     DateTime? minimumTimestampUtc = null)
   {
     var nodes = new List<ExtractedNode>();
@@ -509,8 +522,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       {
         ExtractionResult result = JsonlRecordExtractor.Extract(
           session.Source,
-          line,
-          options);
+          line);
         foreach (ExtractedNode node in result.Nodes)
         {
           if (minimumTimestampUtc is null ||

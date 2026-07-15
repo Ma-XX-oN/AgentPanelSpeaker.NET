@@ -5,27 +5,138 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Converts assistant Markdown into concise text suitable for speech.
+/// Converts Markdown into prose sections and typed fenced-code lines.
 /// </summary>
 internal static partial class TextCleaner
 {
   /// <summary>
-  /// Removes Markdown structure, links, HTML, and optionally fenced code.
+  /// Parses Markdown while preserving every fenced block for live policy use.
   /// </summary>
-  /// <param name="text">Raw assistant text.</param>
-  /// <param name="skipFencedCode">Whether fenced code bodies are omitted.</param>
-  /// <returns>Normalized speech text.</returns>
-  public static string CleanForSpeech(string text, bool skipFencedCode)
+  public static IReadOnlyList<SpeechTextPart> ParseForSpeech(string text)
   {
+    var result = new List<SpeechTextPart>();
     if (string.IsNullOrWhiteSpace(text))
     {
-      return string.Empty;
+      return result;
     }
 
-    string withoutFences = skipFencedCode
-      ? RemoveFencedCode(text)
-      : text;
-    string cleaned = SystemTagRegex().Replace(withoutFences, " ");
+    var prose = new StringBuilder();
+    var fenceLines = new List<string>();
+    bool inFence = false;
+    char fenceCharacter = '\0';
+    int fenceLength = 0;
+    string fenceType = string.Empty;
+    int fenceBlockId = 0;
+
+    foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
+    {
+      string trimmed = line.TrimStart();
+      if (TryReadFence(
+            trimmed,
+            out char currentCharacter,
+            out int currentLength,
+            out string currentType))
+      {
+        if (!inFence)
+        {
+          FlushProse(result, prose);
+          inFence = true;
+          fenceCharacter = currentCharacter;
+          fenceLength = currentLength;
+          fenceType = currentType.Length == 0 ? "untyped" : currentType;
+          fenceLines.Clear();
+        }
+        else if (currentCharacter == fenceCharacter &&
+                 currentLength >= fenceLength)
+        {
+          FlushFence(result, fenceLines, fenceType, fenceBlockId++);
+          inFence = false;
+          fenceCharacter = '\0';
+          fenceLength = 0;
+          fenceType = string.Empty;
+        }
+        else
+        {
+          fenceLines.Add(line);
+        }
+
+        continue;
+      }
+
+      if (inFence)
+      {
+        fenceLines.Add(line);
+      }
+      else
+      {
+        prose.AppendLine(line);
+      }
+    }
+
+    if (inFence)
+    {
+      FlushFence(result, fenceLines, fenceType, fenceBlockId);
+    }
+    else
+    {
+      FlushProse(result, prose);
+    }
+
+    return result;
+  }
+
+  /// <summary>
+  /// Cleans and appends one accumulated prose section.
+  /// </summary>
+  private static void FlushProse(
+    ICollection<SpeechTextPart> result,
+    StringBuilder prose)
+  {
+    string cleaned = CleanProse(prose.ToString());
+    prose.Clear();
+    if (cleaned.Length != 0)
+    {
+      result.Add(new SpeechTextPart(
+        SpeechFragmentKind.Prose,
+        cleaned,
+        string.Empty,
+        -1,
+        -1,
+        0));
+    }
+  }
+
+  /// <summary>
+  /// Appends one entry for every non-empty line in a fenced block.
+  /// </summary>
+  private static void FlushFence(
+    ICollection<SpeechTextPart> result,
+    IReadOnlyList<string> lines,
+    string fenceType,
+    int blockId)
+  {
+    string[] nonEmpty = lines
+      .Select(line => line.Trim())
+      .Where(line => line.Length != 0)
+      .ToArray();
+    for (int index = 0; index < nonEmpty.Length; ++index)
+    {
+      result.Add(new SpeechTextPart(
+        SpeechFragmentKind.FencedCodeLine,
+        nonEmpty[index],
+        fenceType.ToLowerInvariant(),
+        blockId,
+        index,
+        nonEmpty.Length));
+    }
+  }
+
+  /// <summary>
+  /// Removes non-spoken Markdown structure from prose.
+  /// </summary>
+  private static string CleanProse(string text)
+  {
+    string cleaned = SystemTagRegex().Replace(text, " ");
     cleaned = ImageRegex().Replace(cleaned, " ");
     cleaned = LinkRegex().Replace(cleaned, "$1");
     cleaned = RawUrlRegex().Replace(cleaned, " ");
@@ -35,60 +146,24 @@ internal static partial class TextCleaner
     cleaned = MarkdownDecorationRegex().Replace(cleaned, "$1");
     cleaned = cleaned.Replace('\uFFFC', ' ');
     cleaned = WebUtility.HtmlDecode(cleaned);
-    return NormalizeWhitespace(cleaned);
+    cleaned = BlankLineRegex().Replace(cleaned, ". ");
+    cleaned = WhitespaceRegex().Replace(cleaned, " ");
+    cleaned = SpaceBeforePunctuationRegex().Replace(cleaned, "$1");
+    return cleaned.Trim();
   }
 
   /// <summary>
-  /// Removes complete Markdown code fences and their bodies.
-  /// </summary>
-  private static string RemoveFencedCode(string text)
-  {
-    var output = new StringBuilder(text.Length);
-    bool inFence = false;
-    char fenceCharacter = '\0';
-    int fenceLength = 0;
-
-    foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
-    {
-      string trimmed = line.TrimStart();
-      if (TryReadFence(trimmed, out char currentCharacter, out int currentLength))
-      {
-        if (!inFence)
-        {
-          inFence = true;
-          fenceCharacter = currentCharacter;
-          fenceLength = currentLength;
-        }
-        else if (currentCharacter == fenceCharacter &&
-                 currentLength >= fenceLength)
-        {
-          inFence = false;
-          fenceCharacter = '\0';
-          fenceLength = 0;
-        }
-
-        continue;
-      }
-
-      if (!inFence)
-      {
-        output.AppendLine(line);
-      }
-    }
-
-    return output.ToString();
-  }
-
-  /// <summary>
-  /// Identifies a Markdown backtick or tilde fence.
+  /// Reads a backtick or tilde fence and its first info-string token.
   /// </summary>
   private static bool TryReadFence(
     string line,
     out char fenceCharacter,
-    out int fenceLength)
+    out int fenceLength,
+    out string fenceType)
   {
     fenceCharacter = '\0';
     fenceLength = 0;
+    fenceType = string.Empty;
     if (line.Length < 3 || line[0] is not ('`' or '~'))
     {
       return false;
@@ -101,19 +176,16 @@ internal static partial class TextCleaner
       ++fenceLength;
     }
 
-    return fenceLength >= 3;
-  }
+    if (fenceLength < 3)
+    {
+      return false;
+    }
 
-  /// <summary>
-  /// Collapses whitespace while preserving sentence separation.
-  /// </summary>
-  private static string NormalizeWhitespace(string text)
-  {
-    string normalized = text.Replace("\r\n", "\n");
-    normalized = BlankLineRegex().Replace(normalized, ". ");
-    normalized = WhitespaceRegex().Replace(normalized, " ");
-    normalized = SpaceBeforePunctuationRegex().Replace(normalized, "$1");
-    return normalized.Trim();
+    string info = line[fenceLength..].Trim();
+    fenceType = info.Split(
+      (char[]?)null,
+      StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+    return true;
   }
 
   [GeneratedRegex(
@@ -154,3 +226,14 @@ internal static partial class TextCleaner
   [GeneratedRegex(@"\s+([,.;:!?])")]
   private static partial Regex SpaceBeforePunctuationRegex();
 }
+
+/// <summary>
+/// Describes one cleaned prose section or fenced-code line.
+/// </summary>
+internal sealed record SpeechTextPart(
+  SpeechFragmentKind Kind,
+  string Text,
+  string FenceType,
+  int FenceBlockId,
+  int FenceLineIndex,
+  int FenceLineCount);

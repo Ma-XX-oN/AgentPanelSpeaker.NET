@@ -34,14 +34,3 @@ internal sealed record LocatedSession(
     ? SessionId
     : Title;
 }
-
-/// <summary>
-/// Supplies existing speech history to the player before live tailing begins.
-/// </summary>
-/// <param name="Fragments">Existing eligible speech fragments.</param>
-/// <param name="PlaybackStartIndex">
-/// First fragment to play, or Fragments.Count to remain at the live end.
-/// </param>
-internal sealed record SpeechHistorySnapshot(
-  IReadOnlyList<SpeechFragment> Fragments,
-  int PlaybackStartIndex);

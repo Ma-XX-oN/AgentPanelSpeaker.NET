@@ -1,18 +1,17 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Extracts assistant narration from Claude and Codex JSONL records while
+/// Extracts conversational narration from Claude and Codex JSONL records while
 /// excluding tool calls, tool results, commands, diffs, and status records.
 /// </summary>
-internal static class JsonlRecordExtractor
+internal static partial class JsonlRecordExtractor
 {
   /// <summary>
-  /// Detects the record format without consuming any external state.
+  /// Detects the record format without consuming external state.
   /// </summary>
-  /// <param name="line">One complete JSONL line.</param>
-  /// <returns>The detected source, or null for an unrecognized record.</returns>
   public static AgentSource? DetectSource(string line)
   {
     if (string.IsNullOrWhiteSpace(line))
@@ -23,8 +22,7 @@ internal static class JsonlRecordExtractor
     try
     {
       using JsonDocument document = JsonDocument.Parse(line);
-      JsonElement root = document.RootElement;
-      string type = GetString(root, "type");
+      string type = GetString(document.RootElement, "type");
       if (type is "event_msg" or "response_item" or "session_meta")
       {
         return AgentSource.Codex;
@@ -37,31 +35,21 @@ internal static class JsonlRecordExtractor
     }
     catch (JsonException)
     {
-      return null;
     }
 
     return null;
   }
 
   /// <summary>
-  /// Extracts speakable assistant text from one complete JSONL record.
+  /// Extracts all conversational text from one complete JSONL record.
   /// </summary>
-  /// <param name="source">Known session format.</param>
-  /// <param name="line">One complete JSONL line.</param>
-  /// <param name="options">Content-selection options.</param>
-  /// <returns>Extracted nodes and diagnostic classification.</returns>
-  public static ExtractionResult Extract(
-    AgentSource source,
-    string line,
-    ExtractionOptions options)
+  public static ExtractionResult Extract(AgentSource source, string line)
   {
-    ArgumentNullException.ThrowIfNull(options);
-
     using JsonDocument document = JsonDocument.Parse(line);
     return source switch
     {
-      AgentSource.Claude => ExtractClaude(document.RootElement, options),
-      AgentSource.Codex => ExtractCodex(document.RootElement, options),
+      AgentSource.Claude => ExtractClaude(document.RootElement),
+      AgentSource.Codex => ExtractCodex(document.RootElement),
       _ => throw new ArgumentException(
         "A concrete Claude or Codex source is required.",
         nameof(source))
@@ -69,30 +57,28 @@ internal static class JsonlRecordExtractor
   }
 
   /// <summary>
-  /// Extracts Claude assistant thinking and text blocks.
+  /// Extracts real Claude user text, assistant text, and thinking blocks.
   /// </summary>
-  private static ExtractionResult ExtractClaude(
-    JsonElement root,
-    ExtractionOptions options)
+  private static ExtractionResult ExtractClaude(JsonElement root)
   {
     string recordType = GetString(root, "type");
-    if (!string.Equals(recordType, "assistant", StringComparison.Ordinal))
-    {
-      return Empty("claude non-assistant record", recordType, string.Empty);
-    }
-
     if (GetBoolean(root, "isSidechain"))
     {
       return Empty("claude sidechain record", recordType, string.Empty);
     }
 
+    if (recordType == "queue-operation")
+    {
+      return Empty("claude queue-operation record", recordType, string.Empty);
+    }
+
     if (!root.TryGetProperty("message", out JsonElement message) ||
         message.ValueKind != JsonValueKind.Object)
     {
-      return Empty("claude assistant record has no message", recordType, string.Empty);
+      return Empty("claude record has no message", recordType, string.Empty);
     }
 
-    if (string.Equals(
+    if (recordType == "assistant" && string.Equals(
           GetString(message, "model"),
           "<synthetic>",
           StringComparison.Ordinal))
@@ -100,61 +86,74 @@ internal static class JsonlRecordExtractor
       return Empty("claude synthetic assistant record", recordType, string.Empty);
     }
 
-    if (!message.TryGetProperty("content", out JsonElement content) ||
-        content.ValueKind != JsonValueKind.Array)
+    if (!message.TryGetProperty("content", out JsonElement content))
     {
-      return Empty("claude assistant record has no content array", recordType, string.Empty);
+      return Empty("claude message has no content", recordType, string.Empty);
     }
 
-    var nodes = new List<ExtractedNode>();
-    var acceptedKinds = new List<string>();
     string? timestamp = GetOptionalString(root, "timestamp");
-
-    foreach (JsonElement block in content.EnumerateArray())
+    var nodes = new List<ExtractedNode>();
+    if (recordType == "assistant")
     {
-      if (block.ValueKind != JsonValueKind.Object)
+      foreach (JsonElement block in EnumerateContent(content))
       {
-        continue;
-      }
-
-      string blockType = GetString(block, "type");
-      if (blockType == "thinking" && options.SpeakReasoning)
-      {
-        string thinking = GetString(block, "thinking");
-        if (!string.IsNullOrWhiteSpace(thinking))
+        string blockType = GetString(block, "type");
+        if (blockType == "thinking")
         {
-          nodes.Add(new ExtractedNode("claude.thinking", thinking, timestamp));
-          acceptedKinds.Add("thinking");
+          AddNode(
+            nodes,
+            "claude.thinking",
+            ContentCategory.Reasoning,
+            GetString(block, "thinking"),
+            timestamp);
+        }
+        else if (blockType == "text")
+        {
+          AddNode(
+            nodes,
+            "claude.text",
+            ContentCategory.Assistant,
+            GetString(block, "text"),
+            timestamp);
         }
       }
-      else if (blockType == "text" && options.SpeakMessages)
+    }
+    else if (recordType == "user")
+    {
+      foreach (JsonElement block in EnumerateContent(content))
       {
-        string text = GetString(block, "text");
-        if (!string.IsNullOrWhiteSpace(text))
+        if (GetString(block, "type") == "text")
         {
-          nodes.Add(new ExtractedNode("claude.text", text, timestamp));
-          acceptedKinds.Add("text");
+          AddNode(
+            nodes,
+            "claude.user_text",
+            ContentCategory.User,
+            StripSystemText(GetString(block, "text")),
+            timestamp);
         }
       }
-      // tool_use blocks are intentionally ignored. Their matching tool_result
-      // records are user records and are ignored by the record-type gate above.
+    }
+    else
+    {
+      return Empty("claude record is not user/assistant", recordType, string.Empty);
     }
 
-    string decision = nodes.Count == 0
-      ? "claude assistant record contained no enabled text/thinking block"
-      : $"accepted claude {string.Join("+", acceptedKinds)} block(s)";
-    return new ExtractionResult(nodes, decision, recordType, string.Empty);
+    return new ExtractionResult(
+      nodes,
+      nodes.Count == 0
+        ? "claude record contained no conversational text"
+        : $"accepted {nodes.Count} claude conversational block(s)",
+      recordType,
+      string.Empty);
   }
 
   /// <summary>
-  /// Extracts Codex agent messages and reasoning events.
+  /// Extracts Codex event messages while rejecting response-item tool data.
   /// </summary>
-  private static ExtractionResult ExtractCodex(
-    JsonElement root,
-    ExtractionOptions options)
+  private static ExtractionResult ExtractCodex(JsonElement root)
   {
     string recordType = GetString(root, "type");
-    if (!string.Equals(recordType, "event_msg", StringComparison.Ordinal))
+    if (recordType != "event_msg")
     {
       return Empty(
         "codex non-event record; tool/function/diff records are skipped",
@@ -170,57 +169,103 @@ internal static class JsonlRecordExtractor
 
     string payloadType = GetString(payload, "type");
     string? timestamp = GetOptionalString(root, "timestamp");
-    if (payloadType == "agent_message")
+    ExtractedNode? node = payloadType switch
     {
-      if (!options.SpeakMessages)
-      {
-        return Empty("codex agent messages disabled", recordType, payloadType);
-      }
+      "agent_message" => CreateNode(
+        string.IsNullOrWhiteSpace(GetString(payload, "phase"))
+          ? "codex.agent_message"
+          : $"codex.agent_message.{GetString(payload, "phase")}",
+        ContentCategory.Assistant,
+        GetString(payload, "message"),
+        timestamp),
+      "agent_reasoning" => CreateNode(
+        "codex.agent_reasoning",
+        ContentCategory.Reasoning,
+        GetString(payload, "text"),
+        timestamp),
+      "user_message" => CreateNode(
+        "codex.user_message",
+        ContentCategory.User,
+        StripCodexUserPreamble(GetString(payload, "message")),
+        timestamp),
+      _ => null
+    };
 
-      string message = GetString(payload, "message");
-      if (string.IsNullOrWhiteSpace(message))
-      {
-        return Empty("empty codex agent message", recordType, payloadType);
-      }
-
-      string phase = GetString(payload, "phase");
-      string kind = string.IsNullOrWhiteSpace(phase)
-        ? "codex.agent_message"
-        : $"codex.agent_message.{phase}";
-      return new ExtractionResult(
-        new[] { new ExtractedNode(kind, message, timestamp) },
-        "accepted codex agent message",
+    return node is null
+      ? Empty(
+        "codex event is not conversational text",
+        recordType,
+        payloadType)
+      : new ExtractionResult(
+        new[] { node },
+        $"accepted codex {payloadType}",
         recordType,
         payloadType);
-    }
+  }
 
-    if (payloadType == "agent_reasoning")
+  /// <summary>
+  /// Enumerates object blocks from list content or synthesizes one text block.
+  /// </summary>
+  private static IEnumerable<JsonElement> EnumerateContent(JsonElement content)
+  {
+    if (content.ValueKind == JsonValueKind.Array)
     {
-      if (!options.SpeakReasoning)
+      foreach (JsonElement block in content.EnumerateArray())
       {
-        return Empty("codex reasoning disabled", recordType, payloadType);
-      }
-
-      string reasoning = GetString(payload, "text");
-      if (string.IsNullOrWhiteSpace(reasoning))
-      {
-        return Empty("empty codex reasoning event", recordType, payloadType);
-      }
-
-      return new ExtractionResult(
-        new[]
+        if (block.ValueKind == JsonValueKind.Object)
         {
-          new ExtractedNode("codex.agent_reasoning", reasoning, timestamp)
-        },
-        "accepted codex reasoning event",
-        recordType,
-        payloadType);
+          yield return block;
+        }
+      }
     }
+  }
 
-    return Empty(
-      "codex event is not assistant narration/reasoning",
-      recordType,
-      payloadType);
+  /// <summary>
+  /// Adds a non-empty node.
+  /// </summary>
+  private static void AddNode(
+    ICollection<ExtractedNode> nodes,
+    string kind,
+    ContentCategory category,
+    string text,
+    string? timestamp)
+  {
+    ExtractedNode? node = CreateNode(kind, category, text, timestamp);
+    if (node is not null)
+    {
+      nodes.Add(node);
+    }
+  }
+
+  /// <summary>
+  /// Creates a non-empty node or null.
+  /// </summary>
+  private static ExtractedNode? CreateNode(
+    string kind,
+    ContentCategory category,
+    string text,
+    string? timestamp)
+  {
+    return string.IsNullOrWhiteSpace(text)
+      ? null
+      : new ExtractedNode(kind, category, text, timestamp);
+  }
+
+  /// <summary>
+  /// Removes Claude-injected context blocks from real user text.
+  /// </summary>
+  private static string StripSystemText(string text)
+  {
+    return SystemTagRegex().Replace(text, string.Empty).Trim();
+  }
+
+  /// <summary>
+  /// Removes the IDE-context wrapper that Codex prepends to user messages.
+  /// </summary>
+  private static string StripCodexUserPreamble(string text)
+  {
+    Match match = CodexRequestRegex().Match(text);
+    return match.Success ? match.Groups[1].Value.Trim() : text.Trim();
   }
 
   /// <summary>
@@ -267,4 +312,14 @@ internal static class JsonlRecordExtractor
     return element.TryGetProperty(propertyName, out JsonElement value) &&
       value.ValueKind == JsonValueKind.True;
   }
+
+  [GeneratedRegex(
+    @"<(?:ide_opened_file|ide_selection|system[-_]reminder|system|env|" +
+    @"claude_background_info|user[-_]prompt[-_]submit[-_]hook|" +
+    @"command[-_]name|antml:[a-z_]+)[^>]*>.*?</[^>]+>",
+    RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+  private static partial Regex SystemTagRegex();
+
+  [GeneratedRegex(@"## My request for Codex:\s*\r?\n([\s\S]+)")]
+  private static partial Regex CodexRequestRegex();
 }
