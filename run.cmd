@@ -2,8 +2,5 @@
 setlocal
 cd /d "%~dp0"
 
-dotnet run ^
-  --project AgentPanelSpeaker\AgentPanelSpeaker.csproj ^
-  -c Release ^
-  --no-restore
+dotnet run --project AgentPanelSpeaker\AgentPanelSpeaker.csproj -c Release --no-build
 exit /b %errorlevel%

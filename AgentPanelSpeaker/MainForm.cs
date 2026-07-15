@@ -1,25 +1,26 @@
-using System.Windows.Automation;
-
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Provides transcript-container selection, monitoring, and speech controls.
+/// Provides JSONL session selection, monitoring, and speech controls.
 /// </summary>
 internal sealed class MainForm : Form
 {
-  private readonly TranscriptReader _reader = new();
-  private readonly TranscriptMonitor _monitor = new();
+  private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
 
   private readonly Label _instructionsLabel = new();
-  private readonly Button _captureButton = new();
-  private readonly Button _refreshPreviewButton = new();
-  private readonly Label _targetLabel = new();
+  private readonly ComboBox _sourceComboBox = new();
+  private readonly TextBox _sessionPathTextBox = new();
+  private readonly Button _detectLatestButton = new();
+  private readonly Button _browseButton = new();
+  private readonly CheckBox _followLatestCheckBox = new();
   private readonly TextBox _previewTextBox = new();
   private readonly ComboBox _voiceComboBox = new();
   private readonly NumericUpDown _rateNumeric = new();
-  private readonly NumericUpDown _idleNumeric = new();
   private readonly NumericUpDown _pollNumeric = new();
+  private readonly CheckBox _speakMessagesCheckBox = new();
+  private readonly CheckBox _speakReasoningCheckBox = new();
+  private readonly CheckBox _skipFencedCodeCheckBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
   private readonly Button _startButton = new();
   private readonly Button _stopButton = new();
@@ -32,7 +33,7 @@ internal sealed class MainForm : Form
   private readonly Button _openLogButton = new();
   private readonly TextBox _logTextBox = new();
 
-  private TranscriptTarget? _target;
+  private bool _pathIsManual;
   private int _monitorSession;
   private bool _closing;
 
@@ -42,10 +43,12 @@ internal sealed class MainForm : Form
   public MainForm()
   {
     InitializeControls();
+    PopulateSources();
     PopulateVoices();
 
-    _captureButton.Click += CaptureButtonClicked;
-    _refreshPreviewButton.Click += RefreshPreviewButtonClicked;
+    _sourceComboBox.SelectedIndexChanged += SourceSelectionChanged;
+    _detectLatestButton.Click += DetectLatestButtonClicked;
+    _browseButton.Click += BrowseButtonClicked;
     _startButton.Click += StartButtonClicked;
     _stopButton.Click += StopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
@@ -61,7 +64,7 @@ internal sealed class MainForm : Form
     FormClosing += MainFormClosing;
 
     _monitor.TextReady += MonitorTextReady;
-    _monitor.TailChanged += MonitorTailChanged;
+    _monitor.MessagesChanged += MonitorMessagesChanged;
     _monitor.StatusChanged += MonitorStatusChanged;
     _monitor.Faulted += MonitorFaulted;
 
@@ -74,23 +77,28 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v16";
+    Text = "Agent Panel Speaker v18";
     AutoScaleDimensions = new SizeF(96.0f, 96.0f);
     AutoScaleMode = AutoScaleMode.Dpi;
     StartPosition = FormStartPosition.CenterScreen;
-    MinimumSize = new Size(760, 620);
-    Size = new Size(920, 760);
+    MinimumSize = new Size(820, 650);
+    Size = new Size(980, 800);
 
     _instructionsLabel.AutoSize = true;
-    _instructionsLabel.MaximumSize = new Size(850, 0);
+    _instructionsLabel.MaximumSize = new Size(920, 0);
     _instructionsLabel.Text =
-      "1. Select under pointer, then move the pointer over normal Claude or " +
-      "Codex narration.  2. The program walks upward through the " +
-      "accessibility tree and retains the smallest transcript-like " +
-      "container.  3. Confirm the preview and start monitoring.";
+      "Reads Claude/Codex session JSONL directly. It speaks assistant text " +
+      "and optional reasoning while skipping tool calls, command output, " +
+      "diffs, and tool results.";
 
-    ConfigureButton(_captureButton, "Select under pointer (3 s)");
-    ConfigureButton(_refreshPreviewButton, "Refresh preview");
+    _sourceComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+    _sourceComboBox.Width = 110;
+
+    _sessionPathTextBox.ReadOnly = true;
+    _sessionPathTextBox.Width = 560;
+
+    ConfigureButton(_detectLatestButton, "Detect latest");
+    ConfigureButton(_browseButton, "Browse JSONL");
     ConfigureButton(_startButton, "Start");
     ConfigureButton(_stopButton, "Stop");
     ConfigureButton(_cancelSpeechButton, "Cancel speech");
@@ -101,8 +109,9 @@ internal sealed class MainForm : Form
     ConfigureButton(_testVoiceButton, "Test voice");
     ConfigureButton(_openLogButton, "Open diagnostic log");
 
-    _targetLabel.AutoSize = true;
-    _targetLabel.Text = "Target: none";
+    _followLatestCheckBox.AutoSize = true;
+    _followLatestCheckBox.Checked = true;
+    _followLatestCheckBox.Text = "Follow newest session";
 
     _previewTextBox.Multiline = true;
     _previewTextBox.ReadOnly = true;
@@ -111,14 +120,27 @@ internal sealed class MainForm : Form
     _previewTextBox.Font = new Font(FontFamily.GenericMonospace, 9.0f);
 
     _voiceComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
-    _voiceComboBox.Width = 250;
+    _voiceComboBox.Width = 240;
 
-    ConfigureNumeric(_rateNumeric, -10, 10, 0, 50);
-    ConfigureNumeric(_idleNumeric, 100, 5000, 1000, 80);
-    ConfigureNumeric(_pollNumeric, 100, 2000, 150, 80);
+    ConfigureNumeric(_rateNumeric, -10, 10, 0, 55);
+    ConfigureNumeric(_pollNumeric, 50, 2000, 150, 80);
 
-    _speakExistingCheckBox.AutoSize = true;
-    _speakExistingCheckBox.Text = "Speak text already visible on start";
+    ConfigureCheckBox(
+      _speakMessagesCheckBox,
+      "Speak assistant messages",
+      isChecked: true);
+    ConfigureCheckBox(
+      _speakReasoningCheckBox,
+      "Speak reasoning/thinking",
+      isChecked: true);
+    ConfigureCheckBox(
+      _skipFencedCodeCheckBox,
+      "Skip fenced code",
+      isChecked: true);
+    ConfigureCheckBox(
+      _speakExistingCheckBox,
+      "Speak last existing assistant message on start",
+      isChecked: false);
 
     _logTextBox.Multiline = true;
     _logTextBox.ReadOnly = true;
@@ -126,17 +148,29 @@ internal sealed class MainForm : Form
     _logTextBox.Dock = DockStyle.Fill;
     _logTextBox.Font = new Font(FontFamily.GenericMonospace, 9.0f);
 
-    var targetButtons = new FlowLayoutPanel
+    var sessionControls = new FlowLayoutPanel
     {
       AutoSize = true,
       Dock = DockStyle.Fill,
       WrapContents = true
     };
-    targetButtons.Controls.AddRange(new Control[]
+    sessionControls.Controls.AddRange(new Control[]
     {
-      _captureButton,
-      _refreshPreviewButton
+      MakeInlineLabel("Source:"),
+      _sourceComboBox,
+      _detectLatestButton,
+      _browseButton,
+      _followLatestCheckBox
     });
+
+    var pathControls = new FlowLayoutPanel
+    {
+      AutoSize = true,
+      Dock = DockStyle.Fill,
+      WrapContents = false
+    };
+    pathControls.Controls.Add(MakeInlineLabel("Session:"));
+    pathControls.Controls.Add(_sessionPathTextBox);
 
     var settings = new FlowLayoutPanel
     {
@@ -150,10 +184,11 @@ internal sealed class MainForm : Form
       _voiceComboBox,
       MakeInlineLabel("Rate:"),
       _rateNumeric,
-      MakeInlineLabel("Idle ms:"),
-      _idleNumeric,
       MakeInlineLabel("Poll ms:"),
       _pollNumeric,
+      _speakMessagesCheckBox,
+      _speakReasoningCheckBox,
+      _skipFencedCodeCheckBox,
       _speakExistingCheckBox
     });
 
@@ -196,9 +231,9 @@ internal sealed class MainForm : Form
     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 52.0f));
 
     layout.Controls.Add(_instructionsLabel, 0, 0);
-    layout.Controls.Add(targetButtons, 0, 1);
-    layout.Controls.Add(_targetLabel, 0, 2);
-    layout.Controls.Add(MakeSectionLabel("Detected transcript tail:"), 0, 3);
+    layout.Controls.Add(sessionControls, 0, 1);
+    layout.Controls.Add(pathControls, 0, 2);
+    layout.Controls.Add(MakeSectionLabel("Recent accepted assistant text:"), 0, 3);
     layout.Controls.Add(_previewTextBox, 0, 4);
     layout.Controls.Add(settings, 0, 5);
     layout.Controls.Add(runButtons, 0, 6);
@@ -211,8 +246,6 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Applies common button sizing.
   /// </summary>
-  /// <param name="button">Button to configure.</param>
-  /// <param name="text">Button text.</param>
   private static void ConfigureButton(Button button, string text)
   {
     button.AutoSize = true;
@@ -222,11 +255,6 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Applies common numeric control settings.
   /// </summary>
-  /// <param name="control">Control to configure.</param>
-  /// <param name="minimum">Minimum value.</param>
-  /// <param name="maximum">Maximum value.</param>
-  /// <param name="value">Initial value.</param>
-  /// <param name="width">Control width.</param>
   private static void ConfigureNumeric(
     NumericUpDown control,
     decimal minimum,
@@ -241,10 +269,21 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
+  /// Applies common checkbox settings.
+  /// </summary>
+  private static void ConfigureCheckBox(
+    CheckBox checkBox,
+    string text,
+    bool isChecked)
+  {
+    checkBox.AutoSize = true;
+    checkBox.Checked = isChecked;
+    checkBox.Text = text;
+  }
+
+  /// <summary>
   /// Creates a label suitable for a settings row.
   /// </summary>
-  /// <param name="text">Label text.</param>
-  /// <returns>The configured label.</returns>
   private static Label MakeInlineLabel(string text)
   {
     return new Label
@@ -258,8 +297,6 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Creates a section heading label.
   /// </summary>
-  /// <param name="text">Heading text.</param>
-  /// <returns>The configured heading.</returns>
   private static Label MakeSectionLabel(string text)
   {
     return new Label
@@ -272,14 +309,27 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
+  /// Loads source choices.
+  /// </summary>
+  private void PopulateSources()
+  {
+    _sourceComboBox.Items.AddRange(new object[]
+    {
+      AgentSource.Auto,
+      AgentSource.Codex,
+      AgentSource.Claude
+    });
+    _sourceComboBox.SelectedItem = AgentSource.Auto;
+  }
+
+  /// <summary>
   /// Loads all enabled Windows speech voices.
   /// </summary>
   private void PopulateVoices()
   {
     try
     {
-      IReadOnlyList<string> voices = _speech.GetInstalledVoiceNames();
-      foreach (string voice in voices)
+      foreach (string voice in _speech.GetInstalledVoiceNames())
       {
         _voiceComboBox.Items.Add(voice);
       }
@@ -302,43 +352,77 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Waits three seconds and selects the transcript container beneath the
-  /// pointer.
+  /// Clears a stale auto-detected path after the source changes.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private async void CaptureButtonClicked(
-    object? sender,
-    EventArgs eventArgs)
+  private void SourceSelectionChanged(object? sender, EventArgs eventArgs)
   {
-    await CaptureTargetAsync();
+    if (!_pathIsManual)
+    {
+      _sessionPathTextBox.Clear();
+    }
   }
 
   /// <summary>
-  /// Refreshes the transcript preview.
+  /// Finds and displays the newest session for the selected source.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private async void RefreshPreviewButtonClicked(
+  private async void DetectLatestButtonClicked(
     object? sender,
     EventArgs eventArgs)
   {
-    await RefreshTargetDisplayAsync();
+    await DetectLatestAsync();
   }
 
   /// <summary>
-  /// Starts monitoring the selected transcript container.
+  /// Lets the user select a fixed JSONL session file.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private void StartButtonClicked(object? sender, EventArgs eventArgs)
+  private void BrowseButtonClicked(object? sender, EventArgs eventArgs)
   {
-    TranscriptTarget? target = _target;
-    if (target is null)
+    using var dialog = new OpenFileDialog
+    {
+      CheckFileExists = true,
+      Filter = "JSON Lines (*.jsonl)|*.jsonl|All files (*.*)|*.*",
+      Multiselect = false,
+      Title = "Select Claude or Codex session JSONL"
+    };
+
+    if (dialog.ShowDialog(this) != DialogResult.OK)
+    {
+      return;
+    }
+
+    try
+    {
+      AgentSource source = GetSelectedSource();
+      LocatedSession session = SessionLocator.FromPath(dialog.FileName, source);
+      _sessionPathTextBox.Text = session.Path;
+      _pathIsManual = true;
+      _followLatestCheckBox.Checked = false;
+      if (source == AgentSource.Auto)
+      {
+        _sourceComboBox.SelectedItem = session.Source;
+      }
+      DiagnosticLog.Write("session.browsed", session);
+      AppendLog($"Selected {session.Source}: {session.Path}");
+    }
+    catch (Exception exception) when (
+      exception is IOException or
+      UnauthorizedAccessException or
+      InvalidDataException)
+    {
+      AppendLog($"Unable to use selected file: {exception.Message}");
+    }
+  }
+
+  /// <summary>
+  /// Starts monitoring the selected or latest JSONL session.
+  /// </summary>
+  private async void StartButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    if (!_speakMessagesCheckBox.Checked && !_speakReasoningCheckBox.Checked)
     {
       MessageBox.Show(
         this,
-        "Select a transcript region first.",
+        "Enable assistant messages, reasoning/thinking, or both.",
         Text,
         MessageBoxButtons.OK,
         MessageBoxIcon.Information);
@@ -347,32 +431,52 @@ internal sealed class MainForm : Form
 
     try
     {
+      if (string.IsNullOrWhiteSpace(_sessionPathTextBox.Text))
+      {
+        bool found = await DetectLatestAsync();
+        if (!found)
+        {
+          return;
+        }
+      }
+
       ConfigureSpeech();
       _speech.BeginLiveSession();
-      DiagnosticLog.Write("speech.session_started");
       Interlocked.Increment(ref _monitorSession);
-      _monitor.Start(
-        target,
+
+      string? explicitPath = _pathIsManual || !_followLatestCheckBox.Checked
+        ? _sessionPathTextBox.Text
+        : null;
+      var settings = new MonitorSettings(
+        GetSelectedSource(),
+        explicitPath,
+        _followLatestCheckBox.Checked,
+        _speakExistingCheckBox.Checked,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
-        TimeSpan.FromMilliseconds((double)_idleNumeric.Value),
-        _speakExistingCheckBox.Checked);
+        new ExtractionOptions(
+          _speakMessagesCheckBox.Checked,
+          _speakReasoningCheckBox.Checked,
+          _skipFencedCodeCheckBox.Checked));
+
+      _monitor.Start(settings);
+      DiagnosticLog.Write("speech.session_started");
       AppendLog("Monitoring started.");
       UpdateControlState();
     }
     catch (Exception exception) when (
-      exception is ArgumentException or
+      exception is IOException or
+      UnauthorizedAccessException or
+      InvalidDataException or
       InvalidOperationException or
-      ElementNotAvailableException)
+      ArgumentException)
     {
       AppendLog($"Unable to start: {exception.Message}");
     }
   }
 
   /// <summary>
-  /// Stops transcript monitoring.
+  /// Stops transcript monitoring and speech immediately.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void StopButtonClicked(object? sender, EventArgs eventArgs)
   {
     Interlocked.Increment(ref _monitorSession);
@@ -384,10 +488,8 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Cancels current and queued speech.
+  /// Cancels current and queued speech without stopping file monitoring.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void CancelSpeechButtonClicked(
     object? sender,
     EventArgs eventArgs)
@@ -398,90 +500,74 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Replays the preceding spoken sentence.
+  /// Replays the preceding spoken sentence and continues.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void RewindSentenceButtonClicked(
     object? sender,
     EventArgs eventArgs)
   {
-    if (_speech.TryRewindSentence(out string text))
-    {
-      DiagnosticLog.Write("speech.rewind_sentence", new { text });
-      AppendLog($"Rewind sentence and continue: {text}");
-    }
-    else
-    {
-      AppendLog("No earlier sentence is available.");
-    }
+    NavigateSpeech(
+      _speech.TryRewindSentence,
+      "Rewind sentence and continue");
   }
 
   /// <summary>
-  /// Moves forward one spoken sentence and continues from there.
+  /// Moves forward one spoken sentence and continues.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void ForwardSentenceButtonClicked(
     object? sender,
     EventArgs eventArgs)
   {
-    if (_speech.TryForwardSentence(out string text))
-    {
-      DiagnosticLog.Write("speech.forward_sentence", new { text });
-      AppendLog($"Forward sentence and continue: {text}");
-    }
-    else
-    {
-      AppendLog("No later sentence is available.");
-    }
+    NavigateSpeech(
+      _speech.TryForwardSentence,
+      "Forward sentence and continue");
   }
 
   /// <summary>
-  /// Replays the preceding spoken accessibility node.
+  /// Replays the preceding JSONL assistant node and continues.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void RewindNodeButtonClicked(
     object? sender,
     EventArgs eventArgs)
   {
-    if (_speech.TryRewindNode(out string text))
-    {
-      DiagnosticLog.Write("speech.rewind_node", new { text });
-      AppendLog($"Rewind node and continue: {text}");
-    }
-    else
-    {
-      AppendLog("No earlier node is available.");
-    }
+    NavigateSpeech(
+      _speech.TryRewindNode,
+      "Rewind node and continue");
   }
 
   /// <summary>
-  /// Moves forward one spoken accessibility node and continues from there.
+  /// Moves forward one JSONL assistant node and continues.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void ForwardNodeButtonClicked(
     object? sender,
     EventArgs eventArgs)
   {
-    if (_speech.TryForwardNode(out string text))
+    NavigateSpeech(
+      _speech.TryForwardNode,
+      "Forward node and continue");
+  }
+
+  /// <summary>
+  /// Runs one replay-navigation operation.
+  /// </summary>
+  private void NavigateSpeech(
+    TryNavigateSpeech navigate,
+    string action)
+  {
+    if (navigate(out string text))
     {
-      DiagnosticLog.Write("speech.forward_node", new { text });
-      AppendLog($"Forward node and continue: {text}");
+      DiagnosticLog.Write("speech.navigation", new { action, text });
+      AppendLog($"{action}: {text}");
     }
     else
     {
-      AppendLog("No later node is available.");
+      AppendLog($"{action}: no matching history entry is available.");
     }
   }
 
   /// <summary>
   /// Speaks a short test phrase with the selected settings.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void TestVoiceButtonClicked(object? sender, EventArgs eventArgs)
   {
     try
@@ -498,12 +584,9 @@ internal sealed class MainForm : Form
     }
   }
 
-
   /// <summary>
   /// Opens the current structured diagnostic log in File Explorer.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
   private void OpenLogButtonClicked(object? sender, EventArgs eventArgs)
   {
     try
@@ -519,89 +602,19 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Records a DPI transition after WinForms performs automatic scaling.
+  /// Updates the recent accepted-node preview.
   /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">DPI-change arguments.</param>
-  private void MainFormDpiChanged(
-    object? sender,
-    DpiChangedEventArgs eventArgs)
+  private void MonitorMessagesChanged(IReadOnlyList<string> messages)
   {
-    DiagnosticLog.Write("ui.dpi_changed", new
-    {
-      oldDpi = eventArgs.DeviceDpiOld,
-      newDpi = eventArgs.DeviceDpiNew,
-      currentBounds = RectangleToString(Bounds),
-      suggestedBounds = RectangleToString(eventArgs.SuggestedRectangle),
-      screen = Screen.FromControl(this).DeviceName
-    });
-
-    BeginInvoke((Action)(() =>
-    {
-      PerformLayout();
-      WriteLayoutDiagnostic("ui.layout_after_dpi");
-    }));
-  }
-
-  /// <summary>
-  /// Records the completed move or resize of the main window.
-  /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private void MainFormResizeEnded(object? sender, EventArgs eventArgs)
-  {
-    WriteLayoutDiagnostic("ui.resize_end");
-  }
-
-  /// <summary>
-  /// Records the initial monitor layout after the form is displayed.
-  /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Unused event arguments.</param>
-  private void MainFormShown(object? sender, EventArgs eventArgs)
-  {
-    DiagnosticLog.Write("ui.screens", new
-    {
-      screens = Screen.AllScreens.Select(screen => new
-      {
-        screen.DeviceName,
-        bounds = RectangleToString(screen.Bounds),
-        workingArea = RectangleToString(screen.WorkingArea),
-        screen.Primary
-      }).ToArray()
-    });
-    WriteLayoutDiagnostic("ui.shown");
-  }
-
-  /// <summary>
-  /// Stops workers and releases speech resources during window closure.
-  /// </summary>
-  /// <param name="sender">Unused event sender.</param>
-  /// <param name="eventArgs">Form-closing arguments.</param>
-  private void MainFormClosing(
-    object? sender,
-    FormClosingEventArgs eventArgs)
-  {
-    _closing = true;
-    DiagnosticLog.Write("app.closing");
-    _monitor.Dispose();
-    _speech.Dispose();
-  }
-
-  /// <summary>
-  /// Updates the live preview when the monitored tail changes.
-  /// </summary>
-  /// <param name="tail">Latest transcript tail.</param>
-  private void MonitorTailChanged(IReadOnlyList<string> tail)
-  {
-    string preview = FormatPreview(tail);
+    string preview = string.Join(
+      Environment.NewLine + Environment.NewLine,
+      messages.Select((message, index) => $"[{index + 1}] {message}"));
     PostToUi(() => _previewTextBox.Text = preview);
   }
 
   /// <summary>
-  /// Marshals a speech fragment from the monitor thread to the UI thread.
+  /// Queues one monitor fragment for serialized speech.
   /// </summary>
-  /// <param name="fragment">Text and node ready for speech.</param>
   private void MonitorTextReady(SpeechFragment fragment)
   {
     int session = Volatile.Read(ref _monitorSession);
@@ -642,9 +655,8 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Marshals monitor status from the worker thread to the UI thread.
+  /// Marshals monitor status to the UI thread.
   /// </summary>
-  /// <param name="status">Monitor status text.</param>
   private void MonitorStatusChanged(string status)
   {
     PostToUi(() =>
@@ -655,9 +667,8 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Marshals a monitoring failure to the UI thread.
+  /// Marshals a monitor failure to the UI thread.
   /// </summary>
-  /// <param name="exception">Monitoring exception.</param>
   private void MonitorFaulted(Exception exception)
   {
     PostToUi(() =>
@@ -668,249 +679,221 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Hides this window, waits for the pointer to be placed over normal agent
-  /// narration, and automatically selects the transcript ancestor.
+  /// Finds the latest session without blocking the UI thread.
   /// </summary>
-  private async Task CaptureTargetAsync()
+  private async Task<bool> DetectLatestAsync()
   {
     if (_monitor.IsRunning)
     {
-      return;
+      return false;
     }
 
-    AppendLog(
-      "Move the pointer over normal Claude/Codex narration. Capturing in " +
-      "3 seconds.");
-    SetSelectionButtonsEnabled(false);
-    Enabled = false;
-    Hide();
-
-    TranscriptTarget? target = null;
-    Exception? failure = null;
-    System.Drawing.Point point = System.Drawing.Point.Empty;
+    _detectLatestButton.Enabled = false;
     try
     {
-      await Task.Delay(TimeSpan.FromSeconds(3));
-      if (!NativeMethods.GetPhysicalCursorPos(out var nativePoint))
-      {
-        throw new InvalidOperationException(
-          "The physical pointer position could not be read.");
-      }
-
-      point = nativePoint.ToDrawingPoint();
-      target = await Task.Run(() =>
-        TranscriptTarget.CreateFromPoint(point));
+      AgentSource source = GetSelectedSource();
+      LocatedSession session = await Task.Run(() =>
+        SessionLocator.FindLatest(source));
+      _sessionPathTextBox.Text = session.Path;
+      _pathIsManual = false;
+      DiagnosticLog.Write("session.detected", session);
+      AppendLog($"Detected {session.Source}: {session.Path}");
+      return true;
     }
     catch (Exception exception) when (
-      exception is ElementNotAvailableException or
-      System.Runtime.InteropServices.COMException or
-      ArgumentException or
+      exception is IOException or
+      UnauthorizedAccessException or
       InvalidOperationException)
     {
-      failure = exception;
+      AppendLog($"Session detection failed: {exception.Message}");
+      return false;
     }
     finally
     {
-      Show();
-      Activate();
-      Enabled = true;
-      SetSelectionButtonsEnabled(true);
-    }
-
-    if (failure is not null)
-    {
-      AppendLog($"Selection failed: {failure.Message}");
-      return;
-    }
-
-    if (target is null)
-    {
-      AppendLog("Selection failed: no transcript target was returned.");
-      return;
-    }
-
-    _target = target;
-    DiagnosticLog.Write("target.selected", new
-    {
-      point = $"{point.X},{point.Y}",
-      description = target.Describe(),
-      target.SelectionReason
-    });
-    await RefreshTargetDisplayAsync();
-  }
-
-  /// <summary>
-  /// Reads the selected container and updates its description and tail
-  /// preview.
-  /// </summary>
-  private async Task RefreshTargetDisplayAsync()
-  {
-    TranscriptTarget? target = _target;
-    if (target is null)
-    {
-      _targetLabel.Text = "Target: none";
-      _previewTextBox.Clear();
-      UpdateControlState();
-      return;
-    }
-
-    SetSelectionButtonsEnabled(false);
-
-    try
-    {
-      _targetLabel.Text = $"Target: {target.Describe()}";
-      IReadOnlyList<string> tail = await Task.Run(() =>
-        _reader.ReadTail(target));
-      _previewTextBox.Text = FormatPreview(tail);
-      DiagnosticLog.Write("preview.read", new
-      {
-        target = target.Describe(),
-        source = _reader.LastReadSource,
-        details = _reader.LastReadDetails,
-        tail
-      });
-
-      if (tail.Count == 0)
-      {
-        AppendLog(
-          "No transcript text was found inside the selected container.");
-      }
-    }
-    catch (Exception exception) when (
-      exception is ElementNotAvailableException or
-      InvalidOperationException)
-    {
-      _previewTextBox.Clear();
-      AppendLog($"Preview failed: {exception.Message}");
-    }
-    finally
-    {
-      SetSelectionButtonsEnabled(true);
       UpdateControlState();
     }
   }
 
   /// <summary>
-  /// Formats detected tail paragraphs for the preview box.
+  /// Gets the selected source enum.
   /// </summary>
-  /// <param name="tail">Detected paragraphs.</param>
-  /// <returns>Formatted preview text.</returns>
-  private static string FormatPreview(IReadOnlyList<string> tail)
+  private AgentSource GetSelectedSource()
   {
-    if (tail.Count == 0)
-    {
-      return "(No text found.)";
-    }
-
-    return string.Join(
-      Environment.NewLine + Environment.NewLine,
-      tail.Select((paragraph, index) =>
-        $"[{index + 1}] {paragraph}"));
-  }
-
-
-  /// <summary>
-  /// Records the form and major child-control geometry.
-  /// </summary>
-  /// <param name="eventName">Diagnostic event identifier.</param>
-  private void WriteLayoutDiagnostic(string eventName)
-  {
-    DiagnosticLog.Write(eventName, new
-    {
-      dpi = DeviceDpi,
-      formBounds = RectangleToString(Bounds),
-      clientSize = $"{ClientSize.Width}x{ClientSize.Height}",
-      screen = Screen.FromControl(this).DeviceName,
-      font = Font.ToString(),
-      instructions = RectangleToString(_instructionsLabel.Bounds),
-      target = RectangleToString(_targetLabel.Bounds),
-      preview = RectangleToString(_previewTextBox.Bounds),
-      voice = RectangleToString(_voiceComboBox.Bounds),
-      activity = RectangleToString(_logTextBox.Bounds)
-    });
+    return _sourceComboBox.SelectedItem is AgentSource source
+      ? source
+      : AgentSource.Auto;
   }
 
   /// <summary>
-  /// Formats a rectangle for compact diagnostic output.
-  /// </summary>
-  /// <param name="rectangle">Rectangle to format.</param>
-  /// <returns>Left, top, width, and height.</returns>
-  private static string RectangleToString(Rectangle rectangle)
-  {
-    return $"{rectangle.Left},{rectangle.Top} " +
-      $"{rectangle.Width}x{rectangle.Height}";
-  }
-
-  /// <summary>
-  /// Applies the selected voice and speech rate.
+  /// Applies the selected voice and rate.
   /// </summary>
   private void ConfigureSpeech()
   {
-    string voice = _voiceComboBox.SelectedItem as string ?? string.Empty;
+    string voice = _voiceComboBox.SelectedItem?.ToString() ?? string.Empty;
     _speech.Configure(voice, Decimal.ToInt32(_rateNumeric.Value));
   }
 
   /// <summary>
-  /// Appends a timestamped activity line while limiting retained log size.
-  /// </summary>
-  /// <param name="message">Activity text.</param>
-  private void AppendLog(string message)
-  {
-    const int maximumCharacters = 100_000;
-
-    if (_logTextBox.TextLength > maximumCharacters)
-    {
-      _logTextBox.Text = _logTextBox.Text[^50_000..];
-    }
-
-    _logTextBox.AppendText(
-      $"{DateTime.Now:HH:mm:ss.fff}  {message}{Environment.NewLine}");
-  }
-
-  /// <summary>
-  /// Posts an action to the UI thread unless the form is closing.
-  /// </summary>
-  /// <param name="action">UI action.</param>
-  private void PostToUi(Action action)
-  {
-    if (_closing || IsDisposed || !IsHandleCreated)
-    {
-      return;
-    }
-
-    BeginInvoke(action);
-  }
-
-  /// <summary>
-  /// Enables or disables target-selection controls during preview work.
-  /// </summary>
-  /// <param name="enabled">Desired enabled state.</param>
-  private void SetSelectionButtonsEnabled(bool enabled)
-  {
-    _captureButton.Enabled = enabled;
-    _refreshPreviewButton.Enabled = enabled;
-  }
-
-  /// <summary>
-  /// Updates controls according to target and monitor state.
+  /// Updates enabled control states from monitoring state.
   /// </summary>
   private void UpdateControlState()
   {
     bool running = _monitor.IsRunning;
-    bool hasTarget = _target is not null;
-
-    _captureButton.Enabled = !running;
-    _refreshPreviewButton.Enabled = !running && hasTarget;
-    _startButton.Enabled = !running && hasTarget;
-    _stopButton.Enabled = running;
-    _voiceComboBox.Enabled = !running;
-    _rateNumeric.Enabled = !running;
-    _idleNumeric.Enabled = !running;
-    _pollNumeric.Enabled = !running;
+    _sourceComboBox.Enabled = !running;
+    _detectLatestButton.Enabled = !running;
+    _browseButton.Enabled = !running;
+    _followLatestCheckBox.Enabled = !running && !_pathIsManual;
+    _speakMessagesCheckBox.Enabled = !running;
+    _speakReasoningCheckBox.Enabled = !running;
+    _skipFencedCodeCheckBox.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
+    _pollNumeric.Enabled = !running;
+    _startButton.Enabled = !running;
+    _stopButton.Enabled = running;
     _rewindSentenceButton.Enabled = _speech.HasHistory;
     _forwardSentenceButton.Enabled = _speech.HasHistory;
     _rewindNodeButton.Enabled = _speech.HasHistory;
     _forwardNodeButton.Enabled = _speech.HasHistory;
   }
+
+  /// <summary>
+  /// Appends a timestamped activity line.
+  /// </summary>
+  private void AppendLog(string text)
+  {
+    if (_closing || IsDisposed)
+    {
+      return;
+    }
+
+    string line = $"{DateTime.Now:HH:mm:ss.fff}  {text}";
+    if (_logTextBox.TextLength != 0)
+    {
+      _logTextBox.AppendText(Environment.NewLine);
+    }
+
+    _logTextBox.AppendText(line);
+    _logTextBox.SelectionStart = _logTextBox.TextLength;
+    _logTextBox.ScrollToCaret();
+  }
+
+  /// <summary>
+  /// Marshals an action to the UI thread when needed.
+  /// </summary>
+  private void PostToUi(Action action)
+  {
+    if (_closing || IsDisposed)
+    {
+      return;
+    }
+
+    try
+    {
+      if (InvokeRequired)
+      {
+        BeginInvoke(action);
+      }
+      else
+      {
+        action();
+      }
+    }
+    catch (InvalidOperationException) when (_closing || IsDisposed)
+    {
+      // The form closed between the state check and BeginInvoke.
+    }
+  }
+
+  /// <summary>
+  /// Records a DPI transition after WinForms automatic scaling.
+  /// </summary>
+  private void MainFormDpiChanged(
+    object? sender,
+    DpiChangedEventArgs eventArgs)
+  {
+    DiagnosticLog.Write("ui.dpi_changed", new
+    {
+      oldDpi = eventArgs.DeviceDpiOld,
+      newDpi = eventArgs.DeviceDpiNew,
+      currentBounds = RectangleToString(Bounds),
+      suggestedBounds = RectangleToString(eventArgs.SuggestedRectangle),
+      screen = Screen.FromControl(this).DeviceName
+    });
+
+    BeginInvoke((Action)(() =>
+    {
+      PerformLayout();
+      WriteLayoutDiagnostic("ui.layout_after_dpi");
+    }));
+  }
+
+  /// <summary>
+  /// Records a completed move or resize.
+  /// </summary>
+  private void MainFormResizeEnded(object? sender, EventArgs eventArgs)
+  {
+    WriteLayoutDiagnostic("ui.resize_end");
+  }
+
+  /// <summary>
+  /// Records initial monitor layout.
+  /// </summary>
+  private void MainFormShown(object? sender, EventArgs eventArgs)
+  {
+    DiagnosticLog.Write("ui.screens", new
+    {
+      screens = Screen.AllScreens.Select(screen => new
+      {
+        screen.DeviceName,
+        bounds = RectangleToString(screen.Bounds),
+        workingArea = RectangleToString(screen.WorkingArea),
+        screen.Primary
+      }).ToArray()
+    });
+    WriteLayoutDiagnostic("ui.shown");
+  }
+
+  /// <summary>
+  /// Stops workers and releases speech resources during closure.
+  /// </summary>
+  private void MainFormClosing(
+    object? sender,
+    FormClosingEventArgs eventArgs)
+  {
+    _closing = true;
+    DiagnosticLog.Write("app.closing");
+    _monitor.Dispose();
+    _speech.Dispose();
+  }
+
+  /// <summary>
+  /// Records current form and key-control layout.
+  /// </summary>
+  private void WriteLayoutDiagnostic(string eventName)
+  {
+    DiagnosticLog.Write(eventName, new
+    {
+      deviceDpi = DeviceDpi,
+      bounds = RectangleToString(Bounds),
+      clientSize = $"{ClientSize.Width}x{ClientSize.Height}",
+      font = $"{Font.Name} {Font.SizeInPoints:0.##}",
+      previewBounds = RectangleToString(_previewTextBox.Bounds),
+      activityBounds = RectangleToString(_logTextBox.Bounds),
+      screen = Screen.FromControl(this).DeviceName
+    });
+  }
+
+  /// <summary>
+  /// Formats one rectangle for diagnostics.
+  /// </summary>
+  private static string RectangleToString(Rectangle rectangle)
+  {
+    return $"{rectangle.X},{rectangle.Y} " +
+      $"{rectangle.Width}x{rectangle.Height}";
+  }
+
+  /// <summary>
+  /// Delegate shape used by speech navigation operations.
+  /// </summary>
+  private delegate bool TryNavigateSpeech(out string text);
 }

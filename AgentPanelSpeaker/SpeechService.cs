@@ -211,7 +211,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Moves to the previous accessibility node and continues through all later
+  /// Moves to the previous JSONL assistant node and continues through all later
   /// history.
   /// </summary>
   /// <param name="text">Node text at the new playback position.</param>
@@ -241,7 +241,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Moves to the next accessibility node and continues through all later
+  /// Moves to the next JSONL assistant node and continues through all later
   /// history.
   /// </summary>
   /// <param name="text">Node text at the new playback position.</param>
@@ -422,7 +422,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Finds the first history entry belonging to one accessibility node.
+  /// Finds the first history entry belonging to one JSONL assistant node.
   /// </summary>
   /// <param name="index">An entry within the node.</param>
   /// <returns>The first entry index for that node.</returns>
@@ -439,7 +439,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Finds the final history entry belonging to one accessibility node.
+  /// Finds the final history entry belonging to one JSONL assistant node.
   /// </summary>
   /// <param name="index">An entry within the node.</param>
   /// <returns>The final entry index for that node.</returns>

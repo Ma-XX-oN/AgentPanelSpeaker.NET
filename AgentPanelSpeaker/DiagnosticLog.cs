@@ -4,8 +4,8 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Writes structured diagnostics for UI Automation tree traversal, transcript
-/// tracking, speech emission, and per-monitor DPI changes.
+/// Writes structured diagnostics for session selection, JSONL extraction,
+/// speech emission, and per-monitor DPI changes.
 /// </summary>
 internal static class DiagnosticLog
 {
@@ -47,13 +47,15 @@ internal static class DiagnosticLog
 
     Write("app.start", new
     {
-      version = 17,
+      version = 18,
       processId = Environment.ProcessId,
       processPath = Environment.ProcessPath,
       osVersion = Environment.OSVersion.VersionString,
       framework = Environment.Version.ToString(),
       is64BitProcess = Environment.Is64BitProcess,
-      commandLine = Environment.CommandLine
+      commandLine = Environment.CommandLine,
+      claudeConfigDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"),
+      codexHome = Environment.GetEnvironmentVariable("CODEX_HOME")
     });
   }
 
@@ -111,10 +113,6 @@ internal static class DiagnosticLog
   /// <summary>
   /// Stores one structured log record.
   /// </summary>
-  /// <param name="Utc">UTC event time.</param>
-  /// <param name="ThreadId">Managed thread identifier.</param>
-  /// <param name="Event">Stable event identifier.</param>
-  /// <param name="Data">Event-specific data.</param>
   private sealed record DiagnosticRecord(
     DateTime Utc,
     int ThreadId,
