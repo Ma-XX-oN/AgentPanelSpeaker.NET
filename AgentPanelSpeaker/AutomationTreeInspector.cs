@@ -16,6 +16,7 @@ internal static class AutomationTreeInspector
   private const int MaximumLoggedChildren = 24;
   private const int MaximumTextSamples = 32;
   private const double MaximumCandidateWindowCoverage = 0.94;
+  private const double MaximumCandidateRootHeightCoverage = 1.15;
 
   /// <summary>
   /// Finds and diagnoses the transcript container beneath a screen point.
@@ -104,7 +105,8 @@ internal static class AutomationTreeInspector
       selected.ContainsTab,
       selected.WindowCoverage,
       selected.RootHeightCoverage,
-      selected.HeightMultiple
+      selected.HeightMultiple,
+      selected.OversizedHeight
     });
 
     return new TranscriptContainerSelection(
@@ -278,6 +280,8 @@ internal static class AutomationTreeInspector
         ControlType.Window.ProgrammaticName,
         StringComparison.Ordinal) ||
       windowCoverage >= MaximumCandidateWindowCoverage;
+    bool oversizedHeight =
+      rootHeightCoverage > MaximumCandidateRootHeightCoverage;
 
     IReadOnlyList<AutomationElement> children = ReadImmediateChildren(element);
     var childSnapshots = new List<AutomationElementSnapshot>(
@@ -326,6 +330,7 @@ internal static class AutomationTreeInspector
       windowCoverage,
       rootHeightCoverage,
       heightMultiple,
+      oversizedHeight,
       textElementCount,
       narrationTextCount,
       textBearingChildren,
@@ -347,6 +352,7 @@ internal static class AutomationTreeInspector
     string reason = ExplainCandidate(
       tier,
       rootLike,
+      oversizedHeight,
       hasScrollPattern,
       textBearingChildren,
       narrationTextCount,
@@ -372,6 +378,7 @@ internal static class AutomationTreeInspector
       windowCoverage,
       rootHeightCoverage,
       heightMultiple,
+      oversizedHeight,
       childSnapshots,
       textSamples);
   }
@@ -634,6 +641,7 @@ internal static class AutomationTreeInspector
     double windowCoverage,
     double rootHeightCoverage,
     double heightMultiple,
+    bool oversizedHeight,
     int textElementCount,
     int narrationTextCount,
     int textBearingChildren,
@@ -646,14 +654,15 @@ internal static class AutomationTreeInspector
         isRoot ||
         !snapshot.Available ||
         !snapshot.HasUsableBounds ||
-        windowCoverage >= MaximumCandidateWindowCoverage)
+        windowCoverage >= MaximumCandidateWindowCoverage ||
+        oversizedHeight)
     {
       return int.MaxValue;
     }
 
     if (hasScrollPattern &&
-        textBearingChildren >= 2 &&
         narrationTextCount >= 2 &&
+        verticalTextGroups >= 3 &&
         rootHeightCoverage >= 0.20)
     {
       return 0;
@@ -728,6 +737,7 @@ internal static class AutomationTreeInspector
   private static string ExplainCandidate(
     int tier,
     bool rootLike,
+    bool oversizedHeight,
     bool hasScrollPattern,
     int textBearingChildren,
     int narrationTextCount,
@@ -738,9 +748,14 @@ internal static class AutomationTreeInspector
       return "rejected as the top-level or whole-window element";
     }
 
+    if (oversizedHeight)
+    {
+      return "rejected because the element is taller than the owning window";
+    }
+
     if (tier == 0)
     {
-      return "scrollable ancestor with multiple text-bearing children";
+      return "scrollable ancestor with a dense narration subtree";
     }
 
     if (tier == 1)
@@ -1005,6 +1020,7 @@ internal static class AutomationTreeInspector
     double WindowCoverage,
     double RootHeightCoverage,
     double HeightMultiple,
+    bool OversizedHeight,
     IReadOnlyList<AutomationElementSnapshot> ImmediateChildren,
     IReadOnlyList<string> TextSamples);
 }

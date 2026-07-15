@@ -1,8 +1,20 @@
-# Agent Panel Speaker v15
+# Agent Panel Speaker v16
 
 Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
 Visual Studio Code through Windows UI Automation and speaks new narration
 through installed Windows voices.
+
+## v16 container selection correction
+
+Version 16 uses the traversal diagnostics to reject transcript-content
+ancestors whose bounds are taller than the owning VS Code window. Those
+elements represent accumulated or virtualized message content rather than
+the stable transcript viewport.
+
+A scrollable ancestor can now qualify from its narration descendants even
+when the accessibility tree exposes only one immediate content child. This
+selects the stable `thread-scroll-container`-style viewport instead of one
+large historical assistant-message subtree.
 
 ## v15 container selection
 
