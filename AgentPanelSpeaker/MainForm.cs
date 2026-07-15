@@ -21,8 +21,7 @@ internal sealed class MainForm : Form
   private readonly NumericUpDown _pollNumeric = new();
   private readonly TextBox _fenceTypesTextBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
-  private readonly Button _startButton = new();
-  private readonly Button _stopButton = new();
+  private readonly Button _playStopButton = new();
   private readonly Button _cancelSpeechButton = new();
   private readonly Button _rewindSentenceButton = new();
   private readonly Button _forwardSentenceButton = new();
@@ -39,6 +38,7 @@ internal sealed class MainForm : Form
   private bool _pathIsManual;
   private bool _loadingSettings;
   private bool _closing;
+  private bool _playStopTransitioning;
   private int _monitorSession;
 
   /// <summary>
@@ -66,7 +66,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v21";
+    Text = "Agent Panel Speaker v22";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -84,14 +84,30 @@ internal sealed class MainForm : Form
     ConfigureReadOnlyTextBox(_sessionPathTextBox);
     ConfigureButton(_detectLatestButton, "Detect latest");
     ConfigureButton(_browseButton, "Browse JSONL");
-    ConfigureTransportButton(_rewindNodeButton, "⏮", "Previous JSONL node (Alt+G)");
-    ConfigureTransportButton(_rewindSentenceButton, "⏪", "Previous sentence/code line (Alt+H)");
-    ConfigureTransportButton(_startButton, "▶", "Start monitoring (Alt+J)");
-    ConfigureTransportButton(_stopButton, "⏹", "Stop monitoring and speech (Alt+K)");
-    ConfigureTransportButton(_forwardSentenceButton, "⏩", "Next sentence/code line (Alt+L)");
-    ConfigureTransportButton(_forwardNodeButton, "⏭", "Next JSONL node (Alt+;)");
+    ConfigureTransportButton(
+      _rewindNodeButton,
+      "⏮",
+      "Previous JSONL node (H or Alt+H)");
+    ConfigureTransportButton(
+      _rewindSentenceButton,
+      "⏪",
+      "Previous sentence/code line (J or Alt+J)");
+    ConfigureTransportButton(
+      _playStopButton,
+      "▶",
+      "Start monitoring (K or Alt+K)");
+    ConfigureTransportButton(
+      _forwardSentenceButton,
+      "⏩",
+      "Next sentence/code line (L or Alt+L)");
+    ConfigureTransportButton(
+      _forwardNodeButton,
+      "⏭",
+      "Next JSONL node (; or Alt+;)");
     ConfigureButton(_cancelSpeechButton, "Silence");
-    _toolTip.SetToolTip(_cancelSpeechButton, "Silence speech; continue monitoring (Alt+')");
+    _toolTip.SetToolTip(
+      _cancelSpeechButton,
+      "Silence speech; continue monitoring (' or Alt+')");
     ConfigureButton(_saveSettingsButton, "Save settings");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
@@ -165,7 +181,7 @@ internal sealed class MainForm : Form
     };
     transport.Controls.AddRange(new Control[]
     {
-      _rewindNodeButton, _rewindSentenceButton, _startButton, _stopButton,
+      _rewindNodeButton, _rewindSentenceButton, _playStopButton,
       _forwardSentenceButton, _forwardNodeButton, _cancelSpeechButton
     });
     var utility = new FlowLayoutPanel
@@ -237,21 +253,22 @@ internal sealed class MainForm : Form
     _fenceDebounceTimer.Tick += FenceDebounceTimerTick;
     _detectLatestButton.Click += async (_, _) => await DetectLatestAsync();
     _browseButton.Click += BrowseButtonClicked;
-    _startButton.Click += StartButtonClicked;
-    _stopButton.Click += StopButtonClicked;
+    _playStopButton.Click += PlayStopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
     _rewindSentenceButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSentence,
       "Previous sentence/code line");
     _forwardSentenceButton.Click += (_, _) => NavigateSpeech(
       _speech.TryForwardSentence,
-      "Next sentence/code line");
+      "Next sentence/code line",
+      "Past end of last sentence/code line.");
     _rewindNodeButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindNode,
       "Previous JSONL node");
     _forwardNodeButton.Click += (_, _) => NavigateSpeech(
       _speech.TryForwardNode,
-      "Next JSONL node");
+      "Next JSONL node",
+      "Past end of last JSONL node.");
     _saveSettingsButton.Click += (_, _) => SaveSettingsExplicitly();
     _resetSettingsButton.Click += (_, _) => ResetSettings();
     _openLogButton.Click += OpenLogButtonClicked;
@@ -266,7 +283,11 @@ internal sealed class MainForm : Form
     _monitor.Faulted += exception => PostToUi(() =>
       AppendLog($"Monitoring failed: {exception.Message}"));
     _speech.Activity += message => PostToUi(() => AppendLog(message));
-    _speech.SpeakingStateChanged += _ => PostToUi(UpdateAllVoiceRowStates);
+    _speech.SpeakingStateChanged += _ => PostToUi(() =>
+    {
+      UpdateAllVoiceRowStates();
+      UpdateControlState();
+    });
   }
 
   /// <summary>
@@ -533,9 +554,18 @@ internal sealed class MainForm : Form
 
     try
     {
+      SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
+      int pitchPercent = SpeechSsmlBuilder.GetPitchPercent(profile.Pitch);
+      string pitchDescription = pitchPercent > 0
+        ? $"+{pitchPercent}%"
+        : $"{pitchPercent}%";
+      AppendLog(
+        $"Testing {category}: voice={profile.VoiceName}; " +
+        $"rate={profile.Rate}; pitch={profile.Pitch} " +
+        $"({pitchDescription}); volume={profile.Volume}%.");
       _speech.SpeakUntracked(
         $"{category} speech is working.",
-        ReadVoiceProfile(category));
+        profile);
     }
     catch (Exception exception) when (
       exception is ArgumentException or InvalidOperationException)
@@ -545,9 +575,38 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
+  /// Toggles monitoring and speech between running and stopped.
+  /// </summary>
+  private async void PlayStopButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    if (_playStopTransitioning)
+    {
+      return;
+    }
+
+    if (_monitor.IsRunning || _speech.IsSpeaking)
+    {
+      StopMonitoringAndSpeech();
+      return;
+    }
+
+    _playStopTransitioning = true;
+    UpdateControlState();
+    try
+    {
+      await StartMonitoringAsync();
+    }
+    finally
+    {
+      _playStopTransitioning = false;
+      UpdateControlState();
+    }
+  }
+
+  /// <summary>
   /// Starts monitoring the selected or latest session.
   /// </summary>
-  private async void StartButtonClicked(object? sender, EventArgs eventArgs)
+  private async Task StartMonitoringAsync()
   {
     try
     {
@@ -569,7 +628,6 @@ internal sealed class MainForm : Form
         _speakExistingCheckBox.Checked,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value)));
       AppendLog("Monitoring started; existing history is being indexed.");
-      UpdateControlState();
     }
     catch (Exception exception) when (
       exception is IOException or UnauthorizedAccessException or
@@ -582,7 +640,7 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Stops monitoring and speech immediately.
   /// </summary>
-  private void StopButtonClicked(object? sender, EventArgs eventArgs)
+  private void StopMonitoringAndSpeech()
   {
     Interlocked.Increment(ref _monitorSession);
     _speech.CancelAll();
@@ -604,11 +662,15 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Runs one navigation operation.
   /// </summary>
-  private void NavigateSpeech(TryNavigateSpeech navigate, string action)
+  private void NavigateSpeech(
+    TryNavigateSpeech navigate,
+    string action,
+    string? endMessage = null)
   {
     AppendLog(navigate(out string text)
       ? $"{action}: {text}"
-      : $"{action}: no matching enabled history entry is available.");
+      : endMessage ??
+        $"{action}: no matching enabled history entry is available.");
     UpdateControlState();
   }
 
@@ -820,42 +882,47 @@ internal sealed class MainForm : Form
   /// </summary>
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
-    if (keyData == (Keys.Alt | Keys.G))
+    Keys modifiers = keyData & Keys.Modifiers;
+    Keys keyCode = keyData & Keys.KeyCode;
+    bool hasAltOnly = modifiers == Keys.Alt;
+    bool hasNoModifiers = modifiers == Keys.None;
+    if (!hasAltOnly && (!hasNoModifiers || IsEditingControlFocused()))
     {
-      _rewindNodeButton.PerformClick();
-      return true;
+      return base.ProcessCmdKey(ref message, keyData);
     }
-    if (keyData == (Keys.Alt | Keys.H))
+
+    Button? button = keyCode switch
     {
-      _rewindSentenceButton.PerformClick();
-      return true;
-    }
-    if (keyData == (Keys.Alt | Keys.J))
+      Keys.H => _rewindNodeButton,
+      Keys.J => _rewindSentenceButton,
+      Keys.K => _playStopButton,
+      Keys.L => _forwardSentenceButton,
+      Keys.OemSemicolon => _forwardNodeButton,
+      Keys.OemQuotes => _cancelSpeechButton,
+      _ => null
+    };
+    if (button is null)
     {
-      _startButton.PerformClick();
-      return true;
+      return base.ProcessCmdKey(ref message, keyData);
     }
-    if (keyData == (Keys.Alt | Keys.K))
+
+    button.PerformClick();
+    return true;
+  }
+
+  /// <summary>
+  /// Gets whether focus is inside a control that accepts typed input.
+  /// </summary>
+  private bool IsEditingControlFocused()
+  {
+    Control? focused = ActiveControl;
+    while (focused is ContainerControl container &&
+           container.ActiveControl is not null)
     {
-      _stopButton.PerformClick();
-      return true;
+      focused = container.ActiveControl;
     }
-    if (keyData == (Keys.Alt | Keys.L))
-    {
-      _forwardSentenceButton.PerformClick();
-      return true;
-    }
-    if (keyData == (Keys.Alt | Keys.OemSemicolon))
-    {
-      _forwardNodeButton.PerformClick();
-      return true;
-    }
-    if (keyData == (Keys.Alt | Keys.OemQuotes))
-    {
-      _cancelSpeechButton.PerformClick();
-      return true;
-    }
-    return base.ProcessCmdKey(ref message, keyData);
+
+    return focused is TextBoxBase or NumericUpDown or ComboBox;
   }
 
   /// <summary>
@@ -864,6 +931,7 @@ internal sealed class MainForm : Form
   private void UpdateControlState()
   {
     bool running = _monitor.IsRunning;
+    bool playbackActive = running || _speech.IsSpeaking;
     bool hasHistory = _speech.HasHistory;
     _sourceComboBox.Enabled = !running;
     _detectLatestButton.Enabled = !running;
@@ -871,13 +939,27 @@ internal sealed class MainForm : Form
     _followLatestCheckBox.Enabled = !running && !_pathIsManual;
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
-    _startButton.Enabled = !running;
-    _stopButton.Enabled = running;
-    _cancelSpeechButton.Enabled = running || hasHistory;
+    _playStopButton.Enabled = !_playStopTransitioning;
+    UpdatePlayStopButton(playbackActive);
+    _cancelSpeechButton.Enabled = playbackActive || hasHistory;
     _rewindSentenceButton.Enabled = hasHistory;
     _forwardSentenceButton.Enabled = hasHistory;
     _rewindNodeButton.Enabled = hasHistory;
     _forwardNodeButton.Enabled = hasHistory;
+  }
+
+  /// <summary>
+  /// Shows the action that the play/stop toggle will perform next.
+  /// </summary>
+  private void UpdatePlayStopButton(bool active)
+  {
+    string text = active ? "⏹" : "▶";
+    string description = active
+      ? "Stop monitoring and speech (K or Alt+K)"
+      : "Start monitoring (K or Alt+K)";
+    _playStopButton.Text = text;
+    _playStopButton.AccessibleName = description;
+    _toolTip.SetToolTip(_playStopButton, description);
   }
 
   /// <summary>

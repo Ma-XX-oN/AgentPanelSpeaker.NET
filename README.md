@@ -1,4 +1,4 @@
-# Agent Panel Speaker v21
+# Agent Panel Speaker v22
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, and reasoning text with separate voices.  It excludes
@@ -12,7 +12,7 @@ Each content row has its own:
 
 - voice (`Not Spoken` disables that category);
 - rate (`-10..10`);
-- pitch (`-10..10` relative semitones);
+- pitch (`-10..10`, mapped to relative SSML percentages);
 - volume slider (`0..100` percent);
 - test button for that content voice.
 
@@ -38,15 +38,20 @@ both spoken and skipped blocks with the normalized fence type.
 
 | Control | Hotkey | Action |
 | --- | --- | --- |
-| `⏮` | `Alt+G` | Previous JSONL node |
-| `⏪` | `Alt+H` | Previous sentence/code line |
-| `▶` | `Alt+J` | Start monitoring |
-| `⏹` | `Alt+K` | Stop monitoring and speech |
-| `⏩` | `Alt+L` | Next sentence/code line |
-| `⏭` | `Alt+;` | Next JSONL node |
-| Silence | `Alt+'` | Cancel speech; keep monitoring |
+| `⏮` | `H` / `Alt+H` | Previous JSONL node |
+| `⏪` | `J` / `Alt+J` | Previous sentence/code line |
+| `▶` / `⏹` | `K` / `Alt+K` | Toggle start/stop |
+| `⏩` | `L` / `Alt+L` | Next sentence/code line |
+| `⏭` | `;` / `Alt+;` | Next JSONL node |
+| Silence | `'` / `Alt+'` | Cancel speech; keep monitoring |
 
-Hotkeys work only while Agent Panel Speaker is active.
+Hotkeys work only while Agent Panel Speaker is active.  Bare keys are ignored
+while focus is in a text box, numeric field, or voice dropdown.  Alt variants
+remain available from those controls.
+
+Forwarding past the final sentence/code line or node cancels active replay,
+returns the cursor to the live end, and reports the matching boundary in
+Activity.
 
 ## Session selection
 

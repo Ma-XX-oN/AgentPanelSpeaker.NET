@@ -89,14 +89,14 @@ before each fragment starts.  A profile contains:
 
 - voice name or `Not Spoken`;
 - SAPI rate `-10..10`;
-- relative pitch `-10..10` semitones;
+- pitch setting `-10..10`, mapped to relative SSML percentages;
 - volume `0..100` percent;
 
 Voice, rate, pitch, and volume edits therefore affect the next fragment
 without restarting the active fragment.  Pitch is applied through SSML
-prosody; rate and volume use `SpeechSynthesizer` properties.  `SpeechService`
-emits speaking-state transitions so every row test button is disabled during
-active playback.
+prosody using five percentage points per UI step; rate and volume use
+`SpeechSynthesizer` properties.  `SpeechService` emits speaking-state
+transitions so every row test button is disabled during active playback.
 
 A fenced-code line is eligible only when:
 
@@ -138,22 +138,25 @@ fence types.  The cursor tracks the active, pending, or next fragment.
 - node controls move to a node containing at least one currently eligible
   fragment;
 - replay continues forward after navigation;
+- forwarding beyond the last eligible sentence/code line or node cancels
+  replay and moves the cursor to the live end;
 - `Silence` cancels current/queued speech and returns to the live end;
-- `Stop` also stops JSONL monitoring.
+- the play/stop toggle stops both speech and JSONL monitoring when active.
 
 Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 
 | Shortcut | Action |
 | --- | --- |
-| `Alt+G` | Previous node |
-| `Alt+H` | Previous sentence/code line |
-| `Alt+J` | Start |
-| `Alt+K` | Stop |
-| `Alt+L` | Next sentence/code line |
-| `Alt+;` | Next node |
-| `Alt+'` | Silence |
+| `H` / `Alt+H` | Previous node |
+| `J` / `Alt+J` | Previous sentence/code line |
+| `K` / `Alt+K` | Toggle start/stop |
+| `L` / `Alt+L` | Next sentence/code line |
+| `;` / `Alt+;` | Next node |
+| `'` / `Alt+'` | Silence |
 
-They operate only while the Agent Panel Speaker window has focus.
+They operate only while the Agent Panel Speaker window has focus.  Bare keys
+are disabled while focus is in a text box, numeric field, or voice dropdown;
+Alt variants remain active there.
 
 ## Settings
 
@@ -180,7 +183,7 @@ temporary file followed by atomic replacement.  Missing saved voices become
 - Playback settings are resolved when playback begins, not when indexed.
 - `Not Spoken` changes eligibility, not history retention.
 - Fenced-code aliases are explicit; `cpp` does not imply `c++`.
-- Stop cancels speech before stopping monitoring.
+- The play/stop toggle cancels speech before stopping monitoring.
 - Settings writes never overwrite the live file partially.
 
 ## Diagnostics

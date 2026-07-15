@@ -1,4 +1,3 @@
-using System.Security;
 using System.Speech.Synthesis;
 
 namespace AgentPanelSpeaker;
@@ -248,6 +247,12 @@ internal sealed class SpeechService : IDisposable
     {
       int anchor = GetNavigationAnchorLocked();
       int candidate = FindNextEligibleLocked(anchor + 1);
+      if (candidate < 0)
+      {
+        MoveToLiveEndLocked();
+        text = string.Empty;
+        return false;
+      }
       return RestartCandidateLocked(candidate, out text);
     }
   }
@@ -291,6 +296,7 @@ internal sealed class SpeechService : IDisposable
       int anchor = GetNavigationAnchorLocked();
       if (anchor >= _history.Count)
       {
+        MoveToLiveEndLocked();
         text = string.Empty;
         return false;
       }
@@ -309,6 +315,7 @@ internal sealed class SpeechService : IDisposable
         candidate = end + 1;
       }
 
+      MoveToLiveEndLocked();
       text = string.Empty;
       return false;
     }
@@ -322,14 +329,7 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
-      _pendingHistoryIndex = null;
-      _pendingUntracked = null;
-      _nextHistoryIndex = _history.Count;
-      _lastFenceActivity = null;
-      if (_activeKind != ActiveSpeechKind.None)
-      {
-        _synthesizer.SpeakAsyncCancelAll();
-      }
+      MoveToLiveEndLocked();
     }
   }
 
@@ -459,6 +459,7 @@ internal sealed class SpeechService : IDisposable
       normalized.VoiceName,
       normalized.Rate,
       normalized.Pitch,
+      pitchPercent = SpeechSsmlBuilder.GetPitchPercent(normalized.Pitch),
       normalized.Volume
     });
     _synthesizer.SelectVoice(normalized.VoiceName);
@@ -470,16 +471,10 @@ internal sealed class SpeechService : IDisposable
       return;
     }
 
-    string escaped = SecurityElement.Escape(text) ?? string.Empty;
-    string pitch = normalized.Pitch > 0
-      ? $"+{normalized.Pitch}st"
-      : $"{normalized.Pitch}st";
-    string language = _synthesizer.Voice.Culture.Name;
-    string ssml =
-      $"<speak version=\"1.0\" " +
-      $"xmlns=\"http://www.w3.org/2001/10/synthesis\" " +
-      $"xml:lang=\"{language}\"><prosody pitch=\"{pitch}\">" +
-      $"{escaped}</prosody></speak>";
+    string ssml = SpeechSsmlBuilder.BuildPitchDocument(
+      text,
+      _synthesizer.Voice.Culture,
+      normalized.Pitch);
     _synthesizer.SpeakSsmlAsync(ssml);
   }
 
@@ -560,6 +555,21 @@ internal sealed class SpeechService : IDisposable
       reason
     });
     Activity?.Invoke(message);
+  }
+
+  /// <summary>
+  /// Cancels active playback and places navigation after the final fragment.
+  /// </summary>
+  private void MoveToLiveEndLocked()
+  {
+    _pendingHistoryIndex = null;
+    _pendingUntracked = null;
+    _nextHistoryIndex = _history.Count;
+    _lastFenceActivity = null;
+    if (_activeKind != ActiveSpeechKind.None)
+    {
+      _synthesizer.SpeakAsyncCancelAll();
+    }
   }
 
   /// <summary>

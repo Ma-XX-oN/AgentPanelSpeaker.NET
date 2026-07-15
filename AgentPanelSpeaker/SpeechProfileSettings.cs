@@ -5,7 +5,7 @@ namespace AgentPanelSpeaker;
 /// </summary>
 /// <param name="VoiceName">Installed voice name or Not Spoken.</param>
 /// <param name="Rate">SAPI rate from -10 through 10.</param>
-/// <param name="Pitch">Relative pitch in semitones from -10 through 10.</param>
+/// <param name="Pitch">Relative pitch setting from -10 through 10.</param>
 internal sealed record SpeechProfileSettings(
   string VoiceName,
   int Rate,
