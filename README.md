@@ -1,8 +1,36 @@
-# Agent Panel Speaker v16
+# Agent Panel Speaker v17
 
 Agent Panel Speaker reads text exposed by the Claude Code or Codex panel in
 Visual Studio Code through Windows UI Automation and speaks new narration
 through installed Windows voices.
+
+## v17 fast tree traversal and level diagnostics
+
+Version 17 removes the full descendant scan that version 16 performed for
+**every** ancestor between the hovered paragraph and the VS Code window root.
+That repeated scan was the reason selection could take roughly 30 seconds on a
+large Codex transcript.
+
+The selector now uses two passes:
+
+1. The blocking pass reads only each ancestor's own properties and immediate
+   children. It logs the text directly exposed at that level, runtime ID,
+   native window handle, automation ID, class, control type, bounds, supported
+   patterns, and the time spent on that level.
+2. After the target has been selected and the application window is restored,
+   a background diagnostic scans only the selected container's descendants.
+
+The fast pass recognizes a `thread-scroll-container`-style class first, then
+falls back to the nearest bounded ancestor that exposes `ScrollPattern`.
+
+New diagnostic events include:
+
+- `target.tree_level`: one shallow record per ancestor, with direct text and
+  identifying properties;
+- `target.tree_path`: one compact leaf-to-root summary for comparing levels;
+- `target.selected_subtree_diagnostics`: the expensive text sample and metrics
+  for the selected container only;
+- per-level and total elapsed milliseconds, which identify a slow provider.
 
 ## v16 container selection correction
 
@@ -44,10 +72,10 @@ The diagnostic log records the complete selection traversal:
 - every raw-view ancestor from the hovered leaf to the window root;
 - runtime ID, control type, name, automation ID, class, framework, bounds,
   visibility, focusability, and supported patterns;
-- immediate child summaries and text samples;
-- text-element, narration, vertical-group, and text-bearing-child counts;
-- scroll-pattern availability, editor/input presence, candidate tier, score,
-  and rejection reason;
+- immediate child summaries and direct text exposed at each level;
+- per-level runtime ID, native window handle, automation ID, class, and bounds;
+- scroll-pattern availability, candidate tier, score, and rejection reason;
+- a detailed descendant-text scan for the selected container only;
 - the selected container and selection reason;
 - every attempted container reacquisition if the retained element disappears.
 

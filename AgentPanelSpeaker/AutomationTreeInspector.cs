@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
@@ -12,17 +13,29 @@ namespace AgentPanelSpeaker;
 internal static class AutomationTreeInspector
 {
   private const int MaximumAncestorDepth = 64;
-  private const int MaximumImmediateChildren = 128;
-  private const int MaximumLoggedChildren = 24;
-  private const int MaximumTextSamples = 32;
+  private const int MaximumImmediateChildren = 32;
+  private const int MaximumLoggedChildren = 16;
+  private const int MaximumDirectTextSamples = 16;
+  private const int MaximumSelectedTextSamples = 48;
   private const double MaximumCandidateWindowCoverage = 0.94;
   private const double MaximumCandidateRootHeightCoverage = 1.15;
+
+  private static readonly string[] TranscriptClassMarkers =
+  {
+    "thread-scroll-container",
+    "thread-content",
+    "conversation-scroll",
+    "transcript-scroll",
+    "chat-scroll"
+  };
 
   /// <summary>
   /// Finds and diagnoses the transcript container beneath a screen point.
   /// </summary>
   /// <param name="point">Physical screen coordinate.</param>
-  /// <returns>The selected container and its owning window information.</returns>
+  /// <returns>
+  /// The selected container and its owning window information.
+  /// </returns>
   public static TranscriptContainerSelection SelectContainer(
     System.Drawing.Point point)
   {
@@ -63,7 +76,8 @@ internal static class AutomationTreeInspector
 
     DiagnosticLog.Write("target.hovered_element", new
     {
-      rootWindow = $"0x{rootWindow.ToInt64():X}",
+      rootWindow = FormatHandle(rootWindow),
+      childWindow = FormatHandle(childWindow),
       processId,
       root = rootSnapshot,
       hovered = hoveredSnapshot
@@ -75,7 +89,8 @@ internal static class AutomationTreeInspector
     var candidates = new List<ContainerCandidate>(chain.Count);
     for (int depth = 0; depth < chain.Count; ++depth)
     {
-      ContainerCandidate candidate = AnalyzeCandidate(
+      var levelTimer = Stopwatch.StartNew();
+      ContainerCandidate candidate = AnalyzeCandidateShallow(
         chain[depth],
         depth,
         rootSnapshot.RawBounds,
@@ -83,10 +98,57 @@ internal static class AutomationTreeInspector
         point,
         ElementsEqual(chain[depth], root));
       candidates.Add(candidate);
-      DiagnosticLog.Write("target.tree_node", candidate);
+
+      DiagnosticLog.Write("target.tree_level", new
+      {
+        candidate.Depth,
+        candidate.Tier,
+        candidate.Score,
+        candidate.SelectionReason,
+        levelElapsedMilliseconds = levelTimer.ElapsedMilliseconds,
+        totalElapsedMilliseconds = timer.ElapsedMilliseconds,
+        rootWindow = FormatHandle(rootWindow),
+        candidate.Snapshot,
+        candidate.ImmediateChildCount,
+        candidate.DirectTextCount,
+        candidate.HasScrollPattern,
+        candidate.ClassLooksLikeTranscript,
+        candidate.ContainsEdit,
+        candidate.ContainsTab,
+        candidate.ContainsPointer,
+        candidate.WindowCoverage,
+        candidate.RootHeightCoverage,
+        candidate.HeightMultiple,
+        candidate.OversizedHeight,
+        candidate.DirectTextSamples,
+        candidate.ImmediateChildren
+      });
     }
 
     ContainerCandidate selected = ChooseCandidate(candidates);
+    DiagnosticLog.Write("target.tree_path", new
+    {
+      rootWindow = FormatHandle(rootWindow),
+      elapsedMilliseconds = timer.ElapsedMilliseconds,
+      levels = candidates.Select(candidate => new
+      {
+        candidate.Depth,
+        candidate.Tier,
+        candidate.Score,
+        candidate.SelectionReason,
+        runtimeId = candidate.Snapshot.RuntimeIdText,
+        nativeWindowHandle = candidate.Snapshot.NativeWindowHandleHex,
+        candidate.Snapshot.ControlType,
+        candidate.Snapshot.AutomationId,
+        candidate.Snapshot.ClassName,
+        ownText = Abbreviate(candidate.Snapshot.Name, 320),
+        candidate.Snapshot.Bounds,
+        candidate.HasScrollPattern,
+        candidate.ClassLooksLikeTranscript,
+        candidate.DirectTextSamples
+      }).ToArray()
+    });
+
     DiagnosticLog.Write("target.tree_traversal_selected", new
     {
       elapsedMilliseconds = timer.ElapsedMilliseconds,
@@ -96,18 +158,21 @@ internal static class AutomationTreeInspector
       selected.Score,
       selected.SelectionReason,
       selected.Snapshot,
-      selected.TextElementCount,
-      selected.NarrationTextCount,
-      selected.TextBearingChildCount,
-      selected.VerticalTextGroupCount,
+      selected.ImmediateChildCount,
+      selected.DirectTextCount,
       selected.HasScrollPattern,
+      selected.ClassLooksLikeTranscript,
       selected.ContainsEdit,
       selected.ContainsTab,
       selected.WindowCoverage,
       selected.RootHeightCoverage,
       selected.HeightMultiple,
-      selected.OversizedHeight
+      selected.OversizedHeight,
+      selected.DirectTextSamples,
+      detailedDiagnosticsQueued = true
     });
+
+    QueueSelectedSubtreeDiagnostics(selected);
 
     return new TranscriptContainerSelection(
       rootWindow,
@@ -127,59 +192,7 @@ internal static class AutomationTreeInspector
   public static AutomationElementSnapshot ReadSnapshot(
     AutomationElement element)
   {
-    ArgumentNullException.ThrowIfNull(element);
-
-    try
-    {
-      AutomationElement.AutomationElementInformation current =
-        element.Current;
-      string[] patterns;
-      try
-      {
-        patterns = element.GetSupportedPatterns()
-          .Select(pattern => pattern.ProgrammaticName)
-          .OrderBy(name => name, StringComparer.Ordinal)
-          .ToArray();
-      }
-      catch (InvalidOperationException)
-      {
-        patterns = Array.Empty<string>();
-      }
-
-      int[] runtimeId;
-      try
-      {
-        runtimeId = element.GetRuntimeId();
-      }
-      catch (InvalidOperationException)
-      {
-        runtimeId = Array.Empty<int>();
-      }
-
-      return new AutomationElementSnapshot(
-        runtimeId,
-        current.ControlType.ProgrammaticName,
-        current.LocalizedControlType,
-        Normalize(current.Name),
-        current.AutomationId ?? string.Empty,
-        current.ClassName ?? string.Empty,
-        current.FrameworkId ?? string.Empty,
-        current.BoundingRectangle,
-        current.IsOffscreen,
-        current.IsControlElement,
-        current.IsContentElement,
-        current.IsKeyboardFocusable,
-        current.NativeWindowHandle,
-        patterns);
-    }
-    catch (ElementNotAvailableException)
-    {
-      return AutomationElementSnapshot.Unavailable;
-    }
-    catch (InvalidOperationException)
-    {
-      return AutomationElementSnapshot.Unavailable;
-    }
+    return ReadSnapshot(element, includePatterns: true);
   }
 
   /// <summary>
@@ -215,16 +228,10 @@ internal static class AutomationTreeInspector
       {
         current = TreeWalker.RawViewWalker.GetParent(current);
       }
-      catch (ElementNotAvailableException exception)
-      {
-        DiagnosticLog.Write("target.tree_parent_failed", new
-        {
-          depth,
-          exception = exception.ToString()
-        });
-        break;
-      }
-      catch (InvalidOperationException exception)
+      catch (Exception exception) when (
+        exception is ElementNotAvailableException or
+        InvalidOperationException or
+        COMException)
       {
         DiagnosticLog.Write("target.tree_parent_failed", new
         {
@@ -248,16 +255,9 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Collects selection metrics for one ancestor candidate.
+  /// Collects only cheap properties while walking the ancestor chain.
   /// </summary>
-  /// <param name="element">Candidate element.</param>
-  /// <param name="depth">Leaf-first ancestor depth.</param>
-  /// <param name="rootBounds">Top-level window bounds.</param>
-  /// <param name="hoveredBounds">Hovered leaf bounds.</param>
-  /// <param name="point">Selected screen point.</param>
-  /// <param name="isRoot">Whether this is the top-level window root.</param>
-  /// <returns>Candidate metrics and child samples.</returns>
-  private static ContainerCandidate AnalyzeCandidate(
+  private static ContainerCandidate AnalyzeCandidateShallow(
     AutomationElement element,
     int depth,
     System.Windows.Rect rootBounds,
@@ -282,71 +282,62 @@ internal static class AutomationTreeInspector
       windowCoverage >= MaximumCandidateWindowCoverage;
     bool oversizedHeight =
       rootHeightCoverage > MaximumCandidateRootHeightCoverage;
+    bool hasScrollPattern = snapshot.Patterns.Contains(
+      ScrollPattern.Pattern.ProgrammaticName,
+      StringComparer.Ordinal);
+    bool classLooksLikeTranscript = LooksLikeTranscriptClass(
+      snapshot.ClassName);
 
     IReadOnlyList<AutomationElement> children = ReadImmediateChildren(element);
     var childSnapshots = new List<AutomationElementSnapshot>(
       Math.Min(children.Count, MaximumLoggedChildren));
-    int textBearingChildren = 0;
-    for (int index = 0; index < children.Count; ++index)
-    {
-      AutomationElement child = children[index];
-      if (index < MaximumLoggedChildren)
-      {
-        childSnapshots.Add(ReadSnapshot(child));
-      }
+    var directTextSamples = new List<string>(MaximumDirectTextSamples);
+    AddTextSample(directTextSamples, snapshot.Name);
+    bool containsEdit = snapshot.ControlType.Equals(
+      ControlType.Edit.ProgrammaticName,
+      StringComparison.Ordinal);
+    bool containsTab = snapshot.ControlType.Equals(
+      ControlType.Tab.ProgrammaticName,
+      StringComparison.Ordinal);
 
-      if (ElementContainsText(child))
-      {
-        ++textBearingChildren;
-      }
+    for (int index = 0;
+         index < children.Count && index < MaximumLoggedChildren;
+         ++index)
+    {
+      AutomationElementSnapshot child = ReadSnapshot(
+        children[index],
+        includePatterns: false);
+      childSnapshots.Add(child);
+      AddTextSample(directTextSamples, child.Name);
+      containsEdit |= child.ControlType.Equals(
+        ControlType.Edit.ProgrammaticName,
+        StringComparison.Ordinal);
+      containsTab |= child.ControlType.Equals(
+        ControlType.Tab.ProgrammaticName,
+        StringComparison.Ordinal);
     }
 
-    int textElementCount = 0;
-    int narrationTextCount = 0;
-    int verticalTextGroups = 0;
-    string[] textSamples = Array.Empty<string>();
-    int textProviderCount = 0;
-    bool containsEdit = false;
-    bool containsTab = false;
-
-    if (!rootLike && snapshot.Available)
-    {
-      ReadDescendantMetrics(
-        element,
-        out textElementCount,
-        out narrationTextCount,
-        out verticalTextGroups,
-        out textSamples,
-        out textProviderCount,
-        out containsEdit,
-        out containsTab);
-    }
-
-    bool hasScrollPattern = HasPattern(element, ScrollPattern.Pattern);
     int tier = GetQualificationTier(
       snapshot,
       depth,
-      isRoot,
-      windowCoverage,
+      rootLike,
+      oversizedHeight,
       rootHeightCoverage,
       heightMultiple,
-      oversizedHeight,
-      textElementCount,
-      narrationTextCount,
-      textBearingChildren,
-      verticalTextGroups,
       hasScrollPattern,
+      classLooksLikeTranscript,
+      directTextSamples.Count,
+      children.Count,
       containsEdit,
       containsTab);
     int score = CalculateScore(
       depth,
       windowCoverage,
-      textElementCount,
-      narrationTextCount,
-      textBearingChildren,
-      verticalTextGroups,
-      textProviderCount,
+      rootHeightCoverage,
       hasScrollPattern,
+      classLooksLikeTranscript,
+      directTextSamples.Count,
+      children.Count,
       containsEdit,
       containsTab);
     string reason = ExplainCandidate(
@@ -354,9 +345,9 @@ internal static class AutomationTreeInspector
       rootLike,
       oversizedHeight,
       hasScrollPattern,
-      textBearingChildren,
-      narrationTextCount,
-      verticalTextGroups);
+      classLooksLikeTranscript,
+      directTextSamples.Count,
+      children.Count);
 
     return new ContainerCandidate(
       element,
@@ -366,12 +357,9 @@ internal static class AutomationTreeInspector
       reason,
       snapshot,
       children.Count,
-      textBearingChildren,
-      textElementCount,
-      narrationTextCount,
-      verticalTextGroups,
-      textProviderCount,
+      directTextSamples.Count,
       hasScrollPattern,
+      classLooksLikeTranscript,
       containsEdit,
       containsTab,
       snapshot.Contains(point),
@@ -380,14 +368,12 @@ internal static class AutomationTreeInspector
       heightMultiple,
       oversizedHeight,
       childSnapshots,
-      textSamples);
+      directTextSamples);
   }
 
   /// <summary>
-  /// Chooses the smallest qualified ancestor, preferring a scroll container.
+  /// Chooses the nearest qualified transcript ancestor.
   /// </summary>
-  /// <param name="candidates">Leaf-first candidate chain.</param>
-  /// <returns>The chosen transcript container.</returns>
   private static ContainerCandidate ChooseCandidate(
     IReadOnlyList<ContainerCandidate> candidates)
   {
@@ -411,40 +397,97 @@ internal static class AutomationTreeInspector
         candidate.Depth > 0 &&
         candidate.Snapshot.Available &&
         candidate.Snapshot.HasUsableBounds &&
+        !candidate.OversizedHeight &&
         candidate.WindowCoverage < MaximumCandidateWindowCoverage &&
-        (candidate.TextElementCount >= 2 ||
-         candidate.HasScrollPattern))
-      .OrderByDescending(candidate => candidate.Score)
-      .ThenBy(candidate => candidate.Depth)
+        candidate.HasScrollPattern)
+      .OrderBy(candidate => candidate.Depth)
+      .ThenByDescending(candidate => candidate.Score)
       .FirstOrDefault();
     if (selected is not null)
     {
       return selected with
       {
-        SelectionReason = "fallback highest-scoring text ancestor: " +
+        SelectionReason = "fallback nearest bounded scroll ancestor: " +
           selected.SelectionReason
       };
     }
 
-    selected = candidates.FirstOrDefault(candidate => candidate.Depth > 0);
+    selected = candidates
+      .Where(candidate =>
+        candidate.Depth > 0 &&
+        candidate.Snapshot.Available &&
+        candidate.Snapshot.HasUsableBounds &&
+        !candidate.OversizedHeight &&
+        candidate.WindowCoverage < MaximumCandidateWindowCoverage &&
+        candidate.HeightMultiple >= 4.0)
+      .OrderBy(candidate => candidate.Depth)
+      .FirstOrDefault();
     if (selected is not null)
     {
       return selected with
       {
-        SelectionReason = "fallback immediate ancestor: " +
+        SelectionReason = "fallback nearest bounded ancestor: " +
           selected.SelectionReason
       };
     }
 
     throw new InvalidOperationException(
-      "No accessible parent could be found beneath the pointer.");
+      "No accessible transcript parent could be found beneath the pointer.");
   }
 
   /// <summary>
-  /// Returns raw-view immediate children without retaining stale child nodes.
+  /// Logs an expensive descendant scan only for the selected container.
   /// </summary>
-  /// <param name="element">Parent element.</param>
-  /// <returns>Immediate children in raw-view order.</returns>
+  private static void QueueSelectedSubtreeDiagnostics(
+    ContainerCandidate selected)
+  {
+    _ = Task.Run(() =>
+    {
+      var timer = Stopwatch.StartNew();
+      try
+      {
+        ReadDescendantMetrics(
+          selected.Element,
+          out int textElementCount,
+          out int narrationTextCount,
+          out int verticalTextGroups,
+          out string[] textSamples,
+          out int textProviderCount,
+          out bool containsEdit,
+          out bool containsTab);
+        DiagnosticLog.Write("target.selected_subtree_diagnostics", new
+        {
+          elapsedMilliseconds = timer.ElapsedMilliseconds,
+          selected.Depth,
+          selected.Snapshot,
+          textElementCount,
+          narrationTextCount,
+          verticalTextGroups,
+          textProviderCount,
+          containsEdit,
+          containsTab,
+          textSamples
+        });
+      }
+      catch (Exception exception) when (
+        exception is ElementNotAvailableException or
+        InvalidOperationException or
+        COMException)
+      {
+        DiagnosticLog.Write("target.selected_subtree_diagnostics_failed", new
+        {
+          elapsedMilliseconds = timer.ElapsedMilliseconds,
+          selected.Depth,
+          selected.Snapshot,
+          exception = exception.ToString()
+        });
+      }
+    });
+  }
+
+  /// <summary>
+  /// Returns raw-view immediate children without scanning their descendants.
+  /// </summary>
   private static IReadOnlyList<AutomationElement> ReadImmediateChildren(
     AutomationElement element)
   {
@@ -459,10 +502,10 @@ internal static class AutomationTreeInspector
         child = TreeWalker.RawViewWalker.GetNextSibling(child);
       }
     }
-    catch (ElementNotAvailableException)
-    {
-    }
-    catch (InvalidOperationException)
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException or
+      COMException)
     {
     }
 
@@ -470,47 +513,7 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Determines whether one immediate child owns any readable text.
-  /// </summary>
-  /// <param name="element">Child subtree.</param>
-  /// <returns>True when named text is present.</returns>
-  private static bool ElementContainsText(AutomationElement element)
-  {
-    AutomationElementSnapshot snapshot = ReadSnapshot(element);
-    if (snapshot.Name.Length != 0 &&
-        !snapshot.ControlType.Equals(
-          ControlType.Button.ProgrammaticName,
-          StringComparison.Ordinal) &&
-        !snapshot.ControlType.Equals(
-          ControlType.TabItem.ProgrammaticName,
-          StringComparison.Ordinal))
-    {
-      return true;
-    }
-
-    try
-    {
-      var condition = new PropertyCondition(
-        AutomationElement.ControlTypeProperty,
-        ControlType.Text);
-      AutomationElement? text = element.FindFirst(
-        TreeScope.Descendants,
-        condition);
-      return text is not null &&
-        ReadSnapshot(text).Name.Length != 0;
-    }
-    catch (ElementNotAvailableException)
-    {
-      return false;
-    }
-    catch (InvalidOperationException)
-    {
-      return false;
-    }
-  }
-
-  /// <summary>
-  /// Reads text, layout, provider, and chrome metrics for one subtree.
+  /// Reads text and layout metrics for the selected subtree only.
   /// </summary>
   private static void ReadDescendantMetrics(
     AutomationElement element,
@@ -528,7 +531,7 @@ internal static class AutomationTreeInspector
     textProviderCount = 0;
     containsEdit = false;
     containsTab = false;
-    var samples = new List<string>(MaximumTextSamples);
+    var samples = new List<string>(MaximumSelectedTextSamples);
     var tops = new List<(double Top, double Height)>();
 
     try
@@ -552,29 +555,25 @@ internal static class AutomationTreeInspector
 
       foreach (AutomationElement descendant in descendants)
       {
-        AutomationElementSnapshot snapshot = ReadSnapshot(descendant);
+        AutomationElementSnapshot snapshot = ReadSnapshot(
+          descendant,
+          includePatterns: false);
         if (!snapshot.Available)
         {
           continue;
         }
 
-        if (snapshot.ControlType.Equals(
-              ControlType.Edit.ProgrammaticName,
-              StringComparison.Ordinal))
-        {
-          containsEdit = true;
-        }
+        containsEdit |= snapshot.ControlType.Equals(
+          ControlType.Edit.ProgrammaticName,
+          StringComparison.Ordinal);
+        containsTab |= snapshot.ControlType.Equals(
+          ControlType.Tab.ProgrammaticName,
+          StringComparison.Ordinal);
 
-        if (snapshot.ControlType.Equals(
-              ControlType.Tab.ProgrammaticName,
-              StringComparison.Ordinal))
-        {
-          containsTab = true;
-        }
-
-        if (snapshot.Patterns.Contains(
-              TextPattern.Pattern.ProgrammaticName,
-              StringComparer.Ordinal))
+        bool hasTextPattern = HasPattern(
+          descendant,
+          TextPattern.Pattern);
+        if (hasTextPattern)
         {
           ++textProviderCount;
         }
@@ -583,9 +582,7 @@ internal static class AutomationTreeInspector
             (!snapshot.ControlType.Equals(
                ControlType.Text.ProgrammaticName,
                StringComparison.Ordinal) &&
-             !snapshot.Patterns.Contains(
-               TextPattern.Pattern.ProgrammaticName,
-               StringComparer.Ordinal)))
+             !hasTextPattern))
         {
           continue;
         }
@@ -596,9 +593,9 @@ internal static class AutomationTreeInspector
           ++narrationTextCount;
         }
 
-        if (samples.Count < MaximumTextSamples)
+        if (samples.Count < MaximumSelectedTextSamples)
         {
-          samples.Add(Abbreviate(snapshot.Name, 180));
+          samples.Add(Abbreviate(snapshot.Name, 240));
         }
 
         if (snapshot.HasUsableBounds)
@@ -607,10 +604,10 @@ internal static class AutomationTreeInspector
         }
       }
     }
-    catch (ElementNotAvailableException)
-    {
-    }
-    catch (InvalidOperationException)
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException or
+      COMException)
     {
     }
 
@@ -632,69 +629,58 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Assigns a qualification tier to a candidate ancestor.
+  /// Assigns a qualification tier using only cheap ancestor properties.
   /// </summary>
   private static int GetQualificationTier(
     AutomationElementSnapshot snapshot,
     int depth,
-    bool isRoot,
-    double windowCoverage,
+    bool rootLike,
+    bool oversizedHeight,
     double rootHeightCoverage,
     double heightMultiple,
-    bool oversizedHeight,
-    int textElementCount,
-    int narrationTextCount,
-    int textBearingChildren,
-    int verticalTextGroups,
     bool hasScrollPattern,
+    bool classLooksLikeTranscript,
+    int directTextCount,
+    int immediateChildCount,
     bool containsEdit,
     bool containsTab)
   {
     if (depth == 0 ||
-        isRoot ||
+        rootLike ||
         !snapshot.Available ||
         !snapshot.HasUsableBounds ||
-        windowCoverage >= MaximumCandidateWindowCoverage ||
         oversizedHeight)
     {
       return int.MaxValue;
     }
 
-    if (hasScrollPattern &&
-        narrationTextCount >= 2 &&
-        verticalTextGroups >= 3 &&
+    if (classLooksLikeTranscript &&
+        hasScrollPattern &&
         rootHeightCoverage >= 0.20)
     {
       return 0;
     }
 
-    if (!containsEdit &&
-        !containsTab &&
-        textBearingChildren >= 3 &&
-        narrationTextCount >= 2 &&
-        verticalTextGroups >= 3 &&
-        rootHeightCoverage >= 0.25 &&
+    if (hasScrollPattern &&
+        rootHeightCoverage >= 0.20 &&
         heightMultiple >= 4.0)
     {
       return 1;
     }
 
-    if (!containsTab &&
-        textBearingChildren >= 2 &&
-        narrationTextCount >= 3 &&
-        verticalTextGroups >= 4 &&
-        rootHeightCoverage >= 0.25 &&
+    if (classLooksLikeTranscript &&
+        rootHeightCoverage >= 0.20 &&
         heightMultiple >= 4.0)
     {
       return 2;
     }
 
-    if (textElementCount >= 6 &&
-        narrationTextCount >= 3 &&
-        verticalTextGroups >= 4 &&
-        rootHeightCoverage >= 0.25 &&
-        heightMultiple >= 4.0 &&
-        windowCoverage < 0.85)
+    if (!containsEdit &&
+        !containsTab &&
+        immediateChildCount >= 2 &&
+        directTextCount >= 2 &&
+        rootHeightCoverage >= 0.20 &&
+        heightMultiple >= 4.0)
     {
       return 3;
     }
@@ -703,28 +689,26 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Scores a candidate for diagnostics and fallback ordering.
+  /// Scores a shallow candidate for diagnostics and fallback ordering.
   /// </summary>
   private static int CalculateScore(
     int depth,
     double windowCoverage,
-    int textElementCount,
-    int narrationTextCount,
-    int textBearingChildren,
-    int verticalTextGroups,
-    int textProviderCount,
+    double rootHeightCoverage,
     bool hasScrollPattern,
+    bool classLooksLikeTranscript,
+    int directTextCount,
+    int immediateChildCount,
     bool containsEdit,
     bool containsTab)
   {
     int score = 0;
-    score += hasScrollPattern ? 120 : 0;
-    score += Math.Min(textBearingChildren, 12) * 18;
-    score += Math.Min(narrationTextCount, 24) * 6;
-    score += Math.Min(verticalTextGroups, 24) * 4;
-    score += Math.Min(textElementCount, 64);
-    score += Math.Min(textProviderCount, 8) * 5;
-    score += windowCoverage is >= 0.05 and <= 0.80 ? 30 : 0;
+    score += classLooksLikeTranscript ? 300 : 0;
+    score += hasScrollPattern ? 160 : 0;
+    score += Math.Min(directTextCount, 12) * 10;
+    score += Math.Min(immediateChildCount, 12) * 4;
+    score += rootHeightCoverage is >= 0.20 and <= 1.0 ? 40 : 0;
+    score += windowCoverage is >= 0.05 and <= 0.80 ? 20 : 0;
     score -= containsEdit ? 35 : 0;
     score -= containsTab ? 45 : 0;
     score -= depth * 2;
@@ -732,16 +716,16 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Produces a compact explanation for one candidate's qualification.
+  /// Produces a compact explanation for one shallow candidate.
   /// </summary>
   private static string ExplainCandidate(
     int tier,
     bool rootLike,
     bool oversizedHeight,
     bool hasScrollPattern,
-    int textBearingChildren,
-    int narrationTextCount,
-    int verticalTextGroups)
+    bool classLooksLikeTranscript,
+    int directTextCount,
+    int immediateChildCount)
   {
     if (rootLike)
     {
@@ -753,29 +737,92 @@ internal static class AutomationTreeInspector
       return "rejected because the element is taller than the owning window";
     }
 
-    if (tier == 0)
+    return tier switch
     {
-      return "scrollable ancestor with a dense narration subtree";
-    }
+      0 => "known transcript scroll-container class",
+      1 => "nearest bounded scrollable ancestor",
+      2 => "known transcript-container class without ScrollPattern",
+      3 => "bounded ancestor with several direct text-bearing children",
+      _ => $"not qualified: scroll={hasScrollPattern}; " +
+        $"transcriptClass={classLooksLikeTranscript}; " +
+        $"directText={directTextCount}; children={immediateChildCount}"
+    };
+  }
 
-    if (tier == 1)
+  /// <summary>
+  /// Reads one element snapshot, optionally including supported patterns.
+  /// </summary>
+  private static AutomationElementSnapshot ReadSnapshot(
+    AutomationElement element,
+    bool includePatterns)
+  {
+    ArgumentNullException.ThrowIfNull(element);
+
+    try
     {
-      return "small ancestor with several transcript-like child blocks";
-    }
+      AutomationElement.AutomationElementInformation current =
+        element.Current;
+      string[] patterns = includePatterns
+        ? ReadSupportedPatterns(element)
+        : Array.Empty<string>();
 
-    if (tier == 2)
+      int[] runtimeId;
+      try
+      {
+        runtimeId = element.GetRuntimeId();
+      }
+      catch (Exception exception) when (
+        exception is ElementNotAvailableException or
+        InvalidOperationException or
+        COMException)
+      {
+        runtimeId = Array.Empty<int>();
+      }
+
+      return new AutomationElementSnapshot(
+        runtimeId,
+        current.ControlType.ProgrammaticName,
+        current.LocalizedControlType,
+        Normalize(current.Name),
+        current.AutomationId ?? string.Empty,
+        current.ClassName ?? string.Empty,
+        current.FrameworkId ?? string.Empty,
+        current.BoundingRectangle,
+        current.IsOffscreen,
+        current.IsControlElement,
+        current.IsContentElement,
+        current.IsKeyboardFocusable,
+        current.NativeWindowHandle,
+        patterns);
+    }
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException or
+      COMException)
     {
-      return "ancestor with multiple narration blocks and vertical groups";
+      return AutomationElementSnapshot.Unavailable;
     }
+  }
 
-    if (tier == 3)
+  /// <summary>
+  /// Reads supported patterns without allowing provider failures to escape.
+  /// </summary>
+  private static string[] ReadSupportedPatterns(AutomationElement element)
+  {
+    try
     {
-      return "bounded ancestor with a dense narration subtree";
+      return element.GetSupportedPatterns()
+        .Select(pattern => pattern.ProgrammaticName)
+        .OrderBy(name => name, StringComparer.Ordinal)
+        .ToArray();
     }
-
-    return $"not qualified: scroll={hasScrollPattern}; " +
-      $"textChildren={textBearingChildren}; " +
-      $"narration={narrationTextCount}; groups={verticalTextGroups}";
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException or
+      COMException)
+    {
+      return Array.Empty<string>();
+    }
   }
 
   /// <summary>
@@ -789,11 +836,10 @@ internal static class AutomationTreeInspector
     {
       return element.TryGetCurrentPattern(pattern, out _);
     }
-    catch (ElementNotAvailableException)
-    {
-      return false;
-    }
-    catch (InvalidOperationException)
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException or
+      COMException)
     {
       return false;
     }
@@ -822,11 +868,10 @@ internal static class AutomationTreeInspector
         rightId.Length != 0 &&
         leftId.SequenceEqual(rightId);
     }
-    catch (ElementNotAvailableException)
-    {
-      return false;
-    }
-    catch (InvalidOperationException)
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException or
+      COMException)
     {
       return false;
     }
@@ -918,7 +963,7 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Recognizes sentence-like agent narration for container selection only.
+  /// Recognizes sentence-like agent narration for diagnostics only.
   /// </summary>
   private static bool LooksLikeNarration(string text)
   {
@@ -956,6 +1001,35 @@ internal static class AutomationTreeInspector
       candidate.StartsWith("I'm ", StringComparison.OrdinalIgnoreCase) ||
       candidate.StartsWith("The ", StringComparison.OrdinalIgnoreCase) ||
       candidate.StartsWith("This ", StringComparison.OrdinalIgnoreCase);
+  }
+
+  /// <summary>
+  /// Recognizes stable class markers used by transcript scroll containers.
+  /// </summary>
+  private static bool LooksLikeTranscriptClass(string className)
+  {
+    return TranscriptClassMarkers.Any(marker => className.Contains(
+      marker,
+      StringComparison.OrdinalIgnoreCase));
+  }
+
+  /// <summary>
+  /// Adds one normalized, abbreviated text sample if it is not duplicated.
+  /// </summary>
+  private static void AddTextSample(List<string> samples, string text)
+  {
+    string normalized = Normalize(text);
+    if (normalized.Length == 0 ||
+        samples.Count >= MaximumDirectTextSamples)
+    {
+      return;
+    }
+
+    string sample = Abbreviate(normalized, 320);
+    if (!samples.Contains(sample, StringComparer.Ordinal))
+    {
+      samples.Add(sample);
+    }
   }
 
   /// <summary>
@@ -998,7 +1072,15 @@ internal static class AutomationTreeInspector
   }
 
   /// <summary>
-  /// Stores all metrics for one ancestor candidate.
+  /// Formats a native window handle for diagnostics.
+  /// </summary>
+  private static string FormatHandle(IntPtr handle)
+  {
+    return $"0x{handle.ToInt64():X}";
+  }
+
+  /// <summary>
+  /// Stores all cheap metrics for one ancestor candidate.
   /// </summary>
   private sealed record ContainerCandidate(
     [property: JsonIgnore] AutomationElement Element,
@@ -1008,12 +1090,9 @@ internal static class AutomationTreeInspector
     string SelectionReason,
     AutomationElementSnapshot Snapshot,
     int ImmediateChildCount,
-    int TextBearingChildCount,
-    int TextElementCount,
-    int NarrationTextCount,
-    int VerticalTextGroupCount,
-    int TextProviderCount,
+    int DirectTextCount,
     bool HasScrollPattern,
+    bool ClassLooksLikeTranscript,
     bool ContainsEdit,
     bool ContainsTab,
     bool ContainsPointer,
@@ -1022,7 +1101,7 @@ internal static class AutomationTreeInspector
     double HeightMultiple,
     bool OversizedHeight,
     IReadOnlyList<AutomationElementSnapshot> ImmediateChildren,
-    IReadOnlyList<string> TextSamples);
+    IReadOnlyList<string> DirectTextSamples);
 }
 
 /// <summary>
@@ -1099,6 +1178,9 @@ internal sealed class AutomationElementSnapshot
   public static AutomationElementSnapshot Unavailable { get; } = new();
 
   public int[] RuntimeId { get; }
+  public string RuntimeIdText => RuntimeId.Length == 0
+    ? string.Empty
+    : string.Join(".", RuntimeId);
   public string ControlType { get; }
   public string LocalizedControlType { get; }
   public string Name { get; }
@@ -1111,6 +1193,8 @@ internal sealed class AutomationElementSnapshot
   public bool IsContentElement { get; }
   public bool IsKeyboardFocusable { get; }
   public int NativeWindowHandle { get; }
+  public string NativeWindowHandleHex =>
+    $"0x{unchecked((uint)NativeWindowHandle):X}";
   public string[] Patterns { get; }
   public bool Available { get; }
 
