@@ -17,8 +17,31 @@ internal enum AgentSource
 /// <param name="Path">Absolute JSONL path.</param>
 /// <param name="LastWriteUtc">Latest observed file write time.</param>
 /// <param name="Length">Current file length in bytes.</param>
+/// <param name="SessionId">Canonical session identifier.</param>
+/// <param name="Title">Human-readable session title.</param>
 internal sealed record LocatedSession(
   AgentSource Source,
   string Path,
   DateTime LastWriteUtc,
-  long Length);
+  long Length,
+  string SessionId,
+  string Title)
+{
+  /// <summary>
+  /// Gets the preferred human-readable session label.
+  /// </summary>
+  public string DisplayName => string.IsNullOrWhiteSpace(Title)
+    ? SessionId
+    : Title;
+}
+
+/// <summary>
+/// Supplies existing speech history to the player before live tailing begins.
+/// </summary>
+/// <param name="Fragments">Existing eligible speech fragments.</param>
+/// <param name="PlaybackStartIndex">
+/// First fragment to play, or Fragments.Count to remain at the live end.
+/// </param>
+internal sealed record SpeechHistorySnapshot(
+  IReadOnlyList<SpeechFragment> Fragments,
+  int PlaybackStartIndex);

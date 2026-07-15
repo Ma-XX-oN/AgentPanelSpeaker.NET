@@ -7,9 +7,11 @@ internal sealed class MainForm : Form
 {
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
+  private readonly ToolTip _toolTip = new();
 
   private readonly Label _instructionsLabel = new();
   private readonly ComboBox _sourceComboBox = new();
+  private readonly TextBox _sessionTitleTextBox = new();
   private readonly TextBox _sessionPathTextBox = new();
   private readonly Button _detectLatestButton = new();
   private readonly Button _browseButton = new();
@@ -58,12 +60,13 @@ internal sealed class MainForm : Form
     _forwardNodeButton.Click += ForwardNodeButtonClicked;
     _testVoiceButton.Click += TestVoiceButtonClicked;
     _openLogButton.Click += OpenLogButtonClicked;
-    DpiChanged += MainFormDpiChanged;
     ResizeEnd += MainFormResizeEnded;
     Shown += MainFormShown;
     FormClosing += MainFormClosing;
 
     _monitor.TextReady += MonitorTextReady;
+    _monitor.HistoryLoaded += MonitorHistoryLoaded;
+    _monitor.SessionChanged += MonitorSessionChanged;
     _monitor.MessagesChanged += MonitorMessagesChanged;
     _monitor.StatusChanged += MonitorStatusChanged;
     _monitor.Faulted += MonitorFaulted;
@@ -77,15 +80,14 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v18";
-    AutoScaleDimensions = new SizeF(96.0f, 96.0f);
-    AutoScaleMode = AutoScaleMode.Dpi;
+    Text = "Agent Panel Speaker v19";
+    AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
-    MinimumSize = new Size(820, 650);
-    Size = new Size(980, 800);
+    MinimumSize = new Size(900, 720);
+    Size = new Size(1040, 840);
 
     _instructionsLabel.AutoSize = true;
-    _instructionsLabel.MaximumSize = new Size(920, 0);
+    _instructionsLabel.Dock = DockStyle.Fill;
     _instructionsLabel.Text =
       "Reads Claude/Codex session JSONL directly. It speaks assistant text " +
       "and optional reasoning while skipping tool calls, command output, " +
@@ -94,18 +96,30 @@ internal sealed class MainForm : Form
     _sourceComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
     _sourceComboBox.Width = 110;
 
-    _sessionPathTextBox.ReadOnly = true;
-    _sessionPathTextBox.Width = 560;
+    ConfigureReadOnlyTextBox(_sessionTitleTextBox);
+    ConfigureReadOnlyTextBox(_sessionPathTextBox);
 
     ConfigureButton(_detectLatestButton, "Detect latest");
     ConfigureButton(_browseButton, "Browse JSONL");
-    ConfigureButton(_startButton, "Start");
-    ConfigureButton(_stopButton, "Stop");
-    ConfigureButton(_cancelSpeechButton, "Cancel speech");
-    ConfigureButton(_rewindSentenceButton, "Rewind sentence");
-    ConfigureButton(_forwardSentenceButton, "Forward sentence");
-    ConfigureButton(_rewindNodeButton, "Rewind node");
-    ConfigureButton(_forwardNodeButton, "Forward node");
+    ConfigureTransportButton(
+      _rewindNodeButton,
+      "⏮",
+      "Previous JSONL node");
+    ConfigureTransportButton(
+      _rewindSentenceButton,
+      "⏪",
+      "Previous sentence");
+    ConfigureTransportButton(_startButton, "▶", "Start monitoring and play");
+    ConfigureTransportButton(_stopButton, "⏹", "Stop monitoring and speech");
+    ConfigureTransportButton(
+      _forwardSentenceButton,
+      "⏩",
+      "Next sentence");
+    ConfigureTransportButton(
+      _forwardNodeButton,
+      "⏭",
+      "Next JSONL node");
+    ConfigureButton(_cancelSpeechButton, "Silence");
     ConfigureButton(_testVoiceButton, "Test voice");
     ConfigureButton(_openLogButton, "Open diagnostic log");
 
@@ -152,7 +166,7 @@ internal sealed class MainForm : Form
     {
       AutoSize = true,
       Dock = DockStyle.Fill,
-      WrapContents = true
+      WrapContents = false
     };
     sessionControls.Controls.AddRange(new Control[]
     {
@@ -163,14 +177,7 @@ internal sealed class MainForm : Form
       _followLatestCheckBox
     });
 
-    var pathControls = new FlowLayoutPanel
-    {
-      AutoSize = true,
-      Dock = DockStyle.Fill,
-      WrapContents = false
-    };
-    pathControls.Controls.Add(MakeInlineLabel("Session:"));
-    pathControls.Controls.Add(_sessionPathTextBox);
+    TableLayoutPanel sessionDetails = CreateSessionDetailsLayout();
 
     var settings = new FlowLayoutPanel
     {
@@ -192,24 +199,47 @@ internal sealed class MainForm : Form
       _speakExistingCheckBox
     });
 
-    var runButtons = new FlowLayoutPanel
+    var transport = new FlowLayoutPanel
     {
       AutoSize = true,
       Dock = DockStyle.Fill,
-      WrapContents = true
+      FlowDirection = FlowDirection.LeftToRight,
+      WrapContents = false
     };
-    runButtons.Controls.AddRange(new Control[]
+    transport.Controls.AddRange(new Control[]
     {
+      _rewindNodeButton,
+      _rewindSentenceButton,
       _startButton,
       _stopButton,
-      _cancelSpeechButton,
-      _rewindSentenceButton,
       _forwardSentenceButton,
-      _rewindNodeButton,
-      _forwardNodeButton,
+      _forwardNodeButton
+    });
+
+    var utilityButtons = new FlowLayoutPanel
+    {
+      AutoSize = true,
+      Dock = DockStyle.Fill,
+      FlowDirection = FlowDirection.LeftToRight,
+      WrapContents = false
+    };
+    utilityButtons.Controls.AddRange(new Control[]
+    {
+      _cancelSpeechButton,
       _testVoiceButton,
       _openLogButton
     });
+
+    var controlsRow = new TableLayoutPanel
+    {
+      AutoSize = true,
+      ColumnCount = 2,
+      Dock = DockStyle.Fill
+    };
+    controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+    controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
+    controlsRow.Controls.Add(transport, 0, 0);
+    controlsRow.Controls.Add(utilityButtons, 1, 0);
 
     var layout = new TableLayoutPanel
     {
@@ -232,15 +262,43 @@ internal sealed class MainForm : Form
 
     layout.Controls.Add(_instructionsLabel, 0, 0);
     layout.Controls.Add(sessionControls, 0, 1);
-    layout.Controls.Add(pathControls, 0, 2);
-    layout.Controls.Add(MakeSectionLabel("Recent accepted assistant text:"), 0, 3);
+    layout.Controls.Add(sessionDetails, 0, 2);
+    layout.Controls.Add(
+      MakeSectionLabel("Recent accepted assistant text:"),
+      0,
+      3);
     layout.Controls.Add(_previewTextBox, 0, 4);
     layout.Controls.Add(settings, 0, 5);
-    layout.Controls.Add(runButtons, 0, 6);
+    layout.Controls.Add(controlsRow, 0, 6);
     layout.Controls.Add(MakeSectionLabel("Activity:"), 0, 8);
     layout.Controls.Add(_logTextBox, 0, 9);
 
     Controls.Add(layout);
+  }
+
+  /// <summary>
+  /// Creates full-width title and path rows.
+  /// </summary>
+  private TableLayoutPanel CreateSessionDetailsLayout()
+  {
+    var details = new TableLayoutPanel
+    {
+      AutoSize = true,
+      ColumnCount = 2,
+      RowCount = 2,
+      Dock = DockStyle.Fill,
+      Margin = new Padding(0)
+    };
+    details.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+    details.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
+    details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+    details.Controls.Add(MakeInlineLabel("Session:"), 0, 0);
+    details.Controls.Add(_sessionTitleTextBox, 1, 0);
+    details.Controls.Add(MakeInlineLabel("Path:"), 0, 1);
+    details.Controls.Add(_sessionPathTextBox, 1, 1);
+    return details;
   }
 
   /// <summary>
@@ -250,6 +308,32 @@ internal sealed class MainForm : Form
   {
     button.AutoSize = true;
     button.Text = text;
+  }
+
+  /// <summary>
+  /// Configures a standard media transport button.
+  /// </summary>
+  private void ConfigureTransportButton(
+    Button button,
+    string symbol,
+    string accessibleName)
+  {
+    button.AutoSize = false;
+    button.Size = new Size(50, 38);
+    button.Font = new Font("Segoe UI Symbol", 14.0f, FontStyle.Regular);
+    button.Text = symbol;
+    button.AccessibleName = accessibleName;
+    _toolTip.SetToolTip(button, accessibleName);
+  }
+
+  /// <summary>
+  /// Configures a full-width read-only text field.
+  /// </summary>
+  private static void ConfigureReadOnlyTextBox(TextBox textBox)
+  {
+    textBox.ReadOnly = true;
+    textBox.Dock = DockStyle.Fill;
+    textBox.Margin = new Padding(3, 3, 3, 3);
   }
 
   /// <summary>
@@ -352,14 +436,19 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Clears a stale auto-detected path after the source changes.
+  /// Clears stale session metadata when the requested source changes.
   /// </summary>
   private void SourceSelectionChanged(object? sender, EventArgs eventArgs)
   {
-    if (!_pathIsManual)
+    if (_monitor.IsRunning)
     {
-      _sessionPathTextBox.Clear();
+      return;
     }
+
+    _pathIsManual = false;
+    _followLatestCheckBox.Checked = true;
+    ClearSessionDisplay();
+    UpdateControlState();
   }
 
   /// <summary>
@@ -377,12 +466,18 @@ internal sealed class MainForm : Form
   /// </summary>
   private void BrowseButtonClicked(object? sender, EventArgs eventArgs)
   {
+    AgentSource source = GetSelectedSource();
     using var dialog = new OpenFileDialog
     {
       CheckFileExists = true,
       Filter = "JSON Lines (*.jsonl)|*.jsonl|All files (*.*)|*.*",
+      InitialDirectory = SessionLocator.GetBrowseInitialDirectory(
+        source,
+        _sessionPathTextBox.Text),
       Multiselect = false,
-      Title = "Select Claude or Codex session JSONL"
+      Title = source == AgentSource.Auto
+        ? "Select Claude or Codex session JSONL"
+        : $"Select {source} session JSONL"
     };
 
     if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -392,17 +487,18 @@ internal sealed class MainForm : Form
 
     try
     {
-      AgentSource source = GetSelectedSource();
       LocatedSession session = SessionLocator.FromPath(dialog.FileName, source);
-      _sessionPathTextBox.Text = session.Path;
-      _pathIsManual = true;
-      _followLatestCheckBox.Checked = false;
       if (source == AgentSource.Auto)
       {
         _sourceComboBox.SelectedItem = session.Source;
       }
+
+      SetSessionDisplay(session);
+      _pathIsManual = true;
+      _followLatestCheckBox.Checked = false;
       DiagnosticLog.Write("session.browsed", session);
-      AppendLog($"Selected {session.Source}: {session.Path}");
+      AppendLog($"Selected {session.Source}: {session.DisplayName}");
+      UpdateControlState();
     }
     catch (Exception exception) when (
       exception is IOException or
@@ -460,7 +556,7 @@ internal sealed class MainForm : Form
 
       _monitor.Start(settings);
       DiagnosticLog.Write("speech.session_started");
-      AppendLog("Monitoring started.");
+      AppendLog("Monitoring started; existing history is being indexed.");
       UpdateControlState();
     }
     catch (Exception exception) when (
@@ -495,8 +591,9 @@ internal sealed class MainForm : Form
     EventArgs eventArgs)
   {
     _speech.CancelAll();
-    DiagnosticLog.Write("speech.cancel_all");
-    AppendLog("Speech cancelled.");
+    DiagnosticLog.Write("speech.cancel_all", new { source = "silence" });
+    AppendLog("Speech silenced; monitoring continues.");
+    UpdateControlState();
   }
 
   /// <summary>
@@ -506,9 +603,7 @@ internal sealed class MainForm : Form
     object? sender,
     EventArgs eventArgs)
   {
-    NavigateSpeech(
-      _speech.TryRewindSentence,
-      "Rewind sentence and continue");
+    NavigateSpeech(_speech.TryRewindSentence, "Previous sentence");
   }
 
   /// <summary>
@@ -518,9 +613,7 @@ internal sealed class MainForm : Form
     object? sender,
     EventArgs eventArgs)
   {
-    NavigateSpeech(
-      _speech.TryForwardSentence,
-      "Forward sentence and continue");
+    NavigateSpeech(_speech.TryForwardSentence, "Next sentence");
   }
 
   /// <summary>
@@ -530,9 +623,7 @@ internal sealed class MainForm : Form
     object? sender,
     EventArgs eventArgs)
   {
-    NavigateSpeech(
-      _speech.TryRewindNode,
-      "Rewind node and continue");
+    NavigateSpeech(_speech.TryRewindNode, "Previous JSONL node");
   }
 
   /// <summary>
@@ -542,17 +633,13 @@ internal sealed class MainForm : Form
     object? sender,
     EventArgs eventArgs)
   {
-    NavigateSpeech(
-      _speech.TryForwardNode,
-      "Forward node and continue");
+    NavigateSpeech(_speech.TryForwardNode, "Next JSONL node");
   }
 
   /// <summary>
   /// Runs one replay-navigation operation.
   /// </summary>
-  private void NavigateSpeech(
-    TryNavigateSpeech navigate,
-    string action)
+  private void NavigateSpeech(TryNavigateSpeech navigate, string action)
   {
     if (navigate(out string text))
     {
@@ -563,6 +650,8 @@ internal sealed class MainForm : Form
     {
       AppendLog($"{action}: no matching history entry is available.");
     }
+
+    UpdateControlState();
   }
 
   /// <summary>
@@ -577,8 +666,7 @@ internal sealed class MainForm : Form
       DiagnosticLog.Write("speech.test");
     }
     catch (Exception exception) when (
-      exception is ArgumentException or
-      InvalidOperationException)
+      exception is ArgumentException or InvalidOperationException)
     {
       AppendLog($"Voice test failed: {exception.Message}");
     }
@@ -599,6 +687,42 @@ internal sealed class MainForm : Form
     {
       AppendLog($"Unable to open diagnostic log: {exception.Message}");
     }
+  }
+
+  /// <summary>
+  /// Loads existing conversation history for immediate navigation.
+  /// </summary>
+  private void MonitorHistoryLoaded(SpeechHistorySnapshot snapshot)
+  {
+    PostToUi(() =>
+    {
+      try
+      {
+        ConfigureSpeech();
+        _speech.LoadHistory(snapshot.Fragments, snapshot.PlaybackStartIndex);
+        DiagnosticLog.Write("speech.history_loaded", new
+        {
+          fragmentCount = snapshot.Fragments.Count,
+          snapshot.PlaybackStartIndex
+        });
+        AppendLog(
+          $"Indexed {snapshot.Fragments.Count} existing speech fragments.");
+        UpdateControlState();
+      }
+      catch (Exception exception) when (
+        exception is ArgumentException or InvalidOperationException)
+      {
+        AppendLog($"Unable to load speech history: {exception.Message}");
+      }
+    });
+  }
+
+  /// <summary>
+  /// Updates displayed session metadata after selection or automatic switch.
+  /// </summary>
+  private void MonitorSessionChanged(LocatedSession session)
+  {
+    PostToUi(() => SetSessionDisplay(session));
   }
 
   /// <summary>
@@ -646,8 +770,7 @@ internal sealed class MainForm : Form
         UpdateControlState();
       }
       catch (Exception exception) when (
-        exception is ArgumentException or
-        InvalidOperationException)
+        exception is ArgumentException or InvalidOperationException)
       {
         AppendLog($"Speech failed: {exception.Message}");
       }
@@ -694,10 +817,10 @@ internal sealed class MainForm : Form
       AgentSource source = GetSelectedSource();
       LocatedSession session = await Task.Run(() =>
         SessionLocator.FindLatest(source));
-      _sessionPathTextBox.Text = session.Path;
+      SetSessionDisplay(session);
       _pathIsManual = false;
       DiagnosticLog.Write("session.detected", session);
-      AppendLog($"Detected {session.Source}: {session.Path}");
+      AppendLog($"Detected {session.Source}: {session.DisplayName}");
       return true;
     }
     catch (Exception exception) when (
@@ -712,6 +835,26 @@ internal sealed class MainForm : Form
     {
       UpdateControlState();
     }
+  }
+
+  /// <summary>
+  /// Displays one resolved session title and complete path.
+  /// </summary>
+  private void SetSessionDisplay(LocatedSession session)
+  {
+    _sessionTitleTextBox.Text = session.DisplayName;
+    _sessionPathTextBox.Text = session.Path;
+    _sessionTitleTextBox.SelectionStart = 0;
+    _sessionPathTextBox.SelectionStart = 0;
+  }
+
+  /// <summary>
+  /// Clears displayed session metadata.
+  /// </summary>
+  private void ClearSessionDisplay()
+  {
+    _sessionTitleTextBox.Clear();
+    _sessionPathTextBox.Clear();
   }
 
   /// <summary>
@@ -739,6 +882,7 @@ internal sealed class MainForm : Form
   private void UpdateControlState()
   {
     bool running = _monitor.IsRunning;
+    bool hasHistory = _speech.HasHistory;
     _sourceComboBox.Enabled = !running;
     _detectLatestButton.Enabled = !running;
     _browseButton.Enabled = !running;
@@ -750,10 +894,11 @@ internal sealed class MainForm : Form
     _pollNumeric.Enabled = !running;
     _startButton.Enabled = !running;
     _stopButton.Enabled = running;
-    _rewindSentenceButton.Enabled = _speech.HasHistory;
-    _forwardSentenceButton.Enabled = _speech.HasHistory;
-    _rewindNodeButton.Enabled = _speech.HasHistory;
-    _forwardNodeButton.Enabled = _speech.HasHistory;
+    _cancelSpeechButton.Enabled = running || hasHistory;
+    _rewindSentenceButton.Enabled = hasHistory;
+    _forwardSentenceButton.Enabled = hasHistory;
+    _rewindNodeButton.Enabled = hasHistory;
+    _forwardNodeButton.Enabled = hasHistory;
   }
 
   /// <summary>
@@ -800,31 +945,7 @@ internal sealed class MainForm : Form
     }
     catch (InvalidOperationException) when (_closing || IsDisposed)
     {
-      // The form closed between the state check and BeginInvoke.
     }
-  }
-
-  /// <summary>
-  /// Records a DPI transition after WinForms automatic scaling.
-  /// </summary>
-  private void MainFormDpiChanged(
-    object? sender,
-    DpiChangedEventArgs eventArgs)
-  {
-    DiagnosticLog.Write("ui.dpi_changed", new
-    {
-      oldDpi = eventArgs.DeviceDpiOld,
-      newDpi = eventArgs.DeviceDpiNew,
-      currentBounds = RectangleToString(Bounds),
-      suggestedBounds = RectangleToString(eventArgs.SuggestedRectangle),
-      screen = Screen.FromControl(this).DeviceName
-    });
-
-    BeginInvoke((Action)(() =>
-    {
-      PerformLayout();
-      WriteLayoutDiagnostic("ui.layout_after_dpi");
-    }));
   }
 
   /// <summary>
@@ -842,6 +963,7 @@ internal sealed class MainForm : Form
   {
     DiagnosticLog.Write("ui.screens", new
     {
+      highDpiMode = Application.HighDpiMode.ToString(),
       screens = Screen.AllScreens.Select(screen => new
       {
         screen.DeviceName,
@@ -864,6 +986,7 @@ internal sealed class MainForm : Form
     DiagnosticLog.Write("app.closing");
     _monitor.Dispose();
     _speech.Dispose();
+    _toolTip.Dispose();
   }
 
   /// <summary>
@@ -873,6 +996,7 @@ internal sealed class MainForm : Form
   {
     DiagnosticLog.Write(eventName, new
     {
+      highDpiMode = Application.HighDpiMode.ToString(),
       deviceDpi = DeviceDpi,
       bounds = RectangleToString(Bounds),
       clientSize = $"{ClientSize.Width}x{ClientSize.Height}",

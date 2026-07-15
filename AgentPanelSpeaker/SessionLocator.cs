@@ -1,18 +1,23 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Locates active Claude and Codex JSONL session files.
+/// Locates active Claude and Codex JSONL session files and resolves titles.
 /// </summary>
-internal static class SessionLocator
+internal static partial class SessionLocator
 {
+  private const int MaximumTitleLength = 160;
+
   /// <summary>
   /// Finds the most recently written session for the requested source.
   /// </summary>
   /// <param name="source">Requested source or Auto.</param>
-  /// <returns>The newest available session.</returns>
+  /// <returns>The newest available session with display metadata.</returns>
   public static LocatedSession FindLatest(AgentSource source)
   {
-    IEnumerable<LocatedSession> candidates = source switch
+    IEnumerable<SessionFile> candidates = source switch
     {
       AgentSource.Claude => EnumerateClaudeSessions(),
       AgentSource.Codex => EnumerateCodexSessions(),
@@ -21,12 +26,14 @@ internal static class SessionLocator
       _ => throw new ArgumentOutOfRangeException(nameof(source), source, null)
     };
 
-    LocatedSession? latest = candidates
+    SessionFile? latest = candidates
       .OrderByDescending(candidate => candidate.LastWriteUtc)
       .FirstOrDefault();
 
-    return latest ?? throw new FileNotFoundException(
-      $"No {source} session JSONL file was found.");
+    return latest is null
+      ? throw new FileNotFoundException(
+        $"No {source} session JSONL file was found.")
+      : Enrich(latest);
   }
 
   /// <summary>
@@ -45,7 +52,9 @@ internal static class SessionLocator
     var info = new FileInfo(fullPath);
     if (!info.Exists)
     {
-      throw new FileNotFoundException("The selected JSONL file does not exist.", fullPath);
+      throw new FileNotFoundException(
+        "The selected JSONL file does not exist.",
+        fullPath);
     }
 
     AgentSource detectedSource = DetectSource(fullPath);
@@ -59,11 +68,41 @@ internal static class SessionLocator
     AgentSource source = requestedSource == AgentSource.Auto
       ? detectedSource
       : requestedSource;
-    return new LocatedSession(
+    return Enrich(new SessionFile(
       source,
       info.FullName,
       info.LastWriteTimeUtc,
-      info.Length);
+      info.Length));
+  }
+
+  /// <summary>
+  /// Gets the most useful directory for the JSONL file picker.
+  /// </summary>
+  /// <param name="source">Selected source.</param>
+  /// <param name="currentPath">Currently selected session path.</param>
+  /// <returns>An existing initial directory.</returns>
+  public static string GetBrowseInitialDirectory(
+    AgentSource source,
+    string? currentPath)
+  {
+    if (!string.IsNullOrWhiteSpace(currentPath))
+    {
+      string? currentDirectory = Path.GetDirectoryName(currentPath);
+      if (!string.IsNullOrWhiteSpace(currentDirectory) &&
+          Directory.Exists(currentDirectory))
+      {
+        return currentDirectory;
+      }
+    }
+
+    string root = source switch
+    {
+      AgentSource.Claude => GetClaudeProjectsRoot(),
+      AgentSource.Codex => GetCodexSessionsRoot(),
+      AgentSource.Auto => GetMostUsefulAutoRoot(),
+      _ => GetUserHome()
+    };
+    return Directory.Exists(root) ? root : GetUserHome();
   }
 
   /// <summary>
@@ -75,14 +114,17 @@ internal static class SessionLocator
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-    string normalized = Path.GetFullPath(path)
-      .Replace('/', '\\');
-    if (normalized.Contains("\\.claude\\projects\\", StringComparison.OrdinalIgnoreCase))
+    string normalized = Path.GetFullPath(path).Replace('/', '\\');
+    if (normalized.Contains(
+          "\\.claude\\projects\\",
+          StringComparison.OrdinalIgnoreCase))
     {
       return AgentSource.Claude;
     }
 
-    if (normalized.Contains("\\.codex\\sessions\\", StringComparison.OrdinalIgnoreCase))
+    if (normalized.Contains(
+          "\\.codex\\sessions\\",
+          StringComparison.OrdinalIgnoreCase))
     {
       return AgentSource.Codex;
     }
@@ -97,44 +139,252 @@ internal static class SessionLocator
     }
 
     throw new InvalidDataException(
-      "The selected file does not contain a recognizable Claude or Codex record.");
+      "The selected file does not contain a recognizable Claude or Codex " +
+      "record.");
+  }
+
+  /// <summary>
+  /// Adds a canonical identifier and readable title to one session file.
+  /// </summary>
+  private static LocatedSession Enrich(SessionFile file)
+  {
+    string sessionId = file.Source == AgentSource.Codex
+      ? GetCodexSessionId(file.Path)
+      : Path.GetFileNameWithoutExtension(file.Path);
+    string title = file.Source switch
+    {
+      AgentSource.Codex => ReadCodexTitle(file.Path, sessionId),
+      AgentSource.Claude => ReadClaudeTitle(file.Path),
+      _ => string.Empty
+    };
+
+    return new LocatedSession(
+      file.Source,
+      file.Path,
+      file.LastWriteUtc,
+      file.Length,
+      sessionId,
+      title);
+  }
+
+  /// <summary>
+  /// Reads a Codex thread name, falling back to its first user message.
+  /// </summary>
+  private static string ReadCodexTitle(string sessionPath, string sessionId)
+  {
+    string indexTitle = ReadCodexIndexTitle(sessionId);
+    if (indexTitle.Length != 0)
+    {
+      return indexTitle;
+    }
+
+    try
+    {
+      foreach (string line in ReadSharedLines(sessionPath))
+      {
+        using JsonDocument document = JsonDocument.Parse(line);
+        JsonElement root = document.RootElement;
+        if (!TryGetString(root, "type", out string recordType) ||
+            !recordType.Equals("event_msg", StringComparison.Ordinal))
+        {
+          continue;
+        }
+
+        if (!root.TryGetProperty("payload", out JsonElement payload) ||
+            !TryGetString(payload, "type", out string payloadType) ||
+            !payloadType.Equals("user_message", StringComparison.Ordinal) ||
+            !TryGetString(payload, "message", out string message))
+        {
+          continue;
+        }
+
+        string stripped = CodexRequestPreambleRegex().Replace(message, "$1");
+        string title = FirstMeaningfulLine(stripped);
+        if (title.Length != 0)
+        {
+          return LimitTitle(title);
+        }
+      }
+    }
+    catch (Exception exception) when (
+      exception is IOException or
+      UnauthorizedAccessException or
+      JsonException)
+    {
+    }
+
+    return sessionId;
+  }
+
+  /// <summary>
+  /// Reads the newest matching Codex session-index title.
+  /// </summary>
+  private static string ReadCodexIndexTitle(string sessionId)
+  {
+    string indexPath = Path.Combine(GetCodexHome(), "session_index.jsonl");
+    if (!File.Exists(indexPath))
+    {
+      return string.Empty;
+    }
+
+    string latestTimestamp = string.Empty;
+    string latestTitle = string.Empty;
+    try
+    {
+      foreach (string line in ReadSharedLines(indexPath))
+      {
+        using JsonDocument document = JsonDocument.Parse(line);
+        JsonElement root = document.RootElement;
+        if (!TryGetString(root, "id", out string id) ||
+            !id.Equals(sessionId, StringComparison.OrdinalIgnoreCase))
+        {
+          continue;
+        }
+
+        TryGetString(root, "updated_at", out string updatedAt);
+        if (latestTitle.Length != 0 &&
+            string.CompareOrdinal(updatedAt, latestTimestamp) <= 0)
+        {
+          continue;
+        }
+
+        if (TryGetString(root, "thread_name", out string threadName) &&
+            !string.IsNullOrWhiteSpace(threadName))
+        {
+          latestTimestamp = updatedAt;
+          latestTitle = LimitTitle(threadName.Trim());
+        }
+      }
+    }
+    catch (Exception exception) when (
+      exception is IOException or
+      UnauthorizedAccessException or
+      JsonException)
+    {
+      return string.Empty;
+    }
+
+    return latestTitle;
+  }
+
+  /// <summary>
+  /// Reads the first real Claude user message, with assistant fallback.
+  /// </summary>
+  private static string ReadClaudeTitle(string sessionPath)
+  {
+    string assistantFallback = string.Empty;
+    try
+    {
+      foreach (string line in ReadSharedLines(sessionPath))
+      {
+        using JsonDocument document = JsonDocument.Parse(line);
+        JsonElement root = document.RootElement;
+        if (root.TryGetProperty("isSidechain", out JsonElement sidechain) &&
+            sidechain.ValueKind == JsonValueKind.True)
+        {
+          continue;
+        }
+
+        if (!TryGetString(root, "type", out string recordType) ||
+            !root.TryGetProperty("message", out JsonElement message) ||
+            !message.TryGetProperty("content", out JsonElement content) ||
+            content.ValueKind != JsonValueKind.Array)
+        {
+          continue;
+        }
+
+        if (recordType.Equals("assistant", StringComparison.Ordinal) &&
+            TryGetString(message, "model", out string model) &&
+            model.Equals("<synthetic>", StringComparison.Ordinal))
+        {
+          continue;
+        }
+
+        foreach (JsonElement block in content.EnumerateArray())
+        {
+          if (!TryGetString(block, "type", out string blockType) ||
+              !blockType.Equals("text", StringComparison.Ordinal) ||
+              !TryGetString(block, "text", out string text))
+          {
+            continue;
+          }
+
+          string cleaned = SystemTagRegex().Replace(text, string.Empty).Trim();
+          string title = FirstMeaningfulLine(cleaned);
+          if (title.Length == 0)
+          {
+            continue;
+          }
+
+          if (recordType.Equals("user", StringComparison.Ordinal))
+          {
+            return LimitTitle(title);
+          }
+
+          if (recordType.Equals("assistant", StringComparison.Ordinal) &&
+              assistantFallback.Length == 0)
+          {
+            assistantFallback = LimitTitle(title);
+          }
+        }
+      }
+    }
+    catch (Exception exception) when (
+      exception is IOException or
+      UnauthorizedAccessException or
+      JsonException)
+    {
+    }
+
+    return assistantFallback.Length == 0
+      ? Path.GetFileNameWithoutExtension(sessionPath)
+      : assistantFallback;
+  }
+
+  /// <summary>
+  /// Extracts the canonical UUID from a Codex rollout filename.
+  /// </summary>
+  private static string GetCodexSessionId(string path)
+  {
+    string stem = Path.GetFileNameWithoutExtension(path);
+    if (!stem.StartsWith("rollout-", StringComparison.OrdinalIgnoreCase))
+    {
+      return stem;
+    }
+
+    string[] parts = stem.Split('-');
+    return parts.Length > 6 ? string.Join('-', parts.Skip(6)) : stem;
   }
 
   /// <summary>
   /// Enumerates Claude project sessions.
   /// </summary>
-  private static IEnumerable<LocatedSession> EnumerateClaudeSessions()
+  private static IEnumerable<SessionFile> EnumerateClaudeSessions()
   {
-    string config = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")
-      ?? Path.Combine(GetUserHome(), ".claude");
-    string projects = Path.Combine(config, "projects");
-    return EnumerateSessions(projects, AgentSource.Claude);
+    return EnumerateSessions(GetClaudeProjectsRoot(), AgentSource.Claude);
   }
 
   /// <summary>
   /// Enumerates Codex rollout/session files.
   /// </summary>
-  private static IEnumerable<LocatedSession> EnumerateCodexSessions()
+  private static IEnumerable<SessionFile> EnumerateCodexSessions()
   {
-    string home = Environment.GetEnvironmentVariable("CODEX_HOME")
-      ?? Path.Combine(GetUserHome(), ".codex");
-    string sessions = Path.Combine(home, "sessions");
-    return EnumerateSessions(sessions, AgentSource.Codex);
+    return EnumerateSessions(GetCodexSessionsRoot(), AgentSource.Codex);
   }
 
   /// <summary>
   /// Safely enumerates JSONL files under one session root.
   /// </summary>
-  private static IEnumerable<LocatedSession> EnumerateSessions(
+  private static IEnumerable<SessionFile> EnumerateSessions(
     string root,
     AgentSource source)
   {
     if (!Directory.Exists(root))
     {
-      return Array.Empty<LocatedSession>();
+      return Array.Empty<SessionFile>();
     }
 
-    var sessions = new List<LocatedSession>();
+    var sessions = new List<SessionFile>();
     try
     {
       foreach (string path in Directory.EnumerateFiles(
@@ -145,32 +395,144 @@ internal static class SessionLocator
         try
         {
           var info = new FileInfo(path);
-          sessions.Add(new LocatedSession(
+          sessions.Add(new SessionFile(
             source,
             info.FullName,
             info.LastWriteTimeUtc,
             info.Length));
         }
-        catch (IOException)
+        catch (Exception exception) when (
+          exception is IOException or UnauthorizedAccessException)
         {
-          // A session can rotate while the directory is being enumerated.
-        }
-        catch (UnauthorizedAccessException)
-        {
-          // Skip paths that cannot be inspected.
         }
       }
     }
-    catch (IOException)
-    {
-      return sessions;
-    }
-    catch (UnauthorizedAccessException)
+    catch (Exception exception) when (
+      exception is IOException or UnauthorizedAccessException)
     {
       return sessions;
     }
 
     return sessions;
+  }
+
+  /// <summary>
+  /// Reads a shared JSONL file without blocking its writer.
+  /// </summary>
+  private static IEnumerable<string> ReadSharedLines(string path)
+  {
+    using var stream = new FileStream(
+      path,
+      FileMode.Open,
+      FileAccess.Read,
+      FileShare.ReadWrite | FileShare.Delete);
+    using var reader = new StreamReader(
+      stream,
+      System.Text.Encoding.UTF8,
+      detectEncodingFromByteOrderMarks: true,
+      bufferSize: 64 * 1024,
+      leaveOpen: false);
+
+    while (reader.ReadLine() is string line)
+    {
+      if (!string.IsNullOrWhiteSpace(line))
+      {
+        yield return line;
+      }
+    }
+  }
+
+  /// <summary>
+  /// Gets a JSON string property when present.
+  /// </summary>
+  private static bool TryGetString(
+    JsonElement element,
+    string propertyName,
+    out string value)
+  {
+    value = string.Empty;
+    if (!element.TryGetProperty(propertyName, out JsonElement property) ||
+        property.ValueKind != JsonValueKind.String)
+    {
+      return false;
+    }
+
+    value = property.GetString() ?? string.Empty;
+    return true;
+  }
+
+  /// <summary>
+  /// Gets the first non-empty trimmed line.
+  /// </summary>
+  private static string FirstMeaningfulLine(string text)
+  {
+    foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
+    {
+      string candidate = line.Trim();
+      if (candidate.Length != 0)
+      {
+        return candidate;
+      }
+    }
+
+    return string.Empty;
+  }
+
+  /// <summary>
+  /// Bounds a session title for display.
+  /// </summary>
+  private static string LimitTitle(string title)
+  {
+    return title.Length <= MaximumTitleLength
+      ? title
+      : title[..MaximumTitleLength] + "…";
+  }
+
+  /// <summary>
+  /// Gets the Claude projects root.
+  /// </summary>
+  private static string GetClaudeProjectsRoot()
+  {
+    string config = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")
+      ?? Path.Combine(GetUserHome(), ".claude");
+    return Path.Combine(config, "projects");
+  }
+
+  /// <summary>
+  /// Gets the Codex home directory.
+  /// </summary>
+  private static string GetCodexHome()
+  {
+    return Environment.GetEnvironmentVariable("CODEX_HOME")
+      ?? Path.Combine(GetUserHome(), ".codex");
+  }
+
+  /// <summary>
+  /// Gets the Codex sessions root.
+  /// </summary>
+  private static string GetCodexSessionsRoot()
+  {
+    return Path.Combine(GetCodexHome(), "sessions");
+  }
+
+  /// <summary>
+  /// Selects the newest existing source root for Auto browsing.
+  /// </summary>
+  private static string GetMostUsefulAutoRoot()
+  {
+    try
+    {
+      return Path.GetDirectoryName(FindLatest(AgentSource.Auto).Path)
+        ?? GetUserHome();
+    }
+    catch (Exception exception) when (
+      exception is IOException or
+      UnauthorizedAccessException or
+      InvalidOperationException)
+    {
+      string codex = GetCodexSessionsRoot();
+      return Directory.Exists(codex) ? codex : GetClaudeProjectsRoot();
+    }
   }
 
   /// <summary>
@@ -180,12 +542,30 @@ internal static class SessionLocator
   {
     string home = Environment.GetFolderPath(
       Environment.SpecialFolder.UserProfile);
-    if (string.IsNullOrWhiteSpace(home))
-    {
-      throw new InvalidOperationException(
-        "The current user profile directory could not be determined.");
-    }
-
-    return home;
+    return string.IsNullOrWhiteSpace(home)
+      ? throw new InvalidOperationException(
+        "The current user profile directory could not be determined.")
+      : home;
   }
+
+  [GeneratedRegex(
+    @"## My request for Codex:\s*(.*)",
+    RegexOptions.Singleline)]
+  private static partial Regex CodexRequestPreambleRegex();
+
+  [GeneratedRegex(
+    @"<(?:ide_opened_file|ide_selection|system[-_]reminder|system|env|" +
+    @"claude_background_info|user[-_]prompt[-_]submit[-_]hook|" +
+    @"command[-_]name|antml:[a-z_]+)[^>]*>.*?</[^>]+>",
+    RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+  private static partial Regex SystemTagRegex();
+
+  /// <summary>
+  /// Stores file-system session data before title extraction.
+  /// </summary>
+  private sealed record SessionFile(
+    AgentSource Source,
+    string Path,
+    DateTime LastWriteUtc,
+    long Length);
 }

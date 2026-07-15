@@ -43,6 +43,16 @@ internal sealed class JsonlSessionMonitor : IDisposable
   public event Action<SpeechFragment>? TextReady;
 
   /// <summary>
+  /// Raised when existing session history is ready for navigation.
+  /// </summary>
+  public event Action<SpeechHistorySnapshot>? HistoryLoaded;
+
+  /// <summary>
+  /// Raised when the selected or followed session changes.
+  /// </summary>
+  public event Action<LocatedSession>? SessionChanged;
+
+  /// <summary>
   /// Raised when the recent assistant-node preview changes.
   /// </summary>
   public event Action<IReadOnlyList<string>>? MessagesChanged;
@@ -168,7 +178,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var preview = new Queue<string>();
     long nextNodeId = 1;
     DateTime nextLatestRefreshUtc = DateTime.MinValue;
-    DateTime monitorStartedUtc = DateTime.UtcNow;
 
     try
     {
@@ -177,24 +186,18 @@ internal sealed class JsonlSessionMonitor : IDisposable
       StatusChanged?.Invoke(
         $"Monitoring {session.Source}: {session.Path}");
       DiagnosticLog.Write("monitor.session_selected", session);
+      SessionChanged?.Invoke(session);
 
-      if (settings.SpeakExistingLastMessage)
-      {
-        ExtractedNode? lastNode = ReadLastEligibleNode(
-          session,
-          settings.Extraction);
-        if (lastNode is not null)
-        {
-          ProcessNode(
-            session,
-            lastNode,
-            ref nextNodeId,
-            recentFingerprintQueue,
-            recentFingerprintSet,
-            preview,
-            settings.Extraction);
-        }
-      }
+      SpeechHistorySnapshot initialHistory = LoadExistingHistory(
+        session,
+        settings.Extraction,
+        settings.SpeakExistingLastMessage,
+        ref nextNodeId,
+        recentFingerprintQueue,
+        recentFingerprintSet,
+        preview);
+      HistoryLoaded?.Invoke(initialHistory);
+      MessagesChanged?.Invoke(preview.ToArray());
 
       while (!token.IsCancellationRequested)
       {
@@ -217,21 +220,22 @@ internal sealed class JsonlSessionMonitor : IDisposable
             DiagnosticLog.Write("monitor.session_switched", session);
             StatusChanged?.Invoke(
               $"Switched to {session.Source}: {session.Path}");
-            IReadOnlyList<ExtractedNode> existing = ReadEligibleNodes(
+            SessionChanged?.Invoke(session);
+
+            recentFingerprintQueue.Clear();
+            recentFingerprintSet.Clear();
+            preview.Clear();
+            SpeechHistorySnapshot switchedHistory = LoadExistingHistory(
               session,
               settings.Extraction,
-              monitorStartedUtc - TimeSpan.FromSeconds(2));
-            foreach (ExtractedNode node in existing)
-            {
-              ProcessNode(
-                session,
-                node,
-                ref nextNodeId,
-                recentFingerprintQueue,
-                recentFingerprintSet,
-                preview,
-                settings.Extraction);
-            }
+              speakLastExistingNode: false,
+              ref nextNodeId,
+              recentFingerprintQueue,
+              recentFingerprintSet,
+              preview,
+              playbackFromBeginning: true);
+            HistoryLoaded?.Invoke(switchedHistory);
+            MessagesChanged?.Invoke(preview.ToArray());
           }
         }
 
@@ -365,7 +369,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
-    ExtractionOptions options)
+    ExtractionOptions options,
+    List<SpeechFragment>? history = null,
+    bool emitLive = true)
   {
     string cleaned = TextCleaner.CleanForSpeech(
       node.Text,
@@ -424,8 +430,68 @@ internal sealed class JsonlSessionMonitor : IDisposable
         node.Kind,
         text = sentence
       });
-      TextReady?.Invoke(fragment);
+      history?.Add(fragment);
+      if (emitLive)
+      {
+        TextReady?.Invoke(fragment);
+      }
     }
+
+    if (emitLive)
+    {
+      MessagesChanged?.Invoke(preview.ToArray());
+    }
+  }
+
+  /// <summary>
+  /// Loads existing eligible speech into navigation history without replaying
+  /// the whole conversation.
+  /// </summary>
+  private SpeechHistorySnapshot LoadExistingHistory(
+    LocatedSession session,
+    ExtractionOptions options,
+    bool speakLastExistingNode,
+    ref long nextNodeId,
+    Queue<string> recentFingerprintQueue,
+    HashSet<string> recentFingerprintSet,
+    Queue<string> preview,
+    bool playbackFromBeginning = false)
+  {
+    var fragments = new List<SpeechFragment>();
+    foreach (ExtractedNode node in ReadEligibleNodes(session, options))
+    {
+      ProcessNode(
+        session,
+        node,
+        ref nextNodeId,
+        recentFingerprintQueue,
+        recentFingerprintSet,
+        preview,
+        options,
+        fragments,
+        emitLive: false);
+    }
+
+    int playbackStartIndex = fragments.Count;
+    if (playbackFromBeginning && fragments.Count != 0)
+    {
+      playbackStartIndex = 0;
+    }
+    else if (speakLastExistingNode && fragments.Count != 0)
+    {
+      long lastNodeId = fragments[^1].NodeId;
+      playbackStartIndex = fragments.FindIndex(
+        fragment => fragment.NodeId == lastNodeId);
+    }
+
+    DiagnosticLog.Write("monitor.history_loaded", new
+    {
+      session.Source,
+      session.Path,
+      fragmentCount = fragments.Count,
+      playbackStartIndex
+    });
+    return new SpeechHistorySnapshot(fragments, playbackStartIndex);
   }
 
   /// <summary>
@@ -476,22 +542,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
         DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
         out DateTimeOffset parsed) &&
       parsed.UtcDateTime >= minimumUtc;
-  }
-
-  /// <summary>
-  /// Reads the final currently present eligible assistant node.
-  /// </summary>
-  private static ExtractedNode? ReadLastEligibleNode(
-    LocatedSession session,
-    ExtractionOptions options)
-  {
-    ExtractedNode? last = null;
-    foreach (ExtractedNode node in ReadEligibleNodes(session, options))
-    {
-      last = node;
-    }
-
-    return last;
   }
 
   /// <summary>
@@ -581,7 +631,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
       preview.Dequeue();
     }
 
-    MessagesChanged?.Invoke(preview.ToArray());
   }
 
   /// <summary>

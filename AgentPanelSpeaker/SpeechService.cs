@@ -112,6 +112,65 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Replaces navigation history with existing session text and optionally
+  /// begins playback at one entry.
+  /// </summary>
+  /// <param name="fragments">Existing session fragments.</param>
+  /// <param name="playbackStartIndex">
+  /// First entry to play, or fragments.Count to remain at the live end.
+  /// </param>
+  public void LoadHistory(
+    IReadOnlyList<SpeechFragment> fragments,
+    int playbackStartIndex)
+  {
+    ArgumentNullException.ThrowIfNull(fragments);
+
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (playbackStartIndex < 0 || playbackStartIndex > fragments.Count)
+      {
+        throw new ArgumentOutOfRangeException(
+          nameof(playbackStartIndex),
+          playbackStartIndex,
+          "Playback must start within the supplied history or at its end.");
+      }
+
+      _pendingHistoryIndex = null;
+      _pendingUntrackedText = null;
+      _activeHistoryIndex = -1;
+      _history.Clear();
+
+      int firstRetained = Math.Max(
+        0,
+        fragments.Count - MaximumHistoryEntries);
+      foreach (SpeechFragment fragment in fragments.Skip(firstRetained))
+      {
+        string text = fragment.Text.Trim();
+        if (text.Length != 0)
+        {
+          _history.Add(fragment with { Text = text });
+        }
+      }
+
+      _nextHistoryIndex = playbackStartIndex >= fragments.Count
+        ? _history.Count
+        : Math.Clamp(
+          playbackStartIndex - firstRetained,
+          0,
+          _history.Count);
+      if (_activeKind != ActiveSpeechKind.None)
+      {
+        _synthesizer.SpeakAsyncCancelAll();
+      }
+      else
+      {
+        StartPendingOrNextLocked();
+      }
+    }
+  }
+
+  /// <summary>
   /// Queues a live transcript fragment and records it for playback.
   /// </summary>
   /// <param name="fragment">Live fragment.</param>

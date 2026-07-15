@@ -47,7 +47,7 @@ internal static class DiagnosticLog
 
     Write("app.start", new
     {
-      version = 18,
+      version = 19,
       processId = Environment.ProcessId,
       processPath = Environment.ProcessPath,
       osVersion = Environment.OSVersion.VersionString,
