@@ -5,14 +5,17 @@ using System.Windows.Automation.Text;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Reacquires the current UI Automation tree and reads the meaningful tail of
-/// a selected transcript screen region.
+/// Reads the meaningful tail from the current descendants of a retained
+/// transcript container.
 /// </summary>
 internal sealed class TranscriptReader
 {
   private const int MaxParagraphSearch = 512;
   private const int MaxTailParagraphs = 96;
-  private const int RegionLookBehindParagraphs = 12;
+  private const int RegionLookBehindParagraphs = 16;
+  private const double MinimumBroadProviderCoverage = 0.35;
+  private const double MinimumHorizontalLaneCoverage = 0.45;
+  private const double MaximumLookBehindDistanceInRegions = 1.5;
 
   /// <summary>
   /// Gets the source used by the most recent read.
@@ -25,17 +28,18 @@ internal sealed class TranscriptReader
   public string LastReadDetails { get; private set; } = string.Empty;
 
   /// <summary>
-  /// Reads the final meaningful transcript paragraphs inside the selected
-  /// region.
+  /// Reads the final meaningful transcript paragraphs inside the retained
+  /// transcript container.
   /// </summary>
-  /// <param name="target">Stable window and region target.</param>
+  /// <param name="target">Stable transcript-container target.</param>
   /// <returns>The normalized transcript tail in display order.</returns>
   public IReadOnlyList<string> ReadTail(TranscriptTarget target)
   {
     ArgumentNullException.ThrowIfNull(target);
 
-    AutomationElement root = target.GetAutomationRoot();
-    System.Drawing.Rectangle region = target.GetScreenRegion();
+    AutomationElement root = target.GetContainer();
+    System.Drawing.Rectangle region =
+      target.GetContainerRectangle(root);
 
     IReadOnlyList<string> paragraphs = ReadTextPatternTail(
       root,
@@ -59,11 +63,11 @@ internal sealed class TranscriptReader
   }
 
   /// <summary>
-  /// Chooses the most specific TextPattern provider overlapping the selected
-  /// region and walks backward from the region's bottom.
+  /// Chooses the most specific TextPattern provider inside the retained
+  /// container and walks backward from the container's bottom.
   /// </summary>
-  /// <param name="root">Current top-level UI Automation root.</param>
-  /// <param name="region">Current transcript screen region.</param>
+  /// <param name="root">Current transcript container.</param>
+  /// <param name="region">Current container screen bounds.</param>
   /// <returns>The meaningful tail, or an empty list when unavailable.</returns>
   private static IReadOnlyList<string> ReadTextPatternTail(
     AutomationElement root,
@@ -121,6 +125,7 @@ internal sealed class TranscriptReader
           bounds,
           overlap,
           providerArea,
+          region.Width * (double)region.Height,
           providerName,
           controlType);
         if (selected is null || candidate.IsBetterThan(selected))
@@ -153,12 +158,14 @@ internal sealed class TranscriptReader
       $"bounds={RectangleToString(selected.Bounds)}; " +
       $"overlap={selected.OverlapArea:R}; " +
       $"providerArea={selected.ProviderArea:R}; " +
+      $"regionCoverage={selected.OverlapArea / selected.RegionArea:R}; " +
+      $"providerCoverage={selected.OverlapArea / selected.ProviderArea:R}; " +
       $"paragraphs={tail.Count}; {paragraphDetails}";
     return tail;
   }
 
   /// <summary>
-  /// Reads paragraph units backward from the bottom of a selected region.
+  /// Reads paragraph units backward from the bottom of the container bounds.
   /// </summary>
   /// <param name="pattern">Selected text provider.</param>
   /// <param name="providerBounds">Provider screen bounds.</param>
@@ -234,12 +241,14 @@ internal sealed class TranscriptReader
       previousFingerprint = fingerprint;
       if (paragraph.Length != 0)
       {
+        System.Windows.Rect paragraphBounds = GetRangeBounds(rectangles);
         reverse.Add(new ParagraphCandidate(
           paragraph,
           IsRangeHidden(range),
-          rectangles.Any(HasUsableBounds),
+          HasUsableBounds(paragraphBounds),
           RangeIntersectsRegion(rectangles, region),
-          GetRangeBounds(rectangles)));
+          RangeSharesTranscriptLane(paragraphBounds, region),
+          paragraphBounds));
       }
 
       int moved;
@@ -264,11 +273,11 @@ internal sealed class TranscriptReader
 
 
   /// <summary>
-  /// Reconstructs a fallback tail from currently visible text elements in the
-  /// selected region.
+  /// Reconstructs a fallback tail from currently visible text descendants of
+  /// the retained transcript container.
   /// </summary>
-  /// <param name="root">Current top-level UI Automation root.</param>
-  /// <param name="region">Selected transcript screen region.</param>
+  /// <param name="root">Current transcript container.</param>
+  /// <param name="region">Current container screen bounds.</param>
   /// <returns>The final visible meaningful text blocks.</returns>
   private static IReadOnlyList<string> ReadVisibleTextTail(
     AutomationElement root,
@@ -433,6 +442,7 @@ internal sealed class TranscriptReader
     int toolCount = 0;
     int unboundedCount = 0;
     int outsideRegionCount = 0;
+    int laneLookBehindCount = 0;
     int ignoredCount = 0;
     int userBubbleCount = 0;
     bool insideToolBlock = StartsInsideToolBlock(
@@ -443,15 +453,27 @@ internal sealed class TranscriptReader
     {
       ParagraphCandidate candidate = paragraphs[index];
       string text = candidate.Text;
-      if (!candidate.IntersectsRegion)
-      {
-        ++outsideRegionCount;
-      }
-
       if (candidate.IsHidden)
       {
         ++hiddenCount;
         continue;
+      }
+
+      if (!candidate.HasUsableBounds)
+      {
+        ++unboundedCount;
+        continue;
+      }
+
+      if (!candidate.IntersectsRegion)
+      {
+        ++outsideRegionCount;
+        if (!candidate.SharesTranscriptLane)
+        {
+          continue;
+        }
+
+        ++laneLookBehindCount;
       }
 
       if (IsLikelyUserBubble(candidate, region))
@@ -481,16 +503,6 @@ internal sealed class TranscriptReader
         insideToolBlock = false;
       }
 
-      bool insideVisibleSpan = index >= firstVisible &&
-        index <= lastVisible;
-      if (!candidate.HasUsableBounds &&
-          !insideVisibleSpan &&
-          !narration)
-      {
-        ++unboundedCount;
-        continue;
-      }
-
       if (IsIgnoredText(text))
       {
         ++ignoredCount;
@@ -514,7 +526,9 @@ internal sealed class TranscriptReader
       $"window={windowStart}..{windowEnd}; hidden={hiddenCount}; " +
       $"tool={toolCount}; user={userBubbleCount}; " +
       $"unbounded={unboundedCount}; " +
-      $"outsideRegion={outsideRegionCount}; ignored={ignoredCount}; " +
+      $"outsideRegion={outsideRegionCount}; " +
+      $"laneLookBehind={laneLookBehindCount}; " +
+      $"ignored={ignoredCount}; " +
       $"retained={tail.Count}";
     return tail;
   }
@@ -826,6 +840,7 @@ internal sealed class TranscriptReader
     }
 
     if (IsToolActivity(trimmed) ||
+        IsCommandLikeText(trimmed) ||
         IsClockLabel(trimmed) ||
         trimmed.Equals("Queue another message...",
           StringComparison.OrdinalIgnoreCase) ||
@@ -834,6 +849,8 @@ internal sealed class TranscriptReader
         trimmed.Equals("View usage",
           StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("Context automatically compacted",
+          StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Equals("Steered conversation",
           StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("IN", StringComparison.OrdinalIgnoreCase) ||
         trimmed.Equals("OUT", StringComparison.OrdinalIgnoreCase) ||
@@ -935,11 +952,28 @@ internal sealed class TranscriptReader
   /// <returns>True when the text is tool activity rather than prose.</returns>
   private static bool IsToolActivity(string text)
   {
-    return text.StartsWith("Ran ", StringComparison.OrdinalIgnoreCase) ||
-      text.StartsWith("Running ", StringComparison.OrdinalIgnoreCase) ||
-      text.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase) ||
-      text.StartsWith("Read ", StringComparison.OrdinalIgnoreCase) ||
-      text.StartsWith("Wrote ", StringComparison.OrdinalIgnoreCase);
+    string candidate = text.Trim();
+    if (candidate.StartsWith("Ran ", StringComparison.OrdinalIgnoreCase) ||
+        candidate.StartsWith("Running ", StringComparison.OrdinalIgnoreCase) ||
+        candidate.StartsWith("Edited ", StringComparison.OrdinalIgnoreCase) ||
+        candidate.StartsWith("Read ", StringComparison.OrdinalIgnoreCase) ||
+        candidate.StartsWith("Wrote ", StringComparison.OrdinalIgnoreCase) ||
+        candidate.StartsWith("Editing a file",
+          StringComparison.OrdinalIgnoreCase) ||
+        candidate.StartsWith("Editing files",
+          StringComparison.OrdinalIgnoreCase))
+    {
+      return true;
+    }
+
+    int ranIndex = candidate.IndexOf(
+      ", ran ",
+      StringComparison.OrdinalIgnoreCase);
+    return ranIndex > 0 &&
+      (candidate.EndsWith(" command",
+         StringComparison.OrdinalIgnoreCase) ||
+       candidate.EndsWith(" commands",
+         StringComparison.OrdinalIgnoreCase));
   }
 
   /// <summary>
@@ -1172,7 +1206,7 @@ internal sealed class TranscriptReader
   }
 
   /// <summary>
-  /// Determines whether a TextPattern range overlaps the selected region.
+  /// Determines whether a TextPattern range overlaps the container bounds.
   /// </summary>
   /// <param name="rectangles">Range rectangles.</param>
   /// <param name="region">Selected region.</param>
@@ -1196,6 +1230,44 @@ internal sealed class TranscriptReader
     }
 
     return false;
+  }
+
+  /// <summary>
+  /// Determines whether an off-region paragraph belongs to the same transcript
+  /// column as the retained transcript container.
+  /// </summary>
+  /// <param name="bounds">Combined paragraph bounds.</param>
+  /// <param name="region">Selected transcript region.</param>
+  /// <returns>
+  /// True when the paragraph is horizontally aligned with the transcript and
+  /// close enough above it to be safe look-behind text.
+  /// </returns>
+  private static bool RangeSharesTranscriptLane(
+    System.Windows.Rect bounds,
+    System.Drawing.Rectangle region)
+  {
+    if (!HasUsableBounds(bounds))
+    {
+      return false;
+    }
+
+    double horizontalLeft = Math.Max(bounds.Left, region.Left);
+    double horizontalRight = Math.Min(bounds.Right, region.Right);
+    double horizontalOverlap = Math.Max(
+      0.0,
+      horizontalRight - horizontalLeft);
+    double comparisonWidth = Math.Min(bounds.Width, region.Width);
+    if (comparisonWidth <= 0.0 ||
+        horizontalOverlap / comparisonWidth <
+          MinimumHorizontalLaneCoverage)
+    {
+      return false;
+    }
+
+    double maximumDistance = region.Height *
+      MaximumLookBehindDistanceInRegions;
+    return bounds.Top <= region.Bottom &&
+      bounds.Bottom >= region.Top - maximumDistance;
   }
 
   /// <summary>
@@ -1354,6 +1426,7 @@ internal sealed class TranscriptReader
     bool IsHidden,
     bool HasUsableBounds,
     bool IntersectsRegion,
+    bool SharesTranscriptLane,
     System.Windows.Rect Bounds);
 
   /// <summary>
@@ -1364,6 +1437,7 @@ internal sealed class TranscriptReader
     System.Windows.Rect Bounds,
     double OverlapArea,
     double ProviderArea,
+    double RegionArea,
     string Name,
     string ControlType)
   {
@@ -1374,18 +1448,45 @@ internal sealed class TranscriptReader
     /// <returns>True when this provider is preferred.</returns>
     public bool IsBetterThan(TextProviderCandidate other)
     {
-      const double tolerance = 0.5;
-      if (OverlapArea > other.OverlapArea + tolerance)
+      const double tolerance = 0.0001;
+      double regionCoverage = RegionArea <= 0.0
+        ? 0.0
+        : OverlapArea / RegionArea;
+      double otherRegionCoverage = other.RegionArea <= 0.0
+        ? 0.0
+        : other.OverlapArea / other.RegionArea;
+      bool isBroad = regionCoverage >= MinimumBroadProviderCoverage;
+      bool otherIsBroad =
+        otherRegionCoverage >= MinimumBroadProviderCoverage;
+      if (isBroad != otherIsBroad)
       {
-        return true;
+        return isBroad;
       }
 
-      if (Math.Abs(OverlapArea - other.OverlapArea) <= tolerance)
+      double providerCoverage = ProviderArea <= 0.0
+        ? 0.0
+        : OverlapArea / ProviderArea;
+      double otherProviderCoverage = other.ProviderArea <= 0.0
+        ? 0.0
+        : other.OverlapArea / other.ProviderArea;
+
+      if (isBroad &&
+          Math.Abs(providerCoverage - otherProviderCoverage) > tolerance)
       {
-        return ProviderArea < other.ProviderArea;
+        return providerCoverage > otherProviderCoverage;
       }
 
-      return false;
+      if (Math.Abs(regionCoverage - otherRegionCoverage) > tolerance)
+      {
+        return regionCoverage > otherRegionCoverage;
+      }
+
+      if (Math.Abs(providerCoverage - otherProviderCoverage) > tolerance)
+      {
+        return providerCoverage > otherProviderCoverage;
+      }
+
+      return ProviderArea < other.ProviderArea;
     }
   }
 

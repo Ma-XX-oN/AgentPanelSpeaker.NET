@@ -9,6 +9,7 @@ namespace AgentPanelSpeaker;
 internal sealed class TailTracker
 {
   private const int MaximumRememberedSentences = 512;
+  private const int MaximumLostOverlapRecoveryNodes = 12;
   private const int MinimumPrefixMatch = 16;
 
   private readonly bool _speakExistingText;
@@ -118,10 +119,18 @@ internal sealed class TailTracker
     _lastChangeUtc = nowUtc;
     if (_lastOverlapCount == 0)
     {
-      MarkSnapshotAsSpoken(snapshot);
-      _lastDecision =
-        "lost observation overlap; rebased without speech";
-      return Array.Empty<SpeechFragment>();
+      int recoveryStart = Math.Max(
+        0,
+        _nodes.Count - MaximumLostOverlapRecoveryNodes);
+      Snapshot recoverySnapshot = BuildSnapshot(
+        _nodes.Skip(recoveryStart).ToArray());
+      IReadOnlyList<SpeechFragment> recoveryOutput = EmitUnseen(
+        ExtractCompleteSentences(recoverySnapshot));
+      _lastDecision = recoveryOutput.Count == 0
+        ? "lost observation overlap; no unseen complete sentence"
+        : $"lost observation overlap; emitted " +
+          $"{recoveryOutput.Count} unseen sentence(s)";
+      return recoveryOutput;
     }
 
     int speechStart = Math.Max(0, overlap.CurrentEndIndex - 1);

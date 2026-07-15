@@ -3,8 +3,8 @@ using System.Runtime.InteropServices;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Provides the Win32 calls required to bind a selected screen region to its
-/// owning top-level window.
+/// Provides the Win32 calls required to select the accessibility element
+/// beneath a physical screen point and validate its owning window.
 /// </summary>
 internal static class NativeMethods
 {

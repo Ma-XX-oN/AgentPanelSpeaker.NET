@@ -3,7 +3,7 @@ using System.Windows.Automation;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Provides transcript-region selection, monitoring, and speech controls.
+/// Provides transcript-container selection, monitoring, and speech controls.
 /// </summary>
 internal sealed class MainForm : Form
 {
@@ -74,7 +74,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v12";
+    Text = "Agent Panel Speaker v15";
     AutoScaleDimensions = new SizeF(96.0f, 96.0f);
     AutoScaleMode = AutoScaleMode.Dpi;
     StartPosition = FormStartPosition.CenterScreen;
@@ -84,12 +84,12 @@ internal sealed class MainForm : Form
     _instructionsLabel.AutoSize = true;
     _instructionsLabel.MaximumSize = new Size(850, 0);
     _instructionsLabel.Text =
-      "1. Select transcript region and drag around the Claude/Codex output " +
-      "area.  2. The program reacquires the current accessibility nodes on " +
-      "every poll, so virtual scrolling and replaced nodes are supported.  " +
-      "3. Confirm the preview and start monitoring.";
+      "1. Select under pointer, then move the pointer over normal Claude or " +
+      "Codex narration.  2. The program walks upward through the " +
+      "accessibility tree and retains the smallest transcript-like " +
+      "container.  3. Confirm the preview and start monitoring.";
 
-    ConfigureButton(_captureButton, "Select transcript region");
+    ConfigureButton(_captureButton, "Select under pointer (3 s)");
     ConfigureButton(_refreshPreviewButton, "Refresh preview");
     ConfigureButton(_startButton, "Start");
     ConfigureButton(_stopButton, "Stop");
@@ -302,7 +302,8 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Opens the transcript-region selection overlay.
+  /// Waits three seconds and selects the transcript container beneath the
+  /// pointer.
   /// </summary>
   /// <param name="sender">Unused event sender.</param>
   /// <param name="eventArgs">Unused event arguments.</param>
@@ -326,7 +327,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Starts monitoring the selected transcript region.
+  /// Starts monitoring the selected transcript container.
   /// </summary>
   /// <param name="sender">Unused event sender.</param>
   /// <param name="eventArgs">Unused event arguments.</param>
@@ -667,8 +668,8 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Hides this window, collects a screen rectangle, and binds it to the
-  /// top-level window beneath the rectangle's centre.
+  /// Hides this window, waits for the pointer to be placed over normal agent
+  /// narration, and automatically selects the transcript ancestor.
   /// </summary>
   private async Task CaptureTargetAsync()
   {
@@ -677,44 +678,43 @@ internal sealed class MainForm : Form
       return;
     }
 
-    AppendLog("Drag around the transcript output area.  Press Esc to cancel.");
+    AppendLog(
+      "Move the pointer over normal Claude/Codex narration. Capturing in " +
+      "3 seconds.");
+    SetSelectionButtonsEnabled(false);
     Enabled = false;
     Hide();
-    await Task.Delay(150);
 
-    DialogResult result;
-    System.Drawing.Rectangle region;
-    using (var selector = new RegionSelectionForm())
-    {
-      result = selector.ShowDialog();
-      region = selector.SelectedRegion;
-    }
-
-    Exception? failure = null;
     TranscriptTarget? target = null;
-    if (result == DialogResult.OK)
+    Exception? failure = null;
+    System.Drawing.Point point = System.Drawing.Point.Empty;
+    try
     {
-      try
+      await Task.Delay(TimeSpan.FromSeconds(3));
+      if (!NativeMethods.GetPhysicalCursorPos(out var nativePoint))
       {
-        await Task.Delay(100);
-        target = TranscriptTarget.Create(region);
+        throw new InvalidOperationException(
+          "The physical pointer position could not be read.");
       }
-      catch (Exception exception) when (
-        exception is ArgumentException or
-        InvalidOperationException)
-      {
-        failure = exception;
-      }
+
+      point = nativePoint.ToDrawingPoint();
+      target = await Task.Run(() =>
+        TranscriptTarget.CreateFromPoint(point));
     }
-
-    Show();
-    Activate();
-    Enabled = true;
-
-    if (result != DialogResult.OK)
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      System.Runtime.InteropServices.COMException or
+      ArgumentException or
+      InvalidOperationException)
     {
-      AppendLog("Region selection cancelled.");
-      return;
+      failure = exception;
+    }
+    finally
+    {
+      Show();
+      Activate();
+      Enabled = true;
+      SetSelectionButtonsEnabled(true);
     }
 
     if (failure is not null)
@@ -723,17 +723,25 @@ internal sealed class MainForm : Form
       return;
     }
 
+    if (target is null)
+    {
+      AppendLog("Selection failed: no transcript target was returned.");
+      return;
+    }
+
     _target = target;
     DiagnosticLog.Write("target.selected", new
     {
-      description = target?.Describe(),
-      selectedRegion = RectangleToString(region)
+      point = $"{point.X},{point.Y}",
+      description = target.Describe(),
+      target.SelectionReason
     });
     await RefreshTargetDisplayAsync();
   }
 
   /// <summary>
-  /// Reads the selected region and updates its description and tail preview.
+  /// Reads the selected container and updates its description and tail
+  /// preview.
   /// </summary>
   private async Task RefreshTargetDisplayAsync()
   {
@@ -765,7 +773,7 @@ internal sealed class MainForm : Form
       if (tail.Count == 0)
       {
         AppendLog(
-          "No transcript text was found inside the selected region.");
+          "No transcript text was found inside the selected container.");
       }
     }
     catch (Exception exception) when (
@@ -874,7 +882,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Enables or disables region-selection controls during preview work.
+  /// Enables or disables target-selection controls during preview work.
   /// </summary>
   /// <param name="enabled">Desired enabled state.</param>
   private void SetSelectionButtonsEnabled(bool enabled)

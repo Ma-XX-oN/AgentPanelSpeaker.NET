@@ -51,7 +51,7 @@ internal sealed class TranscriptMonitor : IDisposable
   /// <summary>
   /// Starts monitoring a selected target.
   /// </summary>
-  /// <param name="target">The selected transcript window and region.</param>
+  /// <param name="target">The selected transcript container.</param>
   /// <param name="pollInterval">UI Automation polling interval.</param>
   /// <param name="idleTimeout">Unchanged-text flush timeout.</param>
   /// <param name="speakExistingText">
@@ -169,7 +169,7 @@ internal sealed class TranscriptMonitor : IDisposable
   /// <summary>
   /// Runs the polling loop on a dedicated MTA thread.
   /// </summary>
-  /// <param name="target">The selected transcript window and region.</param>
+  /// <param name="target">The selected transcript container.</param>
   /// <param name="pollInterval">UI Automation polling interval.</param>
   /// <param name="idleTimeout">Unchanged-text flush timeout.</param>
   /// <param name="speakExistingText">

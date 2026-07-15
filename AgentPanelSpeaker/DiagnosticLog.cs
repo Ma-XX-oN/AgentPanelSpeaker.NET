@@ -4,8 +4,8 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Writes structured diagnostics for UI Automation, transcript tracking,
-/// speech emission, and per-monitor DPI changes.
+/// Writes structured diagnostics for UI Automation tree traversal, transcript
+/// tracking, speech emission, and per-monitor DPI changes.
 /// </summary>
 internal static class DiagnosticLog
 {
@@ -47,7 +47,7 @@ internal static class DiagnosticLog
 
     Write("app.start", new
     {
-      version = 13,
+      version = 15,
       processId = Environment.ProcessId,
       processPath = Environment.ProcessPath,
       osVersion = Environment.OSVersion.VersionString,

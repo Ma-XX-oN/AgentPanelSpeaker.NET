@@ -3,40 +3,50 @@ using System.Windows.Automation;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Identifies a stable top-level window plus a transcript region expressed
-/// relative to that window.
+/// Retains the selected transcript container and reacquires it only when the
+/// stored UI Automation element becomes unavailable.
 /// </summary>
 internal sealed class TranscriptTarget
 {
+  private const double MaximumReacquireDistance = 1.25;
+
+  private readonly object _sync = new();
+  private readonly AutomationElementSnapshot _selectedSnapshot;
   private readonly double _leftRatio;
   private readonly double _topRatio;
-  private readonly double _rightRatio;
-  private readonly double _bottomRatio;
+  private readonly double _widthRatio;
+  private readonly double _heightRatio;
+  private AutomationElement _container;
+  private int[] _currentRuntimeId;
 
   /// <summary>
-  /// Initializes a transcript target.
+  /// Initializes a stable transcript-container target.
   /// </summary>
-  /// <param name="windowHandle">Owning top-level window.</param>
-  /// <param name="processId">Owning process identifier.</param>
-  /// <param name="windowRectangle">Window rectangle at selection time.</param>
-  /// <param name="region">Selected transcript region.</param>
-  private TranscriptTarget(
-    IntPtr windowHandle,
-    int processId,
-    System.Drawing.Rectangle windowRectangle,
-    System.Drawing.Rectangle region)
+  private TranscriptTarget(TranscriptContainerSelection selection)
   {
-    WindowHandle = windowHandle;
-    ProcessId = processId;
+    ArgumentNullException.ThrowIfNull(selection);
 
-    _leftRatio = Ratio(region.Left - windowRectangle.Left,
-      windowRectangle.Width);
-    _topRatio = Ratio(region.Top - windowRectangle.Top,
-      windowRectangle.Height);
-    _rightRatio = Ratio(region.Right - windowRectangle.Left,
-      windowRectangle.Width);
-    _bottomRatio = Ratio(region.Bottom - windowRectangle.Top,
-      windowRectangle.Height);
+    WindowHandle = selection.WindowHandle;
+    ProcessId = selection.ProcessId;
+    SelectionPoint = selection.SelectionPoint;
+    SelectionReason = selection.SelectionReason;
+    _container = selection.Container;
+    _selectedSnapshot = selection.Snapshot;
+    _currentRuntimeId = selection.Snapshot.RuntimeId.ToArray();
+
+    System.Windows.Rect root = selection.RootBounds;
+    System.Windows.Rect bounds = selection.Snapshot.RawBounds;
+    if (!AutomationTreeInspector.HasUsableBounds(root) ||
+        !AutomationTreeInspector.HasUsableBounds(bounds))
+    {
+      throw new InvalidOperationException(
+        "The selected transcript container has no usable screen bounds.");
+    }
+
+    _leftRatio = (bounds.Left - root.Left) / root.Width;
+    _topRatio = (bounds.Top - root.Top) / root.Height;
+    _widthRatio = bounds.Width / root.Width;
+    _heightRatio = bounds.Height / root.Height;
   }
 
   /// <summary>
@@ -50,72 +60,107 @@ internal sealed class TranscriptTarget
   public int ProcessId { get; }
 
   /// <summary>
-  /// Creates a target from a selected screen region.
+  /// Gets the physical screen point used for selection.
   /// </summary>
-  /// <param name="region">Selected screen region.</param>
-  /// <returns>The stable target.</returns>
-  public static TranscriptTarget Create(System.Drawing.Rectangle region)
+  public System.Drawing.Point SelectionPoint { get; }
+
+  /// <summary>
+  /// Gets why the automatic ancestor selector chose this element.
+  /// </summary>
+  public string SelectionReason { get; }
+
+  /// <summary>
+  /// Selects the transcript container beneath a physical screen point.
+  /// </summary>
+  /// <param name="point">Physical screen point over narration text.</param>
+  /// <returns>The selected target.</returns>
+  public static TranscriptTarget CreateFromPoint(
+    System.Drawing.Point point)
   {
-    if (region.Width < 20 || region.Height < 20)
-    {
-      throw new ArgumentException(
-        "The selected transcript region is too small.",
-        nameof(region));
-    }
-
-    int centerX = checked(region.Left + region.Width / 2);
-    int centerY = checked(region.Top + region.Height / 2);
-    IntPtr child = NativeMethods.WindowFromPoint(
-      new NativeMethods.NativePoint(centerX, centerY));
-    if (child == IntPtr.Zero)
-    {
-      throw new InvalidOperationException(
-        "No window was found beneath the selected region.");
-    }
-
-    IntPtr root = NativeMethods.GetAncestor(
-      child,
-      NativeMethods.GetAncestorRoot);
-    if (root == IntPtr.Zero)
-    {
-      root = child;
-    }
-
-    if (!NativeMethods.GetWindowRect(root, out var nativeWindow))
-    {
-      throw new InvalidOperationException(
-        "The selected window rectangle could not be read.");
-    }
-
-    System.Drawing.Rectangle window = nativeWindow.ToDrawingRectangle();
-    System.Drawing.Rectangle clipped = System.Drawing.Rectangle.Intersect(
-      region,
-      window);
-    if (clipped.Width < 20 || clipped.Height < 20)
-    {
-      throw new InvalidOperationException(
-        "The selected region does not overlap the target window.");
-    }
-
-    NativeMethods.GetWindowThreadProcessId(root, out uint processId);
-    if (processId == 0 || processId > int.MaxValue)
-    {
-      throw new InvalidOperationException(
-        "The selected window process could not be identified.");
-    }
-
-    return new TranscriptTarget(
-      root,
-      checked((int)processId),
-      window,
-      clipped);
+    TranscriptContainerSelection selection =
+      AutomationTreeInspector.SelectContainer(point);
+    return new TranscriptTarget(selection);
   }
 
   /// <summary>
-  /// Reacquires the current UI Automation root for the target window.
+  /// Returns the retained container, reacquiring it only after it becomes
+  /// unavailable.
   /// </summary>
-  /// <returns>The current root element.</returns>
-  public AutomationElement GetAutomationRoot()
+  /// <returns>The current transcript container.</returns>
+  public AutomationElement GetContainer()
+  {
+    lock (_sync)
+    {
+      if (IsCurrentContainerUsable(_container))
+      {
+        return _container;
+      }
+
+      DiagnosticLog.Write("target.container_unavailable", new
+      {
+        selected = _selectedSnapshot,
+        reason = "The retained element no longer exposes current properties."
+      });
+      _container = ReacquireContainer();
+      _currentRuntimeId = AutomationTreeInspector
+        .ReadSnapshot(_container)
+        .RuntimeId;
+      return _container;
+    }
+  }
+
+  /// <summary>
+  /// Returns the current screen rectangle of a retained container.
+  /// </summary>
+  /// <param name="container">Current target container.</param>
+  /// <returns>The container bounds in physical screen pixels.</returns>
+  public System.Drawing.Rectangle GetContainerRectangle(
+    AutomationElement container)
+  {
+    ArgumentNullException.ThrowIfNull(container);
+
+    System.Windows.Rect bounds;
+    try
+    {
+      bounds = container.Current.BoundingRectangle;
+    }
+    catch (Exception exception) when (
+      exception is ElementNotAvailableException or
+      InvalidOperationException)
+    {
+      container = GetContainer();
+      bounds = container.Current.BoundingRectangle;
+    }
+
+    if (!AutomationTreeInspector.HasUsableBounds(bounds))
+    {
+      throw new InvalidOperationException(
+        "The transcript container has no usable screen bounds.");
+    }
+
+    return System.Drawing.Rectangle.FromLTRB(
+      checked((int)Math.Floor(bounds.Left)),
+      checked((int)Math.Floor(bounds.Top)),
+      checked((int)Math.Ceiling(bounds.Right)),
+      checked((int)Math.Ceiling(bounds.Bottom)));
+  }
+
+  /// <summary>
+  /// Creates a readable target description without walking the full subtree.
+  /// </summary>
+  /// <returns>Window, process, and selected container information.</returns>
+  public string Describe()
+  {
+    return $"PID {ProcessId}; {_selectedSnapshot.ControlType}; " +
+      $"name={Abbreviate(_selectedSnapshot.Name, 80)}; " +
+      $"bounds={_selectedSnapshot.Bounds}; " +
+      $"reason={SelectionReason}";
+  }
+
+  /// <summary>
+  /// Validates that the retained element still belongs to the selected process.
+  /// </summary>
+  private bool IsCurrentContainerUsable(AutomationElement container)
   {
     if (!NativeMethods.IsWindow(WindowHandle))
     {
@@ -132,75 +177,246 @@ internal sealed class TranscriptTarget
         "The selected window handle now belongs to another process.");
     }
 
-    return AutomationElement.FromHandle(WindowHandle);
+    try
+    {
+      AutomationElement.AutomationElementInformation current =
+        container.Current;
+      if (current.ProcessId != ProcessId ||
+          !AutomationTreeInspector.HasUsableBounds(
+            current.BoundingRectangle))
+      {
+        return false;
+      }
+
+      int[] runtimeId = container.GetRuntimeId();
+      return _currentRuntimeId.Length == 0 ||
+        runtimeId.Length == 0 ||
+        runtimeId.SequenceEqual(_currentRuntimeId);
+    }
+    catch (ElementNotAvailableException)
+    {
+      return false;
+    }
+    catch (InvalidOperationException)
+    {
+      return false;
+    }
   }
 
   /// <summary>
-  /// Recomputes the selected transcript region after the window moves or
-  /// resizes.
+  /// Reacquires a replaced container using its stable properties and relative
+  /// window location.
   /// </summary>
-  /// <returns>The current screen region.</returns>
-  public System.Drawing.Rectangle GetScreenRegion()
+  /// <returns>The best matching current element.</returns>
+  private AutomationElement ReacquireContainer()
   {
-    if (!NativeMethods.GetWindowRect(
-          WindowHandle,
-          out var nativeWindow))
+    AutomationElement root = AutomationElement.FromHandle(WindowHandle);
+    Condition condition = BuildReacquireCondition();
+    AutomationElementCollection matches;
+    try
+    {
+      matches = root.FindAll(TreeScope.Descendants, condition);
+    }
+    catch (ElementNotAvailableException exception)
     {
       throw new InvalidOperationException(
-        "The selected window rectangle could not be read.");
+        "The transcript container could not be reacquired.",
+        exception);
     }
 
-    System.Drawing.Rectangle window = nativeWindow.ToDrawingRectangle();
-    int left = window.Left + Scale(_leftRatio, window.Width);
-    int top = window.Top + Scale(_topRatio, window.Height);
-    int right = window.Left + Scale(_rightRatio, window.Width);
-    int bottom = window.Top + Scale(_bottomRatio, window.Height);
-
-    return System.Drawing.Rectangle.FromLTRB(
-      Math.Min(left, right),
-      Math.Min(top, bottom),
-      Math.Max(left, right),
-      Math.Max(top, bottom));
-  }
-
-  /// <summary>
-  /// Creates a readable target description.
-  /// </summary>
-  /// <returns>Window, process, and region information.</returns>
-  public string Describe()
-  {
-    System.Drawing.Rectangle region = GetScreenRegion();
-    return $"PID {ProcessId}; region {region.Left},{region.Top} " +
-      $"{region.Width}x{region.Height}";
-  }
-
-  /// <summary>
-  /// Converts a pixel offset to a clamped window-relative ratio.
-  /// </summary>
-  /// <param name="value">Pixel offset.</param>
-  /// <param name="extent">Window extent.</param>
-  /// <returns>A ratio in the inclusive range zero through one.</returns>
-  private static double Ratio(int value, int extent)
-  {
-    if (extent <= 0)
+    DiagnosticLog.Write("target.reacquire_search", new
     {
-      throw new ArgumentOutOfRangeException(
-        nameof(extent),
-        extent,
-        "The window extent must be positive.");
+      mode = "stable properties",
+      matchCount = matches.Count
+    });
+    if (matches.Count == 0 &&
+        !ReferenceEquals(condition, Condition.TrueCondition))
+    {
+      matches = root.FindAll(
+        TreeScope.Descendants,
+        Condition.TrueCondition);
+      DiagnosticLog.Write("target.reacquire_search", new
+      {
+        mode = "broad fallback",
+        matchCount = matches.Count
+      });
     }
 
-    return Math.Clamp((double)value / extent, 0.0, 1.0);
+    System.Windows.Rect rootBounds = root.Current.BoundingRectangle;
+    var candidates = new List<ReacquireCandidate>();
+    foreach (AutomationElement match in matches)
+    {
+      AutomationElementSnapshot snapshot =
+        AutomationTreeInspector.ReadSnapshot(match);
+      if (!snapshot.Available || !snapshot.HasUsableBounds)
+      {
+        continue;
+      }
+
+      double distance = CalculateRelativeDistance(
+        snapshot.RawBounds,
+        rootBounds);
+      int score = CalculateReacquireScore(snapshot, distance);
+      var candidate = new ReacquireCandidate(match, snapshot, distance, score);
+      candidates.Add(candidate);
+      DiagnosticLog.Write("target.reacquire_candidate", new
+      {
+        candidate.Score,
+        candidate.RelativeDistance,
+        candidate.Snapshot
+      });
+    }
+
+    ReacquireCandidate? selected = candidates
+      .Where(candidate =>
+        candidate.RelativeDistance <= MaximumReacquireDistance)
+      .OrderByDescending(candidate => candidate.Score)
+      .ThenBy(candidate => candidate.RelativeDistance)
+      .FirstOrDefault();
+    if (selected is null)
+    {
+      throw new InvalidOperationException(
+        "The retained transcript container disappeared and no matching " +
+        "replacement was found. Reselect the transcript text and send the " +
+        "diagnostic log.");
+    }
+
+    DiagnosticLog.Write("target.container_reacquired", new
+    {
+      selected.Score,
+      selected.RelativeDistance,
+      selected.Snapshot
+    });
+    return selected.Element;
   }
 
   /// <summary>
-  /// Converts a window-relative ratio back to pixels.
+  /// Builds the narrowest reliable UI Automation search condition.
   /// </summary>
-  /// <param name="ratio">Clamped ratio.</param>
-  /// <param name="extent">Current window extent.</param>
-  /// <returns>The scaled pixel offset.</returns>
-  private static int Scale(double ratio, int extent)
+  private Condition BuildReacquireCondition()
   {
-    return checked((int)Math.Round(ratio * extent));
+    var conditions = new List<Condition>();
+    if (_selectedSnapshot.AutomationId.Length != 0)
+    {
+      conditions.Add(new PropertyCondition(
+        AutomationElement.AutomationIdProperty,
+        _selectedSnapshot.AutomationId));
+    }
+
+    if (_selectedSnapshot.ClassName.Length != 0)
+    {
+      conditions.Add(new PropertyCondition(
+        AutomationElement.ClassNameProperty,
+        _selectedSnapshot.ClassName));
+    }
+
+    if (_selectedSnapshot.FrameworkId.Length != 0)
+    {
+      conditions.Add(new PropertyCondition(
+        AutomationElement.FrameworkIdProperty,
+        _selectedSnapshot.FrameworkId));
+    }
+
+    return conditions.Count switch
+    {
+      0 => Condition.TrueCondition,
+      1 => conditions[0],
+      _ => new AndCondition(conditions.ToArray())
+    };
   }
+
+  /// <summary>
+  /// Scores a potential replacement against the original container.
+  /// </summary>
+  private int CalculateReacquireScore(
+    AutomationElementSnapshot snapshot,
+    double relativeDistance)
+  {
+    int score = 0;
+    if (snapshot.RuntimeId.SequenceEqual(_selectedSnapshot.RuntimeId))
+    {
+      score += 1000;
+    }
+
+    if (snapshot.ControlType.Equals(
+          _selectedSnapshot.ControlType,
+          StringComparison.Ordinal))
+    {
+      score += 200;
+    }
+
+    if (snapshot.AutomationId.Equals(
+          _selectedSnapshot.AutomationId,
+          StringComparison.Ordinal))
+    {
+      score += 150;
+    }
+
+    if (snapshot.ClassName.Equals(
+          _selectedSnapshot.ClassName,
+          StringComparison.Ordinal))
+    {
+      score += 100;
+    }
+
+    if (snapshot.FrameworkId.Equals(
+          _selectedSnapshot.FrameworkId,
+          StringComparison.Ordinal))
+    {
+      score += 75;
+    }
+
+    if (snapshot.Name.Equals(
+          _selectedSnapshot.Name,
+          StringComparison.Ordinal))
+    {
+      score += 40;
+    }
+
+    score -= checked((int)Math.Round(relativeDistance * 100.0));
+    return score;
+  }
+
+  /// <summary>
+  /// Calculates normalized position and size distance from the selected bounds.
+  /// </summary>
+  private double CalculateRelativeDistance(
+    System.Windows.Rect bounds,
+    System.Windows.Rect rootBounds)
+  {
+    if (!AutomationTreeInspector.HasUsableBounds(bounds) ||
+        !AutomationTreeInspector.HasUsableBounds(rootBounds))
+    {
+      return double.PositiveInfinity;
+    }
+
+    double left = (bounds.Left - rootBounds.Left) / rootBounds.Width;
+    double top = (bounds.Top - rootBounds.Top) / rootBounds.Height;
+    double width = bounds.Width / rootBounds.Width;
+    double height = bounds.Height / rootBounds.Height;
+
+    return Math.Abs(left - _leftRatio) +
+      Math.Abs(top - _topRatio) +
+      Math.Abs(width - _widthRatio) +
+      Math.Abs(height - _heightRatio);
+  }
+
+  /// <summary>
+  /// Limits one target-description field.
+  /// </summary>
+  private static string Abbreviate(string text, int maximumLength)
+  {
+    return text.Length <= maximumLength
+      ? text
+      : text[..maximumLength] + "…";
+  }
+
+  /// <summary>
+  /// Stores one possible replacement container.
+  /// </summary>
+  private sealed record ReacquireCandidate(
+    AutomationElement Element,
+    AutomationElementSnapshot Snapshot,
+    double RelativeDistance,
+    int Score);
 }
