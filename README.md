@@ -1,4 +1,4 @@
-# Agent Panel Speaker v25.2
+# Agent Panel Speaker v25.3
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, and completed Codex Plan text with

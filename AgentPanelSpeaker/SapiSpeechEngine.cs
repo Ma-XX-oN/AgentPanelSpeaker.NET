@@ -176,8 +176,11 @@ internal sealed class SapiSpeechEngine : IDisposable
     object? voiceObject = null;
     object? voicesObject = null;
     SpeechSynthesizer? synthesizer = null;
+    SynchronizationContext? previousContext = SynchronizationContext.Current;
+    var speechContext = new WorkerSynchronizationContext();
     try
     {
+      SynchronizationContext.SetSynchronizationContext(speechContext);
       synthesizer = new SpeechSynthesizer();
       synthesizer.SetOutputToDefaultAudioDevice();
       var systemVoices = new Dictionary<string, string>(
@@ -280,7 +283,8 @@ internal sealed class SapiSpeechEngine : IDisposable
         voicesObject,
         synthesizer,
         voiceBackends,
-        completions);
+        completions,
+        speechContext);
     }
     catch (Exception exception)
     {
@@ -298,6 +302,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     {
       _initialized.Set();
       synthesizer?.Dispose();
+      SynchronizationContext.SetSynchronizationContext(previousContext);
       ReleaseComObject(voicesObject);
       ReleaseComObject(voiceObject);
     }
@@ -402,7 +407,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     object? voicesObject,
     SpeechSynthesizer synthesizer,
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends,
-    ConcurrentQueue<SystemSpeechCompletion> completions)
+    ConcurrentQueue<SystemSpeechCompletion> completions,
+    WorkerSynchronizationContext speechContext)
   {
     PlaybackSequence? sequence = null;
     SpeechBackend activeBackend = SpeechBackend.None;
@@ -414,9 +420,17 @@ internal sealed class SapiSpeechEngine : IDisposable
     {
       try
       {
+        speechContext.RunPending();
+        Application.DoEvents();
         if (sequence is null)
         {
-          EngineCommand command = _commands.Take();
+          if (!_commands.TryTake(
+                out EngineCommand? command,
+                WorkerPollMilliseconds) ||
+              command is null)
+          {
+            continue;
+          }
           ProcessCommand(
             command,
             voiceObject,
@@ -472,6 +486,8 @@ internal sealed class SapiSpeechEngine : IDisposable
           continue;
         }
 
+        speechContext.RunPending();
+        Application.DoEvents();
         if (!speaking)
         {
           continue;
@@ -1015,6 +1031,73 @@ internal sealed class SapiSpeechEngine : IDisposable
     {
       Marshal.FinalReleaseComObject(value);
     }
+  }
+
+  /// <summary>
+  /// Dispatches System.Speech callbacks on the owning STA worker thread.
+  /// </summary>
+  private sealed class WorkerSynchronizationContext : SynchronizationContext
+  {
+    private readonly ConcurrentQueue<CallbackWorkItem> _callbacks = new();
+    private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
+
+    public override void Post(SendOrPostCallback callback, object? state)
+    {
+      ArgumentNullException.ThrowIfNull(callback);
+      _callbacks.Enqueue(new CallbackWorkItem(callback, state));
+    }
+
+    public override void Send(SendOrPostCallback callback, object? state)
+    {
+      ArgumentNullException.ThrowIfNull(callback);
+      if (Environment.CurrentManagedThreadId == _ownerThreadId)
+      {
+        callback(state);
+        return;
+      }
+
+      using var completed = new ManualResetEventSlim();
+      Exception? failure = null;
+      Post(value =>
+      {
+        try
+        {
+          callback(value);
+        }
+        catch (Exception exception)
+        {
+          failure = exception;
+        }
+        finally
+        {
+          completed.Set();
+        }
+      }, state);
+      completed.Wait();
+      if (failure is not null)
+      {
+        throw new InvalidOperationException(
+          "A speech callback failed on the worker thread.",
+          failure);
+      }
+    }
+
+    public override SynchronizationContext CreateCopy()
+    {
+      return this;
+    }
+
+    public void RunPending()
+    {
+      while (_callbacks.TryDequeue(out CallbackWorkItem workItem))
+      {
+        workItem.Callback(workItem.State);
+      }
+    }
+
+    private readonly record struct CallbackWorkItem(
+      SendOrPostCallback Callback,
+      object? State);
   }
 
   private abstract record EngineCommand;

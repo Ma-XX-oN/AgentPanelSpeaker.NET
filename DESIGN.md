@@ -115,9 +115,12 @@ preserving the absolute-middle pitch element:
 ```
 
 A voice available only through `System.Speech` uses a complete SSML document
-with an equivalent relative-pitch value.  The worker receives one serialized
-sequence at a time and reports completion back to `SpeechService`.  Normal
-speech, voice tests, IPA previews, and wake-tone tests share that worker.
+with an equivalent relative-pitch value.  The STA worker installs and pumps a
+synchronization context and its Windows message queue so asynchronous
+`System.Speech` completion and failure notifications are always dispatched.
+The worker receives one serialized sequence at a time and reports completion
+back to `SpeechService`.  Normal speech, voice tests, IPA previews, and
+wake-tone tests share that worker.
 
 `SpeechService` retains active and paused state.  Pause/resume and cancellation
 are sent to whichever provider owns the active utterance.  Test buttons remain
