@@ -17,9 +17,10 @@ SessionLocator
   -> SpeechFragment history
   -> SpeechService playback policy
   -> SpeechSapiXmlBuilder
-  -> SapiSpeechEngine STA worker
-  -> optional Bluetooth wake tone
-  -> native SAPI SpVoice or System.Speech
+  -> SapiSpeechEngine STA renderer
+  -> native SAPI SpVoice or System.Speech rendered PCM
+  -> PcmWaveData tone/silence/speech composition
+  -> WaveOutPlayer single contiguous output stream
 ```
 
 The monitor indexes all conversational roles and fenced-code blocks.  Current
@@ -39,7 +40,9 @@ the JSONL.
 | `JsonlSessionMonitor` | Builds history and emits deduplicated fragments. |
 | `SpeechService` | Owns history, navigation, eligibility, and speech state. |
 | `SpeechSapiXmlBuilder` | Builds equivalent SAPI XML and SSML markup. |
-| `SapiSpeechEngine` | Owns both providers and all serialized audio output. |
+| `SapiSpeechEngine` | Renders providers and serializes complete buffers. |
+| `PcmWaveData` | Parses, converts, joins, and generates PCM audio. |
+| `WaveOutPlayer` | Plays one PCM buffer through one WinMM output stream. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
 | `PronunciationDialog` | Edits spelling/IPA and hosts the IPA toolbar. |
 | `IpaSymbolCatalog` | Describes grouped symbols and preview examples. |
@@ -115,16 +118,14 @@ preserving the absolute-middle pitch element:
 ```
 
 A voice available only through `System.Speech` uses a complete SSML document
-with an equivalent relative-pitch value.  The STA worker installs and pumps a
-synchronization context and its Windows message queue so asynchronous
-`System.Speech` completion and failure notifications are always dispatched.
-The worker receives one serialized sequence at a time and reports completion
-back to `SpeechService`.  Normal speech, voice tests, IPA previews, and
-wake-tone tests share that worker.
+with an equivalent relative-pitch value.  Each provider renders synchronously
+to a WAVE stream on the STA worker.  The result is converted to mono 48 kHz
+16-bit PCM before any wake or inter-segment audio is added.
 
-`SpeechService` retains active and paused state.  Pause/resume and cancellation
-are sent to whichever provider owns the active utterance.  Test buttons remain
-disabled for both speaking and paused utterances.
+The complete PCM sequence is submitted to one `waveOut` buffer.  Normal speech,
+voice tests, IPA previews, wake-tone tests, and wake-plus-phrase tests share
+that serialized path.  `SpeechService` retains active and paused state; pause,
+resume, and cancellation operate on the active `waveOut` stream.
 
 A fenced-code line is eligible only when:
 
@@ -227,25 +228,29 @@ preview is ignored while any ordinary or paused speech is active.
 - IPA phone/example delay.
 
 `SapiSpeechEngine` owns the last-audio-end timestamp and measures quiet time
-with `Stopwatch`, so wall-clock changes cannot alter the threshold.  Before
-each speech segment:
+with `Stopwatch`, so wall-clock changes cannot alter the threshold.  For one
+playback request it:
 
-1. if wake is disabled, continue immediately;
-2. determine elapsed quiet time;
-3. when it exceeds the threshold, generate a mono 48 kHz 16-bit PCM sine wave;
-4. play it synchronously with short anti-click fades;
-5. record the tone end time;
-6. wait the settle duration;
-7. start speech through the selected voice provider.
+1. renders every speech segment through its selected SAPI or System.Speech
+   provider into a WAVE stream;
+2. parses integer PCM and converts it to mono 48 kHz 16-bit samples;
+3. inserts IPA inter-segment delay as PCM silence when required;
+4. checks the wake threshold after rendering;
+5. when wake applies, prepends a faded sine tone and the configured settling
+   silence to the same sample array;
+6. submits the entire tone → silence → speech array as one WinMM `waveOut`
+   buffer.
 
-The first output after launch is treated as having an indefinite quiet period.
-A forced wake test ignores the threshold.  Between an isolated IPA phone and
-its example, the worker waits the IPA delay and performs the complete wake
-check again.
+The audio device remains open from the first tone sample through the final
+speech sample.  No `SoundPlayer` or provider-device handoff occurs between the
+prefix and sentence.  The first output after launch is treated as having an
+indefinite quiet period.  Wake tests force the prefix; **Test wake + phrase**
+uses the content profile selected in the dialog and the phrase
+`Yes, that makes sense.`
 
-All sequence state, delay handling, and provider access remain on the same STA
-worker.  Commands are polled during the IPA delay so cancel/dispose does not
-wait for the entire delay.
+All provider rendering and playback ownership remain on the same STA worker.
+The worker polls commands while `waveOut` is active, so pause, resume, cancel,
+and dispose remain responsive.
 
 ## Theme
 
@@ -340,7 +345,8 @@ replacement.  Missing saved voices become `Not Spoken` and are logged.
 - `Not Spoken` changes eligibility, not history retention.
 - Fenced-code aliases are explicit; `cpp` does not imply `c++`.
 - Only the SAPI worker thread accesses the late-bound COM voice.
-- Every sound-producing path uses the serialized worker and wake policy.
+- Every sound-producing path uses the serialized worker and PCM composer.
+- A wake tone, settling silence, and its speech use one `waveOut` buffer.
 - The play/stop toggle cancels speech before stopping monitoring.
 - The IPA toolbar never inserts into a token or into its `ipa:` prefix.
 - Settings writes never overwrite the live file partially.

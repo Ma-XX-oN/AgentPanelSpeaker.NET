@@ -326,6 +326,47 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Plays a forced wake prefix and test phrase as one contiguous stream.
+  /// </summary>
+  public void TestWakePhrase(
+    string text,
+    SpeechProfileSettings profile,
+    AudioWakeSettings wakeSettings)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(text);
+    ArgumentNullException.ThrowIfNull(profile);
+    ArgumentNullException.ThrowIfNull(wakeSettings);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (_activeKind != ActiveSpeechKind.None || !profile.IsSpoken)
+      {
+        return;
+      }
+
+      SpeechProfileSettings normalized = profile.Normalize();
+      SpeechMarkup markup = SpeechSapiXmlBuilder.Build(
+        text.Trim(),
+        normalized.Pitch,
+        _spelledWordsProvider(),
+        _pronunciationProvider());
+      SetActiveKindLocked(ActiveSpeechKind.Untracked);
+      try
+      {
+        _engine.TestWakePhrase(
+          markup,
+          normalized,
+          wakeSettings.Normalize());
+      }
+      catch
+      {
+        SetActiveKindLocked(ActiveSpeechKind.None);
+        throw;
+      }
+    }
+  }
+
+  /// <summary>
   /// Moves one eligible fragment backward and continues playback.
   /// </summary>
   public bool TryRewindSentence(out string text)

@@ -78,7 +78,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.3";
+    Text = "Agent Panel Speaker v25.4";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -804,6 +804,7 @@ internal sealed class MainForm : Form
     using var dialog = new AudioWakeSettingsDialog(
       _settingsStore.Current.AudioWake,
       _speech,
+      GetAudioWakeTestProfiles(),
       GetSelectedTheme());
     if (dialog.ShowDialog(this) != DialogResult.OK)
     {
@@ -828,6 +829,25 @@ internal sealed class MainForm : Form
     {
       AppendLog($"Settings save failed: {exception.Message}");
     }
+  }
+
+  /// <summary>
+  /// Captures each content profile for the wake-plus-phrase test.
+  /// </summary>
+  private IReadOnlyList<AudioWakeTestProfile> GetAudioWakeTestProfiles()
+  {
+    return new[]
+    {
+      new AudioWakeTestProfile(
+        "Assistant messages",
+        ReadVoiceProfile(ContentCategory.Assistant)),
+      new AudioWakeTestProfile(
+        "Reasoning/thinking",
+        ReadVoiceProfile(ContentCategory.Reasoning)),
+      new AudioWakeTestProfile(
+        "User messages",
+        ReadVoiceProfile(ContentCategory.User))
+    };
   }
 
   /// <summary>

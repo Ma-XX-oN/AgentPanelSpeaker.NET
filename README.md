@@ -1,4 +1,4 @@
-# Agent Panel Speaker v25.3
+# Agent Panel Speaker v25.4
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, and completed Codex Plan text with
@@ -88,12 +88,18 @@ wake a power-saving Bluetooth audio connection before speech.  It contains:
 - tone play duration;
 - connection settle duration;
 - IPA phone/example delay;
-- a wake-tone test button.
+- a wake-tone test button;
+- a test-profile selector and **Test wake + phrase** button.
 
-Before normal speech, a voice test, or an IPA preview, the audio worker checks
-how long output has been quiet.  When it exceeds the configured quiet duration,
-it plays the tone, waits for the settle duration, and then speaks.  The same
-check is performed between an isolated IPA phone and its example word.
+Before playback, the selected provider renders the complete utterance to PCM.
+The worker converts it to mono 48 kHz 16-bit audio, prepends the generated tone
+and configured settling silence when wake is required, and submits the complete
+buffer to one WinMM `waveOut` stream.  The audio device therefore remains open
+for the complete tone → silence → speech sequence.
+
+IPA phone and example segments are also rendered into one buffer with the saved
+delay inserted as PCM silence.  The tone-only and tone-plus-phrase buttons force
+the prefix regardless of the quiet threshold.
 
 The tone is best-effort.  A codec, driver, amplifier, or speaker may filter it
 or reproduce it audibly.

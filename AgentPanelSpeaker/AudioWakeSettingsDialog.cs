@@ -6,6 +6,7 @@ namespace AgentPanelSpeaker;
 internal sealed class AudioWakeSettingsDialog : Form
 {
   private readonly SpeechService _speech;
+  private readonly ComboBox _testProfileComboBox = new();
   private readonly CheckBox _enabledCheckBox = new();
   private readonly NumericUpDown _quietNumeric = new();
   private readonly NumericUpDown _frequencyNumeric = new();
@@ -15,6 +16,7 @@ internal sealed class AudioWakeSettingsDialog : Form
   private readonly NumericUpDown _settleNumeric = new();
   private readonly NumericUpDown _ipaDelayNumeric = new();
   private readonly Button _testButton = new();
+  private readonly Button _testPhraseButton = new();
   private readonly Button _okButton = new();
   private readonly Button _cancelButton = new();
 
@@ -24,16 +26,18 @@ internal sealed class AudioWakeSettingsDialog : Form
   public AudioWakeSettingsDialog(
     AudioWakeSettings settings,
     SpeechService speech,
+    IReadOnlyList<AudioWakeTestProfile> testProfiles,
     AppTheme theme)
   {
+    ArgumentNullException.ThrowIfNull(testProfiles);
     _speech = speech;
     Text = "Bluetooth audio wake";
     StartPosition = FormStartPosition.CenterParent;
     MinimizeBox = false;
     MaximizeBox = false;
     ShowInTaskbar = false;
-    MinimumSize = new Size(600, 500);
-    Size = new Size(660, 560);
+    MinimumSize = new Size(600, 540);
+    Size = new Size(660, 600);
 
     var explanation = new Label
     {
@@ -43,9 +47,11 @@ internal sealed class AudioWakeSettingsDialog : Form
       Text =
         "Some Bluetooth devices enter a power-saving state after silence and " +
         "can clip the beginning of the next sentence. When enabled, Agent " +
-        "Panel Speaker emits a short high-frequency tone after the configured " +
-        "quiet period, waits for the connection to settle, and then speaks. " +
-        "The tone is best-effort: codecs, drivers, and speakers may filter it " +
+        "Panel Speaker emits a short high-frequency tone after the " +
+        "configured " +
+        "quiet period, keeps one audio stream open through the settling " +
+        "silence, and then speaks. The tone is best-effort: codecs, drivers, " +
+        "and speakers may filter it " +
         "or make it audible."
     };
 
@@ -56,6 +62,19 @@ internal sealed class AudioWakeSettingsDialog : Form
     ConfigureNumeric(_playNumeric, 10, 5000, 10);
     ConfigureNumeric(_settleNumeric, 0, 5000, 10);
     ConfigureNumeric(_ipaDelayNumeric, 0, 5000, 10);
+    _testProfileComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+    _testProfileComboBox.Width = 280;
+    foreach (AudioWakeTestProfile testProfile in testProfiles)
+    {
+      if (testProfile.Profile.IsSpoken)
+      {
+        _testProfileComboBox.Items.Add(testProfile.Normalize());
+      }
+    }
+    if (_testProfileComboBox.Items.Count != 0)
+    {
+      _testProfileComboBox.SelectedIndex = 0;
+    }
 
     _volumeSlider.AutoSize = false;
     _volumeSlider.Minimum = 0;
@@ -80,6 +99,8 @@ internal sealed class AudioWakeSettingsDialog : Form
 
     _testButton.AutoSize = true;
     _testButton.Text = "Test wake tone";
+    _testPhraseButton.AutoSize = true;
+    _testPhraseButton.Text = "Test wake + phrase";
     _okButton.AutoSize = true;
     _okButton.DialogResult = DialogResult.OK;
     _okButton.Text = "OK";
@@ -92,6 +113,9 @@ internal sealed class AudioWakeSettingsDialog : Form
     _enabledCheckBox.CheckedChanged += (_, _) => UpdateEnabledState();
     _volumeSlider.ValueChanged += (_, _) => UpdateVolumeLabel();
     _testButton.Click += (_, _) => TestWakeTone();
+    _testPhraseButton.Click += (_, _) => TestWakePhrase();
+    _testProfileComboBox.SelectedIndexChanged += (_, _) =>
+      UpdateEnabledState();
     _speech.SpeakingStateChanged += SpeechStateChanged;
 
     var volumePanel = new FlowLayoutPanel
@@ -116,7 +140,12 @@ internal sealed class AudioWakeSettingsDialog : Form
     AddRow(settingsTable, "Tone volume:", volumePanel, 2);
     AddRow(settingsTable, "Tone play duration (ms):", _playNumeric, 3);
     AddRow(settingsTable, "Settle duration (ms):", _settleNumeric, 4);
-    AddRow(settingsTable, "IPA sound/word delay (ms):", _ipaDelayNumeric, 5);
+    AddRow(
+      settingsTable,
+      "Test phrase profile:",
+      _testProfileComboBox,
+      5);
+    AddRow(settingsTable, "IPA sound/word delay (ms):", _ipaDelayNumeric, 6);
 
     var buttons = new FlowLayoutPanel
     {
@@ -127,6 +156,7 @@ internal sealed class AudioWakeSettingsDialog : Form
     };
     buttons.Controls.Add(_cancelButton);
     buttons.Controls.Add(_okButton);
+    buttons.Controls.Add(_testPhraseButton);
     buttons.Controls.Add(_testButton);
 
     var layout = new TableLayoutPanel
@@ -190,6 +220,12 @@ internal sealed class AudioWakeSettingsDialog : Form
     _playNumeric.Enabled = enabled;
     _settleNumeric.Enabled = enabled;
     _testButton.Enabled = enabled && !_speech.IsSpeaking;
+    _testProfileComboBox.Enabled = enabled &&
+      !_speech.IsSpeaking &&
+      _testProfileComboBox.Items.Count != 0;
+    _testPhraseButton.Enabled = enabled &&
+      !_speech.IsSpeaking &&
+      SelectedTestProfile is not null;
   }
 
   /// <summary>
@@ -212,6 +248,26 @@ internal sealed class AudioWakeSettingsDialog : Form
     _speech.TestWakeTone(CurrentSettings with { Enabled = true });
     UpdateEnabledState();
   }
+
+  /// <summary>
+  /// Tests the complete tone, settling silence, and speech handoff.
+  /// </summary>
+  private void TestWakePhrase()
+  {
+    AudioWakeTestProfile? testProfile = SelectedTestProfile;
+    if (_speech.IsSpeaking || testProfile is null)
+    {
+      return;
+    }
+    _speech.TestWakePhrase(
+      "Yes, that makes sense.",
+      testProfile.Profile,
+      CurrentSettings with { Enabled = true });
+    UpdateEnabledState();
+  }
+
+  private AudioWakeTestProfile? SelectedTestProfile =>
+    _testProfileComboBox.SelectedItem as AudioWakeTestProfile;
 
   /// <summary>
   /// Refreshes the test button when speech starts or stops.
@@ -258,5 +314,23 @@ internal sealed class AudioWakeSettingsDialog : Form
       Text = label
     }, 0, row);
     table.Controls.Add(control, 1, row);
+  }
+}
+
+/// <summary>
+/// Names one content profile available to the wake-plus-phrase test.
+/// </summary>
+internal sealed record AudioWakeTestProfile(
+  string Name,
+  SpeechProfileSettings Profile)
+{
+  public AudioWakeTestProfile Normalize()
+  {
+    return this with { Profile = Profile.Normalize() };
+  }
+
+  public override string ToString()
+  {
+    return Name;
   }
 }

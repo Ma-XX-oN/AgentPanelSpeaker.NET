@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Media;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Speech.Synthesis;
@@ -8,15 +7,14 @@ using System.Speech.Synthesis;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Serializes SAPI and System.Speech output on one STA worker thread.
+/// Renders speech and wake audio into one PCM buffer on one STA worker.
 /// </summary>
 internal sealed class SapiSpeechEngine : IDisposable
 {
-  private const int SpeakAsync = 1;
-  private const int PurgeBeforeSpeak = 2;
   private const int IsXml = 8;
+  private const int SpFileModeCreateForWrite = 3;
   private const int WorkerPollMilliseconds = 40;
-  private const int ToneSampleRate = 48000;
+  private const int OutputSampleRate = 48000;
 
   private readonly BlockingCollection<EngineCommand> _commands = new();
   private readonly ManualResetEventSlim _initialized = new();
@@ -55,7 +53,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   public event Action? Completed;
 
   /// <summary>
-  /// Raised when the worker encounters a synthesis failure.
+  /// Raised when the worker encounters a synthesis or playback failure.
   /// </summary>
   public event Action<Exception>? Faulted;
 
@@ -78,7 +76,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     AddCommand(new SpeakCommand(
       markup,
       profile.Normalize(),
-      wakeSettings.Normalize()));
+      wakeSettings.Normalize(),
+      ForceWake: false));
   }
 
   /// <summary>
@@ -101,12 +100,30 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
-  /// Plays the wake tone and settling delay regardless of quiet duration.
+  /// Plays the wake tone and settling silence regardless of quiet duration.
   /// </summary>
   public void TestWakeTone(AudioWakeSettings wakeSettings)
   {
     ArgumentNullException.ThrowIfNull(wakeSettings);
     AddCommand(new WakeTestCommand(wakeSettings.Normalize()));
+  }
+
+  /// <summary>
+  /// Plays a forced wake prefix and phrase as one contiguous PCM stream.
+  /// </summary>
+  public void TestWakePhrase(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
+    AudioWakeSettings wakeSettings)
+  {
+    ArgumentNullException.ThrowIfNull(markup);
+    ArgumentNullException.ThrowIfNull(profile);
+    ArgumentNullException.ThrowIfNull(wakeSettings);
+    AddCommand(new SpeakCommand(
+      markup,
+      profile.Normalize(),
+      wakeSettings.Normalize(),
+      ForceWake: true));
   }
 
   /// <summary>
@@ -118,7 +135,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
-  /// Pauses the active utterance.
+  /// Pauses the active contiguous output stream.
   /// </summary>
   public void Pause()
   {
@@ -126,7 +143,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
-  /// Resumes the active utterance.
+  /// Resumes the active contiguous output stream.
   /// </summary>
   public void Resume()
   {
@@ -156,9 +173,6 @@ internal sealed class SapiSpeechEngine : IDisposable
     _initialized.Dispose();
   }
 
-  /// <summary>
-  /// Adds one command unless disposal has begun.
-  /// </summary>
   private void AddCommand(EngineCommand command)
   {
     if (_disposed)
@@ -176,38 +190,14 @@ internal sealed class SapiSpeechEngine : IDisposable
     object? voiceObject = null;
     object? voicesObject = null;
     SpeechSynthesizer? synthesizer = null;
-    SynchronizationContext? previousContext = SynchronizationContext.Current;
-    var speechContext = new WorkerSynchronizationContext();
     try
     {
-      SynchronizationContext.SetSynchronizationContext(speechContext);
       synthesizer = new SpeechSynthesizer();
-      synthesizer.SetOutputToDefaultAudioDevice();
-      var systemVoices = new Dictionary<string, string>(
-        StringComparer.OrdinalIgnoreCase);
-      foreach (InstalledVoice installed in synthesizer.GetInstalledVoices())
-      {
-        if (!installed.Enabled)
-        {
-          continue;
-        }
-
-        VoiceInfo info = installed.VoiceInfo;
-        string name = info.Name.Trim();
-        if (name.Length == 0)
-        {
-          continue;
-        }
-
-        string displayName = BuildVoiceDisplayName(
-          name,
-          info.Description,
-          info.Culture.EnglishName);
-        AddPreferredDisplayName(systemVoices, name, displayName);
-      }
-
+      synthesizer.SetOutputToNull();
+      var systemVoices = EnumerateSystemSpeechVoices(synthesizer);
       var sapiVoices = new Dictionary<string, SapiVoice>(
         StringComparer.OrdinalIgnoreCase);
+
       try
       {
         Type voiceType = Type.GetTypeFromProgID("SAPI.SpVoice") ??
@@ -257,19 +247,11 @@ internal sealed class SapiSpeechEngine : IDisposable
       }
 
       _voices = voiceBackends.Keys
-        .Select(name => new InstalledSpeechVoice(
-          name,
-          displayNames[name]))
+        .Select(name => new InstalledSpeechVoice(name, displayNames[name]))
         .OrderBy(
           voiceInfo => voiceInfo.DisplayName,
           StringComparer.CurrentCultureIgnoreCase)
         .ToArray();
-      var completions = new ConcurrentQueue<SystemSpeechCompletion>();
-      synthesizer.SpeakCompleted += (_, eventArgs) =>
-        completions.Enqueue(new SystemSpeechCompletion(
-          eventArgs.Prompt,
-          eventArgs.Error,
-          eventArgs.Cancelled));
 
       DiagnosticLog.Write("speech.voices_enumerated", new
       {
@@ -282,9 +264,7 @@ internal sealed class SapiSpeechEngine : IDisposable
         voiceObject,
         voicesObject,
         synthesizer,
-        voiceBackends,
-        completions,
-        speechContext);
+        voiceBackends);
     }
     catch (Exception exception)
     {
@@ -302,10 +282,37 @@ internal sealed class SapiSpeechEngine : IDisposable
     {
       _initialized.Set();
       synthesizer?.Dispose();
-      SynchronizationContext.SetSynchronizationContext(previousContext);
       ReleaseComObject(voicesObject);
       ReleaseComObject(voiceObject);
     }
+  }
+
+  private static Dictionary<string, string> EnumerateSystemSpeechVoices(
+    SpeechSynthesizer synthesizer)
+  {
+    var voices = new Dictionary<string, string>(
+      StringComparer.OrdinalIgnoreCase);
+    foreach (InstalledVoice installed in synthesizer.GetInstalledVoices())
+    {
+      if (!installed.Enabled)
+      {
+        continue;
+      }
+
+      VoiceInfo info = installed.VoiceInfo;
+      string name = info.Name.Trim();
+      if (name.Length == 0)
+      {
+        continue;
+      }
+
+      string displayName = BuildVoiceDisplayName(
+        name,
+        info.Description,
+        info.Culture.EnglishName);
+      AddPreferredDisplayName(voices, name, displayName);
+    }
+    return voices;
   }
 
   /// <summary>
@@ -355,9 +362,6 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
-  /// <summary>
-  /// Builds the descriptive label displayed for one provider voice.
-  /// </summary>
   private static string BuildVoiceDisplayName(
     string name,
     string? description,
@@ -379,291 +383,117 @@ internal sealed class SapiSpeechEngine : IDisposable
       : $"{name} - {normalizedCulture}";
   }
 
-  /// <summary>
-  /// Keeps the most descriptive label available for one provider name.
-  /// </summary>
   private static void AddPreferredDisplayName(
     IDictionary<string, string> displayNames,
     string name,
     string candidate)
   {
-    if (!displayNames.TryGetValue(name, out string? existing))
-    {
-      displayNames[name] = candidate;
-      return;
-    }
-
-    if (candidate.Length > existing.Length)
+    if (!displayNames.TryGetValue(name, out string? existing) ||
+        candidate.Length > existing.Length)
     {
       displayNames[name] = candidate;
     }
   }
 
   /// <summary>
-  /// Processes commands, preview delays, and asynchronous completion.
+  /// Processes commands and completion for the active WinMM buffer.
   /// </summary>
   private void ServiceCommands(
     object? voiceObject,
     object? voicesObject,
     SpeechSynthesizer synthesizer,
-    IReadOnlyDictionary<string, VoiceBackend> voiceBackends,
-    ConcurrentQueue<SystemSpeechCompletion> completions,
-    WorkerSynchronizationContext speechContext)
+    IReadOnlyDictionary<string, VoiceBackend> voiceBackends)
   {
-    PlaybackSequence? sequence = null;
-    SpeechBackend activeBackend = SpeechBackend.None;
-    Prompt? activeSystemPrompt = null;
-    bool speaking = false;
+    WaveOutPlayer? player = null;
     bool exiting = false;
 
     while (!exiting)
     {
+      EngineCommand? command = null;
       try
       {
-        speechContext.RunPending();
-        Application.DoEvents();
-        if (sequence is null)
+        if (_commands.TryTake(
+              out command,
+              WorkerPollMilliseconds) &&
+            command is not null)
         {
-          if (!_commands.TryTake(
-                out EngineCommand? command,
-                WorkerPollMilliseconds) ||
-              command is null)
-          {
-            continue;
-          }
           ProcessCommand(
             command,
             voiceObject,
             voicesObject,
             synthesizer,
             voiceBackends,
-            ref sequence,
-            ref activeBackend,
-            ref activeSystemPrompt,
-            ref speaking,
+            ref player,
             ref exiting);
-          continue;
         }
 
-        int wait = WorkerPollMilliseconds;
-        if (!speaking && sequence.NextSegmentUtc is DateTime next)
+        if (player is not null && player.IsComplete)
         {
-          TimeSpan remaining = next - DateTime.UtcNow;
-          if (remaining <= TimeSpan.Zero)
-          {
-            StartNextSegment(
-              sequence,
-              voiceObject,
-              voicesObject,
-              synthesizer,
-              voiceBackends,
-              ref activeBackend,
-              ref activeSystemPrompt,
-              ref speaking);
-            continue;
-          }
-          wait = Math.Max(
-            1,
-            Math.Min(
-              WorkerPollMilliseconds,
-              (int)Math.Ceiling(remaining.TotalMilliseconds)));
-        }
-
-        if (_commands.TryTake(out EngineCommand? pending, wait) &&
-            pending is not null)
-        {
-          ProcessCommand(
-            pending,
-            voiceObject,
-            voicesObject,
-            synthesizer,
-            voiceBackends,
-            ref sequence,
-            ref activeBackend,
-            ref activeSystemPrompt,
-            ref speaking,
-            ref exiting);
-          continue;
-        }
-
-        speechContext.RunPending();
-        Application.DoEvents();
-        if (!speaking)
-        {
-          continue;
-        }
-
-        bool completed = activeBackend switch
-        {
-          SpeechBackend.Sapi => IsSapiComplete(voiceObject),
-          SpeechBackend.SystemSpeech => TryTakeSystemCompletion(
-            completions,
-            activeSystemPrompt),
-          _ => throw new InvalidOperationException(
-            "Active speech has no selected backend.")
-        };
-        if (!completed)
-        {
-          continue;
-        }
-
-        speaking = false;
-        activeBackend = SpeechBackend.None;
-        activeSystemPrompt = null;
-        MarkAudioEnd();
-        if (sequence.Segments.Count == 0)
-        {
-          sequence = null;
+          player.Dispose();
+          player = null;
+          MarkAudioEnd();
           RaiseCompleted();
-        }
-        else
-        {
-          int delay = sequence.Segments.Peek().DelayAfterPreviousMilliseconds;
-          sequence.NextSegmentUtc = DateTime.UtcNow.AddMilliseconds(delay);
         }
       }
       catch (Exception exception)
       {
-        bool hadActivePlayback = sequence is not null;
-        sequence = null;
-        speaking = false;
-        activeBackend = SpeechBackend.None;
-        activeSystemPrompt = null;
+        bool shouldComplete = player is not null || command is PlaybackCommand;
+        CancelPlayer(ref player);
+        if (command is DisposeCommand)
+        {
+          exiting = true;
+        }
         RaiseFaulted(exception);
-        if (hadActivePlayback)
+        if (shouldComplete)
         {
           RaiseCompleted();
         }
       }
     }
+
+    CancelPlayer(ref player);
   }
 
-  /// <summary>
-  /// Gets whether the native SAPI utterance has completed.
-  /// </summary>
-  private static bool IsSapiComplete(object? voiceObject)
-  {
-    if (voiceObject is null)
-    {
-      throw new InvalidOperationException(
-        "The selected native SAPI voice provider is unavailable.");
-    }
-    dynamic voice = voiceObject;
-    return Convert.ToBoolean(voice.WaitUntilDone(0));
-  }
-
-  /// <summary>
-  /// Removes queued completion events until the active prompt is found.
-  /// </summary>
-  private static bool TryTakeSystemCompletion(
-    ConcurrentQueue<SystemSpeechCompletion> completions,
-    Prompt? activePrompt)
-  {
-    if (activePrompt is null)
-    {
-      throw new InvalidOperationException(
-        "System.Speech is active without an associated prompt.");
-    }
-
-    while (completions.TryDequeue(out SystemSpeechCompletion completion))
-    {
-      if (!ReferenceEquals(completion.Prompt, activePrompt))
-      {
-        continue;
-      }
-      if (completion.Error is not null)
-      {
-        throw new InvalidOperationException(
-          "System.Speech failed while speaking.",
-          completion.Error);
-      }
-      return true;
-    }
-    return false;
-  }
-
-  /// <summary>
-  /// Applies one command on the speech apartment thread.
-  /// </summary>
   private void ProcessCommand(
     EngineCommand command,
     object? voiceObject,
     object? voicesObject,
     SpeechSynthesizer synthesizer,
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends,
-    ref PlaybackSequence? sequence,
-    ref SpeechBackend activeBackend,
-    ref Prompt? activeSystemPrompt,
-    ref bool speaking,
+    ref WaveOutPlayer? player,
     ref bool exiting)
   {
     switch (command)
     {
       case SpeakCommand speak:
-        CancelCurrentWithoutCompletion(
-          voiceObject,
-          synthesizer,
-          ref sequence,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
-        sequence = PlaybackSequence.ForSpeech(
-          speak.Markup,
-          speak.Profile,
-          speak.WakeSettings);
-        StartNextSegment(
-          sequence,
+        CancelPlayer(ref player);
+        player = StartSpeechPlayback(
+          PlaybackRequest.ForSpeech(speak),
           voiceObject,
           voicesObject,
           synthesizer,
-          voiceBackends,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
+          voiceBackends);
         break;
 
       case IpaPreviewCommand preview:
-        CancelCurrentWithoutCompletion(
-          voiceObject,
-          synthesizer,
-          ref sequence,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
-        sequence = PlaybackSequence.ForIpaPreview(preview);
-        StartNextSegment(
-          sequence,
+        CancelPlayer(ref player);
+        player = StartSpeechPlayback(
+          PlaybackRequest.ForIpaPreview(preview),
           voiceObject,
           voicesObject,
           synthesizer,
-          voiceBackends,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
+          voiceBackends);
         break;
 
       case WakeTestCommand wakeTest:
-        CancelCurrentWithoutCompletion(
-          voiceObject,
-          synthesizer,
-          ref sequence,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
-        PlayWakeTone(wakeTest.WakeSettings, force: true);
-        RaiseCompleted();
+        CancelPlayer(ref player);
+        player = StartWakeToneTest(wakeTest.WakeSettings);
         break;
 
       case CancelCommand:
       {
-        bool wasActive = sequence is not null;
-        CancelCurrentWithoutCompletion(
-          voiceObject,
-          synthesizer,
-          ref sequence,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
+        bool wasActive = player is not null;
+        CancelPlayer(ref player);
         if (wasActive)
         {
           RaiseCompleted();
@@ -671,95 +501,180 @@ internal sealed class SapiSpeechEngine : IDisposable
         break;
       }
 
-      case PauseCommand when speaking:
-        PauseActive(voiceObject, synthesizer, activeBackend);
+      case PauseCommand when player is not null:
+        player.Pause();
         break;
 
-      case ResumeCommand when speaking:
-        ResumeActive(voiceObject, synthesizer, activeBackend);
+      case ResumeCommand when player is not null:
+        player.Resume();
         break;
 
       case DisposeCommand:
-        CancelCurrentWithoutCompletion(
-          voiceObject,
-          synthesizer,
-          ref sequence,
-          ref activeBackend,
-          ref activeSystemPrompt,
-          ref speaking);
+        CancelPlayer(ref player);
         exiting = true;
         break;
     }
   }
 
   /// <summary>
-  /// Starts the next queued segment after applying wake policy.
+  /// Renders every segment, prefixes wake audio, and starts one PCM buffer.
   /// </summary>
-  private void StartNextSegment(
-    PlaybackSequence sequence,
+  private WaveOutPlayer StartSpeechPlayback(
+    PlaybackRequest request,
     object? voiceObject,
     object? voicesObject,
     SpeechSynthesizer synthesizer,
-    IReadOnlyDictionary<string, VoiceBackend> voiceBackends,
-    ref SpeechBackend activeBackend,
-    ref Prompt? activeSystemPrompt,
-    ref bool speaking)
+    IReadOnlyDictionary<string, VoiceBackend> voiceBackends)
   {
-    if (sequence.Segments.Count == 0)
-    {
-      return;
-    }
     if (!voiceBackends.TryGetValue(
-          sequence.Profile.VoiceName,
+          request.Profile.VoiceName,
           out VoiceBackend backend))
     {
       throw new ArgumentException(
-        $"Voice is not installed: {sequence.Profile.VoiceName}");
+        $"Voice is not installed: {request.Profile.VoiceName}");
     }
 
-    SpeechSegment segment = sequence.Segments.Dequeue();
-    sequence.NextSegmentUtc = null;
-    PlayWakeTone(sequence.WakeSettings, force: false);
-    switch (backend.Backend)
+    var parts = new List<PcmWaveData>();
+    PcmWaveData? outputFormat = null;
+    foreach (SpeechSegment segment in request.Segments)
     {
-      case SpeechBackend.Sapi:
-        ConfigureSapiVoice(
+      if (outputFormat is not null &&
+          segment.DelayAfterPreviousMilliseconds > 0)
+      {
+        parts.Add(outputFormat.CreateSilence(
+          segment.DelayAfterPreviousMilliseconds));
+      }
+
+      PcmWaveData rendered = RenderSpeech(
+          segment.Markup,
+          request.Profile,
+          backend,
           voiceObject,
           voicesObject,
-          backend.SapiIndex,
-          sequence.Profile);
-        dynamic voice = voiceObject!;
-        voice.Speak(segment.Markup.SapiXml, SpeakAsync | IsXml);
-        activeBackend = SpeechBackend.Sapi;
-        activeSystemPrompt = null;
-        break;
-
-      case SpeechBackend.SystemSpeech:
-        synthesizer.SelectVoice(sequence.Profile.VoiceName);
-        synthesizer.Rate = sequence.Profile.Rate;
-        synthesizer.Volume = sequence.Profile.Volume;
-        string ssml = BuildSsmlDocument(
-          segment.Markup.SsmlContent,
-          synthesizer.Voice.Culture.Name);
-        activeSystemPrompt = synthesizer.SpeakSsmlAsync(ssml);
-        activeBackend = SpeechBackend.SystemSpeech;
-        break;
-
-      default:
-        throw new InvalidOperationException(
-          "The selected voice has no speech backend.");
+          synthesizer)
+        .ConvertToMono16(OutputSampleRate);
+      outputFormat ??= rendered;
+      parts.Add(rendered);
     }
-    speaking = true;
+
+    if (outputFormat is null)
+    {
+      throw new InvalidOperationException(
+        "A speech playback request contains no speech segments.");
+    }
+
+    PcmWaveData speech = PcmWaveData.Concatenate(parts);
+    bool wakeApplied = ShouldApplyWake(
+      request.WakeSettings,
+      request.ForceWake);
+    PcmWaveData playback = wakeApplied
+      ? PrefixWakeAudio(speech, request.WakeSettings)
+      : speech;
+
+    DiagnosticLog.Write("speech.playback_buffer", new
+    {
+      request.Profile.VoiceName,
+      request.Profile.Rate,
+      request.Profile.Pitch,
+      request.Profile.Volume,
+      wakeApplied,
+      request.ForceWake,
+      request.WakeSettings.FrequencyHertz,
+      request.WakeSettings.PlayDurationMilliseconds,
+      request.WakeSettings.SettleDurationMilliseconds,
+      sampleRate = playback.SampleRate,
+      sampleBytes = playback.Samples.Length
+    });
+    return new WaveOutPlayer(playback);
+  }
+
+  private WaveOutPlayer StartWakeToneTest(AudioWakeSettings settings)
+  {
+    PcmWaveData format = PcmWaveData.CreateDefaultFormat();
+    PcmWaveData playback = PcmWaveData.Concatenate(new[]
+    {
+      format.CreateTone(
+        settings.FrequencyHertz,
+        settings.ToneVolume,
+        settings.PlayDurationMilliseconds),
+      format.CreateSilence(settings.SettleDurationMilliseconds)
+    });
+    DiagnosticLog.Write("speech.wake_tone_test", new
+    {
+      settings.FrequencyHertz,
+      settings.ToneVolume,
+      settings.PlayDurationMilliseconds,
+      settings.SettleDurationMilliseconds
+    });
+    return new WaveOutPlayer(playback);
+  }
+
+  private static PcmWaveData PrefixWakeAudio(
+    PcmWaveData speech,
+    AudioWakeSettings settings)
+  {
+    return PcmWaveData.Concatenate(new[]
+    {
+      speech.CreateTone(
+        settings.FrequencyHertz,
+        settings.ToneVolume,
+        settings.PlayDurationMilliseconds),
+      speech.CreateSilence(settings.SettleDurationMilliseconds),
+      speech
+    });
+  }
+
+  private bool ShouldApplyWake(AudioWakeSettings settings, bool force)
+  {
+    if (force)
+    {
+      return true;
+    }
+    if (!settings.Enabled)
+    {
+      return false;
+    }
+
+    double quietMilliseconds = _hasAudioEndTimestamp
+      ? Stopwatch.GetElapsedTime(_lastAudioEndTimestamp).TotalMilliseconds
+      : double.PositiveInfinity;
+    return quietMilliseconds > settings.QuietDurationMilliseconds;
+  }
+
+  private static PcmWaveData RenderSpeech(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
+    VoiceBackend backend,
+    object? voiceObject,
+    object? voicesObject,
+    SpeechSynthesizer synthesizer)
+  {
+    return backend.Backend switch
+    {
+      SpeechBackend.Sapi => RenderSapiSpeech(
+        markup,
+        profile,
+        backend.SapiIndex,
+        voiceObject,
+        voicesObject),
+      SpeechBackend.SystemSpeech => RenderSystemSpeech(
+        markup,
+        profile,
+        synthesizer),
+      _ => throw new InvalidOperationException(
+        "The selected voice has no speech backend.")
+    };
   }
 
   /// <summary>
-  /// Selects one native SAPI token and applies rate and volume.
+  /// Renders native SAPI XML into a temporary WAVE file.
   /// </summary>
-  private static void ConfigureSapiVoice(
-    object? voiceObject,
-    object? voicesObject,
+  private static PcmWaveData RenderSapiSpeech(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
     int voiceIndex,
-    SpeechProfileSettings profile)
+    object? voiceObject,
+    object? voicesObject)
   {
     if (voiceObject is null || voicesObject is null || voiceIndex < 0)
     {
@@ -767,6 +682,79 @@ internal sealed class SapiSpeechEngine : IDisposable
         "The selected native SAPI voice is unavailable.");
     }
 
+    Type fileStreamType = Type.GetTypeFromProgID("SAPI.SpFileStream") ??
+      throw new InvalidOperationException("SAPI.SpFileStream is unavailable.");
+    object fileStreamObject = Activator.CreateInstance(fileStreamType) ??
+      throw new InvalidOperationException(
+        "SAPI.SpFileStream could not be created.");
+    string path = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-{Guid.NewGuid():N}.wav");
+    bool opened = false;
+    try
+    {
+      dynamic fileStream = fileStreamObject;
+      fileStream.Open(path, SpFileModeCreateForWrite, false);
+      opened = true;
+      dynamic voice = voiceObject;
+      voice.AudioOutputStream = fileStreamObject;
+      ConfigureSapiVoice(voiceObject, voicesObject, voiceIndex, profile);
+      voice.Speak(markup.SapiXml, IsXml);
+      fileStream.Close();
+      opened = false;
+      return PcmWaveData.Parse(File.ReadAllBytes(path));
+    }
+    finally
+    {
+      if (opened)
+      {
+        try
+        {
+          dynamic fileStream = fileStreamObject;
+          fileStream.Close();
+        }
+        catch (COMException)
+        {
+        }
+      }
+      ReleaseComObject(fileStreamObject);
+      TryDeleteFile(path);
+    }
+  }
+
+  /// <summary>
+  /// Renders System.Speech SSML into an in-memory WAVE file.
+  /// </summary>
+  private static PcmWaveData RenderSystemSpeech(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
+    SpeechSynthesizer synthesizer)
+  {
+    using var stream = new MemoryStream();
+    synthesizer.SelectVoice(profile.VoiceName);
+    synthesizer.Rate = profile.Rate;
+    synthesizer.Volume = profile.Volume;
+    string ssml = BuildSsmlDocument(
+      markup.SsmlContent,
+      synthesizer.Voice.Culture.Name);
+    try
+    {
+      synthesizer.SetOutputToWaveStream(stream);
+      synthesizer.SpeakSsml(ssml);
+    }
+    finally
+    {
+      synthesizer.SetOutputToNull();
+    }
+    return PcmWaveData.Parse(stream.ToArray());
+  }
+
+  private static void ConfigureSapiVoice(
+    object voiceObject,
+    object voicesObject,
+    int voiceIndex,
+    SpeechProfileSettings profile)
+  {
     dynamic voice = voiceObject;
     dynamic voices = voicesObject;
     object tokenObject = voices.Item(voiceIndex);
@@ -782,9 +770,6 @@ internal sealed class SapiSpeechEngine : IDisposable
     voice.Volume = profile.Volume;
   }
 
-  /// <summary>
-  /// Wraps an SSML fragment in a culture-specific speak document.
-  /// </summary>
   private static string BuildSsmlDocument(
     string content,
     string cultureName)
@@ -796,199 +781,45 @@ internal sealed class SapiSpeechEngine : IDisposable
       $"xml:lang=\"{language}\">{content}</speak>";
   }
 
-  /// <summary>
-  /// Pauses the active provider.
-  /// </summary>
-  private static void PauseActive(
-    object? voiceObject,
-    SpeechSynthesizer synthesizer,
-    SpeechBackend activeBackend)
+  private void CancelPlayer(ref WaveOutPlayer? player)
   {
-    if (activeBackend == SpeechBackend.SystemSpeech)
-    {
-      synthesizer.Pause();
-      return;
-    }
-    if (activeBackend != SpeechBackend.Sapi || voiceObject is null)
-    {
-      throw new InvalidOperationException("No speech provider is active.");
-    }
-    dynamic voice = voiceObject;
-    voice.Pause();
-  }
-
-  /// <summary>
-  /// Resumes the active provider.
-  /// </summary>
-  private static void ResumeActive(
-    object? voiceObject,
-    SpeechSynthesizer synthesizer,
-    SpeechBackend activeBackend)
-  {
-    if (activeBackend == SpeechBackend.SystemSpeech)
-    {
-      synthesizer.Resume();
-      return;
-    }
-    if (activeBackend != SpeechBackend.Sapi || voiceObject is null)
-    {
-      throw new InvalidOperationException("No speech provider is active.");
-    }
-    dynamic voice = voiceObject;
-    voice.Resume();
-  }
-
-  /// <summary>
-  /// Cancels current output and queued preview segments without completion.
-  /// </summary>
-  private void CancelCurrentWithoutCompletion(
-    object? voiceObject,
-    SpeechSynthesizer synthesizer,
-    ref PlaybackSequence? sequence,
-    ref SpeechBackend activeBackend,
-    ref Prompt? activeSystemPrompt,
-    ref bool speaking)
-  {
-    if (speaking)
-    {
-      switch (activeBackend)
-      {
-        case SpeechBackend.Sapi when voiceObject is not null:
-          dynamic voice = voiceObject;
-          voice.Speak(string.Empty, SpeakAsync | PurgeBeforeSpeak);
-          break;
-
-        case SpeechBackend.SystemSpeech:
-          synthesizer.SpeakAsyncCancelAll();
-          break;
-      }
-      MarkAudioEnd();
-    }
-    speaking = false;
-    activeBackend = SpeechBackend.None;
-    activeSystemPrompt = null;
-    sequence = null;
-  }
-
-  /// <summary>
-  /// Emits the configured wake tone when the quiet threshold is exceeded.
-  /// </summary>
-  private void PlayWakeTone(AudioWakeSettings settings, bool force)
-  {
-    AudioWakeSettings normalized = settings.Normalize();
-    if (!force && !normalized.Enabled)
-    {
-      return;
-    }
-
-    double quietMilliseconds = _hasAudioEndTimestamp
-      ? Stopwatch.GetElapsedTime(_lastAudioEndTimestamp).TotalMilliseconds
-      : double.PositiveInfinity;
-    if (!force &&
-        quietMilliseconds <= normalized.QuietDurationMilliseconds)
+    if (player is null)
     {
       return;
     }
 
     try
     {
-      using var stream = new MemoryStream(CreateToneWave(normalized));
-      using var player = new SoundPlayer(stream);
-      player.PlaySync();
+      player.Stop();
+    }
+    finally
+    {
+      player.Dispose();
+      player = null;
       MarkAudioEnd();
-      DiagnosticLog.Write("speech.wake_tone", new
-      {
-        normalized.FrequencyHertz,
-        normalized.ToneVolume,
-        normalized.PlayDurationMilliseconds,
-        normalized.SettleDurationMilliseconds,
-        force
-      });
-    }
-    catch (Exception exception) when (
-      exception is InvalidOperationException or IOException or
-      System.ComponentModel.Win32Exception)
-    {
-      DiagnosticLog.Write("speech.wake_tone_failed", new
-      {
-        exception = exception.ToString()
-      });
-      RaiseFaulted(exception);
-    }
-
-    if (normalized.SettleDurationMilliseconds > 0)
-    {
-      Thread.Sleep(normalized.SettleDurationMilliseconds);
     }
   }
 
-  /// <summary>
-  /// Records the end of audio output using a monotonic clock.
-  /// </summary>
   private void MarkAudioEnd()
   {
     _lastAudioEndTimestamp = Stopwatch.GetTimestamp();
     _hasAudioEndTimestamp = true;
   }
 
-  /// <summary>
-  /// Creates a mono 16-bit PCM sine wave with short anti-click fades.
-  /// </summary>
-  private static byte[] CreateToneWave(AudioWakeSettings settings)
+  private static void TryDeleteFile(string path)
   {
-    int sampleCount = Math.Max(
-      1,
-      ToneSampleRate * settings.PlayDurationMilliseconds / 1000);
-    const short channels = 1;
-    const short bitsPerSample = 16;
-    int bytesPerSample = bitsPerSample / 8;
-    int dataLength = sampleCount * channels * bytesPerSample;
-
-    using var stream = new MemoryStream(44 + dataLength);
-    using var writer = new BinaryWriter(stream);
-    writer.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
-    writer.Write(36 + dataLength);
-    writer.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
-    writer.Write(System.Text.Encoding.ASCII.GetBytes("fmt "));
-    writer.Write(16);
-    writer.Write((short)1);
-    writer.Write(channels);
-    writer.Write(ToneSampleRate);
-    writer.Write(ToneSampleRate * channels * bytesPerSample);
-    writer.Write((short)(channels * bytesPerSample));
-    writer.Write(bitsPerSample);
-    writer.Write(System.Text.Encoding.ASCII.GetBytes("data"));
-    writer.Write(dataLength);
-
-    double amplitude = short.MaxValue * settings.ToneVolume / 100.0;
-    int fadeSamples = Math.Min(sampleCount / 2, ToneSampleRate / 200);
-    for (int sample = 0; sample < sampleCount; ++sample)
+    try
     {
-      double fade = 1.0;
-      if (fadeSamples > 0 && sample < fadeSamples)
-      {
-        fade = sample / (double)fadeSamples;
-      }
-      else if (fadeSamples > 0 && sample >= sampleCount - fadeSamples)
-      {
-        fade = (sampleCount - sample - 1) / (double)fadeSamples;
-      }
-
-      double angle = 2.0 * Math.PI * settings.FrequencyHertz *
-        sample / ToneSampleRate;
-      short value = (short)Math.Clamp(
-        Math.Round(Math.Sin(angle) * amplitude * Math.Max(0.0, fade)),
-        short.MinValue,
-        short.MaxValue);
-      writer.Write(value);
+      File.Delete(path);
     }
-    writer.Flush();
-    return stream.ToArray();
+    catch (IOException)
+    {
+    }
+    catch (UnauthorizedAccessException)
+    {
+    }
   }
 
-  /// <summary>
-  /// Raises completion without allowing a subscriber failure to kill speech.
-  /// </summary>
   private void RaiseCompleted()
   {
     try
@@ -1004,9 +835,6 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
-  /// <summary>
-  /// Raises a worker failure without terminating from a subscriber exception.
-  /// </summary>
   private void RaiseFaulted(Exception exception)
   {
     try
@@ -1022,9 +850,6 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
-  /// <summary>
-  /// Releases one late-bound COM object when applicable.
-  /// </summary>
   private static void ReleaseComObject(object? value)
   {
     if (value is not null && Marshal.IsComObject(value))
@@ -1033,88 +858,24 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
-  /// <summary>
-  /// Dispatches System.Speech callbacks on the owning STA worker thread.
-  /// </summary>
-  private sealed class WorkerSynchronizationContext : SynchronizationContext
-  {
-    private readonly ConcurrentQueue<CallbackWorkItem> _callbacks = new();
-    private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
-
-    public override void Post(SendOrPostCallback callback, object? state)
-    {
-      ArgumentNullException.ThrowIfNull(callback);
-      _callbacks.Enqueue(new CallbackWorkItem(callback, state));
-    }
-
-    public override void Send(SendOrPostCallback callback, object? state)
-    {
-      ArgumentNullException.ThrowIfNull(callback);
-      if (Environment.CurrentManagedThreadId == _ownerThreadId)
-      {
-        callback(state);
-        return;
-      }
-
-      using var completed = new ManualResetEventSlim();
-      Exception? failure = null;
-      Post(value =>
-      {
-        try
-        {
-          callback(value);
-        }
-        catch (Exception exception)
-        {
-          failure = exception;
-        }
-        finally
-        {
-          completed.Set();
-        }
-      }, state);
-      completed.Wait();
-      if (failure is not null)
-      {
-        throw new InvalidOperationException(
-          "A speech callback failed on the worker thread.",
-          failure);
-      }
-    }
-
-    public override SynchronizationContext CreateCopy()
-    {
-      return this;
-    }
-
-    public void RunPending()
-    {
-      while (_callbacks.TryDequeue(out CallbackWorkItem workItem))
-      {
-        workItem.Callback(workItem.State);
-      }
-    }
-
-    private readonly record struct CallbackWorkItem(
-      SendOrPostCallback Callback,
-      object? State);
-  }
-
   private abstract record EngineCommand;
+
+  private abstract record PlaybackCommand : EngineCommand;
 
   private sealed record SpeakCommand(
     SpeechMarkup Markup,
     SpeechProfileSettings Profile,
-    AudioWakeSettings WakeSettings) : EngineCommand;
+    AudioWakeSettings WakeSettings,
+    bool ForceWake) : PlaybackCommand;
 
   private sealed record IpaPreviewCommand(
     SpeechMarkup? IsolatedMarkup,
     SpeechMarkup ExampleMarkup,
     SpeechProfileSettings Profile,
-    AudioWakeSettings WakeSettings) : EngineCommand;
+    AudioWakeSettings WakeSettings) : PlaybackCommand;
 
   private sealed record WakeTestCommand(
-    AudioWakeSettings WakeSettings) : EngineCommand;
+    AudioWakeSettings WakeSettings) : PlaybackCommand;
 
   private sealed record CancelCommand : EngineCommand
   {
@@ -1136,38 +897,38 @@ internal sealed class SapiSpeechEngine : IDisposable
     public static DisposeCommand Instance { get; } = new();
   }
 
-  private sealed class PlaybackSequence
+  private sealed class PlaybackRequest
   {
-    private PlaybackSequence(
+    private PlaybackRequest(
       SpeechProfileSettings profile,
       AudioWakeSettings wakeSettings,
+      bool forceWake,
       IEnumerable<SpeechSegment> segments)
     {
       Profile = profile;
       WakeSettings = wakeSettings;
-      Segments = new Queue<SpeechSegment>(segments);
+      ForceWake = forceWake;
+      Segments = segments.ToArray();
     }
 
     public SpeechProfileSettings Profile { get; }
 
     public AudioWakeSettings WakeSettings { get; }
 
-    public Queue<SpeechSegment> Segments { get; }
+    public bool ForceWake { get; }
 
-    public DateTime? NextSegmentUtc { get; set; }
+    public IReadOnlyList<SpeechSegment> Segments { get; }
 
-    public static PlaybackSequence ForSpeech(
-      SpeechMarkup markup,
-      SpeechProfileSettings profile,
-      AudioWakeSettings wakeSettings)
+    public static PlaybackRequest ForSpeech(SpeakCommand command)
     {
-      return new PlaybackSequence(
-        profile,
-        wakeSettings,
-        new[] { new SpeechSegment(markup, 0) });
+      return new PlaybackRequest(
+        command.Profile,
+        command.WakeSettings,
+        command.ForceWake,
+        new[] { new SpeechSegment(command.Markup, 0) });
     }
 
-    public static PlaybackSequence ForIpaPreview(IpaPreviewCommand command)
+    public static PlaybackRequest ForIpaPreview(IpaPreviewCommand command)
     {
       var segments = new List<SpeechSegment>();
       if (command.IsolatedMarkup is not null)
@@ -1181,9 +942,10 @@ internal sealed class SapiSpeechEngine : IDisposable
       {
         segments.Add(new SpeechSegment(command.ExampleMarkup, 0));
       }
-      return new PlaybackSequence(
+      return new PlaybackRequest(
         command.Profile,
         command.WakeSettings,
+        forceWake: false,
         segments);
     }
   }
@@ -1191,11 +953,6 @@ internal sealed class SapiSpeechEngine : IDisposable
   private sealed record SpeechSegment(
     SpeechMarkup Markup,
     int DelayAfterPreviousMilliseconds);
-
-  private readonly record struct SystemSpeechCompletion(
-    Prompt Prompt,
-    Exception? Error,
-    bool Cancelled);
 
   private readonly record struct SapiVoice(
     int Index,
@@ -1218,7 +975,6 @@ internal sealed class SapiSpeechEngine : IDisposable
 
   private enum SpeechBackend
   {
-    None,
     Sapi,
     SystemSpeech
   }
