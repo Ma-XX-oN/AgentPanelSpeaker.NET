@@ -38,7 +38,7 @@ internal sealed class MainForm : Form
   private readonly ComboBox _themeComboBox = new();
   private readonly TextBox _logTextBox = new();
   private readonly Dictionary<ContentCategory, VoiceRowControls> _voiceRows = new();
-  private readonly IReadOnlyList<string> _installedVoices;
+  private readonly IReadOnlyList<InstalledSpeechVoice> _installedVoices;
   private readonly UserSettingsStore _settingsStore;
 
   private bool _pathIsManual;
@@ -52,8 +52,9 @@ internal sealed class MainForm : Form
   /// </summary>
   public MainForm()
   {
-    _installedVoices = _speech.GetInstalledVoiceNames();
-    _settingsStore = new UserSettingsStore(_installedVoices);
+    _installedVoices = _speech.GetInstalledVoices();
+    _settingsStore = new UserSettingsStore(
+      _installedVoices.Select(voice => voice.Name).ToArray());
     _speech.SetPolicyProviders(
       _settingsStore.GetProfile,
       _settingsStore.IsFenceTypeSpoken,
@@ -77,7 +78,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.1";
+    Text = "Agent Panel Speaker v25.2";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -400,7 +401,7 @@ internal sealed class MainForm : Form
     foreach (VoiceRowControls row in _voiceRows.Values)
     {
       row.Voice.Items.Add(SpeechProfileSettings.NotSpoken);
-      foreach (string voice in _installedVoices)
+      foreach (InstalledSpeechVoice voice in _installedVoices)
       {
         row.Voice.Items.Add(voice);
       }
@@ -451,14 +452,45 @@ internal sealed class MainForm : Form
     SpeechProfileSettings profile)
   {
     VoiceRowControls row = _voiceRows[category];
-    row.Voice.SelectedItem = row.Voice.Items.Contains(profile.VoiceName)
-      ? profile.VoiceName
-      : SpeechProfileSettings.NotSpoken;
+    row.Voice.SelectedItem = FindVoiceItem(row.Voice, profile.VoiceName);
     row.Rate.Value = profile.Rate;
     row.Pitch.Value = profile.Pitch;
     row.Volume.Value = profile.Volume;
     UpdateVolumeLabel(row);
     UpdateVoiceRowState(category);
+  }
+
+
+  /// <summary>
+  /// Finds the dropdown item representing one stored provider voice name.
+  /// </summary>
+  private static object FindVoiceItem(ComboBox comboBox, string voiceName)
+  {
+    foreach (object item in comboBox.Items)
+    {
+      if (string.Equals(
+            GetVoiceName(item),
+            voiceName,
+            StringComparison.OrdinalIgnoreCase))
+      {
+        return item;
+      }
+    }
+
+    return SpeechProfileSettings.NotSpoken;
+  }
+
+  /// <summary>
+  /// Gets the stable provider name represented by one dropdown item.
+  /// </summary>
+  private static string GetVoiceName(object? item)
+  {
+    return item switch
+    {
+      InstalledSpeechVoice voice => voice.Name,
+      string name when name.Length != 0 => name,
+      _ => SpeechProfileSettings.NotSpoken
+    };
   }
 
 
@@ -556,7 +588,7 @@ internal sealed class MainForm : Form
   {
     VoiceRowControls row = _voiceRows[category];
     bool enabled = !string.Equals(
-      row.Voice.SelectedItem?.ToString(),
+      GetVoiceName(row.Voice.SelectedItem),
       SpeechProfileSettings.NotSpoken,
       StringComparison.Ordinal);
     row.Rate.Enabled = enabled;
@@ -1015,7 +1047,7 @@ internal sealed class MainForm : Form
   {
     VoiceRowControls row = _voiceRows[category];
     return new SpeechProfileSettings(
-      row.Voice.SelectedItem?.ToString() ?? SpeechProfileSettings.NotSpoken,
+      GetVoiceName(row.Voice.SelectedItem),
       Decimal.ToInt32(row.Rate.Value),
       Decimal.ToInt32(row.Pitch.Value))
     {

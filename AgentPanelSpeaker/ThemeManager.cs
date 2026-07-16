@@ -86,8 +86,7 @@ internal static class ThemeManager
         break;
 
       case ComboBox comboBox:
-        comboBox.BackColor = input;
-        comboBox.ForeColor = inputText;
+        ApplyComboBoxTheme(comboBox, dark, input, inputText);
         break;
 
       case NumericUpDown numeric:
@@ -124,6 +123,85 @@ internal static class ThemeManager
     foreach (Control child in control.Controls)
     {
       ApplyControl(child, dark);
+    }
+  }
+
+  /// <summary>
+  /// Applies colours and owner drawing to one combo box.
+  /// </summary>
+  private static void ApplyComboBoxTheme(
+    ComboBox comboBox,
+    bool dark,
+    Color background,
+    Color foreground)
+  {
+    comboBox.BackColor = background;
+    comboBox.ForeColor = foreground;
+    comboBox.DrawItem -= DrawComboBoxItem;
+
+    if (dark)
+    {
+      comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+      comboBox.FlatStyle = FlatStyle.Flat;
+      comboBox.DrawItem += DrawComboBoxItem;
+      return;
+    }
+
+    comboBox.DrawMode = DrawMode.Normal;
+    comboBox.FlatStyle = FlatStyle.Standard;
+  }
+
+  /// <summary>
+  /// Draws the closed value and every dropdown item using the active palette.
+  /// </summary>
+  private static void DrawComboBoxItem(
+    object? sender,
+    DrawItemEventArgs eventArgs)
+  {
+    if (sender is not ComboBox comboBox)
+    {
+      return;
+    }
+
+    bool selected = (eventArgs.State & DrawItemState.Selected) != 0;
+    Color background = selected
+      ? SystemColors.Highlight
+      : comboBox.BackColor;
+    Color foreground = !comboBox.Enabled
+      ? DarkDisabled
+      : selected
+        ? SystemColors.HighlightText
+        : comboBox.ForeColor;
+
+    using (var brush = new SolidBrush(background))
+    {
+      eventArgs.Graphics.FillRectangle(brush, eventArgs.Bounds);
+    }
+
+    string text = eventArgs.Index >= 0 &&
+      eventArgs.Index < comboBox.Items.Count
+        ? comboBox.Items[eventArgs.Index]?.ToString() ?? string.Empty
+        : comboBox.SelectedItem?.ToString() ?? comboBox.Text;
+    var textBounds = new Rectangle(
+      eventArgs.Bounds.X + 2,
+      eventArgs.Bounds.Y,
+      Math.Max(0, eventArgs.Bounds.Width - 4),
+      eventArgs.Bounds.Height);
+    TextRenderer.DrawText(
+      eventArgs.Graphics,
+      text,
+      comboBox.Font,
+      textBounds,
+      foreground,
+      background,
+      TextFormatFlags.Left |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.EndEllipsis |
+      TextFormatFlags.NoPrefix);
+
+    if ((eventArgs.State & DrawItemState.Focus) != 0)
+    {
+      eventArgs.DrawFocusRectangle();
     }
   }
 

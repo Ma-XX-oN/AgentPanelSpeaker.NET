@@ -21,7 +21,8 @@ internal sealed class SapiSpeechEngine : IDisposable
   private readonly BlockingCollection<EngineCommand> _commands = new();
   private readonly ManualResetEventSlim _initialized = new();
   private readonly Thread _thread;
-  private IReadOnlyList<string> _voiceNames = Array.Empty<string>();
+  private IReadOnlyList<InstalledSpeechVoice> _voices =
+    Array.Empty<InstalledSpeechVoice>();
   private Exception? _initializationException;
   private long _lastAudioEndTimestamp;
   private bool _hasAudioEndTimestamp;
@@ -61,7 +62,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// <summary>
   /// Gets all enabled voices exposed by either Windows speech provider.
   /// </summary>
-  public IReadOnlyList<string> VoiceNames => _voiceNames;
+  public IReadOnlyList<InstalledSpeechVoice> Voices => _voices;
 
   /// <summary>
   /// Starts one marked-up utterance with the configured wake prefix.
@@ -179,15 +180,30 @@ internal sealed class SapiSpeechEngine : IDisposable
     {
       synthesizer = new SpeechSynthesizer();
       synthesizer.SetOutputToDefaultAudioDevice();
-      string[] systemVoiceNames = synthesizer
-        .GetInstalledVoices()
-        .Where(installed => installed.Enabled)
-        .Select(installed => installed.VoiceInfo.Name.Trim())
-        .Where(name => name.Length != 0)
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToArray();
+      var systemVoices = new Dictionary<string, string>(
+        StringComparer.OrdinalIgnoreCase);
+      foreach (InstalledVoice installed in synthesizer.GetInstalledVoices())
+      {
+        if (!installed.Enabled)
+        {
+          continue;
+        }
 
-      var sapiVoiceIndexes = new Dictionary<string, int>(
+        VoiceInfo info = installed.VoiceInfo;
+        string name = info.Name.Trim();
+        if (name.Length == 0)
+        {
+          continue;
+        }
+
+        string displayName = BuildVoiceDisplayName(
+          name,
+          info.Description,
+          info.Culture.EnglishName);
+        AddPreferredDisplayName(systemVoices, name, displayName);
+      }
+
+      var sapiVoices = new Dictionary<string, SapiVoice>(
         StringComparer.OrdinalIgnoreCase);
       try
       {
@@ -198,7 +214,7 @@ internal sealed class SapiSpeechEngine : IDisposable
             "SAPI.SpVoice could not be created.");
         dynamic voice = voiceObject;
         voicesObject = voice.GetVoices(string.Empty, string.Empty);
-        EnumerateSapiVoices(voicesObject, sapiVoiceIndexes);
+        EnumerateSapiVoices(voicesObject, sapiVoices);
       }
       catch (Exception exception)
       {
@@ -210,18 +226,25 @@ internal sealed class SapiSpeechEngine : IDisposable
         ReleaseComObject(voiceObject);
         voicesObject = null;
         voiceObject = null;
-        sapiVoiceIndexes.Clear();
+        sapiVoices.Clear();
       }
 
       var voiceBackends = new Dictionary<string, VoiceBackend>(
         StringComparer.OrdinalIgnoreCase);
-      foreach (string name in systemVoiceNames)
+      var displayNames = new Dictionary<string, string>(
+        StringComparer.OrdinalIgnoreCase);
+      foreach ((string name, string displayName) in systemVoices)
       {
         voiceBackends.TryAdd(name, VoiceBackend.ForSystemSpeech());
+        AddPreferredDisplayName(displayNames, name, displayName);
       }
-      foreach ((string name, int index) in sapiVoiceIndexes)
+      foreach ((string name, SapiVoice sapiVoice) in sapiVoices)
       {
-        voiceBackends[name] = VoiceBackend.ForSapi(index);
+        voiceBackends[name] = VoiceBackend.ForSapi(sapiVoice.Index);
+        AddPreferredDisplayName(
+          displayNames,
+          name,
+          sapiVoice.DisplayName);
       }
 
       if (voiceBackends.Count == 0)
@@ -230,8 +253,13 @@ internal sealed class SapiSpeechEngine : IDisposable
           "No enabled Windows speech voices were found.");
       }
 
-      _voiceNames = voiceBackends.Keys
-        .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
+      _voices = voiceBackends.Keys
+        .Select(name => new InstalledSpeechVoice(
+          name,
+          displayNames[name]))
+        .OrderBy(
+          voiceInfo => voiceInfo.DisplayName,
+          StringComparer.CurrentCultureIgnoreCase)
         .ToArray();
       var completions = new ConcurrentQueue<SystemSpeechCompletion>();
       synthesizer.SpeakCompleted += (_, eventArgs) =>
@@ -242,9 +270,9 @@ internal sealed class SapiSpeechEngine : IDisposable
 
       DiagnosticLog.Write("speech.voices_enumerated", new
       {
-        systemSpeechCount = systemVoiceNames.Length,
-        sapiCount = sapiVoiceIndexes.Count,
-        totalCount = _voiceNames.Count
+        systemSpeechCount = systemVoices.Count,
+        sapiCount = sapiVoices.Count,
+        totalCount = _voices.Count
       });
       _initialized.Set();
       ServiceCommands(
@@ -280,7 +308,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// </summary>
   private static void EnumerateSapiVoices(
     object voicesObject,
-    IDictionary<string, int> voiceIndexes)
+    IDictionary<string, SapiVoice> voicesByName)
   {
     dynamic voices = voicesObject;
     int count = Convert.ToInt32(voices.Count);
@@ -300,20 +328,69 @@ internal sealed class SapiSpeechEngine : IDisposable
         {
           name = string.Empty;
         }
+        string description = Convert.ToString(
+          token.GetDescription(0))?.Trim() ?? string.Empty;
         if (name.Length == 0)
         {
-          name = Convert.ToString(token.GetDescription(0))?.Trim() ??
-            string.Empty;
+          name = description;
         }
-        if (name.Length != 0 && !voiceIndexes.ContainsKey(name))
+        if (name.Length != 0 && !voicesByName.ContainsKey(name))
         {
-          voiceIndexes.Add(name, index);
+          voicesByName.Add(
+            name,
+            new SapiVoice(
+              index,
+              BuildVoiceDisplayName(name, description, string.Empty)));
         }
       }
       finally
       {
         ReleaseComObject(tokenObject);
       }
+    }
+  }
+
+  /// <summary>
+  /// Builds the descriptive label displayed for one provider voice.
+  /// </summary>
+  private static string BuildVoiceDisplayName(
+    string name,
+    string? description,
+    string? cultureName)
+  {
+    string normalizedDescription = description?.Trim() ?? string.Empty;
+    if (normalizedDescription.Length != 0 &&
+        !string.Equals(
+          normalizedDescription,
+          name,
+          StringComparison.OrdinalIgnoreCase))
+    {
+      return normalizedDescription;
+    }
+
+    string normalizedCulture = cultureName?.Trim() ?? string.Empty;
+    return normalizedCulture.Length == 0
+      ? name
+      : $"{name} - {normalizedCulture}";
+  }
+
+  /// <summary>
+  /// Keeps the most descriptive label available for one provider name.
+  /// </summary>
+  private static void AddPreferredDisplayName(
+    IDictionary<string, string> displayNames,
+    string name,
+    string candidate)
+  {
+    if (!displayNames.TryGetValue(name, out string? existing))
+    {
+      displayNames[name] = candidate;
+      return;
+    }
+
+    if (candidate.Length > existing.Length)
+    {
+      displayNames[name] = candidate;
     }
   }
 
@@ -1036,6 +1113,10 @@ internal sealed class SapiSpeechEngine : IDisposable
     Prompt Prompt,
     Exception? Error,
     bool Cancelled);
+
+  private readonly record struct SapiVoice(
+    int Index,
+    string DisplayName);
 
   private readonly record struct VoiceBackend(
     SpeechBackend Backend,

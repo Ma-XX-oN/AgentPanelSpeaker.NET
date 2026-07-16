@@ -95,14 +95,14 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Gets enabled installed voice names.
+  /// Gets enabled installed voices and their descriptive labels.
   /// </summary>
-  public IReadOnlyList<string> GetInstalledVoiceNames()
+  public IReadOnlyList<InstalledSpeechVoice> GetInstalledVoices()
   {
     lock (_sync)
     {
       ThrowIfDisposed();
-      return _engine.VoiceNames.ToArray();
+      return _engine.Voices.ToArray();
     }
   }
 
