@@ -114,6 +114,40 @@ internal sealed class UserSettingsStore
   }
 
   /// <summary>
+  /// Gets the current normalized tokens that must be spelled out.
+  /// </summary>
+  public IReadOnlyList<string> GetSpelledWords()
+  {
+    lock (_sync)
+    {
+      return SpelledWordSet.Parse(_current.SpelledWords).OrderedWords;
+    }
+  }
+
+
+  /// <summary>
+  /// Gets the current normalized pronunciation rules.
+  /// </summary>
+  public PronunciationRuleSet GetPronunciations()
+  {
+    lock (_sync)
+    {
+      return PronunciationRuleSet.Parse(_current.Pronunciations);
+    }
+  }
+
+  /// <summary>
+  /// Gets the current normalized audio-wake settings.
+  /// </summary>
+  public AudioWakeSettings GetAudioWakeSettings()
+  {
+    lock (_sync)
+    {
+      return _current.AudioWake.Normalize();
+    }
+  }
+
+  /// <summary>
   /// Loads settings or returns defaults after any read/parse failure.
   /// </summary>
   private UserSettings LoadOrDefault(string? defaultVoice)
@@ -152,6 +186,11 @@ internal sealed class UserSettingsStore
   /// </summary>
   private UserSettings Normalize(UserSettings settings)
   {
+    string spelledWords = settings.Version < 3 &&
+      string.IsNullOrWhiteSpace(settings.SpelledWords)
+        ? "IDE"
+        : settings.SpelledWords;
+
     SpeechProfileSettings NormalizeProfile(SpeechProfileSettings profile)
     {
       SpeechProfileSettings normalized = profile.Normalize();
@@ -179,6 +218,16 @@ internal sealed class UserSettingsStore
       SpokenFencedCodeTypes = FencedCodeTypeSet
         .Parse(settings.SpokenFencedCodeTypes)
         .NormalizedCsv,
+      SpelledWords = SpelledWordSet.Parse(spelledWords).NormalizedText,
+      Pronunciations = PronunciationRuleSet
+        .Parse(settings.Pronunciations)
+        .NormalizedText,
+      AudioWake = (settings.AudioWake is null
+        ? AudioWakeSettings.Default
+        : settings.AudioWake).Normalize(),
+      Theme = Enum.IsDefined(typeof(AppTheme), settings.Theme)
+        ? settings.Theme
+        : AppTheme.System,
       PollIntervalMilliseconds = Math.Clamp(
         settings.PollIntervalMilliseconds,
         50,

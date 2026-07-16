@@ -11,7 +11,4 @@
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="System.Speech" Version="10.0.9" />
-  </ItemGroup>
 </Project>

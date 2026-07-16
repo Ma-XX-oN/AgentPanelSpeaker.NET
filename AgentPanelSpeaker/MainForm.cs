@@ -1,3 +1,5 @@
+using Microsoft.Win32;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
@@ -22,6 +24,7 @@ internal sealed class MainForm : Form
   private readonly TextBox _fenceTypesTextBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
   private readonly Button _playStopButton = new();
+  private readonly Button _pauseButton = new();
   private readonly Button _cancelSpeechButton = new();
   private readonly Button _rewindSentenceButton = new();
   private readonly Button _forwardSentenceButton = new();
@@ -30,6 +33,9 @@ internal sealed class MainForm : Form
   private readonly Button _saveSettingsButton = new();
   private readonly Button _resetSettingsButton = new();
   private readonly Button _openLogButton = new();
+  private readonly Button _pronunciationsButton = new();
+  private readonly Button _audioWakeButton = new();
+  private readonly ComboBox _themeComboBox = new();
   private readonly TextBox _logTextBox = new();
   private readonly Dictionary<ContentCategory, VoiceRowControls> _voiceRows = new();
   private readonly IReadOnlyList<string> _installedVoices;
@@ -50,13 +56,18 @@ internal sealed class MainForm : Form
     _settingsStore = new UserSettingsStore(_installedVoices);
     _speech.SetPolicyProviders(
       _settingsStore.GetProfile,
-      _settingsStore.IsFenceTypeSpoken);
+      _settingsStore.IsFenceTypeSpoken,
+      _settingsStore.GetSpelledWords,
+      _settingsStore.GetPronunciations,
+      _settingsStore.GetAudioWakeSettings);
     InitializeControls();
     PopulateSources();
     PopulateVoiceRows();
     LoadSettingsIntoControls(_settingsStore.Current);
     ConnectEvents();
     UpdateControlState();
+    ApplyCurrentTheme();
+    SystemEvents.UserPreferenceChanged += WindowsUserPreferenceChanged;
     AppendLog($"Diagnostic log: {DiagnosticLog.FilePath}");
     AppendLog($"Settings: {UserSettingsStore.FilePath}");
   }
@@ -66,7 +77,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v22";
+    Text = "Agent Panel Speaker v24";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -93,6 +104,10 @@ internal sealed class MainForm : Form
       "⏪",
       "Previous sentence/code line (J or Alt+J)");
     ConfigureTransportButton(
+      _pauseButton,
+      "⏸",
+      "Pause speech (I or Alt+I)");
+    ConfigureTransportButton(
       _playStopButton,
       "▶",
       "Start monitoring (K or Alt+K)");
@@ -111,6 +126,16 @@ internal sealed class MainForm : Form
     ConfigureButton(_saveSettingsButton, "Save settings");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
+    ConfigureButton(_pronunciationsButton, "Pronunciations...");
+    ConfigureButton(_audioWakeButton, "Bluetooth wake...");
+    _themeComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+    _themeComboBox.Width = 95;
+    _themeComboBox.Items.AddRange(new object[]
+    {
+      AppTheme.System,
+      AppTheme.Light,
+      AppTheme.Dark
+    });
 
     _followLatestCheckBox.AutoSize = true;
     _followLatestCheckBox.Text = "Follow newest session";
@@ -170,7 +195,9 @@ internal sealed class MainForm : Form
     options.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
-      MakeInlineLabel("Poll ms:"), _pollNumeric, _speakExistingCheckBox
+      _pronunciationsButton, _audioWakeButton,
+      MakeInlineLabel("Poll ms:"), _pollNumeric,
+      _speakExistingCheckBox
     });
 
     var transport = new FlowLayoutPanel
@@ -181,8 +208,9 @@ internal sealed class MainForm : Form
     };
     transport.Controls.AddRange(new Control[]
     {
-      _rewindNodeButton, _rewindSentenceButton, _playStopButton,
-      _forwardSentenceButton, _forwardNodeButton, _cancelSpeechButton
+      _rewindNodeButton, _rewindSentenceButton, _pauseButton,
+      _playStopButton, _forwardSentenceButton, _forwardNodeButton,
+      _cancelSpeechButton
     });
     var utility = new FlowLayoutPanel
     {
@@ -192,6 +220,7 @@ internal sealed class MainForm : Form
     };
     utility.Controls.AddRange(new Control[]
     {
+      MakeInlineLabel("Theme:"), _themeComboBox,
       _saveSettingsButton, _resetSettingsButton, _openLogButton
     });
 
@@ -253,6 +282,7 @@ internal sealed class MainForm : Form
     _fenceDebounceTimer.Tick += FenceDebounceTimerTick;
     _detectLatestButton.Click += async (_, _) => await DetectLatestAsync();
     _browseButton.Click += BrowseButtonClicked;
+    _pauseButton.Click += PauseButtonClicked;
     _playStopButton.Click += PlayStopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
     _rewindSentenceButton.Click += (_, _) => NavigateSpeech(
@@ -272,6 +302,9 @@ internal sealed class MainForm : Form
     _saveSettingsButton.Click += (_, _) => SaveSettingsExplicitly();
     _resetSettingsButton.Click += (_, _) => ResetSettings();
     _openLogButton.Click += OpenLogButtonClicked;
+    _pronunciationsButton.Click += PronunciationsButtonClicked;
+    _audioWakeButton.Click += AudioWakeButtonClicked;
+    _themeComboBox.SelectedIndexChanged += ThemeSelectionChanged;
     ResizeEnd += (_, _) => SaveControlsToSettings(includeWindowPlacement: true);
     Shown += MainFormShown;
     FormClosing += MainFormClosing;
@@ -389,6 +422,7 @@ internal sealed class MainForm : Form
       _pollNumeric.Value = settings.PollIntervalMilliseconds;
       _speakExistingCheckBox.Checked = settings.SpeakLastExistingEnabledMessage;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
+      _themeComboBox.SelectedItem = settings.Theme;
       LoadVoiceRow(ContentCategory.Assistant, settings.Assistant);
       LoadVoiceRow(ContentCategory.Reasoning, settings.Reasoning);
       LoadVoiceRow(ContentCategory.User, settings.User);
@@ -406,6 +440,7 @@ internal sealed class MainForm : Form
     {
       _loadingSettings = false;
     }
+    ApplyCurrentTheme();
   }
 
   /// <summary>
@@ -555,14 +590,10 @@ internal sealed class MainForm : Form
     try
     {
       SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
-      int pitchPercent = SpeechSsmlBuilder.GetPitchPercent(profile.Pitch);
-      string pitchDescription = pitchPercent > 0
-        ? $"+{pitchPercent}%"
-        : $"{pitchPercent}%";
       AppendLog(
         $"Testing {category}: voice={profile.VoiceName}; " +
-        $"rate={profile.Rate}; pitch={profile.Pitch} " +
-        $"({pitchDescription}); volume={profile.Volume}%.");
+        $"rate={profile.Rate}; pitch={profile.Pitch}; " +
+        $"volume={profile.Volume}%.");
       _speech.SpeakUntracked(
         $"{category} speech is working.",
         profile);
@@ -572,6 +603,21 @@ internal sealed class MainForm : Form
     {
       AppendLog($"Voice test failed: {exception.Message}");
     }
+  }
+
+  /// <summary>
+  /// Toggles the active utterance between paused and resumed.
+  /// </summary>
+  private void PauseButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    PauseToggleResult result = _speech.TogglePause();
+    AppendLog(result switch
+    {
+      PauseToggleResult.Paused => "Speech paused.",
+      PauseToggleResult.Resumed => "Speech resumed.",
+      _ => "Pause unavailable: no speech is active."
+    });
+    UpdateControlState();
   }
 
   /// <summary>
@@ -672,6 +718,105 @@ internal sealed class MainForm : Form
       : endMessage ??
         $"{action}: no matching enabled history entry is available.");
     UpdateControlState();
+  }
+
+  /// <summary>
+  /// Opens the spelling and IPA pronunciation editor.
+  /// </summary>
+  private void PronunciationsButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    SaveControlsToSettings();
+    UserSettings current = _settingsStore.Current;
+    using var dialog = new PronunciationDialog(
+      current.SpelledWords,
+      current.Pronunciations,
+      _speech,
+      GetIpaPreviewProfile,
+      _settingsStore.GetAudioWakeSettings,
+      AppendLog,
+      GetSelectedTheme());
+    if (dialog.ShowDialog(this) != DialogResult.OK)
+    {
+      return;
+    }
+
+    SpelledWordSet spelled = SpelledWordSet.Parse(dialog.SpelledWordsText);
+    PronunciationRuleSet pronunciations = PronunciationRuleSet.Parse(
+      dialog.PronunciationsText);
+    try
+    {
+      _settingsStore.Update(_settingsStore.Current with
+      {
+        SpelledWords = spelled.NormalizedText,
+        Pronunciations = pronunciations.NormalizedText
+      });
+      AppendLog(
+        $"Pronunciations updated: {spelled.OrderedWords.Count} spelled; " +
+        $"{pronunciations.Rules.Count} IPA rules.");
+    }
+    catch (Exception exception) when (
+      exception is IOException or UnauthorizedAccessException)
+    {
+      AppendLog($"Settings save failed: {exception.Message}");
+    }
+  }
+
+  /// <summary>
+  /// Opens the Bluetooth wake-tone settings and test dialog.
+  /// </summary>
+  private void AudioWakeButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    SaveControlsToSettings();
+    using var dialog = new AudioWakeSettingsDialog(
+      _settingsStore.Current.AudioWake,
+      _speech,
+      GetSelectedTheme());
+    if (dialog.ShowDialog(this) != DialogResult.OK)
+    {
+      return;
+    }
+
+    try
+    {
+      AudioWakeSettings settings = dialog.CurrentSettings.Normalize();
+      _settingsStore.Update(_settingsStore.Current with
+      {
+        AudioWake = settings
+      });
+      AppendLog(
+        settings.Enabled
+          ? $"Bluetooth wake enabled: {settings.FrequencyHertz} Hz; " +
+            $"quiet={settings.QuietDurationMilliseconds} ms."
+          : "Bluetooth wake disabled.");
+    }
+    catch (Exception exception) when (
+      exception is IOException or UnauthorizedAccessException)
+    {
+      AppendLog($"Settings save failed: {exception.Message}");
+    }
+  }
+
+  /// <summary>
+  /// Chooses the first currently spoken profile for IPA previews.
+  /// </summary>
+  private SpeechProfileSettings GetIpaPreviewProfile()
+  {
+    foreach (ContentCategory category in new[]
+    {
+      ContentCategory.Assistant,
+      ContentCategory.Reasoning,
+      ContentCategory.User
+    })
+    {
+      SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
+      if (profile.IsSpoken)
+      {
+        return profile;
+      }
+    }
+    return ReadVoiceProfile(ContentCategory.Assistant).Normalize();
   }
 
   /// <summary>
@@ -816,6 +961,7 @@ internal sealed class MainForm : Form
         .NormalizedCsv,
       SpeakLastExistingEnabledMessage = _speakExistingCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
+      Theme = GetSelectedTheme(),
       WindowX = includeWindowPlacement ? bounds.X : current.WindowX,
       WindowY = includeWindowPlacement ? bounds.Y : current.WindowY,
       WindowWidth = includeWindowPlacement ? bounds.Width : current.WindowWidth,
@@ -886,7 +1032,11 @@ internal sealed class MainForm : Form
     Keys keyCode = keyData & Keys.KeyCode;
     bool hasAltOnly = modifiers == Keys.Alt;
     bool hasNoModifiers = modifiers == Keys.None;
-    if (!hasAltOnly && (!hasNoModifiers || IsEditingControlFocused()))
+    if (!hasAltOnly && !hasNoModifiers)
+    {
+      return base.ProcessCmdKey(ref message, keyData);
+    }
+    if (hasNoModifiers && _fenceTypesTextBox.ContainsFocus)
     {
       return base.ProcessCmdKey(ref message, keyData);
     }
@@ -895,6 +1045,7 @@ internal sealed class MainForm : Form
     {
       Keys.H => _rewindNodeButton,
       Keys.J => _rewindSentenceButton,
+      Keys.I => _pauseButton,
       Keys.K => _playStopButton,
       Keys.L => _forwardSentenceButton,
       Keys.OemSemicolon => _forwardNodeButton,
@@ -906,23 +1057,9 @@ internal sealed class MainForm : Form
       return base.ProcessCmdKey(ref message, keyData);
     }
 
+    button.Focus();
     button.PerformClick();
     return true;
-  }
-
-  /// <summary>
-  /// Gets whether focus is inside a control that accepts typed input.
-  /// </summary>
-  private bool IsEditingControlFocused()
-  {
-    Control? focused = ActiveControl;
-    while (focused is ContainerControl container &&
-           container.ActiveControl is not null)
-    {
-      focused = container.ActiveControl;
-    }
-
-    return focused is TextBoxBase or NumericUpDown or ComboBox;
   }
 
   /// <summary>
@@ -940,12 +1077,29 @@ internal sealed class MainForm : Form
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
     _playStopButton.Enabled = !_playStopTransitioning;
+    _pauseButton.Enabled = _speech.IsSpeaking;
+    UpdatePauseButton();
     UpdatePlayStopButton(playbackActive);
     _cancelSpeechButton.Enabled = playbackActive || hasHistory;
     _rewindSentenceButton.Enabled = hasHistory;
     _forwardSentenceButton.Enabled = hasHistory;
     _rewindNodeButton.Enabled = hasHistory;
     _forwardNodeButton.Enabled = hasHistory;
+  }
+
+  /// <summary>
+  /// Shows whether the pause button will pause or resume speech.
+  /// </summary>
+  private void UpdatePauseButton()
+  {
+    bool paused = _speech.IsPaused;
+    string text = paused ? "▶" : "⏸";
+    string description = paused
+      ? "Resume speech (I or Alt+I)"
+      : "Pause speech (I or Alt+I)";
+    _pauseButton.Text = text;
+    _pauseButton.AccessibleName = description;
+    _toolTip.SetToolTip(_pauseButton, description);
   }
 
   /// <summary>
@@ -960,6 +1114,53 @@ internal sealed class MainForm : Form
     _playStopButton.Text = text;
     _playStopButton.AccessibleName = description;
     _toolTip.SetToolTip(_playStopButton, description);
+  }
+
+  /// <summary>
+  /// Applies and saves a deliberate theme selection.
+  /// </summary>
+  private void ThemeSelectionChanged(object? sender, EventArgs eventArgs)
+  {
+    if (_loadingSettings)
+    {
+      return;
+    }
+    ApplyCurrentTheme();
+    SaveControlsToSettings();
+  }
+
+  /// <summary>
+  /// Reapplies System theme when Windows changes its app-theme preference.
+  /// </summary>
+  private void WindowsUserPreferenceChanged(
+    object? sender,
+    UserPreferenceChangedEventArgs eventArgs)
+  {
+    PostToUi(() =>
+    {
+      if (GetSelectedTheme() == AppTheme.System)
+      {
+        ApplyCurrentTheme();
+      }
+    });
+  }
+
+  /// <summary>
+  /// Gets the selected theme with System as a safe default.
+  /// </summary>
+  private AppTheme GetSelectedTheme()
+  {
+    return _themeComboBox.SelectedItem is AppTheme theme
+      ? theme
+      : AppTheme.System;
+  }
+
+  /// <summary>
+  /// Applies the currently selected effective theme.
+  /// </summary>
+  private void ApplyCurrentTheme()
+  {
+    ThemeManager.Apply(this, GetSelectedTheme());
   }
 
   /// <summary>
@@ -1048,6 +1249,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void MainFormShown(object? sender, EventArgs eventArgs)
   {
+    ApplyCurrentTheme();
     if (_pathIsManual && File.Exists(_sessionPathTextBox.Text))
     {
       try
@@ -1077,6 +1279,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void MainFormClosing(object? sender, FormClosingEventArgs eventArgs)
   {
+    SystemEvents.UserPreferenceChanged -= WindowsUserPreferenceChanged;
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);

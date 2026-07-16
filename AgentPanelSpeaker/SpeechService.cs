@@ -1,5 +1,3 @@
-using System.Speech.Synthesis;
-
 namespace AgentPanelSpeaker;
 
 /// <summary>
@@ -11,7 +9,7 @@ internal sealed class SpeechService : IDisposable
   private const int MaximumHistoryEntries = 5000;
 
   private readonly object _sync = new();
-  private readonly SpeechSynthesizer _synthesizer = new();
+  private readonly SapiSpeechEngine _engine = new();
   private readonly List<SpeechFragment> _history = new();
   private Func<ContentCategory, SpeechProfileSettings> _profileProvider =
     _ => new SpeechProfileSettings(
@@ -19,6 +17,12 @@ internal sealed class SpeechService : IDisposable
       0,
       0);
   private Func<string, bool> _fenceTypeProvider = _ => false;
+  private Func<IReadOnlyList<string>> _spelledWordsProvider =
+    () => Array.Empty<string>();
+  private Func<PronunciationRuleSet> _pronunciationProvider =
+    () => PronunciationRuleSet.Parse(string.Empty);
+  private Func<AudioWakeSettings> _wakeSettingsProvider =
+    () => AudioWakeSettings.Default;
   private ActiveSpeechKind _activeKind;
   private int _activeHistoryIndex = -1;
   private int _nextHistoryIndex;
@@ -26,6 +30,7 @@ internal sealed class SpeechService : IDisposable
   private UntrackedSpeech? _pendingUntracked;
   private FenceActivityKey? _lastFenceActivity;
   private bool _reportedSpeaking;
+  private bool _isPaused;
   private bool _disposed;
 
   /// <summary>
@@ -33,8 +38,8 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   public SpeechService()
   {
-    _synthesizer.SetOutputToDefaultAudioDevice();
-    _synthesizer.SpeakCompleted += SynthesizerSpeakCompleted;
+    _engine.Completed += EngineCompleted;
+    _engine.Faulted += EngineFaulted;
   }
 
   /// <summary>
@@ -62,6 +67,20 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Gets whether the active utterance is paused.
+  /// </summary>
+  public bool IsPaused
+  {
+    get
+    {
+      lock (_sync)
+      {
+        return _isPaused;
+      }
+    }
+  }
+
+  /// <summary>
   /// Gets whether any indexed history exists.
   /// </summary>
   public bool HasHistory
@@ -83,12 +102,7 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
-      return _synthesizer
-        .GetInstalledVoices()
-        .Where(voice => voice.Enabled)
-        .Select(voice => voice.VoiceInfo.Name)
-        .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
-        .ToArray();
+      return _engine.VoiceNames.ToArray();
     }
   }
 
@@ -97,14 +111,23 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   public void SetPolicyProviders(
     Func<ContentCategory, SpeechProfileSettings> profileProvider,
-    Func<string, bool> fenceTypeProvider)
+    Func<string, bool> fenceTypeProvider,
+    Func<IReadOnlyList<string>> spelledWordsProvider,
+    Func<PronunciationRuleSet> pronunciationProvider,
+    Func<AudioWakeSettings> wakeSettingsProvider)
   {
     ArgumentNullException.ThrowIfNull(profileProvider);
     ArgumentNullException.ThrowIfNull(fenceTypeProvider);
+    ArgumentNullException.ThrowIfNull(spelledWordsProvider);
+    ArgumentNullException.ThrowIfNull(pronunciationProvider);
+    ArgumentNullException.ThrowIfNull(wakeSettingsProvider);
     lock (_sync)
     {
       _profileProvider = profileProvider;
       _fenceTypeProvider = fenceTypeProvider;
+      _spelledWordsProvider = spelledWordsProvider;
+      _pronunciationProvider = pronunciationProvider;
+      _wakeSettingsProvider = wakeSettingsProvider;
     }
   }
 
@@ -124,7 +147,7 @@ internal sealed class SpeechService : IDisposable
       _lastFenceActivity = null;
       if (_activeKind != ActiveSpeechKind.None)
       {
-        _synthesizer.SpeakAsyncCancelAll();
+        CancelEngineLocked();
       }
     }
   }
@@ -169,7 +192,7 @@ internal sealed class SpeechService : IDisposable
 
       if (_activeKind != ActiveSpeechKind.None)
       {
-        _synthesizer.SpeakAsyncCancelAll();
+        CancelEngineLocked();
       }
       else
       {
@@ -221,6 +244,84 @@ internal sealed class SpeechService : IDisposable
       _pendingUntracked = new UntrackedSpeech(text.Trim(), profile.Normalize());
       _nextHistoryIndex = _history.Count;
       RestartPendingLocked();
+    }
+  }
+
+  /// <summary>
+  /// Previews one IPA phone and its example using the central audio path.
+  /// </summary>
+  public void PreviewIpa(
+    string? isolatedIpa,
+    string exampleWord,
+    string exampleIpa,
+    SpeechProfileSettings profile,
+    AudioWakeSettings wakeSettings)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(exampleWord);
+    ArgumentException.ThrowIfNullOrWhiteSpace(exampleIpa);
+    ArgumentNullException.ThrowIfNull(profile);
+    ArgumentNullException.ThrowIfNull(wakeSettings);
+
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (_activeKind != ActiveSpeechKind.None || !profile.IsSpoken)
+      {
+        return;
+      }
+
+      SpeechProfileSettings normalized = profile.Normalize();
+      string? isolatedXml = string.IsNullOrWhiteSpace(isolatedIpa)
+        ? null
+        : SpeechSapiXmlBuilder.BuildIpaPreview(
+          isolatedIpa,
+          isolatedIpa,
+          normalized.Pitch);
+      string exampleXml = SpeechSapiXmlBuilder.BuildIpaPreview(
+        exampleWord,
+        exampleIpa,
+        normalized.Pitch);
+      SetActiveKindLocked(ActiveSpeechKind.Untracked);
+      try
+      {
+        _engine.PreviewIpa(
+          isolatedXml,
+          exampleXml,
+          normalized,
+          wakeSettings.Normalize());
+      }
+      catch
+      {
+        SetActiveKindLocked(ActiveSpeechKind.None);
+        throw;
+      }
+    }
+  }
+
+  /// <summary>
+  /// Plays a wake-tone-only test through the central audio worker.
+  /// </summary>
+  public void TestWakeTone(AudioWakeSettings wakeSettings)
+  {
+    ArgumentNullException.ThrowIfNull(wakeSettings);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (_activeKind != ActiveSpeechKind.None)
+      {
+        return;
+      }
+
+      SetActiveKindLocked(ActiveSpeechKind.Untracked);
+      try
+      {
+        _engine.TestWakeTone(wakeSettings.Normalize());
+      }
+      catch
+      {
+        SetActiveKindLocked(ActiveSpeechKind.None);
+        throw;
+      }
     }
   }
 
@@ -334,6 +435,32 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Pauses or resumes the active utterance.
+  /// </summary>
+  public PauseToggleResult TogglePause()
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (_activeKind == ActiveSpeechKind.None)
+      {
+        return PauseToggleResult.Unavailable;
+      }
+
+      if (_isPaused)
+      {
+        _engine.Resume();
+        SetPausedLocked(false);
+        return PauseToggleResult.Resumed;
+      }
+
+      _engine.Pause();
+      SetPausedLocked(true);
+      return PauseToggleResult.Paused;
+    }
+  }
+
+  /// <summary>
   /// Cancels speech and releases the synthesizer.
   /// </summary>
   public void Dispose()
@@ -345,18 +472,17 @@ internal sealed class SpeechService : IDisposable
         return;
       }
       _disposed = true;
-      _synthesizer.SpeakCompleted -= SynthesizerSpeakCompleted;
-      _synthesizer.SpeakAsyncCancelAll();
-      _synthesizer.Dispose();
+      _engine.Completed -= EngineCompleted;
+      _engine.Faulted -= EngineFaulted;
+      _engine.Cancel();
+      _engine.Dispose();
     }
   }
 
   /// <summary>
   /// Advances serialized playback after one prompt completes or is cancelled.
   /// </summary>
-  private void SynthesizerSpeakCompleted(
-    object? sender,
-    SpeakCompletedEventArgs eventArgs)
+  private void EngineCompleted()
   {
     lock (_sync)
     {
@@ -364,6 +490,7 @@ internal sealed class SpeechService : IDisposable
       {
         return;
       }
+      SetPausedLocked(false);
       _activeKind = ActiveSpeechKind.None;
       _activeHistoryIndex = -1;
       TrimHistoryLocked();
@@ -373,6 +500,18 @@ internal sealed class SpeechService : IDisposable
         SetActiveKindLocked(ActiveSpeechKind.None);
       }
     }
+  }
+
+  /// <summary>
+  /// Reports a SAPI worker failure without leaving playback stuck active.
+  /// </summary>
+  private void EngineFaulted(Exception exception)
+  {
+    DiagnosticLog.Write("speech.engine_fault", new
+    {
+      exception = exception.ToString()
+    });
+    Activity?.Invoke($"Speech synthesis failed: {exception.Message}");
   }
 
   /// <summary>
@@ -454,28 +593,47 @@ internal sealed class SpeechService : IDisposable
     SpeechProfileSettings profile)
   {
     SpeechProfileSettings normalized = profile.Normalize();
+    IReadOnlyList<string> spelledWords = _spelledWordsProvider();
+    PronunciationRuleSet pronunciations = _pronunciationProvider();
+    AudioWakeSettings wakeSettings = _wakeSettingsProvider().Normalize();
+    string sapiXml = SpeechSapiXmlBuilder.Build(
+      text,
+      normalized.Pitch,
+      spelledWords,
+      pronunciations);
     DiagnosticLog.Write("speech.configure", new
     {
       normalized.VoiceName,
       normalized.Rate,
       normalized.Pitch,
-      pitchPercent = SpeechSsmlBuilder.GetPitchPercent(normalized.Pitch),
-      normalized.Volume
+      normalized.Volume,
+      spelledWordCount = spelledWords.Count,
+      pronunciationCount = pronunciations.Rules.Count,
+      wakeEnabled = wakeSettings.Enabled
     });
-    _synthesizer.SelectVoice(normalized.VoiceName);
-    _synthesizer.Rate = normalized.Rate;
-    _synthesizer.Volume = normalized.Volume;
-    if (normalized.Pitch == 0)
+    _engine.Speak(sapiXml, normalized, wakeSettings);
+  }
+
+  /// <summary>
+  /// Updates pause state and refreshes dependent controls.
+  /// </summary>
+  private void SetPausedLocked(bool paused)
+  {
+    if (_isPaused == paused)
     {
-      _synthesizer.SpeakAsync(text);
       return;
     }
+    _isPaused = paused;
+    SpeakingStateChanged?.Invoke(_activeKind != ActiveSpeechKind.None);
+  }
 
-    string ssml = SpeechSsmlBuilder.BuildPitchDocument(
-      text,
-      _synthesizer.Voice.Culture,
-      normalized.Pitch);
-    _synthesizer.SpeakSsmlAsync(ssml);
+  /// <summary>
+  /// Cancels SAPI and clears pause state.
+  /// </summary>
+  private void CancelEngineLocked()
+  {
+    SetPausedLocked(false);
+    _engine.Cancel();
   }
 
   /// <summary>
@@ -568,7 +726,7 @@ internal sealed class SpeechService : IDisposable
     _lastFenceActivity = null;
     if (_activeKind != ActiveSpeechKind.None)
     {
-      _synthesizer.SpeakAsyncCancelAll();
+      CancelEngineLocked();
     }
   }
 
@@ -591,7 +749,7 @@ internal sealed class SpeechService : IDisposable
   {
     if (_activeKind != ActiveSpeechKind.None)
     {
-      _synthesizer.SpeakAsyncCancelAll();
+      CancelEngineLocked();
     }
     else
     {
@@ -787,4 +945,14 @@ internal sealed class SpeechService : IDisposable
     int FenceBlockId,
     bool Spoken,
     string Reason);
+}
+
+/// <summary>
+/// Describes the result of a pause/resume toggle.
+/// </summary>
+internal enum PauseToggleResult
+{
+  Unavailable,
+  Paused,
+  Resumed
 }

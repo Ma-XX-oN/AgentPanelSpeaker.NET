@@ -1,8 +1,9 @@
-# Agent Panel Speaker v22
+# Agent Panel Speaker v24
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
-speaks user, assistant, and reasoning text with separate voices.  It excludes
-tool calls, tool results, command output, patches, diffs, and status records.
+speaks user, assistant, and reasoning text with separate voice profiles.  Tool
+calls, tool results, command output, patches, diffs, and status records are
+excluded.
 
 See [DESIGN.md](DESIGN.md) for the internal architecture and invariants.
 
@@ -12,13 +13,97 @@ Each content row has its own:
 
 - voice (`Not Spoken` disables that category);
 - rate (`-10..10`);
-- pitch (`-10..10`, mapped to relative SSML percentages);
+- pitch (`-10..10` SAPI absolute-middle setting);
 - volume slider (`0..100` percent);
 - test button for that content voice.
 
 Changes remain available while monitoring and apply to the next sentence or
-code line.  The currently speaking fragment is not restarted.  Test buttons
-are disabled while any text is being spoken, so a test cannot interrupt it.
+code line.  The active fragment is not restarted.  Test buttons are disabled
+while speech is active or paused, so a test cannot interrupt it.
+
+Pitch uses the native SAPI XML `pitch` control.  Date and time patterns are
+expanded into natural spoken forms before synthesis.
+
+## Pronunciations and spelling
+
+**Pronunciations...** opens two editors.
+
+### Spell out
+
+Enter one token per line.  Matching is case-insensitive and uses whole-token
+boundaries.  A match is emitted through the native SAPI `spell` element, so
+`IDE` is spoken letter by letter.  Entries are trimmed and de-duplicated while
+preserving their first occurrence.
+
+### IPA pronunciations
+
+Enter one rule per line:
+
+```text
+git=ipa:ɡɪt
+git/i=ipa:ɡɪt
+```
+
+The first form matches exact case.  The `/i` form ignores case.  Both forms use
+whole-token boundaries, and an exact-case rule takes precedence over `/i`.
+Pronunciation rules take precedence over the spell-out list.
+
+The pronunciation tab has a manually opened IPA symbol toolbar.  It never
+closes by itself.  Clicking a symbol inserts it at the saved caret position.
+When the value does not yet start with `ipa:`, the prefix is inserted after the
+`=` first.
+
+IPA buttons are enabled only when the caret or selection starts in a valid
+value position:
+
+- the current line must contain `=`;
+- the caret must be to the right of `=`;
+- when `ipa:` already exists, the caret must be after its colon.
+
+Hovering for one second previews a symbol.  Holding Shift while entering a
+button previews immediately.  The footer shows the example with the active
+phone bracketed, such as:
+
+```text
+æ → cat → /k[æ]t/ → middle
+```
+
+When a phone can be synthesized independently, the preview plays the phone,
+waits for the configured IPA example delay, and then plays the example word.
+Modifiers that cannot stand alone play only the example.
+
+## Bluetooth audio wake
+
+**Bluetooth wake...** configures an optional high-frequency prefix intended to
+wake a power-saving Bluetooth audio connection before speech.  It contains:
+
+- enable/disable;
+- quiet duration;
+- tone frequency;
+- tone volume;
+- tone play duration;
+- connection settle duration;
+- IPA phone/example delay;
+- a wake-tone test button.
+
+Before normal speech, a voice test, or an IPA preview, the audio worker checks
+how long output has been quiet.  When it exceeds the configured quiet duration,
+it plays the tone, waits for the settle duration, and then speaks.  The same
+check is performed between an isolated IPA phone and its example word.
+
+The tone is best-effort.  A codec, driver, amplifier, or speaker may filter it
+or reproduce it audibly.
+
+## Theme
+
+The theme selector provides:
+
+- `System`, which follows the Windows app light/dark preference;
+- `Light`;
+- `Dark`.
+
+The main window updates when the Windows preference changes while `System` is
+selected.  Dialogs use the effective theme when opened.
 
 ## Fenced code
 
@@ -38,20 +123,27 @@ both spoken and skipped blocks with the normalized fence type.
 
 | Control | Hotkey | Action |
 | --- | --- | --- |
-| `⏮` | `H` / `Alt+H` | Previous JSONL node |
-| `⏪` | `J` / `Alt+J` | Previous sentence/code line |
-| `▶` / `⏹` | `K` / `Alt+K` | Toggle start/stop |
-| `⏩` | `L` / `Alt+L` | Next sentence/code line |
-| `⏭` | `;` / `Alt+;` | Next JSONL node |
-| Silence | `'` / `Alt+'` | Cancel speech; keep monitoring |
+| `⏮` | `H` or `Alt+H` | Previous JSONL node |
+| `⏪` | `J` or `Alt+J` | Previous sentence/code line |
+| `⏸` / `▶` | `I` or `Alt+I` | Pause or resume speech |
+| `▶` / `⏹` | `K` or `Alt+K` | Start or stop monitoring |
+| `⏩` | `L` or `Alt+L` | Next sentence/code line |
+| `⏭` | `;` or `Alt+;` | Next JSONL node |
+| Silence | `'` or `Alt+'` | Cancel speech; keep monitoring |
 
-Hotkeys work only while Agent Panel Speaker is active.  Bare keys are ignored
-while focus is in a text box, numeric field, or voice dropdown.  Alt variants
-remain available from those controls.
+Hotkeys work only while Agent Panel Speaker is active.  A hotkey focuses its
+corresponding button before invoking it.  Bare hotkeys remain active while
+focus is in the main window's text boxes, numeric fields, and voice dropdowns.
+The fenced-code CSV box is the only main-window exception so its text can be
+edited normally.  Alt variants continue to work there.
 
-Forwarding past the final sentence/code line or node cancels active replay,
-returns the cursor to the live end, and reports the matching boundary in
-Activity.
+Forwarding past the final eligible entry cancels replay, returns to the live
+end, and reports either:
+
+```text
+Past end of last sentence/code line.
+Past end of last JSONL node.
+```
 
 ## Session selection
 
@@ -76,10 +168,12 @@ Settings automatically persist at:
 %LOCALAPPDATA%\AgentPanelSpeaker\settings.json
 ```
 
+Saved values include session choices, all voice profiles, fenced-code types,
+spelled words, IPA pronunciation rules, Bluetooth wake settings, theme,
+polling interval, startup playback, and window placement.
+
 **Save settings** flushes pending fenced-code edits and saves immediately.
-**Reset defaults** restores defaults.  Window position/size, session choices,
-voice profiles, fence types, polling interval, and startup playback are
-saved.
+**Reset defaults** restores defaults.
 
 ## Build and run
 

@@ -15,14 +15,17 @@ SessionLocator
   -> TextCleaner
   -> SentenceSegmenter
   -> SpeechFragment history
-  -> SpeechService policy check
-  -> System.Speech SpeechSynthesizer
+  -> SpeechService playback policy
+  -> SpeechSapiXmlBuilder
+  -> SapiSpeechEngine STA worker
+  -> optional Bluetooth wake tone
+  -> Windows SAPI SpVoice
 ```
 
-The monitor always indexes all conversational roles and all fenced-code blocks.
-Current settings decide whether a fragment is eligible only when playback
-reaches that fragment.  This permits live voice/fence changes and makes old
-content available after rewind without rescanning the JSONL.
+The monitor indexes all conversational roles and fenced-code blocks.  Current
+settings decide whether and how a fragment is spoken only when playback reaches
+it.  Live settings therefore affect new and replayed history without rescanning
+the JSONL.
 
 ## Components
 
@@ -34,7 +37,16 @@ content available after rewind without rescanning the JSONL.
 | `TextCleaner` | Cleans prose and preserves typed fenced-code lines. |
 | `SentenceSegmenter` | Splits cleaned prose into navigable sentences. |
 | `JsonlSessionMonitor` | Builds history and emits deduplicated fragments. |
-| `SpeechService` | Owns playback history, navigation, policy, and synthesis. |
+| `SpeechService` | Owns history, navigation, eligibility, and speech state. |
+| `SpeechSapiXmlBuilder` | Adds pitch, pronunciation, spelling, and dates. |
+| `SapiSpeechEngine` | Owns SAPI and all serialized audio output. |
+| `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
+| `PronunciationDialog` | Edits spelling/IPA and hosts the IPA toolbar. |
+| `IpaSymbolCatalog` | Describes grouped symbols and preview examples. |
+| `SpelledWordSet` | Normalizes the one-entry-per-line spelling list. |
+| `AudioWakeSettings` | Stores normalized Bluetooth wake policy. |
+| `AudioWakeSettingsDialog` | Explains, edits, and tests wake settings. |
+| `ThemeManager` | Resolves System/Light/Dark and applies the palette. |
 | `UserSettingsStore` | Atomically loads/saves immutable settings snapshots. |
 | `MainForm` | Presents session, speech, transport, and diagnostics controls. |
 | `DiagnosticLog` | Writes structured execution diagnostics. |
@@ -80,23 +92,33 @@ Each `SpeechFragment` retains:
 - fenced-block identity, line index, and non-empty line count.
 
 Prose is sentence-split.  Every non-empty fenced-code line is one navigation
-entry.  Node navigation groups all fragments carrying the same `NodeId`.
+entry.  Node navigation groups fragments carrying the same `NodeId`.
 
 ## Playback policy
 
-`SpeechService` asks `UserSettingsStore` for the current profile immediately
-before each fragment starts.  A profile contains:
+`SpeechService` resolves current policy immediately before every fragment.  A
+profile contains:
 
 - voice name or `Not Spoken`;
 - SAPI rate `-10..10`;
-- pitch setting `-10..10`, mapped to relative SSML percentages;
-- volume `0..100` percent;
+- SAPI absolute-middle pitch `-10..10`;
+- volume `0..100` percent.
 
-Voice, rate, pitch, and volume edits therefore affect the next fragment
-without restarting the active fragment.  Pitch is applied through SSML
-prosody using five percentage points per UI step; rate and volume use
-`SpeechSynthesizer` properties.  `SpeechService` emits speaking-state
-transitions so every row test button is disabled during active playback.
+Rate and volume are assigned to `SAPI.SpVoice`.  Pitch is emitted as native
+SAPI XML:
+
+```xml
+<pitch absmiddle="5">text</pitch>
+```
+
+The SAPI worker receives one serialized sequence at a time and reports
+completion back to `SpeechService`.  Normal speech, voice tests, IPA previews,
+and wake-tone tests share that worker.  This prevents one audio operation from
+interrupting another unexpectedly.
+
+`SpeechService` retains active and paused state.  Pause/resume calls
+`SpVoice.Pause` and `SpVoice.Resume`; stop and silence purge the active SAPI
+queue.  Test buttons remain disabled for both speaking and paused utterances.
 
 A fenced-code line is eligible only when:
 
@@ -106,6 +128,128 @@ A fenced-code line is eligible only when:
 
 Disabled fragments remain in history.  Rewind/forward skips fragments that are
 currently disabled.
+
+## Date, time, spelling, and pronunciation markup
+
+`SpeechSapiXmlBuilder` transforms text at playback time, after history and
+sentence boundaries have already been established.
+
+Recognized date/time forms include:
+
+- ISO dates such as `2026-07-15`;
+- slash- or dash-separated numeric dates;
+- ISO date-times such as `2026-07-15T14:30:00Z`;
+- 12-hour and 24-hour clock values such as `2:30 PM` and `14:30`.
+
+Dates are expanded to a long date and times to a 12-hour clock form before SAPI
+receives them.  A trailing `Z` is spoken as UTC.
+
+The spelling list is normalized by trimming each line, removing empty lines,
+and de-duplicating case-insensitively.  Whole-token matching is
+case-insensitive.  Matches are wrapped in the native SAPI `spell` element:
+
+```xml
+<spell>IDE</spell>
+```
+
+Pronunciation rules have these normalized forms:
+
+```text
+git=ipa:ɡɪt
+git/i=ipa:ɡɪt
+```
+
+The first form is case-sensitive.  `/i` ignores case.  Both are whole-token
+matches.  On a tie, an exact-case rule wins.  Matching precedence is:
+
+1. IPA pronunciation rule;
+2. spell-out rule;
+3. date/time expansion;
+4. ordinary escaped text.
+
+An IPA match is emitted as a phoneme element inside the active pitch wrapper.
+All policy is read from the current settings for every utterance, so edits also
+affect later replay without rebuilding history.
+
+## IPA editor and toolbar
+
+The pronunciation dialog contains separate spell-out and IPA-rule tabs.  The
+IPA toolbar is manually toggled and never closes itself.  Symbol buttons are
+grouped using IPA chart sections.  Each definition supplies:
+
+- the insertion symbol;
+- a description and Unicode code point tooltip;
+- an example word or carrier syllable;
+- the example IPA;
+- a bracketed version that identifies the demonstrated phone;
+- whether an isolated-phone preview is meaningful.
+
+The editor saves its selection before a toolbar button takes focus.  Insertion
+is permitted only when:
+
+1. the current line contains `=`;
+2. the selection starts strictly to its right;
+3. the selection does not cross the line boundary;
+4. when the value starts with `ipa:`, insertion starts after the colon.
+
+If the value does not start with `ipa:`, clicking a symbol inserts that prefix
+at the value start and adjusts the saved selection before inserting the symbol.
+
+A one-second hover timer starts a preview.  Holding Shift when entering a
+symbol, or pressing Shift while it remains hovered, starts immediately.  The
+footer uses bracket notation, for example:
+
+```text
+æ → cat → /k[æ]t/ → middle
+```
+
+An independent phone is played first, followed by the example after the saved
+IPA delay.  A modifier that cannot stand alone plays only its example.  Hover
+preview is ignored while any ordinary or paused speech is active.
+
+## Bluetooth wake sequence
+
+`AudioWakeSettings` stores:
+
+- enabled state;
+- quiet threshold in milliseconds;
+- frequency in hertz;
+- tone volume;
+- tone duration;
+- settle duration;
+- IPA phone/example delay.
+
+`SapiSpeechEngine` owns the last-audio-end timestamp and measures quiet time
+with `Stopwatch`, so wall-clock changes cannot alter the threshold.  Before
+each speech segment:
+
+1. if wake is disabled, continue immediately;
+2. determine elapsed quiet time;
+3. when it exceeds the threshold, generate a mono 48 kHz 16-bit PCM sine wave;
+4. play it synchronously with short anti-click fades;
+5. record the tone end time;
+6. wait the settle duration;
+7. start SAPI speech.
+
+The first output after launch is treated as having an indefinite quiet period.
+A forced wake test ignores the threshold.  Between an isolated IPA phone and
+its example, the worker waits the IPA delay and performs the complete wake
+check again.
+
+All sequence state, delay handling, and SAPI access remain on the same STA
+worker.  Commands are polled during the IPA delay so cancel/dispose does not
+wait for the entire delay.
+
+## Theme
+
+`AppTheme` has `System`, `Light`, and `Dark`.  `System` reads
+`AppsUseLightTheme` from the current user's Windows personalization settings.
+`ThemeManager` recursively applies window, input, control, and text colours and
+requests a matching DWM title bar.
+
+The main form subscribes to Windows preference changes.  When `System` is
+selected, it reapplies the effective theme on the UI thread.  Modal dialogs use
+the effective theme supplied when they are opened.
 
 ## Fenced-code allow-list
 
@@ -119,8 +263,8 @@ The edit box contains CSV values.  Parsing:
 6. uses `untyped` for a fence without an info-string token;
 7. uses `*` to enable every type.
 
-Edits are applied one second after the last keystroke.  No Enter or Apply action
-is needed.  Closing or explicitly saving forces pending text to apply.
+Edits apply one second after the last keystroke.  Closing or explicitly saving
+forces pending text to apply.
 
 Activity reports one outcome per block encountered during playback:
 
@@ -135,13 +279,13 @@ History owns all indexed fragments, including currently disabled categories and
 fence types.  The cursor tracks the active, pending, or next fragment.
 
 - sentence controls move one currently eligible fragment;
-- node controls move to a node containing at least one currently eligible
-  fragment;
+- node controls move to a node containing an eligible fragment;
 - replay continues forward after navigation;
 - forwarding beyond the last eligible sentence/code line or node cancels
   replay and moves the cursor to the live end;
-- `Silence` cancels current/queued speech and returns to the live end;
-- the play/stop toggle stops both speech and JSONL monitoring when active.
+- `Silence` cancels speech and returns to the live end;
+- the play/stop toggle stops both speech and JSONL monitoring when active;
+- pause/resume affects only the active utterance and does not stop monitoring.
 
 Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 
@@ -149,14 +293,16 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 | --- | --- |
 | `H` / `Alt+H` | Previous node |
 | `J` / `Alt+J` | Previous sentence/code line |
+| `I` / `Alt+I` | Toggle pause/resume |
 | `K` / `Alt+K` | Toggle start/stop |
 | `L` / `Alt+L` | Next sentence/code line |
 | `;` / `Alt+;` | Next node |
 | `'` / `Alt+'` | Silence |
 
-They operate only while the Agent Panel Speaker window has focus.  Bare keys
-are disabled while focus is in a text box, numeric field, or voice dropdown;
-Alt variants remain active there.
+They operate only while the Agent Panel Speaker window has focus.  The invoked
+button receives focus before `PerformClick` runs.  Bare keys work in main-form
+text boxes, numeric controls, and voice dropdowns.  The fenced-code CSV box is
+exempt so it can accept normal typing; Alt variants still work there.
 
 ## Settings
 
@@ -167,28 +313,35 @@ Settings are stored at:
 ```
 
 Saved values include source, follow-newest state, pinned session path, every
-role's voice/rate/pitch/volume, fenced-code CSV, startup playback
-option, polling interval, and normal window bounds.
+role's voice/rate/pitch/volume, fenced-code CSV, spelling rules, IPA rules,
+Bluetooth wake settings, theme, startup playback, polling interval, and normal
+window bounds.
 
-Normal controls save immediately.  The fenced-code CSV uses its one-second
-debounce.  Window placement saves after resize and on shutdown.  Writes use a
-temporary file followed by atomic replacement.  Missing saved voices become
-`Not Spoken` and are logged.
+Settings version 4 adds `Pronunciations`, `AudioWake`, and `Theme`.  Creating or
+upgrading a settings file preserves the spelling-list migration that adds `IDE`
+when no prior list exists.  Normal controls save immediately.  The fenced-code
+CSV uses a one-second debounce.  Writes use a temporary file followed by atomic
+replacement.  Missing saved voices become `Not Spoken` and are logged.
 
 ## Invariants
 
 - Tool calls, tool results, command output, patches, and diffs never enter
   history.
 - Every history fragment retains role and JSONL-node identity.
-- Playback settings are resolved when playback begins, not when indexed.
+- Playback settings, spelling, pronunciation, and wake policy are resolved at
+  playback time.
 - `Not Spoken` changes eligibility, not history retention.
 - Fenced-code aliases are explicit; `cpp` does not imply `c++`.
+- Only the SAPI worker thread accesses the late-bound COM voice.
+- Every sound-producing path uses the serialized worker and wake policy.
 - The play/stop toggle cancels speech before stopping monitoring.
+- The IPA toolbar never inserts into a token or into its `ipa:` prefix.
 - Settings writes never overwrite the live file partially.
 
 ## Diagnostics
 
 Logs record session selection/switching, JSONL classification, accepted nodes,
 duplicate suppression, emitted fragments, playback/navigation, fence outcomes,
-settings saves, missing voices, and form/screen geometry.  Accepted
-conversation text is present in logs and should be reviewed before sharing.
+settings saves, missing voices, wake-tone output/failures, SAPI failures, and
+form/screen geometry.  Accepted conversation text is present in logs and should
+be reviewed before sharing.

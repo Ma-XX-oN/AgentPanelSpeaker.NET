@@ -20,7 +20,29 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 2;
+  public const int CurrentVersion = 4;
+
+
+  /// <summary>
+  /// Gets the one-token-per-line list that should be spelled out.
+  /// </summary>
+  public string SpelledWords { get; init; } = string.Empty;
+
+  /// <summary>
+  /// Gets case-sensitive and /i case-insensitive IPA pronunciation rules.
+  /// </summary>
+  public string Pronunciations { get; init; } = string.Empty;
+
+  /// <summary>
+  /// Gets the optional Bluetooth wake-tone settings.
+  /// </summary>
+  public AudioWakeSettings AudioWake { get; init; } =
+    AudioWakeSettings.Default;
+
+  /// <summary>
+  /// Gets the requested light, dark, or Windows-following theme.
+  /// </summary>
+  public AppTheme Theme { get; init; } = AppTheme.System;
 
   /// <summary>
   /// Creates defaults using the first installed voice for assistant output.
@@ -51,7 +73,13 @@ internal sealed record UserSettings(
       WindowY: 0,
       WindowWidth: 1120,
       WindowHeight: 900,
-      HasWindowPlacement: false);
+      HasWindowPlacement: false)
+    {
+      SpelledWords = "IDE",
+      Pronunciations = string.Empty,
+      AudioWake = AudioWakeSettings.Default,
+      Theme = AppTheme.System
+    };
   }
 
   /// <summary>
