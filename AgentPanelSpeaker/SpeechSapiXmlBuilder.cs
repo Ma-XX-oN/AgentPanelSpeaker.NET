@@ -6,14 +6,16 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Builds SAPI XML with pitch, spelling, pronunciation, and date expansion.
+/// Builds equivalent SAPI XML and System.Speech SSML markup.
 /// </summary>
 internal static partial class SpeechSapiXmlBuilder
 {
+  private const int SsmlPitchPercentPerStep = 5;
+
   /// <summary>
-  /// Builds one SAPI XML fragment for an utterance.
+  /// Builds one marked-up utterance.
   /// </summary>
-  public static string Build(
+  public static SpeechMarkup Build(
     string text,
     int pitchSetting,
     IReadOnlyList<string> spelledWords,
@@ -22,14 +24,17 @@ internal static partial class SpeechSapiXmlBuilder
     ArgumentNullException.ThrowIfNull(text);
     ArgumentNullException.ThrowIfNull(spelledWords);
     ArgumentNullException.ThrowIfNull(pronunciations);
-    string content = BuildContent(text, spelledWords, pronunciations);
-    return WrapPitch(content, pitchSetting);
+    string sapiContent = BuildContent(text, spelledWords, pronunciations);
+    string ssmlContent = ConvertContentToSsml(sapiContent);
+    return new SpeechMarkup(
+      WrapSapiPitch(sapiContent, pitchSetting),
+      WrapSsmlPitch(ssmlContent, pitchSetting));
   }
 
   /// <summary>
   /// Builds one explicit IPA pronunciation for toolbar preview.
   /// </summary>
-  public static string BuildIpaPreview(
+  public static SpeechMarkup BuildIpaPreview(
     string displayedText,
     string ipa,
     int pitchSetting)
@@ -38,7 +43,10 @@ internal static partial class SpeechSapiXmlBuilder
     ArgumentException.ThrowIfNullOrWhiteSpace(ipa);
     var content = new StringBuilder();
     AppendIpa(content, displayedText, ipa);
-    return WrapPitch(content.ToString(), pitchSetting);
+    string sapiContent = content.ToString();
+    return new SpeechMarkup(
+      WrapSapiPitch(sapiContent, pitchSetting),
+      WrapSsmlPitch(sapiContent, pitchSetting));
   }
 
   /// <summary>
@@ -132,6 +140,19 @@ internal static partial class SpeechSapiXmlBuilder
   }
 
   /// <summary>
+  /// Converts native SAPI spelling elements into SSML spelling elements.
+  /// </summary>
+  private static string ConvertContentToSsml(string sapiContent)
+  {
+    return sapiContent
+      .Replace(
+        "<spell>",
+        "<say-as interpret-as=\"characters\">",
+        StringComparison.Ordinal)
+      .Replace("</spell>", "</say-as>", StringComparison.Ordinal);
+  }
+
+  /// <summary>
   /// Returns the earliest successful match and uses kind order on ties.
   /// </summary>
   private static SpecialMatch? Earliest(params SpecialMatch?[] matches)
@@ -188,10 +209,23 @@ internal static partial class SpeechSapiXmlBuilder
   /// <summary>
   /// Applies the native SAPI absolute-middle pitch setting.
   /// </summary>
-  private static string WrapPitch(string content, int pitchSetting)
+  private static string WrapSapiPitch(string content, int pitchSetting)
   {
     int pitch = Math.Clamp(pitchSetting, -10, 10);
     return $"<pitch absmiddle=\"{pitch}\">{content}</pitch>";
+  }
+
+  /// <summary>
+  /// Applies the System.Speech relative pitch setting.
+  /// </summary>
+  private static string WrapSsmlPitch(string content, int pitchSetting)
+  {
+    int pitchPercent = Math.Clamp(pitchSetting, -10, 10) *
+      SsmlPitchPercentPerStep;
+    string pitch = pitchPercent > 0
+      ? $"+{pitchPercent}%"
+      : $"{pitchPercent}%";
+    return $"<prosody pitch=\"{pitch}\">{content}</prosody>";
   }
 
   /// <summary>
@@ -290,7 +324,7 @@ internal static partial class SpeechSapiXmlBuilder
   }
 
   /// <summary>
-  /// Escapes text before inserting it into SAPI XML.
+  /// Escapes text before inserting it into XML.
   /// </summary>
   private static void AppendEscaped(StringBuilder output, string text)
   {

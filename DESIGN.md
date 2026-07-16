@@ -19,7 +19,7 @@ SessionLocator
   -> SpeechSapiXmlBuilder
   -> SapiSpeechEngine STA worker
   -> optional Bluetooth wake tone
-  -> Windows SAPI SpVoice
+  -> native SAPI SpVoice or System.Speech
 ```
 
 The monitor indexes all conversational roles and fenced-code blocks.  Current
@@ -33,13 +33,13 @@ the JSONL.
 | --- | --- |
 | `SessionLocator` | Finds latest or explicitly selected Claude/Codex JSONL. |
 | `JsonlTailReader` | Reads only complete newly appended JSONL lines. |
-| `JsonlRecordExtractor` | Classifies user, assistant, and reasoning text. |
+| `JsonlRecordExtractor` | Classifies user, assistant, reasoning, and Plans. |
 | `TextCleaner` | Cleans prose and preserves typed fenced-code lines. |
 | `SentenceSegmenter` | Splits cleaned prose into navigable sentences. |
 | `JsonlSessionMonitor` | Builds history and emits deduplicated fragments. |
 | `SpeechService` | Owns history, navigation, eligibility, and speech state. |
-| `SpeechSapiXmlBuilder` | Adds pitch, pronunciation, spelling, and dates. |
-| `SapiSpeechEngine` | Owns SAPI and all serialized audio output. |
+| `SpeechSapiXmlBuilder` | Builds equivalent SAPI XML and SSML markup. |
+| `SapiSpeechEngine` | Owns both providers and all serialized audio output. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
 | `PronunciationDialog` | Edits spelling/IPA and hosts the IPA toolbar. |
 | `IpaSymbolCatalog` | Describes grouped symbols and preview examples. |
@@ -62,9 +62,11 @@ Accepted `event_msg` payloads:
 | `user_message` | User |
 | `agent_message` | Assistant |
 | `agent_reasoning` | Reasoning |
+| `item_completed` with `item.type=Plan` | Assistant |
 
-All `response_item` records are rejected.  This excludes command calls,
-command output, tool calls, patches, diffs, and file-edit details.
+Other `item_completed` item types and all `response_item` records are
+rejected.  This excludes command calls, command output, tool calls, patches,
+diffs, and file-edit details.
 
 ### Claude
 
@@ -100,25 +102,26 @@ entry.  Node navigation groups fragments carrying the same `NodeId`.
 profile contains:
 
 - voice name or `Not Spoken`;
-- SAPI rate `-10..10`;
-- SAPI absolute-middle pitch `-10..10`;
+- rate `-10..10`;
+- pitch `-10..10`;
 - volume `0..100` percent.
 
-Rate and volume are assigned to `SAPI.SpVoice`.  Pitch is emitted as native
-SAPI XML:
+Voice discovery is the case-insensitive union of enabled `System.Speech`
+voices and native `SAPI.SpVoice` tokens.  A duplicate name uses native SAPI,
+preserving the absolute-middle pitch element:
 
 ```xml
 <pitch absmiddle="5">text</pitch>
 ```
 
-The SAPI worker receives one serialized sequence at a time and reports
-completion back to `SpeechService`.  Normal speech, voice tests, IPA previews,
-and wake-tone tests share that worker.  This prevents one audio operation from
-interrupting another unexpectedly.
+A voice available only through `System.Speech` uses a complete SSML document
+with an equivalent relative-pitch value.  The worker receives one serialized
+sequence at a time and reports completion back to `SpeechService`.  Normal
+speech, voice tests, IPA previews, and wake-tone tests share that worker.
 
-`SpeechService` retains active and paused state.  Pause/resume calls
-`SpVoice.Pause` and `SpVoice.Resume`; stop and silence purge the active SAPI
-queue.  Test buttons remain disabled for both speaking and paused utterances.
+`SpeechService` retains active and paused state.  Pause/resume and cancellation
+are sent to whichever provider owns the active utterance.  Test buttons remain
+disabled for both speaking and paused utterances.
 
 A fenced-code line is eligible only when:
 
@@ -146,7 +149,8 @@ receives them.  A trailing `Z` is spoken as UTC.
 
 The spelling list is normalized by trimming each line, removing empty lines,
 and de-duplicating case-insensitively.  Whole-token matching is
-case-insensitive.  Matches are wrapped in the native SAPI `spell` element:
+case-insensitive.  Native SAPI matches use `spell`; System.Speech matches use
+the equivalent SSML `say-as` element:
 
 ```xml
 <spell>IDE</spell>
@@ -229,14 +233,14 @@ each speech segment:
 4. play it synchronously with short anti-click fades;
 5. record the tone end time;
 6. wait the settle duration;
-7. start SAPI speech.
+7. start speech through the selected voice provider.
 
 The first output after launch is treated as having an indefinite quiet period.
 A forced wake test ignores the threshold.  Between an isolated IPA phone and
 its example, the worker waits the IPA delay and performs the complete wake
 check again.
 
-All sequence state, delay handling, and SAPI access remain on the same STA
+All sequence state, delay handling, and provider access remain on the same STA
 worker.  Commands are polled during the IPA delay so cancel/dispose does not
 wait for the entire delay.
 

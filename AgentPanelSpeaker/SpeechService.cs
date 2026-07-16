@@ -271,13 +271,13 @@ internal sealed class SpeechService : IDisposable
       }
 
       SpeechProfileSettings normalized = profile.Normalize();
-      string? isolatedXml = string.IsNullOrWhiteSpace(isolatedIpa)
+      SpeechMarkup? isolatedMarkup = string.IsNullOrWhiteSpace(isolatedIpa)
         ? null
         : SpeechSapiXmlBuilder.BuildIpaPreview(
           isolatedIpa,
           isolatedIpa,
           normalized.Pitch);
-      string exampleXml = SpeechSapiXmlBuilder.BuildIpaPreview(
+      SpeechMarkup exampleMarkup = SpeechSapiXmlBuilder.BuildIpaPreview(
         exampleWord,
         exampleIpa,
         normalized.Pitch);
@@ -285,8 +285,8 @@ internal sealed class SpeechService : IDisposable
       try
       {
         _engine.PreviewIpa(
-          isolatedXml,
-          exampleXml,
+          isolatedMarkup,
+          exampleMarkup,
           normalized,
           wakeSettings.Normalize());
       }
@@ -596,7 +596,7 @@ internal sealed class SpeechService : IDisposable
     IReadOnlyList<string> spelledWords = _spelledWordsProvider();
     PronunciationRuleSet pronunciations = _pronunciationProvider();
     AudioWakeSettings wakeSettings = _wakeSettingsProvider().Normalize();
-    string sapiXml = SpeechSapiXmlBuilder.Build(
+    SpeechMarkup markup = SpeechSapiXmlBuilder.Build(
       text,
       normalized.Pitch,
       spelledWords,
@@ -611,7 +611,7 @@ internal sealed class SpeechService : IDisposable
       pronunciationCount = pronunciations.Rules.Count,
       wakeEnabled = wakeSettings.Enabled
     });
-    _engine.Speak(sapiXml, normalized, wakeSettings);
+    _engine.Speak(markup, normalized, wakeSettings);
   }
 
   /// <summary>
@@ -628,7 +628,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Cancels SAPI and clears pause state.
+  /// Cancels the active speech provider and clears pause state.
   /// </summary>
   private void CancelEngineLocked()
   {

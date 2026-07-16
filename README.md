@@ -1,8 +1,9 @@
-# Agent Panel Speaker v24
+# Agent Panel Speaker v25.1
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
-speaks user, assistant, and reasoning text with separate voice profiles.  Tool
-calls, tool results, command output, patches, diffs, and status records are
+speaks user, assistant, reasoning, and completed Codex Plan text with
+separate voice profiles.  Plans use the Assistant profile.  Tool calls, tool
+results, command output, patches, diffs, and unrelated status records are
 excluded.
 
 See [DESIGN.md](DESIGN.md) for the internal architecture and invariants.
@@ -13,7 +14,7 @@ Each content row has its own:
 
 - voice (`Not Spoken` disables that category);
 - rate (`-10..10`);
-- pitch (`-10..10` SAPI absolute-middle setting);
+- pitch (`-10..10`);
 - volume slider (`0..100` percent);
 - test button for that content voice.
 
@@ -21,8 +22,11 @@ Changes remain available while monitoring and apply to the next sentence or
 code line.  The active fragment is not restarted.  Test buttons are disabled
 while speech is active or paused, so a test cannot interrupt it.
 
-Pitch uses the native SAPI XML `pitch` control.  Date and time patterns are
-expanded into natural spoken forms before synthesis.
+The voice lists combine every enabled voice exposed through `System.Speech`
+with the native `SAPI.SpVoice` list.  A voice present in both lists uses
+native SAPI.  Voices exposed only through `System.Speech` use equivalent SSML
+for rate, pitch, spelling, and pronunciation markup.  Date and time patterns
+are expanded into natural spoken forms before synthesis.
 
 ## Pronunciations and spelling
 
@@ -31,9 +35,9 @@ expanded into natural spoken forms before synthesis.
 ### Spell out
 
 Enter one token per line.  Matching is case-insensitive and uses whole-token
-boundaries.  A match is emitted through the native SAPI `spell` element, so
-`IDE` is spoken letter by letter.  Entries are trimmed and de-duplicated while
-preserving their first occurrence.
+boundaries.  A match is emitted through native SAPI `spell` or the equivalent
+System.Speech SSML `say-as` element, so `IDE` is spoken letter by letter.
+Entries are trimmed and de-duplicated while preserving their first occurrence.
 
 ### IPA pronunciations
 
@@ -177,7 +181,8 @@ polling interval, startup playback, and window placement.
 
 ## Build and run
 
-Requirements: Windows 11, .NET 10 SDK, and at least one installed SAPI voice.
+Requirements: Windows 11, .NET 10 SDK, and at least one enabled Windows
+speech voice.
 
 ```text
 .\build.cmd

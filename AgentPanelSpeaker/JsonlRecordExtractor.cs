@@ -188,6 +188,7 @@ internal static partial class JsonlRecordExtractor
         ContentCategory.User,
         StripCodexUserPreamble(GetString(payload, "message")),
         timestamp),
+      "item_completed" => CreateCodexCompletedItemNode(payload, timestamp),
       _ => null
     };
 
@@ -201,6 +202,30 @@ internal static partial class JsonlRecordExtractor
         $"accepted codex {payloadType}",
         recordType,
         payloadType);
+  }
+
+  /// <summary>
+  /// Extracts a completed Codex Plan and rejects other completed items.
+  /// </summary>
+  private static ExtractedNode? CreateCodexCompletedItemNode(
+    JsonElement payload,
+    string? timestamp)
+  {
+    if (!payload.TryGetProperty("item", out JsonElement item) ||
+        item.ValueKind != JsonValueKind.Object ||
+        !string.Equals(
+          GetString(item, "type"),
+          "Plan",
+          StringComparison.OrdinalIgnoreCase))
+    {
+      return null;
+    }
+
+    return CreateNode(
+      "codex.plan",
+      ContentCategory.Assistant,
+      GetString(item, "text"),
+      timestamp);
   }
 
   /// <summary>
