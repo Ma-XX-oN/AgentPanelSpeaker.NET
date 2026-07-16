@@ -81,6 +81,25 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
+  /// Previews ordinary text and forces the enabled Bluetooth wake prefix.
+  /// </summary>
+  public void PreviewText(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
+    AudioWakeSettings wakeSettings)
+  {
+    ArgumentNullException.ThrowIfNull(markup);
+    ArgumentNullException.ThrowIfNull(profile);
+    ArgumentNullException.ThrowIfNull(wakeSettings);
+    AudioWakeSettings normalizedWake = wakeSettings.Normalize();
+    AddCommand(new SpeakCommand(
+      markup,
+      profile.Normalize(),
+      normalizedWake,
+      ForceWake: normalizedWake.Enabled));
+  }
+
+  /// <summary>
   /// Plays an optional isolated phone, waits, and then speaks its example.
   /// </summary>
   public void PreviewIpa(
@@ -945,7 +964,7 @@ internal sealed class SapiSpeechEngine : IDisposable
       return new PlaybackRequest(
         command.Profile,
         command.WakeSettings,
-        forceWake: false,
+        forceWake: command.WakeSettings.Enabled,
         segments);
     }
   }

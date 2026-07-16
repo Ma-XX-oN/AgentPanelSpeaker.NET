@@ -1,4 +1,4 @@
-# Agent Panel Speaker v25.5
+# Agent Panel Speaker v25.6.1
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, and completed Codex Plan text with
@@ -53,12 +53,14 @@ whole-token boundaries, and an exact-case rule takes precedence over `/i`.
 Pronunciation rules take precedence over the spell-out list.
 
 The pronunciation tab has a manually opened IPA symbol toolbar.  It never
-closes by itself.  Clicking a symbol inserts it at the saved caret position.
-The adjacent **Pronounce** button speaks the rule on the caret's current line
-using the first enabled speech profile.  It exists only on the Pronunciations
-tab and is enabled only when that line contains one valid rule.
-When the value does not yet start with `ipa:`, the prefix is inserted after the
-`=` first.
+closes by itself, and its horizontal splitter lets the user resize the toolbar
+relative to the editor.  Clicking a symbol inserts it at the saved caret
+position.  The adjacent **Pronounce** button exists only on the Pronunciations
+tab and speaks the token on the caret's current line using the first enabled
+speech profile.  When the value starts with `ipa:`, that IPA is used.  When the
+prefix is absent, including an empty value such as `word=`, the token is spoken
+with the voice's standard pronunciation.  Clicking a symbol still inserts the
+`ipa:` prefix after `=` when required.
 
 IPA buttons are enabled only when the caret or selection starts in a valid
 value position:
@@ -68,7 +70,9 @@ value position:
 - when `ipa:` already exists, the caret must be after its colon.
 
 Hovering for one second previews a symbol.  Holding Shift while entering a
-button previews immediately.  The footer shows the example with the active
+button previews immediately.  The footer states both controls when they fit;
+otherwise it alternates them at a readable interval until the pointer enters
+an enabled symbol button.  The footer then shows the example with the active
 phone bracketed, such as:
 
 ```text
@@ -101,8 +105,11 @@ buffer to one WinMM `waveOut` stream.  The audio device therefore remains open
 for the complete tone → silence → speech sequence.
 
 IPA phone and example segments are also rendered into one buffer with the saved
-delay inserted as PCM silence.  The tone-only and tone-plus-phrase buttons force
-the prefix regardless of the quiet threshold.
+delay inserted as PCM silence.  When Bluetooth wake is enabled, explicit IPA
+and Pronounce previews always prepend the configured tone and settling silence,
+regardless of the quiet threshold.  This gives short preview sounds the same
+minimum lead-in duration as a wake test.  The tone-only and tone-plus-phrase
+buttons also force the prefix.
 
 The tone is best-effort.  A codec, driver, amplifier, or speaker may filter it
 or reproduce it audibly.

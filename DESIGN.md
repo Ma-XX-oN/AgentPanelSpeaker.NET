@@ -196,9 +196,10 @@ grouped using IPA chart sections.  Each definition supplies:
 - whether an isolated-phone preview is meaningful.
 
 The editor saves its selection before a toolbar button takes focus.  The
-Pronounce button parses only the caret's current line and previews that rule
-through the same PCM path as hover previews.  It is hosted only by the
-Pronunciations tab.  Insertion is permitted only when:
+Pronounce button reads only the caret's current line.  It previews explicit
+`ipa:` content through the IPA path and otherwise speaks the line's token with
+ordinary voice pronunciation, including an empty value such as `word=`.  It is
+hosted only by the Pronunciations tab.  Insertion is permitted only when:
 
 1. the current line contains `=`;
 2. the selection starts strictly to its right;
@@ -210,7 +211,10 @@ at the value start and adjusts the saved selection before inserting the symbol.
 
 A one-second hover timer starts a preview.  Holding Shift when entering a
 symbol, or pressing Shift while it remains hovered, starts immediately.  The
-footer uses bracket notation, for example:
+editor and toolbar are separated by a user-movable horizontal splitter.  The
+footer displays both hover instructions when they fit, otherwise alternates
+between them until an enabled symbol is hovered.  It then uses bracket notation,
+for example:
 
 ```text
 æ → cat → /k[æ]t/ → middle
@@ -249,9 +253,11 @@ playback request it:
 The audio device remains open from the first tone sample through the final
 speech sample.  No `SoundPlayer` or provider-device handoff occurs between the
 prefix and sentence.  The first output after launch is treated as having an
-indefinite quiet period.  Wake tests force the prefix; **Test wake + phrase**
-uses the content profile selected in the dialog and the phrase
-`Yes, that makes sense.`
+indefinite quiet period.  Wake tests force the prefix.  Explicit IPA hover and
+Pronounce previews also force it whenever wake is enabled, so short sounds get
+the configured tone-plus-settle lead-in even when the ordinary quiet threshold
+has not elapsed.  **Test wake + phrase** uses the content profile selected in
+the dialog and the phrase `Yes, that makes sense.`
 
 All provider rendering and playback ownership remain on the same STA worker.
 The worker polls commands while `waveOut` is active, so pause, resume, cancel,

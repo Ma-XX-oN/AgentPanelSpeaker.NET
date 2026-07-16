@@ -248,6 +248,48 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Previews ordinary text without spelling or pronunciation overrides.
+  /// </summary>
+  public void PreviewText(
+    string text,
+    SpeechProfileSettings profile,
+    AudioWakeSettings wakeSettings)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(text);
+    ArgumentNullException.ThrowIfNull(profile);
+    ArgumentNullException.ThrowIfNull(wakeSettings);
+
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (_activeKind != ActiveSpeechKind.None || !profile.IsSpoken)
+      {
+        return;
+      }
+
+      SpeechProfileSettings normalized = profile.Normalize();
+      SpeechMarkup markup = SpeechSapiXmlBuilder.Build(
+        text.Trim(),
+        normalized.Pitch,
+        Array.Empty<string>(),
+        PronunciationRuleSet.Parse(string.Empty));
+      SetActiveKindLocked(ActiveSpeechKind.Untracked);
+      try
+      {
+        _engine.PreviewText(
+          markup,
+          normalized,
+          wakeSettings.Normalize());
+      }
+      catch
+      {
+        SetActiveKindLocked(ActiveSpeechKind.None);
+        throw;
+      }
+    }
+  }
+
+  /// <summary>
   /// Previews one IPA phone and its example using the central audio path.
   /// </summary>
   public void PreviewIpa(

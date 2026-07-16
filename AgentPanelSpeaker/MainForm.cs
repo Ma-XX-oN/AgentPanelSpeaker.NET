@@ -23,13 +23,13 @@ internal sealed class MainForm : Form
   private readonly NumericUpDown _pollNumeric = new();
   private readonly TextBox _fenceTypesTextBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
-  private readonly Button _playStopButton = new();
-  private readonly Button _pauseButton = new();
+  private readonly GlyphButton _playStopButton = new();
+  private readonly GlyphButton _pauseButton = new();
   private readonly Button _cancelSpeechButton = new();
-  private readonly Button _rewindSentenceButton = new();
-  private readonly Button _forwardSentenceButton = new();
-  private readonly Button _rewindNodeButton = new();
-  private readonly Button _forwardNodeButton = new();
+  private readonly GlyphButton _rewindSentenceButton = new();
+  private readonly GlyphButton _forwardSentenceButton = new();
+  private readonly GlyphButton _rewindNodeButton = new();
+  private readonly GlyphButton _forwardNodeButton = new();
   private readonly Button _saveSettingsButton = new();
   private readonly Button _resetSettingsButton = new();
   private readonly Button _openLogButton = new();
@@ -78,7 +78,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.5";
+    Text = "Agent Panel Speaker v25.6.1";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -96,6 +96,7 @@ internal sealed class MainForm : Form
     ConfigureReadOnlyTextBox(_sessionPathTextBox);
     ConfigureButton(_detectLatestButton, "Detect latest");
     ConfigureButton(_browseButton, "Browse JSONL");
+    ConfigureButton(_cancelSpeechButton, "Silence");
     ConfigureTransportButton(
       _rewindNodeButton,
       "⏮",
@@ -120,7 +121,6 @@ internal sealed class MainForm : Form
       _forwardNodeButton,
       "⏭",
       "Next JSONL node (; or Alt+;)");
-    ConfigureButton(_cancelSpeechButton, "Silence");
     _toolTip.SetToolTip(
       _cancelSpeechButton,
       "Silence speech; continue monitoring (' or Alt+')");
@@ -1149,7 +1149,7 @@ internal sealed class MainForm : Form
     string description = paused
       ? "Resume speech (I or Alt+I)"
       : "Pause speech (I or Alt+I)";
-    _pauseButton.Text = text;
+    _pauseButton.Glyph = text;
     _pauseButton.AccessibleName = description;
     _toolTip.SetToolTip(_pauseButton, description);
   }
@@ -1163,7 +1163,7 @@ internal sealed class MainForm : Form
     string description = active
       ? "Stop monitoring and speech (K or Alt+K)"
       : "Start monitoring (K or Alt+K)";
-    _playStopButton.Text = text;
+    _playStopButton.Glyph = text;
     _playStopButton.AccessibleName = description;
     _toolTip.SetToolTip(_playStopButton, description);
   }
@@ -1213,6 +1213,28 @@ internal sealed class MainForm : Form
   private void ApplyCurrentTheme()
   {
     ThemeManager.Apply(this, GetSelectedTheme());
+    SynchronizeTransportButtonHeights();
+  }
+
+  /// <summary>
+  /// Keeps every glyph transport button equal to the standard Silence button.
+  /// </summary>
+  private void SynchronizeTransportButtonHeights()
+  {
+    int height = _cancelSpeechButton.PreferredSize.Height;
+    GlyphButton[] buttons =
+    {
+      _rewindNodeButton,
+      _rewindSentenceButton,
+      _pauseButton,
+      _playStopButton,
+      _forwardSentenceButton,
+      _forwardNodeButton
+    };
+    foreach (GlyphButton button in buttons)
+    {
+      button.Height = height;
+    }
   }
 
   /// <summary>
@@ -1368,17 +1390,16 @@ internal sealed class MainForm : Form
   /// Configures a transport button.
   /// </summary>
   private void ConfigureTransportButton(
-    Button button,
+    GlyphButton button,
     string symbol,
     string accessibleName)
   {
+    int standardButtonHeight = _cancelSpeechButton.PreferredSize.Height;
     button.AutoSize = false;
-    button.Size = new Size(54, 44);
-    button.Font = new Font("Segoe UI Symbol", 15.0f);
-    button.Padding = new Padding(0, 0, 0, 2);
-    button.Text = symbol;
-    button.TextAlign = ContentAlignment.MiddleCenter;
-    button.UseCompatibleTextRendering = true;
+    button.Size = new Size(50, standardButtonHeight);
+    button.Font = new Font("Segoe UI Symbol", 14.0f);
+    button.Glyph = symbol;
+    button.Text = string.Empty;
     button.AccessibleName = accessibleName;
     _toolTip.SetToolTip(button, accessibleName);
   }

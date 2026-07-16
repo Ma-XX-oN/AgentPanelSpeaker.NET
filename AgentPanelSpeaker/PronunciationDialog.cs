@@ -14,18 +14,29 @@ internal sealed class PronunciationDialog : Form
   private readonly Button _toggleToolbarButton = new();
   private readonly Button _pronounceButton = new();
   private readonly Panel _toolbarPanel = new();
-  private readonly TableLayoutPanel _pronunciationLayout = new();
+  private readonly SplitContainer _pronunciationSplitContainer = new();
   private readonly Label _ipaInformationLabel = new();
   private readonly Label _validationLabel = new();
   private readonly Button _okButton = new();
   private readonly Button _cancelButton = new();
   private readonly ToolTip _toolTip = new();
   private readonly System.Windows.Forms.Timer _hoverTimer = new();
+  private readonly System.Windows.Forms.Timer _informationTimer = new();
   private readonly List<Button> _ipaButtons = new();
+
+  private static readonly string[] IpaInformationSentences =
+  {
+    "Hover over an IPA symbol to see its sound and example.",
+    "Press Shift while hovering for an immediate sound example."
+  };
+
+  private const int InformationRotationMilliseconds = 7000;
 
   private IpaSymbolDefinition? _hoveredSymbol;
   private int _savedSelectionStart;
   private int _savedSelectionLength;
+  private int _informationSentenceIndex;
+  private int _savedToolbarHeight = 300;
   private bool _toolbarOpen;
 
   /// <summary>
@@ -103,6 +114,9 @@ internal sealed class PronunciationDialog : Form
 
     _hoverTimer.Interval = 1000;
     _hoverTimer.Tick += HoverTimerTick;
+    _informationTimer.Interval = InformationRotationMilliseconds;
+    _informationTimer.Tick += InformationTimerTick;
+    _informationTimer.Start();
     _speech.SpeakingStateChanged += SpeechSpeakingStateChanged;
     FormClosing += PronunciationDialogClosing;
     ThemeManager.Apply(this, theme);
@@ -128,6 +142,7 @@ internal sealed class PronunciationDialog : Form
     {
       _speech.SpeakingStateChanged -= SpeechSpeakingStateChanged;
       _hoverTimer.Dispose();
+      _informationTimer.Dispose();
       _toolTip.Dispose();
     }
     base.Dispose(disposing);
@@ -223,39 +238,69 @@ internal sealed class PronunciationDialog : Form
     _toolbarPanel.AutoScroll = true;
     _toolbarPanel.BorderStyle = BorderStyle.FixedSingle;
     _toolbarPanel.Dock = DockStyle.Fill;
-    _toolbarPanel.Visible = false;
     _toolbarPanel.Controls.Add(CreateIpaToolbarContents());
 
     _ipaInformationLabel.AutoEllipsis = true;
+    _ipaInformationLabel.AutoSize = false;
     _ipaInformationLabel.BorderStyle = BorderStyle.FixedSingle;
     _ipaInformationLabel.Dock = DockStyle.Fill;
     _ipaInformationLabel.Font = new Font(
       FontFamily.GenericMonospace,
       10.0f);
-    _ipaInformationLabel.MinimumSize = new Size(0, 30);
-    _ipaInformationLabel.Padding = new Padding(6);
-    _ipaInformationLabel.Text =
-      "Hover over an IPA symbol to see its sound and example.";
+    _ipaInformationLabel.Padding = new Padding(6, 4, 6, 4);
+    _ipaInformationLabel.Text = IpaInformationSentences[0];
+    _ipaInformationLabel.TextAlign = ContentAlignment.MiddleLeft;
+    _ipaInformationLabel.SizeChanged += (_, _) =>
+      RefreshIdleInformationText();
 
-    _pronunciationLayout.ColumnCount = 1;
-    _pronunciationLayout.Dock = DockStyle.Fill;
-    _pronunciationLayout.Padding = new Padding(8);
-    _pronunciationLayout.RowCount = 5;
-    _pronunciationLayout.ColumnStyles.Add(
+    var editorAndButtons = new TableLayoutPanel
+    {
+      ColumnCount = 1,
+      Dock = DockStyle.Fill,
+      RowCount = 2
+    };
+    editorAndButtons.ColumnStyles.Add(
       new ColumnStyle(SizeType.Percent, 100.0f));
-    _pronunciationLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    _pronunciationLayout.RowStyles.Add(
+    editorAndButtons.RowStyles.Add(
       new RowStyle(SizeType.Percent, 100.0f));
-    _pronunciationLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    _pronunciationLayout.RowStyles.Add(
-      new RowStyle(SizeType.Absolute, 0.0f));
-    _pronunciationLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    _pronunciationLayout.Controls.Add(instructions, 0, 0);
-    _pronunciationLayout.Controls.Add(_pronunciationsTextBox, 0, 1);
-    _pronunciationLayout.Controls.Add(pronunciationButtons, 0, 2);
-    _pronunciationLayout.Controls.Add(_toolbarPanel, 0, 3);
-    _pronunciationLayout.Controls.Add(_ipaInformationLabel, 0, 4);
-    page.Controls.Add(_pronunciationLayout);
+    editorAndButtons.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    editorAndButtons.Controls.Add(_pronunciationsTextBox, 0, 0);
+    editorAndButtons.Controls.Add(pronunciationButtons, 0, 1);
+
+    _pronunciationSplitContainer.Dock = DockStyle.Fill;
+    _pronunciationSplitContainer.FixedPanel = FixedPanel.Panel2;
+    _pronunciationSplitContainer.IsSplitterFixed = false;
+    _pronunciationSplitContainer.Orientation = Orientation.Horizontal;
+    _pronunciationSplitContainer.Panel1MinSize = 150;
+    _pronunciationSplitContainer.Panel2MinSize = 120;
+    _pronunciationSplitContainer.Panel2Collapsed = true;
+    _pronunciationSplitContainer.SplitterWidth = 6;
+    _pronunciationSplitContainer.Panel1.Controls.Add(editorAndButtons);
+    _pronunciationSplitContainer.Panel2.Controls.Add(_toolbarPanel);
+    _pronunciationSplitContainer.SplitterMoved += (_, _) =>
+    {
+      if (!_pronunciationSplitContainer.Panel2Collapsed)
+      {
+        _savedToolbarHeight =
+          _pronunciationSplitContainer.Panel2.ClientSize.Height;
+      }
+    };
+
+    var layout = new TableLayoutPanel
+    {
+      ColumnCount = 1,
+      Dock = DockStyle.Fill,
+      Padding = new Padding(8),
+      RowCount = 3
+    };
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100.0f));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40.0f));
+    layout.Controls.Add(instructions, 0, 0);
+    layout.Controls.Add(_pronunciationSplitContainer, 0, 1);
+    layout.Controls.Add(_ipaInformationLabel, 0, 2);
+    page.Controls.Add(layout);
     return page;
   }
 
@@ -311,17 +356,15 @@ internal sealed class PronunciationDialog : Form
       font,
       Size.Empty,
       TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-    var button = new Button
+    var button = new GlyphButton
     {
       AutoSize = false,
       Font = font,
+      Glyph = definition.Symbol,
       Height = Math.Max(42, textSize.Height + 14),
       Margin = new Padding(2),
-      Padding = new Padding(2),
       Tag = definition,
-      Text = definition.Symbol,
-      TextAlign = ContentAlignment.MiddleCenter,
-      UseCompatibleTextRendering = true,
+      Text = string.Empty,
       Width = Math.Max(42, textSize.Width + 18)
     };
     _ipaButtons.Add(button);
@@ -342,18 +385,51 @@ internal sealed class PronunciationDialog : Form
   private void ToggleToolbar()
   {
     _toolbarOpen = !_toolbarOpen;
-    _toolbarPanel.Visible = _toolbarOpen;
-    RowStyle editorStyle = _pronunciationLayout.RowStyles[1];
-    editorStyle.SizeType = SizeType.Percent;
-    editorStyle.Height = _toolbarOpen ? 55.0f : 100.0f;
-    RowStyle toolbarStyle = _pronunciationLayout.RowStyles[3];
-    toolbarStyle.SizeType = _toolbarOpen
-      ? SizeType.Percent
-      : SizeType.Absolute;
-    toolbarStyle.Height = _toolbarOpen ? 45.0f : 0.0f;
+    if (_toolbarOpen)
+    {
+      _pronunciationSplitContainer.Panel2Collapsed = false;
+      BeginInvoke((Action)RestoreToolbarHeight);
+    }
+    else
+    {
+      _savedToolbarHeight =
+        _pronunciationSplitContainer.Panel2.ClientSize.Height;
+      _pronunciationSplitContainer.Panel2Collapsed = true;
+      ResumeInformationRotation();
+    }
     _toggleToolbarButton.Text = _toolbarOpen
       ? "Hide IPA symbols"
       : "Show IPA symbols";
+  }
+
+  /// <summary>
+  /// Restores the user-sized toolbar height after its panel is reopened.
+  /// </summary>
+  private void RestoreToolbarHeight()
+  {
+    if (!_toolbarOpen || _pronunciationSplitContainer.Panel2Collapsed)
+    {
+      return;
+    }
+
+    int totalHeight = _pronunciationSplitContainer.ClientSize.Height;
+    int maximumToolbarHeight =
+      totalHeight -
+      _pronunciationSplitContainer.SplitterWidth -
+      _pronunciationSplitContainer.Panel1MinSize;
+    if (maximumToolbarHeight < _pronunciationSplitContainer.Panel2MinSize)
+    {
+      return;
+    }
+
+    int toolbarHeight = Math.Clamp(
+      _savedToolbarHeight,
+      _pronunciationSplitContainer.Panel2MinSize,
+      maximumToolbarHeight);
+    _pronunciationSplitContainer.SplitterDistance =
+      totalHeight -
+      _pronunciationSplitContainer.SplitterWidth -
+      toolbarHeight;
   }
 
   /// <summary>
@@ -406,11 +482,13 @@ internal sealed class PronunciationDialog : Form
   private void IpaButtonMouseEnter(object? sender, EventArgs eventArgs)
   {
     if (sender is not Button button ||
+        !button.Enabled ||
         button.Tag is not IpaSymbolDefinition definition)
     {
       return;
     }
 
+    _informationTimer.Stop();
     _hoveredSymbol = definition;
     _ipaInformationLabel.Text =
       $"{definition.Symbol} → {definition.ExampleWord} → " +
@@ -427,12 +505,73 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Cancels a pending hover preview.
+  /// Cancels a pending hover preview and restores idle instructions.
   /// </summary>
   private void IpaButtonMouseLeave(object? sender, EventArgs eventArgs)
   {
     _hoverTimer.Stop();
     _hoveredSymbol = null;
+    ResumeInformationRotation();
+  }
+
+  /// <summary>
+  /// Alternates idle instructions when both do not fit on one line.
+  /// </summary>
+  private void InformationTimerTick(object? sender, EventArgs eventArgs)
+  {
+    if (_hoveredSymbol is not null)
+    {
+      return;
+    }
+
+    _informationSentenceIndex =
+      (_informationSentenceIndex + 1) % IpaInformationSentences.Length;
+    RefreshIdleInformationText();
+  }
+
+  /// <summary>
+  /// Restores idle instructions after the pointer leaves an active key.
+  /// </summary>
+  private void ResumeInformationRotation()
+  {
+    _hoverTimer.Stop();
+    _hoveredSymbol = null;
+    RefreshIdleInformationText();
+  }
+
+  /// <summary>
+  /// Shows both idle instructions when space permits, otherwise rotates them.
+  /// </summary>
+  private void RefreshIdleInformationText()
+  {
+    if (_hoveredSymbol is not null || _ipaInformationLabel.IsDisposed)
+    {
+      return;
+    }
+
+    string combined = string.Join("  ", IpaInformationSentences);
+    Size combinedSize = TextRenderer.MeasureText(
+      combined,
+      _ipaInformationLabel.Font,
+      Size.Empty,
+      TextFormatFlags.NoPadding |
+      TextFormatFlags.NoPrefix |
+      TextFormatFlags.SingleLine);
+    int availableWidth = Math.Max(
+      0,
+      _ipaInformationLabel.ClientSize.Width -
+      _ipaInformationLabel.Padding.Horizontal);
+
+    _informationTimer.Stop();
+    if (availableWidth >= combinedSize.Width)
+    {
+      _ipaInformationLabel.Text = combined;
+      return;
+    }
+
+    _ipaInformationLabel.Text =
+      IpaInformationSentences[_informationSentenceIndex];
+    _informationTimer.Start();
   }
 
   /// <summary>
@@ -495,8 +634,9 @@ internal sealed class PronunciationDialog : Form
   private void PronounceButtonClicked(object? sender, EventArgs eventArgs)
   {
     if (_speech.IsSpeaking ||
-        !TryGetCurrentPronunciationRule(out PronunciationRule? rule) ||
-        rule is null)
+        !TryGetCurrentPronunciationPreview(
+          out string token,
+          out string? ipa))
     {
       return;
     }
@@ -509,31 +649,66 @@ internal sealed class PronunciationDialog : Form
       return;
     }
 
-    _activity($"Pronunciation preview: {rule.Token}; /{rule.Ipa}/.");
-    _speech.PreviewIpa(
-      isolatedIpa: null,
-      rule.Token,
-      rule.Ipa,
-      profile,
-      _wakeProvider());
+    if (ipa is null)
+    {
+      _activity(
+        $"Pronunciation preview: {token}; standard voice pronunciation.");
+      _speech.PreviewText(token, profile, _wakeProvider());
+    }
+    else
+    {
+      _activity($"Pronunciation preview: {token}; /{ipa}/.");
+      _speech.PreviewIpa(
+        isolatedIpa: null,
+        token,
+        ipa,
+        profile,
+        _wakeProvider());
+    }
     UpdatePronounceButtonState();
   }
 
   /// <summary>
-  /// Reads exactly one valid rule from the caret's current line.
+  /// Reads the preview token and optional IPA value from the caret line.
   /// </summary>
-  private bool TryGetCurrentPronunciationRule(
-    out PronunciationRule? rule)
+  private bool TryGetCurrentPronunciationPreview(
+    out string token,
+    out string? ipa)
   {
     string text = _pronunciationsTextBox.Text;
     int caret = Math.Clamp(_savedSelectionStart, 0, text.Length);
     GetCurrentLine(text, caret, out int lineStart, out int lineEnd);
-    string line = text[lineStart..lineEnd].TrimEnd('\r');
-    PronunciationRuleSet parsed = PronunciationRuleSet.Parse(line);
-    rule = parsed.Errors.Count == 0 && parsed.Rules.Count == 1
-      ? parsed.Rules[0]
-      : null;
-    return rule is not null;
+    string line = text[lineStart..lineEnd].Trim();
+    int equals = line.IndexOf('=');
+    if (equals <= 0)
+    {
+      token = string.Empty;
+      ipa = null;
+      return false;
+    }
+
+    string left = line[..equals].Trim();
+    if (left.EndsWith("/i", StringComparison.OrdinalIgnoreCase))
+    {
+      left = left[..^2].Trim();
+    }
+    if (left.Length == 0)
+    {
+      token = string.Empty;
+      ipa = null;
+      return false;
+    }
+
+    token = left;
+    string right = line[(equals + 1)..].Trim();
+    if (!right.StartsWith("ipa:", StringComparison.OrdinalIgnoreCase))
+    {
+      ipa = null;
+      return true;
+    }
+
+    ipa = right[4..].Trim();
+    return ipa.Length != 0;
   }
 
   /// <summary>
@@ -561,13 +736,13 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Enables Pronounce only for one valid current-line rule while idle.
+  /// Enables Pronounce for a current-line token while speech is idle.
   /// </summary>
   private void UpdatePronounceButtonState()
   {
     _pronounceButton.Enabled =
       !_speech.IsSpeaking &&
-      TryGetCurrentPronunciationRule(out _);
+      TryGetCurrentPronunciationPreview(out _, out _);
   }
 
   /// <summary>
