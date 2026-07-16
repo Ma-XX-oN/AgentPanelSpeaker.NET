@@ -58,6 +58,11 @@ internal sealed class SapiSpeechEngine : IDisposable
   public event Action<Exception>? Faulted;
 
   /// <summary>
+  /// Raised when the worker recovers from unsupported preview markup.
+  /// </summary>
+  public event Action<string>? Notice;
+
+  /// <summary>
   /// Gets all enabled voices exposed by either Windows speech provider.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> Voices => _voices;
@@ -105,15 +110,18 @@ internal sealed class SapiSpeechEngine : IDisposable
   public void PreviewIpa(
     SpeechMarkup? isolatedMarkup,
     SpeechMarkup exampleMarkup,
+    SpeechMarkup exampleFallbackMarkup,
     SpeechProfileSettings profile,
     AudioWakeSettings wakeSettings)
   {
     ArgumentNullException.ThrowIfNull(exampleMarkup);
+    ArgumentNullException.ThrowIfNull(exampleFallbackMarkup);
     ArgumentNullException.ThrowIfNull(profile);
     ArgumentNullException.ThrowIfNull(wakeSettings);
     AddCommand(new IpaPreviewCommand(
       isolatedMarkup,
       exampleMarkup,
+      exampleFallbackMarkup,
       profile.Normalize(),
       wakeSettings.Normalize()));
   }
@@ -557,6 +565,18 @@ internal sealed class SapiSpeechEngine : IDisposable
     PcmWaveData? outputFormat = null;
     foreach (SpeechSegment segment in request.Segments)
     {
+      PcmWaveData? rendered = RenderSpeechSegment(
+        segment,
+        request.Profile,
+        backend,
+        voiceObject,
+        voicesObject,
+        synthesizer);
+      if (rendered is null)
+      {
+        continue;
+      }
+
       if (outputFormat is not null &&
           segment.DelayAfterPreviousMilliseconds > 0)
       {
@@ -564,16 +584,9 @@ internal sealed class SapiSpeechEngine : IDisposable
           segment.DelayAfterPreviousMilliseconds));
       }
 
-      PcmWaveData rendered = RenderSpeech(
-          segment.Markup,
-          request.Profile,
-          backend,
-          voiceObject,
-          voicesObject,
-          synthesizer)
-        .ConvertToMono16(OutputSampleRate);
-      outputFormat ??= rendered;
-      parts.Add(rendered);
+      PcmWaveData converted = rendered.ConvertToMono16(OutputSampleRate);
+      outputFormat ??= converted;
+      parts.Add(converted);
     }
 
     if (outputFormat is null)
@@ -683,6 +696,83 @@ internal sealed class SapiSpeechEngine : IDisposable
       _ => throw new InvalidOperationException(
         "The selected voice has no speech backend.")
     };
+  }
+
+  /// <summary>
+  /// Renders one preview segment and applies its explicit unsupported-IPA
+  /// recovery policy.
+  /// </summary>
+  private PcmWaveData? RenderSpeechSegment(
+    SpeechSegment segment,
+    SpeechProfileSettings profile,
+    VoiceBackend backend,
+    object? voiceObject,
+    object? voicesObject,
+    SpeechSynthesizer synthesizer)
+  {
+    try
+    {
+      return RenderSpeech(
+        segment.Markup,
+        profile,
+        backend,
+        voiceObject,
+        voicesObject,
+        synthesizer);
+    }
+    catch (Exception primaryException) when (
+      (segment.SkipWhenRejected || segment.FallbackMarkup is not null) &&
+      IsPreviewMarkupRejection(primaryException))
+    {
+      SpeechMarkup? fallbackMarkup = segment.FallbackMarkup;
+      DiagnosticLog.Write("speech.preview_markup_rejected", new
+      {
+        profile.VoiceName,
+        backend = backend.Backend.ToString(),
+        segment.Label,
+        exception = primaryException.ToString(),
+        fallback = fallbackMarkup is not null
+      });
+
+      if (fallbackMarkup is null)
+      {
+        RaiseNotice(
+          "The selected voice cannot synthesize this isolated IPA sound; " +
+          "playing the example instead.");
+        return null;
+      }
+
+      try
+      {
+        PcmWaveData fallback = RenderSpeech(
+          fallbackMarkup,
+          profile,
+          backend,
+          voiceObject,
+          voicesObject,
+          synthesizer);
+        RaiseNotice(
+          "The selected voice rejected this IPA example; " +
+          "using its ordinary word pronunciation.");
+        return fallback;
+      }
+      catch (Exception fallbackException)
+      {
+        throw new AggregateException(
+          "The selected voice rejected both the IPA preview and its " +
+          "ordinary-pronunciation fallback.",
+          primaryException,
+          fallbackException);
+      }
+    }
+  }
+
+  /// <summary>
+  /// Identifies provider failures caused by rejected pronunciation markup.
+  /// </summary>
+  private static bool IsPreviewMarkupRejection(Exception exception)
+  {
+    return exception is FormatException or COMException;
   }
 
   /// <summary>
@@ -869,6 +959,24 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
+  /// <summary>
+  /// Reports a recovered preview problem without failing playback.
+  /// </summary>
+  private void RaiseNotice(string message)
+  {
+    try
+    {
+      Notice?.Invoke(message);
+    }
+    catch (Exception handlerException)
+    {
+      DiagnosticLog.Write("speech.notice_handler_failed", new
+      {
+        exception = handlerException.ToString()
+      });
+    }
+  }
+
   private static void ReleaseComObject(object? value)
   {
     if (value is not null && Marshal.IsComObject(value))
@@ -890,6 +998,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private sealed record IpaPreviewCommand(
     SpeechMarkup? IsolatedMarkup,
     SpeechMarkup ExampleMarkup,
+    SpeechMarkup ExampleFallbackMarkup,
     SpeechProfileSettings Profile,
     AudioWakeSettings WakeSettings) : PlaybackCommand;
 
@@ -944,7 +1053,15 @@ internal sealed class SapiSpeechEngine : IDisposable
         command.Profile,
         command.WakeSettings,
         command.ForceWake,
-        new[] { new SpeechSegment(command.Markup, 0) });
+        new[]
+        {
+          new SpeechSegment(
+            command.Markup,
+            FallbackMarkup: null,
+            SkipWhenRejected: false,
+            DelayAfterPreviousMilliseconds: 0,
+            Label: "speech")
+        });
     }
 
     public static PlaybackRequest ForIpaPreview(IpaPreviewCommand command)
@@ -952,26 +1069,43 @@ internal sealed class SapiSpeechEngine : IDisposable
       var segments = new List<SpeechSegment>();
       if (command.IsolatedMarkup is not null)
       {
-        segments.Add(new SpeechSegment(command.IsolatedMarkup, 0));
+        segments.Add(new SpeechSegment(
+          command.IsolatedMarkup,
+          FallbackMarkup: null,
+          SkipWhenRejected: true,
+          DelayAfterPreviousMilliseconds: 0,
+          Label: "isolated IPA"));
         segments.Add(new SpeechSegment(
           command.ExampleMarkup,
-          command.WakeSettings.IpaExampleDelayMilliseconds));
+          FallbackMarkup: command.ExampleFallbackMarkup,
+          SkipWhenRejected: false,
+          DelayAfterPreviousMilliseconds:
+            command.WakeSettings.IpaExampleDelayMilliseconds,
+          Label: "IPA example"));
       }
       else
       {
-        segments.Add(new SpeechSegment(command.ExampleMarkup, 0));
+        segments.Add(new SpeechSegment(
+          command.ExampleMarkup,
+          FallbackMarkup: command.ExampleFallbackMarkup,
+          SkipWhenRejected: false,
+          DelayAfterPreviousMilliseconds: 0,
+          Label: "IPA example"));
       }
       return new PlaybackRequest(
         command.Profile,
         command.WakeSettings,
         forceWake: command.WakeSettings.Enabled,
-        segments);
+        segments: segments);
     }
   }
 
   private sealed record SpeechSegment(
     SpeechMarkup Markup,
-    int DelayAfterPreviousMilliseconds);
+    SpeechMarkup? FallbackMarkup,
+    bool SkipWhenRejected,
+    int DelayAfterPreviousMilliseconds,
+    string Label);
 
   private readonly record struct SapiVoice(
     int Index,

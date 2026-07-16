@@ -40,6 +40,7 @@ internal sealed class SpeechService : IDisposable
   {
     _engine.Completed += EngineCompleted;
     _engine.Faulted += EngineFaulted;
+    _engine.Notice += EngineNotice;
   }
 
   /// <summary>
@@ -323,12 +324,18 @@ internal sealed class SpeechService : IDisposable
         exampleWord,
         exampleIpa,
         normalized.Pitch);
+      SpeechMarkup exampleFallbackMarkup = SpeechSapiXmlBuilder.Build(
+        exampleWord,
+        normalized.Pitch,
+        Array.Empty<string>(),
+        PronunciationRuleSet.Parse(string.Empty));
       SetActiveKindLocked(ActiveSpeechKind.Untracked);
       try
       {
         _engine.PreviewIpa(
           isolatedMarkup,
           exampleMarkup,
+          exampleFallbackMarkup,
           normalized,
           wakeSettings.Normalize());
       }
@@ -557,6 +564,7 @@ internal sealed class SpeechService : IDisposable
       _disposed = true;
       _engine.Completed -= EngineCompleted;
       _engine.Faulted -= EngineFaulted;
+      _engine.Notice -= EngineNotice;
       _engine.Cancel();
       _engine.Dispose();
     }
@@ -595,6 +603,14 @@ internal sealed class SpeechService : IDisposable
       exception = exception.ToString()
     });
     Activity?.Invoke($"Speech synthesis failed: {exception.Message}");
+  }
+
+  /// <summary>
+  /// Reports a non-fatal speech fallback selected by the engine.
+  /// </summary>
+  private void EngineNotice(string message)
+  {
+    Activity?.Invoke(message);
   }
 
   /// <summary>

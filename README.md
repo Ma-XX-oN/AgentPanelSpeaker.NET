@@ -1,4 +1,4 @@
-# Agent Panel Speaker v25.6.1
+# Agent Panel Speaker v25.6.2
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, and completed Codex Plan text with
@@ -81,7 +81,12 @@ phone bracketed, such as:
 
 When a phone can be synthesized independently, the preview plays the phone,
 waits for the configured IPA example delay, and then plays the example word.
-Modifiers that cannot stand alone play only the example.
+Modifiers that cannot stand alone play only the example.  Installed voices do
+not necessarily accept every symbol on the complete IPA chart.  When the
+selected provider rejects an isolated phone, the preview skips that segment and
+continues with the example.  When it rejects the example IPA, the same example
+word is spoken with the voice's ordinary pronunciation instead of failing the
+whole preview.  The Activity log states when either fallback occurs.
 
 ## Bluetooth audio wake
 
@@ -113,6 +118,11 @@ buttons also force the prefix.
 
 The tone is best-effort.  A codec, driver, amplifier, or speaker may filter it
 or reproduce it audibly.
+
+The transport controls use the same height as **Silence**.  Their visible glyph
+outlines are centred rather than their font line boxes, so the play, pause,
+stop, rewind, and forward symbols remain optically centred in the shorter
+buttons.
 
 ## Theme
 

@@ -54,6 +54,12 @@ the JSONL.
 | `MainForm` | Presents session, speech, transport, and diagnostics controls. |
 | `DiagnosticLog` | Writes structured execution diagnostics. |
 
+`GlyphButton` normally uses WinForms text rendering for IPA controls.  Main
+transport buttons enable ink-bound centring, which builds the glyph outline and
+translates its actual painted bounds to the centre of the standard-height
+button.  This avoids the vertical bias caused by centring the font's ascent and
+descent box.
+
 ## JSONL classification
 
 ### Codex
@@ -221,8 +227,14 @@ for example:
 ```
 
 An independent phone is played first, followed by the example after the saved
-IPA delay.  A modifier that cannot stand alone plays only its example.  Hover
-preview is ignored while any ordinary or paused speech is active.
+IPA delay.  A modifier that cannot stand alone plays only its example.  Because
+an installed provider can expose a smaller phoneme inventory than the complete
+IPA chart, preview segments carry an explicit recovery policy.  A rejected
+isolated-phone segment is omitted.  A rejected example-IPA segment is rendered
+again as the ordinary example word.  Only `FormatException` and `COMException`
+select this recovery path; unrelated synthesis and playback failures remain
+fatal and visible.  Hover preview is ignored while any ordinary or paused
+speech is active.
 
 ## Bluetooth wake sequence
 
