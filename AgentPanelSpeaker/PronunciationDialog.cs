@@ -12,6 +12,7 @@ internal sealed class PronunciationDialog : Form
   private readonly TextBox _spelledTextBox = new();
   private readonly RichTextBox _pronunciationsTextBox = new();
   private readonly Button _toggleToolbarButton = new();
+  private readonly Button _pronounceButton = new();
   private readonly Panel _toolbarPanel = new();
   private readonly TableLayoutPanel _pronunciationLayout = new();
   private readonly Label _ipaInformationLabel = new();
@@ -102,6 +103,7 @@ internal sealed class PronunciationDialog : Form
 
     _hoverTimer.Interval = 1000;
     _hoverTimer.Tick += HoverTimerTick;
+    _speech.SpeakingStateChanged += SpeechSpeakingStateChanged;
     FormClosing += PronunciationDialogClosing;
     ThemeManager.Apply(this, theme);
     UpdateIpaButtonState();
@@ -124,6 +126,7 @@ internal sealed class PronunciationDialog : Form
   {
     if (disposing)
     {
+      _speech.SpeakingStateChanged -= SpeechSpeakingStateChanged;
       _hoverTimer.Dispose();
       _toolTip.Dispose();
     }
@@ -203,6 +206,20 @@ internal sealed class PronunciationDialog : Form
     _toggleToolbarButton.Text = "Show IPA symbols";
     _toggleToolbarButton.Click += (_, _) => ToggleToolbar();
 
+    _pronounceButton.AutoSize = true;
+    _pronounceButton.Text = "Pronounce";
+    _pronounceButton.MouseDown += (_, _) => SaveEditorSelection();
+    _pronounceButton.Click += PronounceButtonClicked;
+
+    var pronunciationButtons = new FlowLayoutPanel
+    {
+      AutoSize = true,
+      Dock = DockStyle.Fill,
+      WrapContents = false
+    };
+    pronunciationButtons.Controls.Add(_toggleToolbarButton);
+    pronunciationButtons.Controls.Add(_pronounceButton);
+
     _toolbarPanel.AutoScroll = true;
     _toolbarPanel.BorderStyle = BorderStyle.FixedSingle;
     _toolbarPanel.Dock = DockStyle.Fill;
@@ -235,7 +252,7 @@ internal sealed class PronunciationDialog : Form
     _pronunciationLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _pronunciationLayout.Controls.Add(instructions, 0, 0);
     _pronunciationLayout.Controls.Add(_pronunciationsTextBox, 0, 1);
-    _pronunciationLayout.Controls.Add(_toggleToolbarButton, 0, 2);
+    _pronunciationLayout.Controls.Add(pronunciationButtons, 0, 2);
     _pronunciationLayout.Controls.Add(_toolbarPanel, 0, 3);
     _pronunciationLayout.Controls.Add(_ipaInformationLabel, 0, 4);
     page.Controls.Add(_pronunciationLayout);
@@ -288,15 +305,24 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private Button CreateIpaButton(IpaSymbolDefinition definition)
   {
+    var font = new Font("Segoe UI", 14.0f);
+    Size textSize = TextRenderer.MeasureText(
+      definition.Symbol,
+      font,
+      Size.Empty,
+      TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
     var button = new Button
     {
       AutoSize = false,
-      Font = new Font("Segoe UI", 13.0f),
-      Height = 34,
+      Font = font,
+      Height = Math.Max(42, textSize.Height + 14),
       Margin = new Padding(2),
+      Padding = new Padding(2),
       Tag = definition,
       Text = definition.Symbol,
-      Width = Math.Max(38, 18 + definition.Symbol.Length * 14)
+      TextAlign = ContentAlignment.MiddleCenter,
+      UseCompatibleTextRendering = true,
+      Width = Math.Max(42, textSize.Width + 18)
     };
     _ipaButtons.Add(button);
     _toolTip.SetToolTip(
@@ -464,6 +490,87 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
+  /// Pronounces the rule on the caret's current line.
+  /// </summary>
+  private void PronounceButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    if (_speech.IsSpeaking ||
+        !TryGetCurrentPronunciationRule(out PronunciationRule? rule) ||
+        rule is null)
+    {
+      return;
+    }
+
+    SpeechProfileSettings profile = _profileProvider().Normalize();
+    if (!profile.IsSpoken)
+    {
+      _activity(
+        "Pronunciation preview unavailable: no spoken voice is selected.");
+      return;
+    }
+
+    _activity($"Pronunciation preview: {rule.Token}; /{rule.Ipa}/.");
+    _speech.PreviewIpa(
+      isolatedIpa: null,
+      rule.Token,
+      rule.Ipa,
+      profile,
+      _wakeProvider());
+    UpdatePronounceButtonState();
+  }
+
+  /// <summary>
+  /// Reads exactly one valid rule from the caret's current line.
+  /// </summary>
+  private bool TryGetCurrentPronunciationRule(
+    out PronunciationRule? rule)
+  {
+    string text = _pronunciationsTextBox.Text;
+    int caret = Math.Clamp(_savedSelectionStart, 0, text.Length);
+    GetCurrentLine(text, caret, out int lineStart, out int lineEnd);
+    string line = text[lineStart..lineEnd].TrimEnd('\r');
+    PronunciationRuleSet parsed = PronunciationRuleSet.Parse(line);
+    rule = parsed.Errors.Count == 0 && parsed.Rules.Count == 1
+      ? parsed.Rules[0]
+      : null;
+    return rule is not null;
+  }
+
+  /// <summary>
+  /// Refreshes the Pronounce button when speech starts or stops.
+  /// </summary>
+  private void SpeechSpeakingStateChanged(bool speaking)
+  {
+    if (IsDisposed || Disposing || !IsHandleCreated)
+    {
+      return;
+    }
+
+    if (InvokeRequired)
+    {
+      try
+      {
+        BeginInvoke((Action)UpdatePronounceButtonState);
+      }
+      catch (InvalidOperationException)
+      {
+      }
+      return;
+    }
+    UpdatePronounceButtonState();
+  }
+
+  /// <summary>
+  /// Enables Pronounce only for one valid current-line rule while idle.
+  /// </summary>
+  private void UpdatePronounceButtonState()
+  {
+    _pronounceButton.Enabled =
+      !_speech.IsSpeaking &&
+      TryGetCurrentPronunciationRule(out _);
+  }
+
+  /// <summary>
   /// Stores the active editor selection before a toolbar button takes focus.
   /// </summary>
   private void SaveEditorSelection()
@@ -482,6 +589,7 @@ internal sealed class PronunciationDialog : Form
     {
       button.Enabled = enabled;
     }
+    UpdatePronounceButtonState();
   }
 
   /// <summary>

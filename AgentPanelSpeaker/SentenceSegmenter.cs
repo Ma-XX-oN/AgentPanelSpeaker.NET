@@ -31,7 +31,17 @@ internal static class SentenceSegmenter
           ++end;
         }
 
-        if (end == text.Length || char.IsWhiteSpace(text[end]))
+        int nextNonWhitespace = end;
+        while (nextNonWhitespace < text.Length &&
+               char.IsWhiteSpace(text[nextNonWhitespace]))
+        {
+          ++nextNonWhitespace;
+        }
+        bool precedesHeadingPause =
+          nextNonWhitespace < text.Length &&
+          text[nextNonWhitespace] == SpeechTextMarkers.HeadingPause;
+        if (!precedesHeadingPause &&
+            (end == text.Length || char.IsWhiteSpace(text[end])))
         {
           Add(result, text[start..end]);
           start = end;

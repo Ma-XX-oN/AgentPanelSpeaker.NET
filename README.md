@@ -1,4 +1,4 @@
-# Agent Panel Speaker v25.4
+# Agent Panel Speaker v25.5
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, and completed Codex Plan text with
@@ -54,6 +54,9 @@ Pronunciation rules take precedence over the spell-out list.
 
 The pronunciation tab has a manually opened IPA symbol toolbar.  It never
 closes by itself.  Clicking a symbol inserts it at the saved caret position.
+The adjacent **Pronounce** button speaks the rule on the caret's current line
+using the first enabled speech profile.  It exists only on the Pronunciations
+tab and is enabled only when that line contains one valid rule.
 When the value does not yet start with `ipa:`, the prefix is inserted after the
 `=` first.
 
@@ -212,3 +215,9 @@ Logs are written under:
 ```
 
 Conversation text is included in diagnostics.  Review logs before sharing.
+
+## Heading transitions
+
+Markdown headings remain in the spoken text.  A 250 ms synthesis pause is
+inserted between a heading and the following prose without splitting the two
+parts into separate audio streams.

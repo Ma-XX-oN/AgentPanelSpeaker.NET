@@ -137,6 +137,11 @@ internal static partial class TextCleaner
   private static string CleanProse(string text)
   {
     string cleaned = SystemTagRegex().Replace(text, " ");
+    cleaned = HeadingLineRegex().Replace(
+      cleaned,
+      match =>
+        match.Groups[1].Value.TrimEnd() +
+        " " + SpeechTextMarkers.HeadingPause + "\n");
     cleaned = ImageRegex().Replace(cleaned, " ");
     cleaned = LinkRegex().Replace(cleaned, "$1");
     cleaned = RawUrlRegex().Replace(cleaned, " ");
@@ -209,6 +214,11 @@ internal static partial class TextCleaner
 
   [GeneratedRegex(@"`+([^`]+?)`+")]
   private static partial Regex InlineCodeRegex();
+
+  [GeneratedRegex(
+    @"(?m)^\s{0,3}#{1,6}[ \t]+(.+?)[ \t]*\r?\n" +
+    @"(?:[ \t]*\r?\n)*(?=\s*\S)")]
+  private static partial Regex HeadingLineRegex();
 
   [GeneratedRegex(
     @"(?m)^\s{0,3}(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+)")]

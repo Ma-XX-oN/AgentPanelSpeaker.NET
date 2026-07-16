@@ -139,7 +139,10 @@ currently disabled.
 ## Date, time, spelling, and pronunciation markup
 
 `SpeechSapiXmlBuilder` transforms text at playback time, after history and
-sentence boundaries have already been established.
+sentence boundaries have already been established.  `TextCleaner` retains an
+invisible heading-boundary marker, which the markup builder converts to a
+250 ms native SAPI silence element or equivalent SSML break.  The heading and
+following prose therefore remain in one contiguous utterance.
 
 Recognized date/time forms include:
 
@@ -192,8 +195,10 @@ grouped using IPA chart sections.  Each definition supplies:
 - a bracketed version that identifies the demonstrated phone;
 - whether an isolated-phone preview is meaningful.
 
-The editor saves its selection before a toolbar button takes focus.  Insertion
-is permitted only when:
+The editor saves its selection before a toolbar button takes focus.  The
+Pronounce button parses only the caret's current line and previews that rule
+through the same PCM path as hover previews.  It is hosted only by the
+Pronunciations tab.  Insertion is permitted only when:
 
 1. the current line contains `=`;
 2. the selection starts strictly to its right;

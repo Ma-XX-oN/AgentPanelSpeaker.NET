@@ -78,7 +78,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.4";
+    Text = "Agent Panel Speaker v25.5";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1373,9 +1373,12 @@ internal sealed class MainForm : Form
     string accessibleName)
   {
     button.AutoSize = false;
-    button.Size = new Size(50, 38);
-    button.Font = new Font("Segoe UI Symbol", 14.0f);
+    button.Size = new Size(54, 44);
+    button.Font = new Font("Segoe UI Symbol", 15.0f);
+    button.Padding = new Padding(0, 0, 0, 2);
     button.Text = symbol;
+    button.TextAlign = ContentAlignment.MiddleCenter;
+    button.UseCompatibleTextRendering = true;
     button.AccessibleName = accessibleName;
     _toolTip.SetToolTip(button, accessibleName);
   }

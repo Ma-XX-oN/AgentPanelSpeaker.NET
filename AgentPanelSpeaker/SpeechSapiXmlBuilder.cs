@@ -11,6 +11,10 @@ namespace AgentPanelSpeaker;
 internal static partial class SpeechSapiXmlBuilder
 {
   private const int SsmlPitchPercentPerStep = 5;
+  private const string SapiHeadingPause =
+    "<silence msec=\"250\"/>";
+  private const string SsmlHeadingPause =
+    "<break time=\"250ms\"/>";
 
   /// <summary>
   /// Builds one marked-up utterance.
@@ -97,11 +101,11 @@ internal static partial class SpeechSapiXmlBuilder
 
       if (next is null || !next.Match.Success)
       {
-        AppendEscaped(output, text[position..]);
+        AppendTextWithPauses(output, text[position..]);
         break;
       }
 
-      AppendEscaped(output, text[position..next.Match.Index]);
+      AppendTextWithPauses(output, text[position..next.Match.Index]);
       switch (next.Kind)
       {
         case SpecialMatchKind.Pronunciation:
@@ -145,6 +149,10 @@ internal static partial class SpeechSapiXmlBuilder
   private static string ConvertContentToSsml(string sapiContent)
   {
     return sapiContent
+      .Replace(
+        SapiHeadingPause,
+        SsmlHeadingPause,
+        StringComparison.Ordinal)
       .Replace(
         "<spell>",
         "<say-as interpret-as=\"characters\">",
@@ -321,6 +329,28 @@ internal static partial class SpeechSapiXmlBuilder
     return parsed.ToString(
       hasSeconds ? "h:mm:ss tt" : "h:mm tt",
       CultureInfo.CurrentCulture);
+  }
+
+  /// <summary>
+  /// Escapes ordinary text and expands retained heading-pause markers.
+  /// </summary>
+  private static void AppendTextWithPauses(
+    StringBuilder output,
+    string text)
+  {
+    int start = 0;
+    for (int index = 0; index < text.Length; ++index)
+    {
+      if (text[index] != SpeechTextMarkers.HeadingPause)
+      {
+        continue;
+      }
+
+      AppendEscaped(output, text[start..index]);
+      output.Append(SapiHeadingPause);
+      start = index + 1;
+    }
+    AppendEscaped(output, text[start..]);
   }
 
   /// <summary>
