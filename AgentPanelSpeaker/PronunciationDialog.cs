@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
@@ -496,12 +499,7 @@ internal sealed class PronunciationDialog : Form
 
     _informationTimer.Stop();
     _hoveredSymbol = definition;
-    string displaySymbol =
-      IpaSymbolCatalog.GetDisplaySymbol(definition.Symbol);
-    string informationText =
-      $"{displaySymbol} → {definition.ExampleWord} → " +
-      $"/{definition.HighlightedExampleIpa}/ → {definition.Position}";
-    SetIpaInformationText(informationText, displaySymbol.Length);
+    SetIpaInformationText(definition);
     _hoverTimer.Stop();
     if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift)
     {
@@ -583,11 +581,185 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Replaces the information line and optionally bolds its leading symbol.
+  /// Shows one symbol using a consistent isolated-and-example layout.
+  /// </summary>
+  private void SetIpaInformationText(IpaSymbolDefinition definition)
+  {
+    ArgumentNullException.ThrowIfNull(definition);
+
+    var text = new StringBuilder();
+    var emphasizedRanges = new List<TextRange>();
+    string displaySymbol =
+      IpaSymbolCatalog.GetDisplaySymbol(definition.Symbol);
+    AppendEmphasizedText(text, emphasizedRanges, displaySymbol);
+    text.Append(" → ");
+
+    if (definition.StandaloneIpa is not null)
+    {
+      text.Append("isolated /");
+      AppendIpaText(
+        text,
+        emphasizedRanges,
+        definition.StandaloneIpa,
+        definition.Symbol);
+      text.Append("/ → ");
+    }
+
+    text.Append(definition.ExampleWord);
+    text.Append(" → /");
+    AppendIpaText(
+      text,
+      emphasizedRanges,
+      definition.ExampleIpa,
+      definition.Symbol);
+    text.Append("/ → ");
+    text.Append(definition.Position);
+
+    SetIpaInformationText(text.ToString(), emphasizedRanges);
+  }
+
+  /// <summary>
+  /// Appends text and records the complete appended range for emphasis.
+  /// </summary>
+  private static void AppendEmphasizedText(
+    StringBuilder text,
+    ICollection<TextRange> emphasizedRanges,
+    string value)
+  {
+    int start = text.Length;
+    text.Append(value);
+    emphasizedRanges.Add(new TextRange(start, value.Length));
+  }
+
+  /// <summary>
+  /// Appends IPA and records every occurrence of the selected symbol.
+  /// </summary>
+  private static void AppendIpaText(
+    StringBuilder text,
+    ICollection<TextRange> emphasizedRanges,
+    string ipa,
+    string symbol)
+  {
+    int textStart = text.Length;
+    text.Append(ipa);
+    foreach (TextRange range in GetIpaEmphasisRanges(ipa, symbol))
+    {
+      emphasizedRanges.Add(
+        new TextRange(textStart + range.Start, range.Length));
+    }
+  }
+
+  /// <summary>
+  /// Finds every selected symbol and includes its carrier when necessary.
+  /// </summary>
+  private static IEnumerable<TextRange> GetIpaEmphasisRanges(
+    string ipa,
+    string symbol)
+  {
+    int searchStart = 0;
+    while (searchStart < ipa.Length)
+    {
+      int symbolStart = ipa.IndexOf(
+        symbol,
+        searchStart,
+        StringComparison.Ordinal);
+      if (symbolStart < 0)
+      {
+        yield break;
+      }
+
+      int start = symbolStart;
+      int end = symbolStart + symbol.Length;
+      if (symbol is "͡" or "͜")
+      {
+        start = PreviousRuneStart(ipa, start);
+        end = NextRuneEnd(ipa, end);
+      }
+      else
+      {
+        UnicodeCategory category =
+          CharUnicodeInfo.GetUnicodeCategory(symbol, 0);
+        if (category is
+          UnicodeCategory.NonSpacingMark or
+          UnicodeCategory.SpacingCombiningMark or
+          UnicodeCategory.EnclosingMark)
+        {
+          start = PreviousRuneStart(ipa, start);
+        }
+        else if (category == UnicodeCategory.ModifierLetter)
+        {
+          if (IsPrefixModifier(symbol))
+          {
+            end = NextRuneEnd(ipa, end);
+          }
+          else
+          {
+            start = PreviousRuneStart(ipa, start);
+          }
+        }
+      }
+
+      yield return new TextRange(start, end - start);
+      searchStart = symbolStart + Math.Max(1, symbol.Length);
+    }
+  }
+
+  /// <summary>
+  /// Returns whether a modifier visually belongs to the following phone.
+  /// </summary>
+  private static bool IsPrefixModifier(string symbol)
+  {
+    return symbol is "ˈ" or "ˌ" or "ꜛ" or "ꜜ" or "↗" or "↘";
+  }
+
+  /// <summary>
+  /// Finds the UTF-16 start of the rune immediately before an index.
+  /// </summary>
+  private static int PreviousRuneStart(string text, int index)
+  {
+    if (index <= 0)
+    {
+      return 0;
+    }
+
+    int start = index - 1;
+    if (start > 0 &&
+        char.IsLowSurrogate(text[start]) &&
+        char.IsHighSurrogate(text[start - 1]))
+    {
+      start--;
+    }
+
+    return start;
+  }
+
+  /// <summary>
+  /// Finds the UTF-16 end of the rune immediately after an index.
+  /// </summary>
+  private static int NextRuneEnd(string text, int index)
+  {
+    if (index >= text.Length)
+    {
+      return text.Length;
+    }
+
+    int end = index + 1;
+    if (char.IsHighSurrogate(text[index]) &&
+        end < text.Length &&
+        char.IsLowSurrogate(text[end]))
+    {
+      end++;
+    }
+
+    return end;
+  }
+
+  /// <summary>
+  /// Replaces the information line and bolds every requested range.
   /// </summary>
   private void SetIpaInformationText(
     string text,
-    int emphasizedPrefixLength = 0)
+    IReadOnlyCollection<TextRange>? emphasizedRanges = null)
   {
     ArgumentNullException.ThrowIfNull(text);
     if (_ipaInformationBox.IsDisposed)
@@ -603,17 +775,25 @@ internal sealed class PronunciationDialog : Form
       _ipaInformationBox.SelectionColor = _ipaInformationBox.ForeColor;
       _ipaInformationBox.SelectionFont = _ipaInformationBox.Font;
 
-      int emphasizedLength = Math.Clamp(
-        emphasizedPrefixLength,
-        0,
-        text.Length);
-      if (emphasizedLength > 0)
+      if (emphasizedRanges is not null && emphasizedRanges.Count > 0)
       {
         using var emphasizedFont = new Font(
-          _ipaInformationBox.Font,
-          FontStyle.Bold);
-        _ipaInformationBox.Select(0, emphasizedLength);
-        _ipaInformationBox.SelectionFont = emphasizedFont;
+          _ipaInformationBox.Font.FontFamily,
+          _ipaInformationBox.Font.Size + 1.0f,
+          FontStyle.Bold,
+          _ipaInformationBox.Font.Unit);
+        foreach (TextRange range in emphasizedRanges)
+        {
+          int start = Math.Clamp(range.Start, 0, text.Length);
+          int length = Math.Clamp(range.Length, 0, text.Length - start);
+          if (length == 0)
+          {
+            continue;
+          }
+
+          _ipaInformationBox.Select(start, length);
+          _ipaInformationBox.SelectionFont = emphasizedFont;
+        }
       }
 
       _ipaInformationBox.Select(0, 0);
@@ -671,7 +851,7 @@ internal sealed class PronunciationDialog : Form
       $"IPA preview: {definition.Symbol}; " +
       $"example={definition.ExampleWord}.");
     _speech.PreviewIpa(
-      definition.CanSoundAlone ? definition.Symbol : null,
+      definition.StandaloneIpa,
       definition.ExampleWord,
       definition.ExampleIpa,
       profile,
@@ -908,4 +1088,10 @@ internal sealed class PronunciationDialog : Form
         break;
     }
   }
+
+  /// <summary>
+  /// Describes one rich-text emphasis range.
+  /// </summary>
+  private readonly record struct TextRange(int Start, int Length);
+
 }

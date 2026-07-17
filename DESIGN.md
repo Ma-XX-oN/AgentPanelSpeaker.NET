@@ -196,11 +196,10 @@ grouped using IPA chart sections.  Each definition supplies:
 
 - the insertion symbol;
 - a description and Unicode code point tooltip;
-- an example word or carrier syllable;
+- an independent IPA pronunciation when one can be constructed;
+- an example word or explicit carrier-word frame;
 - the example IPA;
-- a display transcription that identifies the demonstrated phone when
-  bracket highlighting is appropriate;
-- whether an isolated-phone preview is meaningful.
+- the phone position inside the example.
 
 The editor saves its selection before a toolbar button takes focus.  The
 Pronounce button reads only the caret's current line.  It previews explicit
@@ -221,12 +220,17 @@ symbol, or pressing Shift while it remains hovered, starts immediately.  The
 editor and toolbar are separated by a user-movable horizontal splitter.  The
 footer displays both hover instructions when they fit, otherwise alternates
 between them until an enabled symbol is hovered.  The footer is a read-only
-`RichTextBox`.  During hover, it applies bold character formatting only to the
-leading symbol or dotted-circle combining-mark cluster; the example word,
-transcription, arrows, and position retain the normal footer font.
+`RichTextBox`.  During hover, it uses a fixed layout: the displayed symbol, an
+isolated pronunciation when available, the example
+word, the example IPA, and the phone position.  It applies bold formatting to
+the displayed symbol and every occurrence in both IPA transcriptions.
+Combining marks include their carrier phone in the bold range, and tie bars
+include both tied phones.  Square brackets are never inserted as a visual
+highlight.
 
-An independent phone is played first, followed by the example after the saved
-IPA delay.  A modifier that cannot stand alone plays only its example.  Because
+The same independent pronunciation shown in the footer is played first,
+followed by the example after the saved IPA delay.  A mark with no meaningful
+independent sound plays only its example.  Because
 an installed provider can expose a smaller phoneme inventory than the complete
 IPA chart, preview segments carry an explicit recovery policy.  A rejected
 isolated-phone segment is omitted.  A rejected example-IPA segment is rendered

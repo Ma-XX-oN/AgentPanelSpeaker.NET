@@ -74,7 +74,7 @@ internal static class IpaSymbolCatalog
   }
 
   /// <summary>
-  /// Creates a consonant group using a carrier syllable by default.
+  /// Creates a consonant group using the apa carrier word by default.
   /// </summary>
   private static IpaSymbolGroup BuildSegmentGroup(
     string name,
@@ -90,11 +90,10 @@ internal static class IpaSymbolCatalog
           : new IpaSymbolDefinition(
             symbol,
             description,
-            "carrier syllable",
-            $"{symbol}a",
-            $"[{symbol}]a",
-            "beginning",
-            CanSoundAlone: true))
+            symbol,
+            "apa",
+            $"a{symbol}a",
+            "middle"))
         .ToArray());
   }
 
@@ -114,11 +113,10 @@ internal static class IpaSymbolCatalog
           : new IpaSymbolDefinition(
             symbol,
             "vowel",
-            "carrier syllable",
+            symbol,
+            "h–d carrier",
             $"h{symbol}d",
-            $"h[{symbol}]d",
-            "middle",
-            CanSoundAlone: true))
+            "middle"))
         .ToArray());
   }
 
@@ -139,11 +137,10 @@ internal static class IpaSymbolCatalog
           : new IpaSymbolDefinition(
             symbol,
             description,
-            "carrier example",
-            $"a{symbol}",
-            $"a{symbol}",
-            "modifier",
-            CanSoundAlone: false))
+            GetStandaloneIpa(symbol, $"ap{symbol}a"),
+            "apa",
+            $"ap{symbol}a",
+            "middle"))
         .ToArray());
   }
 
@@ -163,82 +160,82 @@ internal static class IpaSymbolCatalog
   {
     var values = new[]
     {
-      D("p", "voiceless bilabial plosive", "spin", "spɪn", "s[p]ɪn", "middle"),
-      D("b", "voiced bilabial plosive", "bin", "bɪn", "[b]ɪn", "beginning"),
-      D("t", "voiceless alveolar plosive", "stop", "stɑp", "s[t]ɑp", "middle"),
-      D("d", "voiced alveolar plosive", "dog", "dɔɡ", "[d]ɔɡ", "beginning"),
-      D("k", "voiceless velar plosive", "cat", "kæt", "[k]æt", "beginning"),
-      D("ɡ", "voiced velar plosive", "git", "ɡɪt", "[ɡ]ɪt", "beginning"),
-      D("m", "bilabial nasal", "map", "mæp", "[m]æp", "beginning"),
-      D("n", "alveolar nasal", "net", "nɛt", "[n]ɛt", "beginning"),
-      D("ŋ", "velar nasal", "sing", "sɪŋ", "sɪ[ŋ]", "end"),
-      D("f", "voiceless labiodental fricative", "fine", "faɪn", "[f]aɪn", "beginning"),
-      D("v", "voiced labiodental fricative", "vine", "vaɪn", "[v]aɪn", "beginning"),
-      D("θ", "voiceless dental fricative", "thin", "θɪn", "[θ]ɪn", "beginning"),
-      D("ð", "voiced dental fricative", "this", "ðɪs", "[ð]ɪs", "beginning"),
-      D("s", "voiceless alveolar fricative", "sip", "sɪp", "[s]ɪp", "beginning"),
-      D("z", "voiced alveolar fricative", "zip", "zɪp", "[z]ɪp", "beginning"),
-      D("ʃ", "voiceless postalveolar fricative", "ship", "ʃɪp", "[ʃ]ɪp", "beginning"),
-      D("ʒ", "voiced postalveolar fricative", "vision", "vɪʒən", "vɪ[ʒ]ən", "middle"),
-      D("h", "voiceless glottal fricative", "hat", "hæt", "[h]æt", "beginning"),
-      D("w", "voiced labial-velar approximant", "wet", "wɛt", "[w]ɛt", "beginning"),
-      D("ɹ", "alveolar approximant", "red", "ɹɛd", "[ɹ]ɛd", "beginning"),
-      D("j", "palatal approximant", "yes", "jɛs", "[j]ɛs", "beginning"),
-      D("l", "alveolar lateral approximant", "let", "lɛt", "[l]ɛt", "beginning"),
-      D("i", "close front unrounded vowel", "fleece", "flis", "fl[i]s", "middle"),
-      D("ɪ", "near-close front unrounded vowel", "kit", "kɪt", "k[ɪ]t", "middle"),
-      D("e", "close-mid front unrounded vowel", "café", "kæfe", "kæf[e]", "end"),
-      D("ɛ", "open-mid front unrounded vowel", "dress", "dɹɛs", "dɹ[ɛ]s", "middle"),
-      D("æ", "near-open front unrounded vowel", "cat", "kæt", "k[æ]t", "middle"),
-      D("ə", "mid central vowel", "about", "əbaʊt", "[ə]baʊt", "beginning"),
-      D("ɜ", "open-mid central unrounded vowel", "nurse", "nɜɹs", "n[ɜ]ɹs", "middle"),
-      D("u", "close back rounded vowel", "goose", "ɡus", "ɡ[u]s", "middle"),
-      D("ʊ", "near-close back rounded vowel", "foot", "fʊt", "f[ʊ]t", "middle"),
-      D("o", "close-mid back rounded vowel", "go", "ɡo", "ɡ[o]", "end"),
-      D("ɔ", "open-mid back rounded vowel", "thought", "θɔt", "θ[ɔ]t", "middle"),
-      D("ʌ", "open-mid back unrounded vowel", "strut", "stɹʌt", "stɹ[ʌ]t", "middle"),
-      D("ɑ", "open back unrounded vowel", "father", "fɑðɚ", "f[ɑ]ðɚ", "middle"),
-      D("ɒ", "open back rounded vowel", "lot", "lɒt", "l[ɒ]t", "middle"),
-      M("ˈ", "primary stress", "computer", "kəmˈpjutɚ", "kəm[ˈpju]tɚ", "middle"),
-      M("ˌ", "secondary stress", "information", "ˌɪnfɚˈmeɪʃən", "[ˌɪn]fɚˈmeɪʃən", "beginning"),
-      M("ː", "length mark", "fleece", "fliːs", "fl[iː]s", "middle"),
-      M(".", "syllable boundary", "button", "bʌt.ən", "bʌt[.]ən", "middle"),
-      M("̥", "voiceless", "play", "pʰl̥eɪ", "pʰl̥eɪ", "middle"),
-      M("̊", "voiceless, alternate above form", "cream", "kɹ̊im", "kɹ̊im", "middle"),
-      M("̬", "voiced", "zoo", "s̬u", "s̬u", "beginning"),
-      M("̤", "breathy voiced", "bhai", "b̤aɪ", "b̤aɪ", "beginning"),
-      M("̰", "creaky voiced", "uh-oh", "ʌ̰ʔoʊ", "ʌ̰ʔoʊ", "beginning"),
-      M("̼", "linguolabial", "mana", "n̼ana", "n̼ana", "beginning"),
-      M("̪", "dental", "eighth", "eɪt̪θ", "eɪt̪θ", "middle"),
-      M("̺", "apical", "pero", "peɾ̺o", "peɾ̺o", "middle"),
-      M("̻", "laminal", "see", "s̻i", "s̻i", "beginning"),
-      M("̃", "nasalized", "sans", "sɑ̃", "sɑ̃", "end"),
-      M("ⁿ", "nasal release", "hidden", "hɪdⁿn̩", "hɪdⁿn̩", "middle"),
-      M("ˡ", "lateral release", "atlas", "ætˡləs", "ætˡləs", "middle"),
-      M("̚", "no audible release", "cat", "kæt̚", "kæt̚", "end"),
-      M("̴", "velarized or pharyngealized", "feel", "fil̴", "fil̴", "end"),
-      M("̝", "raised", "Dvořák", "ˈdvor̝aːk", "ˈdvor̝aːk", "middle"),
-      M("˔", "raised, alternate spacing form", "Dvořák", "ˈdvoɹ˔aːk", "ˈdvoɹ˔aːk", "middle"),
-      M("̞", "lowered", "lobo", "loβ̞o", "loβ̞o", "middle"),
-      M("˕", "lowered, alternate spacing form", "lobo", "loβ˕o", "loβ˕o", "middle"),
-      M("̟", "advanced", "goose", "ɡu̟s", "ɡu̟s", "middle"),
-      M("̠", "retracted", "goo", "ɡ̠u", "ɡ̠u", "beginning"),
-      M("̘", "advanced tongue root", "see", "si̘", "si̘", "middle"),
-      M("̙", "retracted tongue root", "set", "sɛ̙t", "sɛ̙t", "middle"),
-      M("̈", "centralized", "roses", "ɹoʊzɪ̈z", "ɹoʊzɪ̈z", "middle"),
-      M("̽", "mid-centralized", "comma", "kɑmə̽", "kɑmə̽", "end"),
-      M("̹", "more rounded", "thought", "θɔ̹t", "θɔ̹t", "middle"),
-      M("̜", "less rounded", "foot", "fʊ̜t", "fʊ̜t", "middle"),
-      M("̩", "syllabic", "button", "bʌtn̩", "bʌtn̩", "end"),
-      M("̯", "non-syllabic", "boy", "bɔɪ̯", "bɔɪ̯", "end"),
-      M("˞", "rhoticity", "bird", "bɜ˞d", "bɜ˞d", "middle"),
-      M("ʰ", "aspirated", "pin", "pʰɪn", "pʰɪn", "beginning"),
-      M("ʷ", "labialized", "queen", "kʷin", "kʷin", "beginning"),
-      M("ʲ", "palatalized", "nyet", "nʲet", "nʲet", "beginning"),
-      M("ˠ", "velarized", "bád", "bˠaːdˠ", "bˠaːdˠ", "beginning and end"),
-      M("ˤ", "pharyngealized", "ṣād", "sˤaːd", "sˤaːd", "beginning"),
-      M("͡", "tie bar above", "church", "t͡ʃɜɹtʃ", "t͡ʃɜɹtʃ", "beginning"),
-      M("͜", "tie bar below", "church", "t͜ʃɜɹtʃ", "t͜ʃɜɹtʃ", "beginning")
+      D("p", "voiceless bilabial plosive", "spin", "spɪn", "middle"),
+      D("b", "voiced bilabial plosive", "bin", "bɪn", "beginning"),
+      D("t", "voiceless alveolar plosive", "stop", "stɑp", "middle"),
+      D("d", "voiced alveolar plosive", "dog", "dɔɡ", "beginning"),
+      D("k", "voiceless velar plosive", "cat", "kæt", "beginning"),
+      D("ɡ", "voiced velar plosive", "git", "ɡɪt", "beginning"),
+      D("m", "bilabial nasal", "map", "mæp", "beginning"),
+      D("n", "alveolar nasal", "net", "nɛt", "beginning"),
+      D("ŋ", "velar nasal", "sing", "sɪŋ", "end"),
+      D("f", "voiceless labiodental fricative", "fine", "faɪn", "beginning"),
+      D("v", "voiced labiodental fricative", "vine", "vaɪn", "beginning"),
+      D("θ", "voiceless dental fricative", "thin", "θɪn", "beginning"),
+      D("ð", "voiced dental fricative", "this", "ðɪs", "beginning"),
+      D("s", "voiceless alveolar fricative", "sip", "sɪp", "beginning"),
+      D("z", "voiced alveolar fricative", "zip", "zɪp", "beginning"),
+      D("ʃ", "voiceless postalveolar fricative", "ship", "ʃɪp", "beginning"),
+      D("ʒ", "voiced postalveolar fricative", "vision", "vɪʒən", "middle"),
+      D("h", "voiceless glottal fricative", "hat", "hæt", "beginning"),
+      D("w", "voiced labial-velar approximant", "wet", "wɛt", "beginning"),
+      D("ɹ", "alveolar approximant", "red", "ɹɛd", "beginning"),
+      D("j", "palatal approximant", "yes", "jɛs", "beginning"),
+      D("l", "alveolar lateral approximant", "let", "lɛt", "beginning"),
+      D("i", "close front unrounded vowel", "fleece", "flis", "middle"),
+      D("ɪ", "near-close front unrounded vowel", "kit", "kɪt", "middle"),
+      D("e", "close-mid front unrounded vowel", "café", "kæfe", "end"),
+      D("ɛ", "open-mid front unrounded vowel", "dress", "dɹɛs", "middle"),
+      D("æ", "near-open front unrounded vowel", "cat", "kæt", "middle"),
+      D("ə", "mid central vowel", "about", "əbaʊt", "beginning"),
+      D("ɜ", "open-mid central unrounded vowel", "nurse", "nɜɹs", "middle"),
+      D("u", "close back rounded vowel", "goose", "ɡus", "middle"),
+      D("ʊ", "near-close back rounded vowel", "foot", "fʊt", "middle"),
+      D("o", "close-mid back rounded vowel", "go", "ɡo", "end"),
+      D("ɔ", "open-mid back rounded vowel", "thought", "θɔt", "middle"),
+      D("ʌ", "open-mid back unrounded vowel", "strut", "stɹʌt", "middle"),
+      D("ɑ", "open back unrounded vowel", "father", "fɑðɚ", "middle"),
+      D("ɒ", "open back rounded vowel", "lot", "lɒt", "middle"),
+      M("ˈ", "primary stress", "computer", "kəmˈpjutɚ", "middle"),
+      M("ˌ", "secondary stress", "information", "ˌɪnfɚˈmeɪʃən", "beginning"),
+      M("ː", "length mark", "fleece", "fliːs", "middle"),
+      M(".", "syllable boundary", "button", "bʌt.ən", "middle"),
+      M("̥", "voiceless", "play", "pʰl̥eɪ", "middle"),
+      M("̊", "voiceless, alternate above form", "cream", "kɹ̊im", "middle"),
+      M("̬", "voiced", "zoo", "s̬u", "beginning"),
+      M("̤", "breathy voiced", "bhai", "b̤aɪ", "beginning"),
+      M("̰", "creaky voiced", "uh-oh", "ʌ̰ʔoʊ", "beginning"),
+      M("̼", "linguolabial", "mana", "n̼ana", "beginning"),
+      M("̪", "dental", "eighth", "eɪt̪θ", "middle"),
+      M("̺", "apical", "pero", "peɾ̺o", "middle"),
+      M("̻", "laminal", "see", "s̻i", "beginning"),
+      M("̃", "nasalized", "sans", "sɑ̃", "end"),
+      M("ⁿ", "nasal release", "hidden", "hɪdⁿn̩", "middle"),
+      M("ˡ", "lateral release", "atlas", "ætˡləs", "middle"),
+      M("̚", "no audible release", "cat", "kæt̚", "end"),
+      M("̴", "velarized or pharyngealized", "feel", "fil̴", "end"),
+      M("̝", "raised", "Dvořák", "ˈdvor̝aːk", "middle"),
+      M("˔", "raised, alternate spacing form", "Dvořák", "ˈdvoɹ˔aːk", "middle"),
+      M("̞", "lowered", "lobo", "loβ̞o", "middle"),
+      M("˕", "lowered, alternate spacing form", "lobo", "loβ˕o", "middle"),
+      M("̟", "advanced", "goose", "ɡu̟s", "middle"),
+      M("̠", "retracted", "goo", "ɡ̠u", "beginning"),
+      M("̘", "advanced tongue root", "see", "si̘", "middle"),
+      M("̙", "retracted tongue root", "set", "sɛ̙t", "middle"),
+      M("̈", "centralized", "roses", "ɹoʊzɪ̈z", "middle"),
+      M("̽", "mid-centralized", "comma", "kɑmə̽", "end"),
+      M("̹", "more rounded", "thought", "θɔ̹t", "middle"),
+      M("̜", "less rounded", "foot", "fʊ̜t", "middle"),
+      M("̩", "syllabic", "button", "bʌtn̩", "end"),
+      M("̯", "non-syllabic", "boy", "bɔɪ̯", "end"),
+      M("˞", "rhoticity", "bird", "bɜ˞d", "middle"),
+      M("ʰ", "aspirated", "pin", "pʰɪn", "beginning"),
+      M("ʷ", "labialized", "queen", "kʷin", "beginning"),
+      M("ʲ", "palatalized", "nyet", "nʲet", "beginning"),
+      M("ˠ", "velarized", "bád", "bˠaːdˠ", "beginning and end"),
+      M("ˤ", "pharyngealized", "ṣād", "sˤaːd", "beginning"),
+      M("͡", "tie bar above", "church", "t͡ʃɜɹtʃ", "beginning"),
+      M("͜", "tie bar below", "church", "t͜ʃɜɹtʃ", "beginning")
     };
     return values.ToDictionary(value => value.Symbol, StringComparer.Ordinal);
   }
@@ -248,17 +245,15 @@ internal static class IpaSymbolCatalog
     string description,
     string word,
     string ipa,
-    string highlighted,
     string position)
   {
     return new IpaSymbolDefinition(
       symbol,
       description,
+      symbol,
       word,
       ipa,
-      highlighted,
-      position,
-      CanSoundAlone: true);
+      position);
   }
 
   private static IpaSymbolDefinition M(
@@ -266,17 +261,75 @@ internal static class IpaSymbolCatalog
     string description,
     string word,
     string ipa,
-    string highlighted,
     string position)
   {
     return new IpaSymbolDefinition(
       symbol,
       description,
+      GetStandaloneIpa(symbol, ipa),
       word,
       ipa,
-      highlighted,
-      position,
-      CanSoundAlone: false);
+      position);
+  }
+
+  /// <summary>
+  /// Builds a compact pronounceable carrier for a modifier when possible.
+  /// </summary>
+  private static string? GetStandaloneIpa(string symbol, string exampleIpa)
+  {
+    ArgumentException.ThrowIfNullOrEmpty(symbol);
+    ArgumentException.ThrowIfNullOrEmpty(exampleIpa);
+
+    if (symbol is "ˈ" or "ˌ" or "." or "|" or "‖" or "‿")
+    {
+      return null;
+    }
+
+    if (symbol is "͡" or "͜")
+    {
+      return $"t{symbol}ʃ";
+    }
+
+    int symbolIndex = exampleIpa.IndexOf(symbol, StringComparison.Ordinal);
+    if (symbolIndex < 0)
+    {
+      return null;
+    }
+
+    UnicodeCategory category =
+      CharUnicodeInfo.GetUnicodeCategory(symbol, 0);
+    if (category is
+      UnicodeCategory.NonSpacingMark or
+      UnicodeCategory.SpacingCombiningMark or
+      UnicodeCategory.EnclosingMark)
+    {
+      int carrierStart = PreviousRuneStart(exampleIpa, symbolIndex);
+      return exampleIpa[carrierStart..(symbolIndex + symbol.Length)];
+    }
+
+    if (category == UnicodeCategory.ModifierLetter && symbolIndex > 0)
+    {
+      int carrierStart = PreviousRuneStart(exampleIpa, symbolIndex);
+      return exampleIpa[carrierStart..(symbolIndex + symbol.Length)];
+    }
+
+    return $"a{symbol}";
+  }
+
+  /// <summary>
+  /// Finds the UTF-16 start of the rune immediately before an index.
+  /// </summary>
+  private static int PreviousRuneStart(string text, int index)
+  {
+    int previous = index - 1;
+    if (previous > 0 &&
+        char.IsLowSurrogate(text[previous]) &&
+        char.IsHighSurrogate(text[previous - 1]))
+    {
+      previous--;
+    }
+
+    return Math.Max(0, previous);
   }
 
   /// <summary>
@@ -324,8 +377,7 @@ internal sealed record IpaSymbolGroup(
 internal sealed record IpaSymbolDefinition(
   string Symbol,
   string Description,
+  string? StandaloneIpa,
   string ExampleWord,
   string ExampleIpa,
-  string HighlightedExampleIpa,
-  string Position,
-  bool CanSoundAlone);
+  string Position);

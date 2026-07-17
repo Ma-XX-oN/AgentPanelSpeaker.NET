@@ -1,4 +1,19 @@
-# Agent Panel Speaker v25.6.4
+# Agent Panel Speaker v25.6.5
+
+## v25.6.5
+
+- IPA hover information now uses one consistent layout: the displayed symbol,
+  an isolated pronunciation when one can be constructed, an example word or
+  carrier word, and the complete example transcription.
+- Every occurrence of the selected symbol is bold in both the isolated and
+  example transcriptions.  Combining marks bold their complete carrier
+  cluster, and tie bars bold the complete tied affricate.
+- Square-bracket highlighting has been removed completely.
+- Generic consonants use the `apa` carrier word and generic vowels use an
+  `h–d` carrier frame, so the selected phone appears inside a word rather than
+  only beside a generic `carrier syllable` label.
+- Hover audio uses the same isolated IPA shown in the footer before speaking
+  the example word.
 
 ## v25.6.4
 
@@ -88,13 +103,16 @@ value position:
 Hovering for one second previews a symbol.  Holding Shift while entering a
 button previews immediately.  The footer states both controls when they fit;
 otherwise it alternates them at a readable interval until the pointer enters
-an enabled symbol button.  On hover, the footer bolds only the displayed
-symbol or dotted-circle combining-mark cluster while leaving the example word,
-transcription, arrows, and position at normal weight.
+an enabled symbol button.  On hover, the footer bolds the displayed symbol and
+every occurrence of that symbol in the isolated and example IPA.  Combining marks include their carrier
+phone in the bold range, and tie bars include both tied phones.  The example
+word, arrows, and position remain at normal weight.  No square brackets are
+inserted for highlighting.
 
-When a phone can be synthesized independently, the preview plays the phone,
-waits for the configured IPA example delay, and then plays the example word.
-Modifiers that cannot stand alone play only the example.  Installed voices do
+When an independent pronunciation can be constructed, the preview plays that
+phone or modified-phone cluster, waits for the configured IPA example delay,
+and then plays the example word.  Marks with no meaningful independent sound
+play only the example.  Installed voices do
 not necessarily accept every symbol on the complete IPA chart.  When the
 selected provider rejects an isolated phone, the preview skips that segment and
 continues with the example.  When it rejects the example IPA, the same example
