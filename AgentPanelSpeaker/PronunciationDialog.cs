@@ -143,6 +143,42 @@ internal sealed class PronunciationDialog : Form
     UpdateIpaButtonState();
   }
 
+
+  /// <summary>
+  /// Inserts line breaks in either rule editor instead of activating OK.
+  /// </summary>
+  protected override bool ProcessCmdKey(ref Message message, Keys keyData)
+  {
+    Keys keyCode = keyData & Keys.KeyCode;
+    Keys modifiers = keyData & Keys.Modifiers;
+    if (keyCode == Keys.Enter &&
+        (modifiers == Keys.None || modifiers == Keys.Shift) &&
+        TryGetFocusedEditor(out TextBoxBase editor))
+    {
+      editor.SelectedText = Environment.NewLine;
+      return true;
+    }
+
+    return base.ProcessCmdKey(ref message, keyData);
+  }
+
+  private bool TryGetFocusedEditor(out TextBoxBase editor)
+  {
+    if (_spelledTextBox.ContainsFocus)
+    {
+      editor = _spelledTextBox;
+      return true;
+    }
+    if (_pronunciationsTextBox.ContainsFocus)
+    {
+      editor = _pronunciationsTextBox;
+      return true;
+    }
+
+    editor = null!;
+    return false;
+  }
+
   /// <summary>
   /// Gets the spelling-list editor text.
   /// </summary>
@@ -1400,6 +1436,7 @@ internal sealed class PronunciationDialog : Form
     switch (editor)
     {
       case TextBox textBox:
+        textBox.AcceptsReturn = true;
         textBox.ScrollBars = ScrollBars.Both;
         break;
 

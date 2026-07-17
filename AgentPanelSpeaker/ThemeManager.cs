@@ -178,10 +178,10 @@ internal static class ThemeManager
       eventArgs.Graphics.FillRectangle(brush, eventArgs.Bounds);
     }
 
-    string text = eventArgs.Index >= 0 &&
+    string text = (eventArgs.Index >= 0 &&
       eventArgs.Index < comboBox.Items.Count
-        ? comboBox.Items[eventArgs.Index]?.ToString() ?? string.Empty
-        : comboBox.SelectedItem?.ToString() ?? comboBox.Text;
+        ? comboBox.GetItemText(comboBox.Items[eventArgs.Index])
+        : comboBox.GetItemText(comboBox.SelectedItem)) ?? string.Empty;
     var textBounds = new Rectangle(
       eventArgs.Bounds.X + 2,
       eventArgs.Bounds.Y,

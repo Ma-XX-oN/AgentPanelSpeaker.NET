@@ -36,8 +36,17 @@ internal sealed class MainForm : Form
   private readonly Button _pronunciationsButton = new();
   private readonly Button _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
+  private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
   private readonly Dictionary<ContentCategory, VoiceRowControls> _voiceRows = new();
+  private readonly VoiceDisplayField[] _voiceDisplayOrder =
+  {
+    VoiceDisplayField.Location,
+    VoiceDisplayField.Language,
+    VoiceDisplayField.VoiceName,
+    VoiceDisplayField.Natural,
+    VoiceDisplayField.Maker
+  };
   private readonly IReadOnlyList<InstalledSpeechVoice> _installedVoices;
   private readonly UserSettingsStore _settingsStore;
 
@@ -45,6 +54,7 @@ internal sealed class MainForm : Form
   private bool _loadingSettings;
   private bool _closing;
   private bool _playStopTransitioning;
+  private bool _voiceSettingPreviewActive;
   private int _monitorSession;
 
   /// <summary>
@@ -78,7 +88,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.6.9";
+    Text = "Agent Panel Speaker v25.6.11";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -171,14 +181,14 @@ internal sealed class MainForm : Form
     var speechTable = new TableLayoutPanel
     {
       AutoSize = true,
-      ColumnCount = 6,
+      ColumnCount = 5,
       RowCount = 4,
       Dock = DockStyle.Fill,
       CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
     };
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
-    for (int index = 0; index < 4; ++index)
+    for (int index = 0; index < 3; ++index)
     {
       speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     }
@@ -317,8 +327,12 @@ internal sealed class MainForm : Form
     _monitor.Faulted += exception => PostToUi(() =>
       AppendLog($"Monitoring failed: {exception.Message}"));
     _speech.Activity += message => PostToUi(() => AppendLog(message));
-    _speech.SpeakingStateChanged += _ => PostToUi(() =>
+    _speech.SpeakingStateChanged += speaking => PostToUi(() =>
     {
+      if (!speaking)
+      {
+        _voiceSettingPreviewActive = false;
+      }
       UpdateAllVoiceRowStates();
       UpdateControlState();
     });
@@ -327,15 +341,27 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Adds table column headers.
   /// </summary>
-  private static void AddSpeechHeader(TableLayoutPanel table)
+  private void AddSpeechHeader(TableLayoutPanel table)
   {
-    string[] headings =
+    table.Controls.Add(MakeSectionLabel("Content"), 0, 0);
+
+    _voiceHeaderLabel.AutoSize = true;
+    _voiceHeaderLabel.Cursor = Cursors.Hand;
+    _voiceHeaderLabel.Font = new Font(
+      SystemFonts.DefaultFont,
+      FontStyle.Bold);
+    _voiceHeaderLabel.Margin = new Padding(4);
+    _voiceHeaderLabel.Click += (_, _) => RotateVoiceDisplayOrder();
+    table.Controls.Add(_voiceHeaderLabel, 1, 0);
+    UpdateVoiceHeaderLabel();
+
+    string[] remainingHeadings = { "Rate", "Pitch", "Volume" };
+    for (int index = 0; index < remainingHeadings.Length; ++index)
     {
-      "Content", "Voice", "Rate", "Pitch", "Volume", "Test"
-    };
-    for (int column = 0; column < headings.Length; ++column)
-    {
-      table.Controls.Add(MakeSectionLabel(headings[column]), column, 0);
+      table.Controls.Add(
+        MakeSectionLabel(remainingHeadings[index]),
+        index + 2,
+        0);
     }
   }
 
@@ -353,33 +379,37 @@ internal sealed class MainForm : Form
       DropDownStyle = ComboBoxStyle.DropDownList,
       Dock = DockStyle.Fill
     };
+    voice.FormattingEnabled = true;
+    voice.Format += VoiceComboBoxFormat;
     var rate = CreateNumeric(-10, 10, 0, 60);
     var pitch = CreateNumeric(-10, 10, 0, 60);
     VolumeSliderControls volume = CreateVolumeSlider();
-    var test = new Button { AutoSize = true, Text = "🔊" };
+    var previewTimer = new System.Windows.Forms.Timer
+    {
+      Interval = 350
+    };
     var controls = new VoiceRowControls(
       voice,
       rate,
       pitch,
       volume.Slider,
       volume.ValueLabel,
-      test);
+      previewTimer,
+      $"{category} speech is working.");
     _voiceRows.Add(category, controls);
     table.Controls.Add(MakeInlineLabel(label), 0, row);
     table.Controls.Add(voice, 1, row);
     table.Controls.Add(rate, 2, row);
     table.Controls.Add(pitch, 3, row);
     table.Controls.Add(volume.Container, 4, row);
-    table.Controls.Add(test, 5, row);
     voice.SelectedIndexChanged += (_, _) => VoiceRowChanged(category);
     rate.ValueChanged += (_, _) => VoiceRowChanged(category);
     pitch.ValueChanged += (_, _) => VoiceRowChanged(category);
     volume.Slider.ValueChanged += (_, _) =>
       VolumeSliderChanged(category);
-    test.Click += (_, _) => TestVoice(category);
+    previewTimer.Tick += (_, _) => PreviewVoiceSettings(category);
     volume.Slider.AccessibleName = $"{label} volume";
     _toolTip.SetToolTip(volume.Slider, $"{label} volume");
-    _toolTip.SetToolTip(test, $"Test {label.ToLowerInvariant()} voice");
   }
 
   /// <summary>
@@ -398,14 +428,130 @@ internal sealed class MainForm : Form
   /// </summary>
   private void PopulateVoiceRows()
   {
-    foreach (VoiceRowControls row in _voiceRows.Values)
+    RepopulateVoiceRows(preserveSelections: false);
+  }
+
+  /// <summary>
+  /// Formats one installed voice using the current rotated field order.
+  /// </summary>
+  private void VoiceComboBoxFormat(
+    object? sender,
+    ListControlConvertEventArgs eventArgs)
+  {
+    if (eventArgs.ListItem is InstalledSpeechVoice voice)
     {
-      row.Voice.Items.Add(SpeechProfileSettings.NotSpoken);
-      foreach (InstalledSpeechVoice voice in _installedVoices)
+      eventArgs.Value = voice.Format(_voiceDisplayOrder);
+    }
+  }
+
+  /// <summary>
+  /// Rotates the displayed field order left and sorts by the new first field.
+  /// </summary>
+  private void RotateVoiceDisplayOrder()
+  {
+    VoiceDisplayField first = _voiceDisplayOrder[0];
+    Array.Copy(
+      _voiceDisplayOrder,
+      1,
+      _voiceDisplayOrder,
+      0,
+      _voiceDisplayOrder.Length - 1);
+    _voiceDisplayOrder[^1] = first;
+    UpdateVoiceHeaderLabel();
+    RepopulateVoiceRows(preserveSelections: true);
+  }
+
+  /// <summary>
+  /// Shows the primary voice sort field and explains the rotation action.
+  /// </summary>
+  private void UpdateVoiceHeaderLabel()
+  {
+    string firstField = GetVoiceDisplayFieldLabel(_voiceDisplayOrder[0]);
+    _voiceHeaderLabel.Text = $"Voice ({firstField})";
+    _voiceHeaderLabel.AccessibleName =
+      $"Voice list sorted by {firstField}. Activate to rotate field order.";
+    _toolTip.SetToolTip(
+      _voiceHeaderLabel,
+      $"Sorted by {firstField}. Click to rotate voice fields and resort.");
+  }
+
+  /// <summary>
+  /// Rebuilds all voice lists in current field order without changing profiles.
+  /// </summary>
+  private void RepopulateVoiceRows(bool preserveSelections)
+  {
+    var selectedNames = new Dictionary<ContentCategory, string>();
+    if (preserveSelections)
+    {
+      foreach ((ContentCategory category, VoiceRowControls row) in _voiceRows)
       {
-        row.Voice.Items.Add(voice);
+        selectedNames[category] = GetVoiceName(row.Voice.SelectedItem);
       }
     }
+
+    InstalledSpeechVoice[] sortedVoices = _installedVoices
+      .OrderBy(
+        voice => voice.GetDisplayField(_voiceDisplayOrder[0]),
+        StringComparer.CurrentCultureIgnoreCase)
+      .ThenBy(
+        voice => voice.GetDisplayField(_voiceDisplayOrder[1]),
+        StringComparer.CurrentCultureIgnoreCase)
+      .ThenBy(
+        voice => voice.GetDisplayField(_voiceDisplayOrder[2]),
+        StringComparer.CurrentCultureIgnoreCase)
+      .ThenBy(
+        voice => voice.GetDisplayField(_voiceDisplayOrder[3]),
+        StringComparer.CurrentCultureIgnoreCase)
+      .ThenBy(
+        voice => voice.GetDisplayField(_voiceDisplayOrder[4]),
+        StringComparer.CurrentCultureIgnoreCase)
+      .ThenBy(
+        voice => voice.Name,
+        StringComparer.CurrentCultureIgnoreCase)
+      .ToArray();
+
+    bool wasLoading = _loadingSettings;
+    _loadingSettings = true;
+    try
+    {
+      foreach ((ContentCategory category, VoiceRowControls row) in _voiceRows)
+      {
+        row.Voice.BeginUpdate();
+        try
+        {
+          row.Voice.Items.Clear();
+          row.Voice.Items.Add(SpeechProfileSettings.NotSpoken);
+          row.Voice.Items.AddRange(sortedVoices.Cast<object>().ToArray());
+          if (preserveSelections)
+          {
+            row.Voice.SelectedItem = FindVoiceItem(
+              row.Voice,
+              selectedNames[category]);
+          }
+        }
+        finally
+        {
+          row.Voice.EndUpdate();
+        }
+      }
+    }
+    finally
+    {
+      _loadingSettings = wasLoading;
+    }
+  }
+
+  private static string GetVoiceDisplayFieldLabel(VoiceDisplayField field)
+  {
+    return field switch
+    {
+      VoiceDisplayField.Location => "Location",
+      VoiceDisplayField.Language => "Language",
+      VoiceDisplayField.VoiceName => "Name",
+      VoiceDisplayField.Natural => "Natural",
+      VoiceDisplayField.Maker => "Maker",
+      _ => throw new ArgumentOutOfRangeException(nameof(field), field, null)
+    };
   }
 
   /// <summary>
@@ -561,6 +707,7 @@ internal sealed class MainForm : Form
     }
     UpdateVoiceRowState(category);
     SaveControlsToSettings();
+    ScheduleVoiceSettingsPreview(category);
   }
 
   /// <summary>
@@ -582,7 +729,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Enables profile controls when spoken and test buttons when idle.
+  /// Enables rate, pitch, and volume only when the row has a spoken voice.
   /// </summary>
   private void UpdateVoiceRowState(ContentCategory category)
   {
@@ -595,11 +742,10 @@ internal sealed class MainForm : Form
     row.Pitch.Enabled = enabled;
     row.Volume.Enabled = enabled;
     row.VolumeValue.Enabled = enabled;
-    row.Test.Enabled = enabled && !_speech.IsSpeaking;
   }
 
   /// <summary>
-  /// Refreshes all test buttons after speech starts or stops.
+  /// Refreshes all role rows after speech starts or stops.
   /// </summary>
   private void UpdateAllVoiceRowStates()
   {
@@ -610,11 +756,33 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Tests one role profile without changing transcript history.
+  /// Debounces a profile edit before speaking its automatic test message.
   /// </summary>
-  private void TestVoice(ContentCategory category)
+  private void ScheduleVoiceSettingsPreview(ContentCategory category)
   {
-    if (_speech.IsSpeaking)
+    VoiceRowControls row = _voiceRows[category];
+    row.PreviewTimer.Stop();
+    if (_monitor.IsRunning || _playStopTransitioning)
+    {
+      return;
+    }
+
+    SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
+    if (profile.IsSpoken)
+    {
+      row.PreviewTimer.Start();
+    }
+  }
+
+  /// <summary>
+  /// Speaks the edited role profile unless monitored playback owns speech.
+  /// </summary>
+  private void PreviewVoiceSettings(ContentCategory category)
+  {
+    VoiceRowControls row = _voiceRows[category];
+    row.PreviewTimer.Stop();
+    if (_monitor.IsRunning || _playStopTransitioning ||
+        (_speech.IsSpeaking && !_voiceSettingPreviewActive))
     {
       return;
     }
@@ -622,18 +790,23 @@ internal sealed class MainForm : Form
     try
     {
       SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
+      if (!profile.IsSpoken)
+      {
+        return;
+      }
+
+      _voiceSettingPreviewActive = true;
       AppendLog(
-        $"Testing {category}: voice={profile.VoiceName}; " +
+        $"Previewing {category}: voice={profile.VoiceName}; " +
         $"rate={profile.Rate}; pitch={profile.Pitch}; " +
         $"volume={profile.Volume}%.");
-      _speech.SpeakUntracked(
-        $"{category} speech is working.",
-        profile);
+      _speech.SpeakUntracked(row.PreviewMessage, profile);
     }
     catch (Exception exception) when (
       exception is ArgumentException or InvalidOperationException)
     {
-      AppendLog($"Voice test failed: {exception.Message}");
+      _voiceSettingPreviewActive = false;
+      AppendLog($"Voice preview failed: {exception.Message}");
     }
   }
 
@@ -662,7 +835,13 @@ internal sealed class MainForm : Form
       return;
     }
 
-    if (_monitor.IsRunning || _speech.IsSpeaking)
+    if (_voiceSettingPreviewActive && !_monitor.IsRunning)
+    {
+      StopVoicePreviewTimers();
+      _voiceSettingPreviewActive = false;
+      _speech.CancelAll();
+    }
+    else if (_monitor.IsRunning || _speech.IsSpeaking)
     {
       StopMonitoringAndSpeech();
       return;
@@ -1120,6 +1299,17 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
+  /// Cancels all pending automatic voice-setting previews.
+  /// </summary>
+  private void StopVoicePreviewTimers()
+  {
+    foreach (VoiceRowControls row in _voiceRows.Values)
+    {
+      row.PreviewTimer.Stop();
+    }
+  }
+
+  /// <summary>
   /// Updates controls that depend on monitoring/history state.
   /// </summary>
   private void UpdateControlState()
@@ -1127,6 +1317,10 @@ internal sealed class MainForm : Form
     bool running = _monitor.IsRunning;
     bool playbackActive = running || _speech.IsSpeaking;
     bool hasHistory = _speech.HasHistory;
+    if (playbackActive && !_voiceSettingPreviewActive)
+    {
+      StopVoicePreviewTimers();
+    }
     _sourceComboBox.Enabled = !running;
     _detectLatestButton.Enabled = !running;
     _browseButton.Enabled = !running;
@@ -1368,6 +1562,10 @@ internal sealed class MainForm : Form
     _monitor.Dispose();
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
+    foreach (VoiceRowControls row in _voiceRows.Values)
+    {
+      row.PreviewTimer.Dispose();
+    }
     _toolTip.Dispose();
   }
 
@@ -1545,7 +1743,8 @@ internal sealed class MainForm : Form
     NumericUpDown Pitch,
     TrackBar Volume,
     Label VolumeValue,
-    Button Test);
+    System.Windows.Forms.Timer PreviewTimer,
+    string PreviewMessage);
 
   private sealed record VolumeSliderControls(
     Control Container,

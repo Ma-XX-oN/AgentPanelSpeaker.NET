@@ -44,7 +44,7 @@ the JSONL.
 | `PcmWaveData` | Parses, converts, joins, and generates PCM audio. |
 | `WaveOutPlayer` | Plays one PCM buffer through one WinMM output stream. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
-| `PronunciationDialog` | Edits spelling/IPA and hosts the IPA toolbar. |
+| `PronunciationDialog` | Edits multi-line rules and hosts the IPA toolbar. |
 | `IpaSymbolCatalog` | Describes grouped symbols and preview examples. |
 | `SpelledWordSet` | Normalizes the one-entry-per-line spelling list. |
 | `AudioWakeSettings` | Stores normalized Bluetooth wake policy. |
@@ -118,6 +118,13 @@ profile contains:
 - pitch `-10..10`;
 - volume `0..100` percent.
 
+The UI formats each installed voice as structured location, language, name,
+Natural quality, and maker fields.  The current field order is also the sort
+order.  Clicking the Voice heading rotates that order without changing the
+stable provider name stored in the profile.  Voice, rate, pitch, and volume
+edits are debounced for 350 ms and then spoken as an untracked preview unless
+monitored playback is active.
+
 Voice discovery is the case-insensitive union of enabled `System.Speech`
 voices and native `SAPI.SpVoice` tokens.  A duplicate name uses native SAPI,
 preserving the absolute-middle pitch element:
@@ -132,9 +139,10 @@ to a WAVE stream on the STA worker.  The result is converted to mono 48 kHz
 16-bit PCM before any wake or inter-segment audio is added.
 
 The complete PCM sequence is submitted to one `waveOut` buffer.  Normal speech,
-voice tests, IPA previews, wake-tone tests, and wake-plus-phrase tests share
-that serialized path.  `SpeechService` retains active and paused state; pause,
-resume, and cancellation operate on the active `waveOut` stream.
+automatic voice-setting previews, IPA previews, wake-tone tests, and
+wake-plus-phrase tests share that serialized path.  `SpeechService` retains
+active and paused state; pause, resume, and cancellation operate on the active
+`waveOut` stream.
 
 A fenced-code line is eligible only when:
 
@@ -197,8 +205,10 @@ literally and is not recursively matched against other pronunciation rules.
 
 ## IPA editor and toolbar
 
-The pronunciation dialog contains separate spell-out and rule tabs.  The
-IPA toolbar is manually toggled and never closes itself.  Symbol buttons are
+The pronunciation dialog contains separate spell-out and rule tabs.  Both
+editors intercept Enter and Shift+Enter as line insertion, preventing the
+form's default OK button from limiting either editor to one entry.  The IPA
+toolbar is manually toggled and never closes itself.  Symbol buttons are
 grouped using IPA chart sections.  Each definition supplies:
 
 - the insertion symbol;

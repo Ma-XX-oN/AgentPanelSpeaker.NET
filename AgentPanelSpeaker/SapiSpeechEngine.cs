@@ -273,9 +273,15 @@ internal sealed class SapiSpeechEngine : IDisposable
       }
 
       _voices = voiceBackends.Keys
-        .Select(name => new InstalledSpeechVoice(name, displayNames[name]))
+        .Select(name => InstalledSpeechVoice.Create(name, displayNames[name]))
         .OrderBy(
-          voiceInfo => voiceInfo.DisplayName,
+          voiceInfo => voiceInfo.Location,
+          StringComparer.CurrentCultureIgnoreCase)
+        .ThenBy(
+          voiceInfo => voiceInfo.Language,
+          StringComparer.CurrentCultureIgnoreCase)
+        .ThenBy(
+          voiceInfo => voiceInfo.VoiceName,
           StringComparer.CurrentCultureIgnoreCase)
         .ToArray();
 

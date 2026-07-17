@@ -1,9 +1,26 @@
-# Agent Panel Speaker v25.6.9
+# Agent Panel Speaker v25.6.11
+
+## v25.6.11
+
+- Fixed the nullable-analysis build failure in the dark-theme ComboBox drawing
+  path by converting a null item label to an empty string before drawing it.
+
+## v25.6.10
+
+- Enter and Shift+Enter insert another line in both pronunciation editors
+  instead of activating **OK**, so either tab accepts any number of entries.
+- Voice labels use structured fields in this initial order: location, language,
+  name, Natural quality, and maker.  Clicking the **Voice** heading rotates the
+  field order left and immediately resorts all three dropdowns by the new first
+  field while preserving every selected provider voice.
+- The voice **Test** column was removed.  Changing a row's voice, rate, pitch,
+  or volume automatically speaks that row's test message after a short debounce
+  whenever monitored playback is not active.
 
 ## v25.6.9
 
-- Pronunciation rules now accept spoken-text aliases as well as IPA.  For
-  example, `TODO/i=to do` speaks every case variation of `TODO` as “to do”.
+- Pronunciation rules accept spoken-text aliases as well as IPA.  For example,
+  `TODO/i=to do` speaks every case variation of `TODO` as “to do”.
 - `name=spoken text` is exact-case; `name/i=spoken text` ignores case.  Existing
   `name=ipa:...` and `name/i=ipa:...` rules remain unchanged.
 - **Pronounce** previews the spoken-text value on the caret line instead of the
@@ -93,12 +110,17 @@ Each content row has its own:
 - voice (`Not Spoken` disables that category);
 - rate (`-10..10`);
 - pitch (`-10..10`);
-- volume slider (`0..100` percent);
-- test button for that content voice.
+- volume slider (`0..100` percent).
 
-Changes remain available while monitoring and apply to the next sentence or
-code line.  The active fragment is not restarted.  Test buttons are disabled
-while speech is active or paused, so a test cannot interrupt it.
+Changing any of those values automatically speaks the row's test message after
+350 ms without another edit.  Automatic previews are suppressed during
+monitored playback and do not alter transcript history.
+
+Voice labels initially display location, language, name, Natural quality when
+present, and maker.  The dropdown is sorted by the first displayed field.
+Clicking the **Voice** heading rotates the field order left and resorts all
+voice lists.  `Not Spoken` remains the first special entry, and the stored
+provider name is unchanged by display reordering.
 
 The voice lists combine every enabled voice exposed through `System.Speech`
 with the native `SAPI.SpVoice` list.  A voice present in both lists uses
