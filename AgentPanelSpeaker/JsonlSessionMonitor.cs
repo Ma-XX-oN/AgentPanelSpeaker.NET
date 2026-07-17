@@ -410,13 +410,20 @@ internal sealed class JsonlSessionMonitor : IDisposable
     {
       if (part.Kind == SpeechFragmentKind.Prose)
       {
+        SpeechFragmentKind fragmentKind = part.FenceType.Length == 0
+          ? SpeechFragmentKind.Prose
+          : SpeechFragmentKind.FencedCodeLine;
         fragments.AddRange(SentenceSegmenter
           .Split(part.Text, part.PauseAfter)
           .Select(sentence => new SpeechFragment(
             nodeId,
             node.Category,
-            SpeechFragmentKind.Prose,
+            fragmentKind,
             sentence.Text,
+            part.FenceType,
+            part.FenceBlockId,
+            part.FenceLineIndex,
+            part.FenceLineCount,
             PauseAfter: sentence.PauseAfter)));
       }
       else

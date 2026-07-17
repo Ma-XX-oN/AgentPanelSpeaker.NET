@@ -102,8 +102,11 @@ Each `SpeechFragment` retains:
 - normalized fence type;
 - fenced-block identity, line index, and non-empty line count.
 
-Prose is sentence-split.  Every non-empty fenced-code line is one navigation
-entry.  Node navigation groups fragments carrying the same `NodeId`.
+Prose is sentence-split.  Every non-empty line in a non-`md` fenced block is
+one navigation entry, and punctuation inside that line is ignored.  An
+explicit `md` fence is parsed recursively with normal Markdown block and
+sentence segmentation while retaining fenced-block playback policy.  Node
+navigation groups fragments carrying the same `NodeId`.
 
 ## Playback policy
 
@@ -397,7 +400,11 @@ voice pronunciation.
 ## Structural speech boundaries
 
 Markdown block structure and sentence navigation share one segmentation model.
-Headings, paragraphs, list items, quote blocks, table rows, and every spoken
-fenced-code line end a navigation unit and receive one 250 ms pause.  When a
-block already ends in sentence punctuation, the punctuation and block ending
-are one coincident boundary and never create an empty fragment.
+Headings, paragraphs, list items, quote blocks, and table rows end a navigation
+unit and receive one 250 ms pause.  Non-`md` fenced blocks instead treat every
+non-empty source line as exactly one unit and ignore punctuation within it.
+Explicit `md` fences recurse through the normal Markdown rules, including
+nested fences.  Fence delimiters may contain one or more matching backticks or
+tildes.  When a block already ends in sentence punctuation, the punctuation
+and block ending are one coincident boundary and never create an empty
+fragment.

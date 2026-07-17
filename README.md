@@ -1,4 +1,15 @@
-# Agent Panel Speaker v25.6.7
+# Agent Panel Speaker v25.6.8
+
+## v25.6.8
+
+- Non-`md` fenced blocks ignore sentence punctuation for navigation.  Every
+  non-empty source line is exactly one navigation unit and receives one
+  structural pause.
+- Fences explicitly tagged `md` are parsed recursively with the same Markdown
+  block and sentence rules as ordinary JSONL message text.
+- Backtick and tilde fences are recognized with runs of one, two, three, or
+  more markers.  A closing fence uses the same marker character, at least the
+  opening run length, and no info-string token.
 
 ## v25.6.7
 
@@ -201,8 +212,13 @@ No Enter key or Apply button is required.
 - An empty list skips all fenced blocks.
 - Aliases are explicit: list both `cpp` and `c++` when both are wanted.
 
-Every non-empty accepted code line is one rewind/forward entry.  Activity logs
-both spoken and skipped blocks with the normalized fence type.
+Every non-empty accepted line in a non-`md` fenced block is one
+rewind/forward entry, regardless of punctuation inside that line.  An
+explicitly tagged `md` fence is parsed recursively as Markdown, so its headings,
+paragraphs, list items, sentences, and nested fences use the same segmentation
+rules as ordinary message text.  Fence runs may contain one or more backticks
+or tildes.  Activity logs both spoken and skipped blocks with the normalized
+fence type.
 
 ## Playback controls and local hotkeys
 

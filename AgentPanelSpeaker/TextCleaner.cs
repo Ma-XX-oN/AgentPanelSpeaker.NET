@@ -21,13 +21,35 @@ internal static partial class TextCleaner
       return result;
     }
 
+    int nextFenceBlockId = 0;
+    ParseMarkdownInto(
+      result,
+      text,
+      ref nextFenceBlockId,
+      string.Empty,
+      -1,
+      0);
+    return result;
+  }
+
+  /// <summary>
+  /// Parses one Markdown source region, including nested fenced blocks.
+  /// </summary>
+  private static void ParseMarkdownInto(
+    ICollection<SpeechTextPart> result,
+    string text,
+    ref int nextFenceBlockId,
+    string enclosingFenceType,
+    int enclosingFenceBlockId,
+    int enclosingFenceLineCount)
+  {
     var prose = new StringBuilder();
     var fenceLines = new List<string>();
     bool inFence = false;
     char fenceCharacter = '\0';
     int fenceLength = 0;
     string fenceType = string.Empty;
-    int fenceBlockId = 0;
+    int fenceBlockId = -1;
 
     foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
     {
@@ -40,21 +62,34 @@ internal static partial class TextCleaner
       {
         if (!inFence)
         {
-          FlushProse(result, prose);
+          FlushProse(
+            result,
+            prose,
+            enclosingFenceType,
+            enclosingFenceBlockId,
+            enclosingFenceLineCount);
           inFence = true;
           fenceCharacter = currentCharacter;
           fenceLength = currentLength;
           fenceType = currentType.Length == 0 ? "untyped" : currentType;
+          fenceBlockId = nextFenceBlockId++;
           fenceLines.Clear();
         }
         else if (currentCharacter == fenceCharacter &&
-                 currentLength >= fenceLength)
+                 currentLength >= fenceLength &&
+                 currentType.Length == 0)
         {
-          FlushFence(result, fenceLines, fenceType, fenceBlockId++);
+          FlushFence(
+            result,
+            fenceLines,
+            fenceType,
+            fenceBlockId,
+            ref nextFenceBlockId);
           inFence = false;
           fenceCharacter = '\0';
           fenceLength = 0;
           fenceType = string.Empty;
+          fenceBlockId = -1;
         }
         else
         {
@@ -76,14 +111,22 @@ internal static partial class TextCleaner
 
     if (inFence)
     {
-      FlushFence(result, fenceLines, fenceType, fenceBlockId);
+      FlushFence(
+        result,
+        fenceLines,
+        fenceType,
+        fenceBlockId,
+        ref nextFenceBlockId);
     }
     else
     {
-      FlushProse(result, prose);
+      FlushProse(
+        result,
+        prose,
+        enclosingFenceType,
+        enclosingFenceBlockId,
+        enclosingFenceLineCount);
     }
-
-    return result;
   }
 
   /// <summary>
@@ -91,7 +134,10 @@ internal static partial class TextCleaner
   /// </summary>
   private static void FlushProse(
     ICollection<SpeechTextPart> result,
-    StringBuilder prose)
+    StringBuilder prose,
+    string fenceType,
+    int fenceBlockId,
+    int fenceLineCount)
   {
     string text = SystemTagRegex().Replace(prose.ToString(), " ");
     prose.Clear();
@@ -100,7 +146,12 @@ internal static partial class TextCleaner
       return;
     }
 
-    AppendProseBlocks(result, text.Replace("\r\n", "\n").Split('\n'));
+    AppendProseBlocks(
+      result,
+      text.Replace("\r\n", "\n").Split('\n'),
+      fenceType,
+      fenceBlockId,
+      fenceLineCount);
   }
 
   /// <summary>
@@ -108,7 +159,10 @@ internal static partial class TextCleaner
   /// </summary>
   private static void AppendProseBlocks(
     ICollection<SpeechTextPart> result,
-    IReadOnlyList<string> lines)
+    IReadOnlyList<string> lines,
+    string fenceType,
+    int fenceBlockId,
+    int fenceLineCount)
   {
     var current = new StringBuilder();
     ProseBlockKind currentKind = ProseBlockKind.None;
@@ -118,15 +172,32 @@ internal static partial class TextCleaner
       string line = lines[index];
       if (string.IsNullOrWhiteSpace(line))
       {
-        FlushCurrentBlock(result, current, ref currentKind);
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         continue;
       }
 
       Match heading = AtxHeadingRegex().Match(line);
       if (heading.Success)
       {
-        FlushCurrentBlock(result, current, ref currentKind);
-        AddProseBlock(result, heading.Groups[1].Value);
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
+        AddProseBlock(
+          result,
+          heading.Groups[1].Value,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         continue;
       }
 
@@ -134,8 +205,19 @@ internal static partial class TextCleaner
           SetextUnderlineRegex().IsMatch(lines[index + 1]) &&
           !string.IsNullOrWhiteSpace(line))
       {
-        FlushCurrentBlock(result, current, ref currentKind);
-        AddProseBlock(result, line);
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
+        AddProseBlock(
+          result,
+          line,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         ++index;
         continue;
       }
@@ -143,13 +225,25 @@ internal static partial class TextCleaner
       if (ThematicBreakRegex().IsMatch(line) ||
           TableSeparatorRegex().IsMatch(line))
       {
-        FlushCurrentBlock(result, current, ref currentKind);
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         continue;
       }
 
       if (ListItemRegex().IsMatch(line))
       {
-        FlushCurrentBlock(result, current, ref currentKind);
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         currentKind = ProseBlockKind.ListItem;
         current.AppendLine(line);
         continue;
@@ -159,7 +253,13 @@ internal static partial class TextCleaner
       {
         if (currentKind != ProseBlockKind.Quote)
         {
-          FlushCurrentBlock(result, current, ref currentKind);
+          FlushCurrentBlock(
+            result,
+            current,
+            ref currentKind,
+            fenceType,
+            fenceBlockId,
+            fenceLineCount);
           currentKind = ProseBlockKind.Quote;
         }
         current.AppendLine(line);
@@ -168,15 +268,37 @@ internal static partial class TextCleaner
 
       if (IndentedCodeRegex().IsMatch(line))
       {
-        FlushCurrentBlock(result, current, ref currentKind);
-        AddProseBlock(result, IndentedCodeRegex().Replace(line, "$1"));
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
+        AddProseBlock(
+          result,
+          IndentedCodeRegex().Replace(line, "$1"),
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         continue;
       }
 
       if (IsTableRow(line))
       {
-        FlushCurrentBlock(result, current, ref currentKind);
-        AddProseBlock(result, NormalizeTableRow(line));
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
+        AddProseBlock(
+          result,
+          NormalizeTableRow(line),
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
         continue;
       }
 
@@ -187,7 +309,13 @@ internal static partial class TextCleaner
       current.AppendLine(line);
     }
 
-    FlushCurrentBlock(result, current, ref currentKind);
+    FlushCurrentBlock(
+      result,
+      current,
+      ref currentKind,
+      fenceType,
+      fenceBlockId,
+      fenceLineCount);
   }
 
   /// <summary>
@@ -196,11 +324,19 @@ internal static partial class TextCleaner
   private static void FlushCurrentBlock(
     ICollection<SpeechTextPart> result,
     StringBuilder current,
-    ref ProseBlockKind currentKind)
+    ref ProseBlockKind currentKind,
+    string fenceType,
+    int fenceBlockId,
+    int fenceLineCount)
   {
     if (current.Length != 0)
     {
-      AddProseBlock(result, current.ToString());
+      AddProseBlock(
+        result,
+        current.ToString(),
+        fenceType,
+        fenceBlockId,
+        fenceLineCount);
       current.Clear();
     }
     currentKind = ProseBlockKind.None;
@@ -211,7 +347,10 @@ internal static partial class TextCleaner
   /// </summary>
   private static void AddProseBlock(
     ICollection<SpeechTextPart> result,
-    string text)
+    string text,
+    string fenceType,
+    int fenceBlockId,
+    int fenceLineCount)
   {
     string cleaned = CleanProseBlock(text);
     if (cleaned.Length == 0)
@@ -222,22 +361,38 @@ internal static partial class TextCleaner
     result.Add(new SpeechTextPart(
       SpeechFragmentKind.Prose,
       cleaned,
-      string.Empty,
+      fenceType,
+      fenceBlockId,
       -1,
-      -1,
-      0,
+      fenceLineCount,
       PauseAfter: true));
   }
 
   /// <summary>
-  /// Appends one entry for every non-empty line in a fenced block.
+  /// Appends Markdown fence contents through the prose parser, and every other
+  /// fenced block as one entry per non-empty source line.
   /// </summary>
   private static void FlushFence(
     ICollection<SpeechTextPart> result,
     IReadOnlyList<string> lines,
     string fenceType,
-    int blockId)
+    int blockId,
+    ref int nextFenceBlockId)
   {
+    string normalizedType = fenceType.ToLowerInvariant();
+    int nonEmptyLineCount = lines.Count(line => !string.IsNullOrWhiteSpace(line));
+    if (string.Equals(normalizedType, "md", StringComparison.Ordinal))
+    {
+      ParseMarkdownInto(
+        result,
+        string.Join("\n", lines),
+        ref nextFenceBlockId,
+        normalizedType,
+        blockId,
+        nonEmptyLineCount);
+      return;
+    }
+
     string[] nonEmpty = lines
       .Select(line => line.Trim())
       .Where(line => line.Length != 0)
@@ -247,7 +402,7 @@ internal static partial class TextCleaner
       result.Add(new SpeechTextPart(
         SpeechFragmentKind.FencedCodeLine,
         nonEmpty[index],
-        fenceType.ToLowerInvariant(),
+        normalizedType,
         blockId,
         index,
         nonEmpty.Length,
@@ -325,7 +480,7 @@ internal static partial class TextCleaner
     fenceCharacter = '\0';
     fenceLength = 0;
     fenceType = string.Empty;
-    if (line.Length < 3 || line[0] is not ('`' or '~'))
+    if (line.Length == 0 || line[0] is not ('`' or '~'))
     {
       return false;
     }
@@ -337,10 +492,6 @@ internal static partial class TextCleaner
       ++fenceLength;
     }
 
-    if (fenceLength < 3)
-    {
-      return false;
-    }
 
     string info = line[fenceLength..].Trim();
     fenceType = info.Split(
