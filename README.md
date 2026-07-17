@@ -1,4 +1,24 @@
-# Agent Panel Speaker v25.6.5
+# Agent Panel Speaker v25.6.6
+
+## v25.6.6
+
+- Tabbing to an enabled IPA key now uses the same information and
+  delayed-preview path as pointer hover.  Pressing Shift while a key is
+  hovered or focused displays its information and plays it immediately.
+- Symbol information remains visible for seven seconds, then returns to the
+  rotating helper text even when the pointer or focus remains on the key.
+- Generic IPA examples are explicitly labelled `carrier`; the UI no longer
+  presents synthetic `apa` text as a real word.  Carrier IPA has no ordinary
+  word fallback when a voice rejects it.
+- Reused real-word examples were audited.  Equivalent alternate marks use the
+  same carrier phone, and the conflicting Dvořák/lobo examples were replaced
+  by clearly labelled carriers.
+- The toolbar preserves its scroll position across Pronounce, symbol insertion,
+  and window deactivation/reactivation.  First expansion uses about 86% of the
+  available height and puts the caret line at the top of the remaining editor.
+  A manually chosen splitter height is retained for later toggles.
+- The rich-text footer uses an IPA-capable semibold font for the displayed
+  symbol, isolated phone, and every matching phone cluster in the example.
 
 ## v25.6.5
 
@@ -9,9 +29,7 @@
   example transcriptions.  Combining marks bold their complete carrier
   cluster, and tie bars bold the complete tied affricate.
 - Square-bracket highlighting has been removed completely.
-- Generic consonants use the `apa` carrier word and generic vowels use an
-  `h–d` carrier frame, so the selected phone appears inside a word rather than
-  only beside a generic `carrier syllable` label.
+- Generic consonants and vowels now use explicitly labelled carrier frames.
 - Hover audio uses the same isolated IPA shown in the footer before speaking
   the example word.
 
@@ -100,24 +118,21 @@ value position:
 - the caret must be to the right of `=`;
 - when `ipa:` already exists, the caret must be after its colon.
 
-Hovering for one second previews a symbol.  Holding Shift while entering a
-button previews immediately.  The footer states both controls when they fit;
-otherwise it alternates them at a readable interval until the pointer enters
-an enabled symbol button.  On hover, the footer bolds the displayed symbol and
-every occurrence of that symbol in the isolated and example IPA.  Combining marks include their carrier
-phone in the bold range, and tie bars include both tied phones.  The example
-word, arrows, and position remain at normal weight.  No square brackets are
-inserted for highlighting.
+Hovering over or Tabbing to a key displays its information and starts a
+one-second delayed preview.  Pressing Shift while the key is hovered or focused
+displays the same information and plays it immediately.  Symbol information
+remains readable for seven seconds, then the footer returns to its rotating
+helper text.  The footer bolds the displayed symbol and every occurrence of the
+selected phone cluster in the isolated and example IPA.  Combining marks include
+their carrier phone, and tie bars include both tied phones.  No square brackets
+are inserted for highlighting.
 
 When an independent pronunciation can be constructed, the preview plays that
 phone or modified-phone cluster, waits for the configured IPA example delay,
-and then plays the example word.  Marks with no meaningful independent sound
-play only the example.  Installed voices do
-not necessarily accept every symbol on the complete IPA chart.  When the
-selected provider rejects an isolated phone, the preview skips that segment and
-continues with the example.  When it rejects the example IPA, the same example
-word is spoken with the voice's ordinary pronunciation instead of failing the
-whole preview.  The Activity log states when either fallback occurs.
+and then plays the example.  Real words fall back to ordinary word pronunciation
+when their IPA is rejected.  Synthetic carriers are labelled `carrier` and are
+skipped when rejected rather than being spoken as a misleading fake word.  The
+Activity log states when either recovery occurs.
 
 ## Bluetooth audio wake
 

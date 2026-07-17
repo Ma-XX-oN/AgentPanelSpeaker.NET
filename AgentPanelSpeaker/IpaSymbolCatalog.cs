@@ -19,7 +19,7 @@ internal static class IpaSymbolCatalog
   private static IReadOnlyList<IpaSymbolGroup> BuildGroups()
   {
     var overrides = BuildOverrides();
-    return new IpaSymbolGroup[]
+    IpaSymbolGroup[] groups =
     {
       BuildSegmentGroup(
         "Pulmonic consonants",
@@ -71,10 +71,77 @@ internal static class IpaSymbolCatalog
         "tone or accent mark",
         overrides)
     };
+    Validate(groups);
+    return groups;
   }
 
   /// <summary>
-  /// Creates a consonant group using the apa carrier word by default.
+  /// Rejects catalogue data that would produce contradictory footer entries.
+  /// </summary>
+  private static void Validate(IReadOnlyList<IpaSymbolGroup> groups)
+  {
+    IpaSymbolDefinition[] definitions = groups
+      .SelectMany(group => group.Symbols)
+      .ToArray();
+    if (definitions.Select(value => value.Symbol).Distinct().Count() !=
+        definitions.Length)
+    {
+      throw new InvalidOperationException(
+        "The IPA catalogue contains duplicate toolbar symbols.");
+    }
+
+    foreach (IpaSymbolDefinition definition in definitions)
+    {
+      if (!definition.ExampleIpa.Contains(
+            definition.Symbol,
+            StringComparison.Ordinal))
+      {
+        throw new InvalidOperationException(
+          $"The IPA example for {definition.Symbol} does not contain it.");
+      }
+      if (definition.StandaloneIpa is not null &&
+          !definition.StandaloneIpa.Contains(
+            definition.Symbol,
+            StringComparison.Ordinal))
+      {
+        throw new InvalidOperationException(
+          $"The isolated IPA for {definition.Symbol} does not contain it.");
+      }
+      if (definition.ExampleKind == IpaExampleKind.Carrier &&
+          !string.Equals(
+            definition.ExampleWord,
+            "carrier",
+            StringComparison.Ordinal))
+      {
+        throw new InvalidOperationException(
+          $"The IPA carrier for {definition.Symbol} is not labelled carrier.");
+      }
+    }
+
+    foreach (IGrouping<string, IpaSymbolDefinition> repeatedWord in
+      definitions
+        .Where(value => value.ExampleKind == IpaExampleKind.Word)
+        .GroupBy(value => value.ExampleWord, StringComparer.OrdinalIgnoreCase)
+        .Where(group => group.Count() > 1))
+    {
+      string[] basePronunciations = repeatedWord
+        .Select(value => value.ExampleIpa.Replace(
+          value.Symbol,
+          string.Empty,
+          StringComparison.Ordinal))
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+      if (basePronunciations.Length != 1)
+      {
+        throw new InvalidOperationException(
+          $"The repeated IPA example word '{repeatedWord.Key}' has " +
+          "contradictory base pronunciations.");
+      }
+    }
+  }
+
+  /// <summary>
+  /// Creates a consonant group using an explicitly labelled carrier.
   /// </summary>
   private static IpaSymbolGroup BuildSegmentGroup(
     string name,
@@ -91,9 +158,10 @@ internal static class IpaSymbolCatalog
             symbol,
             description,
             symbol,
-            "apa",
+            "carrier",
             $"a{symbol}a",
-            "middle"))
+            "middle",
+            IpaExampleKind.Carrier))
         .ToArray());
   }
 
@@ -114,9 +182,10 @@ internal static class IpaSymbolCatalog
             symbol,
             "vowel",
             symbol,
-            "h–d carrier",
+            "carrier",
             $"h{symbol}d",
-            "middle"))
+            "middle",
+            IpaExampleKind.Carrier))
         .ToArray());
   }
 
@@ -138,9 +207,10 @@ internal static class IpaSymbolCatalog
             symbol,
             description,
             GetStandaloneIpa(symbol, $"ap{symbol}a"),
-            "apa",
+            "carrier",
             $"ap{symbol}a",
-            "middle"))
+            "middle",
+            IpaExampleKind.Carrier))
         .ToArray());
   }
 
@@ -164,7 +234,7 @@ internal static class IpaSymbolCatalog
       D("b", "voiced bilabial plosive", "bin", "bɪn", "beginning"),
       D("t", "voiceless alveolar plosive", "stop", "stɑp", "middle"),
       D("d", "voiced alveolar plosive", "dog", "dɔɡ", "beginning"),
-      D("k", "voiceless velar plosive", "cat", "kæt", "beginning"),
+      D("k", "voiceless velar plosive", "kite", "kaɪt", "beginning"),
       D("ɡ", "voiced velar plosive", "git", "ɡɪt", "beginning"),
       D("m", "bilabial nasal", "map", "mæp", "beginning"),
       D("n", "alveolar nasal", "net", "nɛt", "beginning"),
@@ -198,42 +268,42 @@ internal static class IpaSymbolCatalog
       D("ɒ", "open back rounded vowel", "lot", "lɒt", "middle"),
       M("ˈ", "primary stress", "computer", "kəmˈpjutɚ", "middle"),
       M("ˌ", "secondary stress", "information", "ˌɪnfɚˈmeɪʃən", "beginning"),
-      M("ː", "length mark", "fleece", "fliːs", "middle"),
-      M(".", "syllable boundary", "button", "bʌt.ən", "middle"),
-      M("̥", "voiceless", "play", "pʰl̥eɪ", "middle"),
-      M("̊", "voiceless, alternate above form", "cream", "kɹ̊im", "middle"),
+      M("ː", "length mark", "machine", "məʃiːn", "middle"),
+      M(".", "syllable boundary", "react", "ɹi.ækt", "middle"),
+      C("̥", "voiceless", "ar̥a", "middle"),
+      C("̊", "voiceless, alternate above form", "ar̊a", "middle"),
       M("̬", "voiced", "zoo", "s̬u", "beginning"),
-      M("̤", "breathy voiced", "bhai", "b̤aɪ", "beginning"),
-      M("̰", "creaky voiced", "uh-oh", "ʌ̰ʔoʊ", "beginning"),
-      M("̼", "linguolabial", "mana", "n̼ana", "beginning"),
+      C("̤", "breathy voiced", "ab̤a", "middle"),
+      C("̰", "creaky voiced", "a̰a", "middle"),
+      C("̼", "linguolabial", "an̼a", "middle"),
       M("̪", "dental", "eighth", "eɪt̪θ", "middle"),
-      M("̺", "apical", "pero", "peɾ̺o", "middle"),
-      M("̻", "laminal", "see", "s̻i", "beginning"),
-      M("̃", "nasalized", "sans", "sɑ̃", "end"),
+      C("̺", "apical", "aɾ̺a", "middle"),
+      C("̻", "laminal", "as̻a", "middle"),
+      C("̃", "nasalized", "ãa", "middle"),
       M("ⁿ", "nasal release", "hidden", "hɪdⁿn̩", "middle"),
       M("ˡ", "lateral release", "atlas", "ætˡləs", "middle"),
-      M("̚", "no audible release", "cat", "kæt̚", "end"),
+      M("̚", "no audible release", "back", "bæk̚", "end"),
       M("̴", "velarized or pharyngealized", "feel", "fil̴", "end"),
-      M("̝", "raised", "Dvořák", "ˈdvor̝aːk", "middle"),
-      M("˔", "raised, alternate spacing form", "Dvořák", "ˈdvoɹ˔aːk", "middle"),
-      M("̞", "lowered", "lobo", "loβ̞o", "middle"),
-      M("˕", "lowered, alternate spacing form", "lobo", "loβ˕o", "middle"),
-      M("̟", "advanced", "goose", "ɡu̟s", "middle"),
+      C("̝", "raised", "ar̝a", "middle"),
+      C("˔", "raised, alternate spacing form", "ar˔a", "middle"),
+      C("̞", "lowered", "aβ̞a", "middle"),
+      C("˕", "lowered, alternate spacing form", "aβ˕a", "middle"),
+      C("̟", "advanced", "au̟a", "middle"),
       M("̠", "retracted", "goo", "ɡ̠u", "beginning"),
-      M("̘", "advanced tongue root", "see", "si̘", "middle"),
+      C("̘", "advanced tongue root", "ai̘a", "middle"),
       M("̙", "retracted tongue root", "set", "sɛ̙t", "middle"),
       M("̈", "centralized", "roses", "ɹoʊzɪ̈z", "middle"),
       M("̽", "mid-centralized", "comma", "kɑmə̽", "end"),
-      M("̹", "more rounded", "thought", "θɔ̹t", "middle"),
-      M("̜", "less rounded", "foot", "fʊ̜t", "middle"),
+      C("̹", "more rounded", "aɔ̹a", "middle"),
+      C("̜", "less rounded", "aʊ̜a", "middle"),
       M("̩", "syllabic", "button", "bʌtn̩", "end"),
-      M("̯", "non-syllabic", "boy", "bɔɪ̯", "end"),
+      C("̯", "non-syllabic", "aɪ̯a", "middle"),
       M("˞", "rhoticity", "bird", "bɜ˞d", "middle"),
       M("ʰ", "aspirated", "pin", "pʰɪn", "beginning"),
       M("ʷ", "labialized", "queen", "kʷin", "beginning"),
-      M("ʲ", "palatalized", "nyet", "nʲet", "beginning"),
-      M("ˠ", "velarized", "bád", "bˠaːdˠ", "beginning and end"),
-      M("ˤ", "pharyngealized", "ṣād", "sˤaːd", "beginning"),
+      C("ʲ", "palatalized", "anʲa", "middle"),
+      C("ˠ", "velarized", "alˠa", "middle"),
+      C("ˤ", "pharyngealized", "asˤa", "middle"),
       M("͡", "tie bar above", "church", "t͡ʃɜɹtʃ", "beginning"),
       M("͜", "tie bar below", "church", "t͜ʃɜɹtʃ", "beginning")
     };
@@ -270,6 +340,25 @@ internal static class IpaSymbolCatalog
       word,
       ipa,
       position);
+  }
+
+  /// <summary>
+  /// Defines a synthetic carrier without presenting it as a real word.
+  /// </summary>
+  private static IpaSymbolDefinition C(
+    string symbol,
+    string description,
+    string ipa,
+    string position)
+  {
+    return new IpaSymbolDefinition(
+      symbol,
+      description,
+      GetStandaloneIpa(symbol, ipa),
+      "carrier",
+      ipa,
+      position,
+      IpaExampleKind.Carrier);
   }
 
   /// <summary>
@@ -380,4 +469,22 @@ internal sealed record IpaSymbolDefinition(
   string? StandaloneIpa,
   string ExampleWord,
   string ExampleIpa,
-  string Position);
+  string Position,
+  IpaExampleKind ExampleKind = IpaExampleKind.Word)
+{
+  /// <summary>
+  /// Gets ordinary text that can be used only when a real-word IPA example
+  /// is rejected by the selected voice.
+  /// </summary>
+  public string? ExampleFallbackText =>
+    ExampleKind == IpaExampleKind.Word ? ExampleWord : null;
+}
+
+/// <summary>
+/// Identifies whether an IPA example is a real displayed word or a carrier.
+/// </summary>
+internal enum IpaExampleKind
+{
+  Word,
+  Carrier
+}

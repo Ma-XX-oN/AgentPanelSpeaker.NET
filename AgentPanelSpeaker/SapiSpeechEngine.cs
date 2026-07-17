@@ -110,12 +110,11 @@ internal sealed class SapiSpeechEngine : IDisposable
   public void PreviewIpa(
     SpeechMarkup? isolatedMarkup,
     SpeechMarkup exampleMarkup,
-    SpeechMarkup exampleFallbackMarkup,
+    SpeechMarkup? exampleFallbackMarkup,
     SpeechProfileSettings profile,
     AudioWakeSettings wakeSettings)
   {
     ArgumentNullException.ThrowIfNull(exampleMarkup);
-    ArgumentNullException.ThrowIfNull(exampleFallbackMarkup);
     ArgumentNullException.ThrowIfNull(profile);
     ArgumentNullException.ThrowIfNull(wakeSettings);
     AddCommand(new IpaPreviewCommand(
@@ -591,8 +590,11 @@ internal sealed class SapiSpeechEngine : IDisposable
 
     if (outputFormat is null)
     {
-      throw new InvalidOperationException(
-        "A speech playback request contains no speech segments.");
+      RaiseNotice(
+        "The selected voice rejected both the isolated IPA sound and its " +
+        "carrier; no IPA audio was available.");
+      outputFormat = PcmWaveData.CreateDefaultFormat();
+      parts.Add(outputFormat.CreateSilence(1));
     }
 
     PcmWaveData speech = PcmWaveData.Concatenate(parts);
@@ -736,9 +738,11 @@ internal sealed class SapiSpeechEngine : IDisposable
 
       if (fallbackMarkup is null)
       {
-        RaiseNotice(
-          "The selected voice cannot synthesize this isolated IPA sound; " +
-          "playing the example instead.");
+        RaiseNotice(segment.Label == "isolated IPA"
+          ? "The selected voice cannot synthesize this isolated IPA sound; " +
+            "playing the example instead."
+          : "The selected voice cannot synthesize this IPA carrier; " +
+            "skipping it.");
         return null;
       }
 
@@ -998,7 +1002,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private sealed record IpaPreviewCommand(
     SpeechMarkup? IsolatedMarkup,
     SpeechMarkup ExampleMarkup,
-    SpeechMarkup ExampleFallbackMarkup,
+    SpeechMarkup? ExampleFallbackMarkup,
     SpeechProfileSettings Profile,
     AudioWakeSettings WakeSettings) : PlaybackCommand;
 
@@ -1078,7 +1082,7 @@ internal sealed class SapiSpeechEngine : IDisposable
         segments.Add(new SpeechSegment(
           command.ExampleMarkup,
           FallbackMarkup: command.ExampleFallbackMarkup,
-          SkipWhenRejected: false,
+          SkipWhenRejected: command.ExampleFallbackMarkup is null,
           DelayAfterPreviousMilliseconds:
             command.WakeSettings.IpaExampleDelayMilliseconds,
           Label: "IPA example"));
@@ -1088,7 +1092,7 @@ internal sealed class SapiSpeechEngine : IDisposable
         segments.Add(new SpeechSegment(
           command.ExampleMarkup,
           FallbackMarkup: command.ExampleFallbackMarkup,
-          SkipWhenRejected: false,
+          SkipWhenRejected: command.ExampleFallbackMarkup is null,
           DelayAfterPreviousMilliseconds: 0,
           Label: "IPA example"));
       }

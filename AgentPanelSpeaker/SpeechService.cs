@@ -297,6 +297,7 @@ internal sealed class SpeechService : IDisposable
     string? isolatedIpa,
     string exampleWord,
     string exampleIpa,
+    string? exampleFallbackText,
     SpeechProfileSettings profile,
     AudioWakeSettings wakeSettings)
   {
@@ -324,11 +325,14 @@ internal sealed class SpeechService : IDisposable
         exampleWord,
         exampleIpa,
         normalized.Pitch);
-      SpeechMarkup exampleFallbackMarkup = SpeechSapiXmlBuilder.Build(
-        exampleWord,
-        normalized.Pitch,
-        Array.Empty<string>(),
-        PronunciationRuleSet.Parse(string.Empty));
+      SpeechMarkup? exampleFallbackMarkup =
+        string.IsNullOrWhiteSpace(exampleFallbackText)
+          ? null
+          : SpeechSapiXmlBuilder.Build(
+            exampleFallbackText,
+            normalized.Pitch,
+            Array.Empty<string>(),
+            PronunciationRuleSet.Parse(string.Empty));
       SetActiveKindLocked(ActiveSpeechKind.Untracked);
       try
       {

@@ -215,29 +215,30 @@ hosted only by the Pronunciations tab.  Insertion is permitted only when:
 If the value does not start with `ipa:`, clicking a symbol inserts that prefix
 at the value start and adjusts the saved selection before inserting the symbol.
 
-A one-second hover timer starts a preview.  Holding Shift when entering a
-symbol, or pressing Shift while it remains hovered, starts immediately.  The
-editor and toolbar are separated by a user-movable horizontal splitter.  The
-footer displays both hover instructions when they fit, otherwise alternates
-between them until an enabled symbol is hovered.  The footer is a read-only
-`RichTextBox`.  During hover, it uses a fixed layout: the displayed symbol, an
-isolated pronunciation when available, the example
-word, the example IPA, and the phone position.  It applies bold formatting to
-the displayed symbol and every occurrence in both IPA transcriptions.
-Combining marks include their carrier phone in the bold range, and tie bars
-include both tied phones.  Square brackets are never inserted as a visual
-highlight.
+Pointer hover and keyboard focus share one IPA-key interaction path.  Either
+shows the symbol information and starts a one-second delayed preview.  Shift
+shows the information and previews immediately.  A separate seven-second timer
+returns the footer to rotating helper text without removing the active key used
+by Shift.  The editor and toolbar are separated by a user-movable splitter.  On
+first expansion the toolbar receives about 86% of the split area; later manual
+heights are retained.  The caret line is moved to the top of the remaining
+editor, and toolbar scroll position is restored after focus-changing actions.
+
+The footer is a read-only `RichTextBox`.  It uses a fixed layout containing the
+displayed symbol, an isolated pronunciation when available, a real word or an
+explicitly labelled carrier, the example IPA, and the position.  It applies
+semibold formatting to the displayed symbol and every matching phone cluster in
+both IPA transcriptions.  Combining marks include their carrier phone, tie bars
+include both tied phones, and square brackets are never used as highlights.
 
 The same independent pronunciation shown in the footer is played first,
 followed by the example after the saved IPA delay.  A mark with no meaningful
-independent sound plays only its example.  Because
-an installed provider can expose a smaller phoneme inventory than the complete
-IPA chart, preview segments carry an explicit recovery policy.  A rejected
-isolated-phone segment is omitted.  A rejected example-IPA segment is rendered
-again as the ordinary example word.  Only `FormatException` and `COMException`
-select this recovery path; unrelated synthesis and playback failures remain
-fatal and visible.  Hover preview is ignored while any ordinary or paused
-speech is active.
+independent sound plays only its example.  Real-word examples retain ordinary
+text fallback.  Carrier examples deliberately have no text fallback, so a
+provider rejection skips the carrier instead of speaking an unrelated fake
+word.  Only `FormatException` and `COMException` select this recovery path;
+unrelated synthesis and playback failures remain fatal and visible.  Preview is
+ignored while any ordinary or paused speech is active.
 
 ## Bluetooth wake sequence
 

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace AgentPanelSpeaker;
@@ -25,21 +26,32 @@ internal sealed class PronunciationDialog : Form
   private readonly ToolTip _toolTip = new();
   private readonly System.Windows.Forms.Timer _hoverTimer = new();
   private readonly System.Windows.Forms.Timer _informationTimer = new();
+  private readonly System.Windows.Forms.Timer _symbolInformationTimer = new();
   private readonly List<Button> _ipaButtons = new();
 
   private static readonly string[] IpaInformationSentences =
   {
-    "Hover over an IPA symbol to see its sound and example.",
-    "Press Shift while hovering for an immediate sound example."
+    "Hover over or Tab to an IPA symbol to see its sound and example.",
+    "Press Shift while an IPA symbol is hovered or focused to hear it now."
   };
 
   private const int InformationRotationMilliseconds = 7000;
+  private const int SymbolInformationMilliseconds = 7000;
+  private const int EmGetFirstVisibleLine = 0x00CE;
+  private const int EmLineScroll = 0x00B6;
 
-  private IpaSymbolDefinition? _hoveredSymbol;
+  private Button? _hoveredIpaButton;
+  private Button? _focusedIpaButton;
+  private IpaSymbolDefinition? _activeSymbol;
   private int _savedSelectionStart;
   private int _savedSelectionLength;
   private int _informationSentenceIndex;
-  private int _savedToolbarHeight = 300;
+  private int _savedToolbarHeight;
+  private Point _savedToolbarScrollPosition;
+  private bool _hasSavedToolbarScrollPosition;
+  private bool _hasUserSizedToolbar;
+  private bool _userIsMovingSplitter;
+  private bool _symbolInformationVisible;
   private bool _toolbarOpen;
 
   /// <summary>
@@ -120,8 +132,12 @@ internal sealed class PronunciationDialog : Form
     _informationTimer.Interval = InformationRotationMilliseconds;
     _informationTimer.Tick += InformationTimerTick;
     _informationTimer.Start();
+    _symbolInformationTimer.Interval = SymbolInformationMilliseconds;
+    _symbolInformationTimer.Tick += SymbolInformationTimerTick;
     _speech.SpeakingStateChanged += SpeechSpeakingStateChanged;
     FormClosing += PronunciationDialogClosing;
+    Deactivate += (_, _) => CaptureToolbarScrollPosition();
+    Activated += (_, _) => QueueToolbarScrollRestore();
     ThemeManager.Apply(this, theme);
     RefreshIdleInformationText();
     UpdateIpaButtonState();
@@ -147,6 +163,7 @@ internal sealed class PronunciationDialog : Form
       _speech.SpeakingStateChanged -= SpeechSpeakingStateChanged;
       _hoverTimer.Dispose();
       _informationTimer.Dispose();
+      _symbolInformationTimer.Dispose();
       _toolTip.Dispose();
     }
     base.Dispose(disposing);
@@ -227,7 +244,11 @@ internal sealed class PronunciationDialog : Form
 
     _pronounceButton.AutoSize = true;
     _pronounceButton.Text = "Pronounce";
-    _pronounceButton.MouseDown += (_, _) => SaveEditorSelection();
+    _pronounceButton.MouseDown += (_, _) =>
+    {
+      SaveEditorSelection();
+      CaptureToolbarScrollPosition();
+    };
     _pronounceButton.Click += PronounceButtonClicked;
 
     var pronunciationButtons = new FlowLayoutPanel
@@ -249,9 +270,7 @@ internal sealed class PronunciationDialog : Form
     _ipaInformationBox.Cursor = Cursors.Default;
     _ipaInformationBox.DetectUrls = false;
     _ipaInformationBox.Dock = DockStyle.Fill;
-    _ipaInformationBox.Font = new Font(
-      FontFamily.GenericMonospace,
-      10.0f);
+    _ipaInformationBox.Font = new Font("Segoe UI", 10.5f);
     _ipaInformationBox.Multiline = true;
     _ipaInformationBox.ReadOnly = true;
     _ipaInformationBox.ScrollBars = RichTextBoxScrollBars.None;
@@ -280,19 +299,24 @@ internal sealed class PronunciationDialog : Form
     _pronunciationSplitContainer.FixedPanel = FixedPanel.Panel2;
     _pronunciationSplitContainer.IsSplitterFixed = false;
     _pronunciationSplitContainer.Orientation = Orientation.Horizontal;
-    _pronunciationSplitContainer.Panel1MinSize = 150;
+    _pronunciationSplitContainer.Panel1MinSize = 96;
     _pronunciationSplitContainer.Panel2MinSize = 120;
     _pronunciationSplitContainer.Panel2Collapsed = true;
     _pronunciationSplitContainer.SplitterWidth = 6;
     _pronunciationSplitContainer.Panel1.Controls.Add(editorAndButtons);
     _pronunciationSplitContainer.Panel2.Controls.Add(_toolbarPanel);
+    _pronunciationSplitContainer.SplitterMoving += (_, _) =>
+      _userIsMovingSplitter = true;
     _pronunciationSplitContainer.SplitterMoved += (_, _) =>
     {
-      if (!_pronunciationSplitContainer.Panel2Collapsed)
+      if (!_pronunciationSplitContainer.Panel2Collapsed &&
+          _userIsMovingSplitter)
       {
         _savedToolbarHeight =
           _pronunciationSplitContainer.Panel2.ClientSize.Height;
+        _hasUserSizedToolbar = true;
       }
+      _userIsMovingSplitter = false;
     };
 
     var layout = new TableLayoutPanel
@@ -367,6 +391,11 @@ internal sealed class PronunciationDialog : Form
       TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
     var button = new GlyphButton
     {
+      AccessibleDescription =
+        $"{definition.Description}; " +
+        IpaSymbolCatalog.GetCodePoints(definition.Symbol),
+      AccessibleName =
+        $"IPA {definition.Description}",
       AutoSize = false,
       Font = font,
       Glyph = definition.Symbol,
@@ -381,8 +410,14 @@ internal sealed class PronunciationDialog : Form
       button,
       $"{definition.Description}; " +
       IpaSymbolCatalog.GetCodePoints(definition.Symbol));
-    button.MouseDown += (_, _) => SaveEditorSelection();
+    button.MouseDown += (_, _) =>
+    {
+      SaveEditorSelection();
+      CaptureToolbarScrollPosition();
+    };
     button.Click += IpaButtonClicked;
+    button.Enter += IpaButtonEntered;
+    button.Leave += IpaButtonLeft;
     button.MouseEnter += IpaButtonMouseEnter;
     button.MouseLeave += IpaButtonMouseLeave;
     return button;
@@ -401,9 +436,19 @@ internal sealed class PronunciationDialog : Form
     }
     else
     {
-      _savedToolbarHeight =
-        _pronunciationSplitContainer.Panel2.ClientSize.Height;
+      CaptureToolbarScrollPosition();
+      if (_hasUserSizedToolbar)
+      {
+        _savedToolbarHeight =
+          _pronunciationSplitContainer.Panel2.ClientSize.Height;
+      }
       _pronunciationSplitContainer.Panel2Collapsed = true;
+      _hoverTimer.Stop();
+      _symbolInformationTimer.Stop();
+      _hoveredIpaButton = null;
+      _focusedIpaButton = null;
+      _activeSymbol = null;
+      _symbolInformationVisible = false;
       ResumeInformationRotation();
     }
     _toggleToolbarButton.Text = _toolbarOpen
@@ -431,14 +476,19 @@ internal sealed class PronunciationDialog : Form
       return;
     }
 
+    int requestedToolbarHeight = _hasUserSizedToolbar
+      ? _savedToolbarHeight
+      : (int)Math.Round(totalHeight * 0.86);
     int toolbarHeight = Math.Clamp(
-      _savedToolbarHeight,
+      requestedToolbarHeight,
       _pronunciationSplitContainer.Panel2MinSize,
       maximumToolbarHeight);
     _pronunciationSplitContainer.SplitterDistance =
       totalHeight -
       _pronunciationSplitContainer.SplitterWidth -
       toolbarHeight;
+    MakeCaretLineFirstVisible();
+    QueueToolbarScrollRestore();
   }
 
   /// <summary>
@@ -453,6 +503,7 @@ internal sealed class PronunciationDialog : Form
       return;
     }
 
+    CaptureToolbarScrollPosition();
     _pronunciationsTextBox.Focus();
     _pronunciationsTextBox.Select(
       _savedSelectionStart,
@@ -483,27 +534,85 @@ internal sealed class PronunciationDialog : Form
     _pronunciationsTextBox.SelectedText = definition.Symbol;
     SaveEditorSelection();
     UpdateIpaButtonState();
+    QueueToolbarScrollRestore();
   }
 
   /// <summary>
-  /// Displays symbol information and starts delayed or Shift-immediate preview.
+  /// Treats pointer entry as an active IPA-key interaction.
   /// </summary>
   private void IpaButtonMouseEnter(object? sender, EventArgs eventArgs)
   {
-    if (sender is not Button button ||
-        !button.Enabled ||
+    if (sender is not Button button || !IsActiveIpaButton(button))
+    {
+      return;
+    }
+
+    _hoveredIpaButton = button;
+    ActivateIpaButton(
+      button,
+      immediateWhenShiftHeld: true);
+  }
+
+  /// <summary>
+  /// Cancels pointer-owned delayed playback without discarding readable text.
+  /// </summary>
+  private void IpaButtonMouseLeave(object? sender, EventArgs eventArgs)
+  {
+    if (ReferenceEquals(_hoveredIpaButton, sender))
+    {
+      _hoveredIpaButton = null;
+    }
+    UpdateActiveIpaButtonAfterDeparture(sender as Button);
+  }
+
+  /// <summary>
+  /// Treats Tab focus exactly like pointer hover.
+  /// </summary>
+  private void IpaButtonEntered(object? sender, EventArgs eventArgs)
+  {
+    if (sender is not Button button || !IsActiveIpaButton(button))
+    {
+      return;
+    }
+
+    _focusedIpaButton = button;
+    ActivateIpaButton(
+      button,
+      immediateWhenShiftHeld: false);
+  }
+
+  /// <summary>
+  /// Cancels focus-owned delayed playback without discarding readable text.
+  /// </summary>
+  private void IpaButtonLeft(object? sender, EventArgs eventArgs)
+  {
+    if (ReferenceEquals(_focusedIpaButton, sender))
+    {
+      _focusedIpaButton = null;
+    }
+    UpdateActiveIpaButtonAfterDeparture(sender as Button);
+  }
+
+  /// <summary>
+  /// Displays one key, starts its delayed preview, and resets its text timeout.
+  /// </summary>
+  private void ActivateIpaButton(
+    Button button,
+    bool immediateWhenShiftHeld)
+  {
+    if (!IsActiveIpaButton(button) ||
         button.Tag is not IpaSymbolDefinition definition)
     {
       return;
     }
 
-    _informationTimer.Stop();
-    _hoveredSymbol = definition;
-    SetIpaInformationText(definition);
+    _activeSymbol = definition;
+    ShowIpaSymbolInformation(definition);
     _hoverTimer.Stop();
-    if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift)
+    if (immediateWhenShiftHeld &&
+        (Control.ModifierKeys & Keys.Shift) == Keys.Shift)
     {
-      PreviewHoveredSymbol();
+      PreviewActiveSymbol();
     }
     else
     {
@@ -512,13 +621,57 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Cancels a pending hover preview and restores idle instructions.
+  /// Retains whichever pointer or keyboard interaction is still active.
   /// </summary>
-  private void IpaButtonMouseLeave(object? sender, EventArgs eventArgs)
+  private void UpdateActiveIpaButtonAfterDeparture(Button? departedButton)
   {
-    _hoverTimer.Stop();
-    _hoveredSymbol = null;
-    ResumeInformationRotation();
+    Button? remaining = IsActiveIpaButton(_hoveredIpaButton)
+      ? _hoveredIpaButton
+      : IsActiveIpaButton(_focusedIpaButton)
+        ? _focusedIpaButton
+        : null;
+    if (!ReferenceEquals(remaining, departedButton))
+    {
+      _hoverTimer.Stop();
+    }
+    _activeSymbol = remaining?.Tag as IpaSymbolDefinition;
+  }
+
+  /// <summary>
+  /// Returns whether a button can currently represent an IPA interaction.
+  /// </summary>
+  private static bool IsActiveIpaButton(Button? button)
+  {
+    return button is
+    {
+      Enabled: true,
+      IsDisposed: false,
+      Tag: IpaSymbolDefinition
+    };
+  }
+
+  /// <summary>
+  /// Displays a symbol long enough to read, independently of hover/focus exit.
+  /// </summary>
+  private void ShowIpaSymbolInformation(IpaSymbolDefinition definition)
+  {
+    _informationTimer.Stop();
+    _symbolInformationTimer.Stop();
+    _symbolInformationVisible = true;
+    SetIpaInformationText(definition);
+    _symbolInformationTimer.Start();
+  }
+
+  /// <summary>
+  /// Returns to cycling helper text after the symbol-reading interval.
+  /// </summary>
+  private void SymbolInformationTimerTick(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    _symbolInformationTimer.Stop();
+    _symbolInformationVisible = false;
+    RefreshIdleInformationText();
   }
 
   /// <summary>
@@ -526,7 +679,7 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private void InformationTimerTick(object? sender, EventArgs eventArgs)
   {
-    if (_hoveredSymbol is not null)
+    if (_symbolInformationVisible)
     {
       return;
     }
@@ -537,12 +690,13 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Restores idle instructions after the pointer leaves an active key.
+  /// Restores idle instructions and their normal cycling schedule.
   /// </summary>
   private void ResumeInformationRotation()
   {
     _hoverTimer.Stop();
-    _hoveredSymbol = null;
+    _symbolInformationTimer.Stop();
+    _symbolInformationVisible = false;
     RefreshIdleInformationText();
   }
 
@@ -551,7 +705,7 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private void RefreshIdleInformationText()
   {
-    if (_hoveredSymbol is not null || _ipaInformationBox.IsDisposed)
+    if (_symbolInformationVisible || _ipaInformationBox.IsDisposed)
     {
       return;
     }
@@ -605,8 +759,16 @@ internal sealed class PronunciationDialog : Form
       text.Append("/ → ");
     }
 
-    text.Append(definition.ExampleWord);
-    text.Append(" → /");
+    if (definition.ExampleKind == IpaExampleKind.Carrier)
+    {
+      text.Append("carrier /");
+    }
+    else
+    {
+      text.Append("word “");
+      text.Append(definition.ExampleWord);
+      text.Append("” /");
+    }
     AppendIpaText(
       text,
       emphasizedRanges,
@@ -778,7 +940,7 @@ internal sealed class PronunciationDialog : Form
       if (emphasizedRanges is not null && emphasizedRanges.Count > 0)
       {
         using var emphasizedFont = new Font(
-          _ipaInformationBox.Font.FontFamily,
+          "Segoe UI Semibold",
           _ipaInformationBox.Font.Size + 1.0f,
           FontStyle.Bold,
           _ipaInformationBox.Font.Unit);
@@ -805,19 +967,21 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Starts a pending hover preview immediately when Shift is pressed.
+  /// Displays and starts the active IPA preview when Shift is pressed.
   /// </summary>
   private void PronunciationDialogKeyDown(
     object? sender,
     KeyEventArgs eventArgs)
   {
-    if (eventArgs.KeyCode != Keys.ShiftKey || _hoveredSymbol is null)
+    IpaSymbolDefinition? definition = _activeSymbol;
+    if (eventArgs.KeyCode != Keys.ShiftKey || definition is null)
     {
       return;
     }
 
     _hoverTimer.Stop();
-    PreviewHoveredSymbol();
+    ShowIpaSymbolInformation(definition);
+    PreviewActiveSymbol();
   }
 
   /// <summary>
@@ -826,15 +990,15 @@ internal sealed class PronunciationDialog : Form
   private void HoverTimerTick(object? sender, EventArgs eventArgs)
   {
     _hoverTimer.Stop();
-    PreviewHoveredSymbol();
+    PreviewActiveSymbol();
   }
 
   /// <summary>
   /// Plays an isolated phone when possible, then its example word.
   /// </summary>
-  private void PreviewHoveredSymbol()
+  private void PreviewActiveSymbol()
   {
-    IpaSymbolDefinition? definition = _hoveredSymbol;
+    IpaSymbolDefinition? definition = _activeSymbol;
     if (definition is null || _speech.IsSpeaking)
     {
       return;
@@ -849,11 +1013,13 @@ internal sealed class PronunciationDialog : Form
 
     _activity(
       $"IPA preview: {definition.Symbol}; " +
-      $"example={definition.ExampleWord}.");
+      $"example={definition.ExampleWord}; " +
+      $"kind={definition.ExampleKind}.");
     _speech.PreviewIpa(
       definition.StandaloneIpa,
       definition.ExampleWord,
       definition.ExampleIpa,
+      definition.ExampleFallbackText,
       profile,
       _wakeProvider());
   }
@@ -863,39 +1029,49 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private void PronounceButtonClicked(object? sender, EventArgs eventArgs)
   {
-    if (_speech.IsSpeaking ||
-        !TryGetCurrentPronunciationPreview(
-          out string token,
-          out string? ipa))
+    CaptureToolbarScrollPosition();
+    try
     {
-      return;
-    }
+      if (_speech.IsSpeaking ||
+          !TryGetCurrentPronunciationPreview(
+            out string token,
+            out string? ipa))
+      {
+        return;
+      }
 
-    SpeechProfileSettings profile = _profileProvider().Normalize();
-    if (!profile.IsSpoken)
-    {
-      _activity(
-        "Pronunciation preview unavailable: no spoken voice is selected.");
-      return;
-    }
+      RestoreEditorFocus();
+      SpeechProfileSettings profile = _profileProvider().Normalize();
+      if (!profile.IsSpoken)
+      {
+        _activity(
+          "Pronunciation preview unavailable: no spoken voice is selected.");
+        return;
+      }
 
-    if (ipa is null)
-    {
-      _activity(
-        $"Pronunciation preview: {token}; standard voice pronunciation.");
-      _speech.PreviewText(token, profile, _wakeProvider());
+      if (ipa is null)
+      {
+        _activity(
+          $"Pronunciation preview: {token}; standard voice pronunciation.");
+        _speech.PreviewText(token, profile, _wakeProvider());
+      }
+      else
+      {
+        _activity($"Pronunciation preview: {token}; /{ipa}/.");
+        _speech.PreviewIpa(
+          isolatedIpa: null,
+          token,
+          ipa,
+          token,
+          profile,
+          _wakeProvider());
+      }
     }
-    else
+    finally
     {
-      _activity($"Pronunciation preview: {token}; /{ipa}/.");
-      _speech.PreviewIpa(
-        isolatedIpa: null,
-        token,
-        ipa,
-        profile,
-        _wakeProvider());
+      UpdatePronounceButtonState();
+      QueueToolbarScrollRestore();
     }
-    UpdatePronounceButtonState();
   }
 
   /// <summary>
@@ -970,9 +1146,16 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private void UpdatePronounceButtonState()
   {
-    _pronounceButton.Enabled =
+    bool enabled =
       !_speech.IsSpeaking &&
       TryGetCurrentPronunciationPreview(out _, out _);
+    if (!enabled && _pronounceButton.Focused)
+    {
+      CaptureToolbarScrollPosition();
+      RestoreEditorFocus();
+      QueueToolbarScrollRestore();
+    }
+    _pronounceButton.Enabled = enabled;
   }
 
   /// <summary>
@@ -985,14 +1168,143 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
+  /// Restores the saved caret and selection before focus is reassigned.
+  /// </summary>
+  private void RestoreEditorFocus()
+  {
+    if (_pronunciationsTextBox.IsDisposed)
+    {
+      return;
+    }
+
+    int start = Math.Clamp(
+      _savedSelectionStart,
+      0,
+      _pronunciationsTextBox.TextLength);
+    int length = Math.Clamp(
+      _savedSelectionLength,
+      0,
+      _pronunciationsTextBox.TextLength - start);
+    _pronunciationsTextBox.Focus();
+    _pronunciationsTextBox.Select(start, length);
+  }
+
+  /// <summary>
+  /// Captures the visible toolbar origin before focus can auto-scroll it.
+  /// </summary>
+  private void CaptureToolbarScrollPosition()
+  {
+    if (!_toolbarOpen ||
+        _pronunciationSplitContainer.Panel2Collapsed ||
+        _toolbarPanel.IsDisposed)
+    {
+      return;
+    }
+
+    Point position = _toolbarPanel.AutoScrollPosition;
+    _savedToolbarScrollPosition = new Point(-position.X, -position.Y);
+    _hasSavedToolbarScrollPosition = true;
+  }
+
+  /// <summary>
+  /// Restores the toolbar origin after WinForms finishes focus restoration.
+  /// </summary>
+  private void QueueToolbarScrollRestore()
+  {
+    if (!_hasSavedToolbarScrollPosition ||
+        IsDisposed ||
+        Disposing ||
+        !IsHandleCreated)
+    {
+      return;
+    }
+
+    try
+    {
+      BeginInvoke((Action)RestoreToolbarScrollPosition);
+    }
+    catch (InvalidOperationException)
+    {
+    }
+  }
+
+  /// <summary>
+  /// Applies the last explicitly captured toolbar scroll position.
+  /// </summary>
+  private void RestoreToolbarScrollPosition()
+  {
+    if (!_hasSavedToolbarScrollPosition ||
+        !_toolbarOpen ||
+        _pronunciationSplitContainer.Panel2Collapsed ||
+        _toolbarPanel.IsDisposed)
+    {
+      return;
+    }
+
+    _toolbarPanel.AutoScrollPosition = _savedToolbarScrollPosition;
+  }
+
+  /// <summary>
+  /// Places the caret line at the top of the remaining editor viewport.
+  /// </summary>
+  private void MakeCaretLineFirstVisible()
+  {
+    if (_pronunciationsTextBox.IsDisposed ||
+        !_pronunciationsTextBox.IsHandleCreated)
+    {
+      return;
+    }
+
+    int caret = Math.Clamp(
+      _savedSelectionStart,
+      0,
+      _pronunciationsTextBox.TextLength);
+    int caretLine = _pronunciationsTextBox.GetLineFromCharIndex(caret);
+    int firstVisibleLine = (int)SendMessage(
+      _pronunciationsTextBox.Handle,
+      EmGetFirstVisibleLine,
+      nint.Zero,
+      nint.Zero);
+    int lineDelta = caretLine - firstVisibleLine;
+    if (lineDelta != 0)
+    {
+      SendMessage(
+        _pronunciationsTextBox.Handle,
+        EmLineScroll,
+        nint.Zero,
+        (nint)lineDelta);
+    }
+    _pronunciationsTextBox.Select(
+      caret,
+      Math.Clamp(
+        _savedSelectionLength,
+        0,
+        _pronunciationsTextBox.TextLength - caret));
+  }
+
+  /// <summary>
   /// Enables symbols only at a valid pronunciation-value insertion point.
   /// </summary>
   private void UpdateIpaButtonState()
   {
     bool enabled = CanInsertIpaAtSavedSelection();
+    if (!enabled && _ipaButtons.Any(button => button.Focused))
+    {
+      CaptureToolbarScrollPosition();
+      RestoreEditorFocus();
+      QueueToolbarScrollRestore();
+    }
     foreach (Button button in _ipaButtons)
     {
       button.Enabled = enabled;
+    }
+    if (!enabled)
+    {
+      _hoverTimer.Stop();
+      _focusedIpaButton = null;
+      _activeSymbol = IsActiveIpaButton(_hoveredIpaButton)
+        ? _hoveredIpaButton!.Tag as IpaSymbolDefinition
+        : null;
     }
     UpdatePronounceButtonState();
   }
@@ -1088,6 +1400,13 @@ internal sealed class PronunciationDialog : Form
         break;
     }
   }
+
+  [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+  private static extern nint SendMessage(
+    nint windowHandle,
+    int message,
+    nint wordParameter,
+    nint longParameter);
 
   /// <summary>
   /// Describes one rich-text emphasis range.
