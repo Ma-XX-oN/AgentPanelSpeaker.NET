@@ -5,12 +5,13 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Converts Markdown into prose sections and typed fenced-code lines.
+/// Converts Markdown into prose blocks and typed fenced-code lines.
 /// </summary>
 internal static partial class TextCleaner
 {
   /// <summary>
-  /// Parses Markdown while preserving every fenced block for live policy use.
+  /// Parses Markdown while preserving structural block boundaries and every
+  /// fenced block for live policy use.
   /// </summary>
   public static IReadOnlyList<SpeechTextPart> ParseForSpeech(string text)
   {
@@ -86,24 +87,146 @@ internal static partial class TextCleaner
   }
 
   /// <summary>
-  /// Cleans and appends one accumulated prose section.
+  /// Cleans and appends every structural prose block in one accumulated section.
   /// </summary>
   private static void FlushProse(
     ICollection<SpeechTextPart> result,
     StringBuilder prose)
   {
-    string cleaned = CleanProse(prose.ToString());
+    string text = SystemTagRegex().Replace(prose.ToString(), " ");
     prose.Clear();
-    if (cleaned.Length != 0)
+    if (string.IsNullOrWhiteSpace(text))
     {
-      result.Add(new SpeechTextPart(
-        SpeechFragmentKind.Prose,
-        cleaned,
-        string.Empty,
-        -1,
-        -1,
-        0));
+      return;
     }
+
+    AppendProseBlocks(result, text.Replace("\r\n", "\n").Split('\n'));
+  }
+
+  /// <summary>
+  /// Converts Markdown source lines into independently navigable prose blocks.
+  /// </summary>
+  private static void AppendProseBlocks(
+    ICollection<SpeechTextPart> result,
+    IReadOnlyList<string> lines)
+  {
+    var current = new StringBuilder();
+    ProseBlockKind currentKind = ProseBlockKind.None;
+
+    for (int index = 0; index < lines.Count; ++index)
+    {
+      string line = lines[index];
+      if (string.IsNullOrWhiteSpace(line))
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        continue;
+      }
+
+      Match heading = AtxHeadingRegex().Match(line);
+      if (heading.Success)
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        AddProseBlock(result, heading.Groups[1].Value);
+        continue;
+      }
+
+      if (index + 1 < lines.Count &&
+          SetextUnderlineRegex().IsMatch(lines[index + 1]) &&
+          !string.IsNullOrWhiteSpace(line))
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        AddProseBlock(result, line);
+        ++index;
+        continue;
+      }
+
+      if (ThematicBreakRegex().IsMatch(line) ||
+          TableSeparatorRegex().IsMatch(line))
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        continue;
+      }
+
+      if (ListItemRegex().IsMatch(line))
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        currentKind = ProseBlockKind.ListItem;
+        current.AppendLine(line);
+        continue;
+      }
+
+      if (QuoteLineRegex().IsMatch(line))
+      {
+        if (currentKind != ProseBlockKind.Quote)
+        {
+          FlushCurrentBlock(result, current, ref currentKind);
+          currentKind = ProseBlockKind.Quote;
+        }
+        current.AppendLine(line);
+        continue;
+      }
+
+      if (IndentedCodeRegex().IsMatch(line))
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        AddProseBlock(result, IndentedCodeRegex().Replace(line, "$1"));
+        continue;
+      }
+
+      if (IsTableRow(line))
+      {
+        FlushCurrentBlock(result, current, ref currentKind);
+        AddProseBlock(result, NormalizeTableRow(line));
+        continue;
+      }
+
+      if (currentKind == ProseBlockKind.None)
+      {
+        currentKind = ProseBlockKind.Paragraph;
+      }
+      current.AppendLine(line);
+    }
+
+    FlushCurrentBlock(result, current, ref currentKind);
+  }
+
+  /// <summary>
+  /// Appends one completed prose block after Markdown cleanup.
+  /// </summary>
+  private static void FlushCurrentBlock(
+    ICollection<SpeechTextPart> result,
+    StringBuilder current,
+    ref ProseBlockKind currentKind)
+  {
+    if (current.Length != 0)
+    {
+      AddProseBlock(result, current.ToString());
+      current.Clear();
+    }
+    currentKind = ProseBlockKind.None;
+  }
+
+  /// <summary>
+  /// Cleans and appends one non-empty structural prose block.
+  /// </summary>
+  private static void AddProseBlock(
+    ICollection<SpeechTextPart> result,
+    string text)
+  {
+    string cleaned = CleanProseBlock(text);
+    if (cleaned.Length == 0)
+    {
+      return;
+    }
+
+    result.Add(new SpeechTextPart(
+      SpeechFragmentKind.Prose,
+      cleaned,
+      string.Empty,
+      -1,
+      -1,
+      0,
+      PauseAfter: true));
   }
 
   /// <summary>
@@ -127,34 +250,67 @@ internal static partial class TextCleaner
         fenceType.ToLowerInvariant(),
         blockId,
         index,
-        nonEmpty.Length));
+        nonEmpty.Length,
+        PauseAfter: true));
     }
   }
 
   /// <summary>
-  /// Removes non-spoken Markdown structure from prose.
+  /// Removes non-spoken Markdown structure from one prose block.
   /// </summary>
-  private static string CleanProse(string text)
+  private static string CleanProseBlock(string text)
   {
-    string cleaned = SystemTagRegex().Replace(text, " ");
-    cleaned = HeadingLineRegex().Replace(
-      cleaned,
-      match =>
-        match.Groups[1].Value.TrimEnd() +
-        " " + SpeechTextMarkers.HeadingPause + "\n");
-    cleaned = ImageRegex().Replace(cleaned, " ");
+    string cleaned = ImageRegex().Replace(text, " ");
     cleaned = LinkRegex().Replace(cleaned, "$1");
     cleaned = RawUrlRegex().Replace(cleaned, " ");
     cleaned = HtmlTagRegex().Replace(cleaned, " ");
     cleaned = InlineCodeRegex().Replace(cleaned, "$1");
-    cleaned = MarkdownPrefixRegex().Replace(cleaned, string.Empty);
+    cleaned = StripMarkdownPrefixes(cleaned);
     cleaned = MarkdownDecorationRegex().Replace(cleaned, "$1");
     cleaned = cleaned.Replace('\uFFFC', ' ');
     cleaned = WebUtility.HtmlDecode(cleaned);
-    cleaned = BlankLineRegex().Replace(cleaned, ". ");
     cleaned = WhitespaceRegex().Replace(cleaned, " ");
     cleaned = SpaceBeforePunctuationRegex().Replace(cleaned, "$1");
     return cleaned.Trim();
+  }
+
+  /// <summary>
+  /// Removes nested block prefixes such as quote-plus-list markers.
+  /// </summary>
+  private static string StripMarkdownPrefixes(string text)
+  {
+    string current = text;
+    for (int pass = 0; pass < 8; ++pass)
+    {
+      string next = MarkdownPrefixRegex().Replace(current, string.Empty);
+      if (string.Equals(next, current, StringComparison.Ordinal))
+      {
+        return next;
+      }
+      current = next;
+    }
+    return current;
+  }
+
+  /// <summary>
+  /// Returns whether one line is a pipe-delimited Markdown table row.
+  /// </summary>
+  private static bool IsTableRow(string line)
+  {
+    string trimmed = line.Trim();
+    return trimmed.Length > 2 &&
+      trimmed.Contains('|') &&
+      (trimmed.StartsWith('|') || trimmed.EndsWith('|'));
+  }
+
+  /// <summary>
+  /// Converts table-cell separators into spoken pauses between cell contents.
+  /// </summary>
+  private static string NormalizeTableRow(string line)
+  {
+    return string.Join(
+      ", ",
+      line.Trim().Trim('|').Split('|').Select(cell => cell.Trim()));
   }
 
   /// <summary>
@@ -215,10 +371,26 @@ internal static partial class TextCleaner
   [GeneratedRegex(@"`+([^`]+?)`+")]
   private static partial Regex InlineCodeRegex();
 
-  [GeneratedRegex(
-    @"(?m)^\s{0,3}#{1,6}[ \t]+(.+?)[ \t]*\r?\n" +
-    @"(?:[ \t]*\r?\n)*(?=\s*\S)")]
-  private static partial Regex HeadingLineRegex();
+  [GeneratedRegex(@"^\s{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$")]
+  private static partial Regex AtxHeadingRegex();
+
+  [GeneratedRegex(@"^\s{0,3}(?:=+|-+)\s*$")]
+  private static partial Regex SetextUnderlineRegex();
+
+  [GeneratedRegex(@"^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$")]
+  private static partial Regex ThematicBreakRegex();
+
+  [GeneratedRegex(@"^\s{0,3}(?:[-+*]|\d+[.)])[ \t]+")]
+  private static partial Regex ListItemRegex();
+
+  [GeneratedRegex(@"^\s{0,3}>[ \t]?")]
+  private static partial Regex QuoteLineRegex();
+
+  [GeneratedRegex(@"^(?:\t| {4})(.*)$")]
+  private static partial Regex IndentedCodeRegex();
+
+  [GeneratedRegex(@"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")]
+  private static partial Regex TableSeparatorRegex();
 
   [GeneratedRegex(
     @"(?m)^\s{0,3}(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+)")]
@@ -227,18 +399,26 @@ internal static partial class TextCleaner
   [GeneratedRegex(@"(?:\*\*|__|~~)(.+?)(?:\*\*|__|~~)")]
   private static partial Regex MarkdownDecorationRegex();
 
-  [GeneratedRegex(@"\n\s*\n+")]
-  private static partial Regex BlankLineRegex();
-
   [GeneratedRegex(@"\s+")]
   private static partial Regex WhitespaceRegex();
 
   [GeneratedRegex(@"\s+([,.;:!?])")]
   private static partial Regex SpaceBeforePunctuationRegex();
+
+  /// <summary>
+  /// Identifies the current structural prose block while source lines are read.
+  /// </summary>
+  private enum ProseBlockKind
+  {
+    None,
+    Paragraph,
+    ListItem,
+    Quote
+  }
 }
 
 /// <summary>
-/// Describes one cleaned prose section or fenced-code line.
+/// Describes one cleaned prose block or fenced-code line.
 /// </summary>
 internal sealed record SpeechTextPart(
   SpeechFragmentKind Kind,
@@ -246,4 +426,5 @@ internal sealed record SpeechTextPart(
   string FenceType,
   int FenceBlockId,
   int FenceLineIndex,
-  int FenceLineCount);
+  int FenceLineCount,
+  bool PauseAfter);

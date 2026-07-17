@@ -393,3 +393,11 @@ transcription.  Combining marks are displayed with a dotted-circle carrier in
 the information line, but the raw mark is inserted into the pronunciation
 editor.  Unsupported IPA markup still falls back to the example word's normal
 voice pronunciation.
+
+## Structural speech boundaries
+
+Markdown block structure and sentence navigation share one segmentation model.
+Headings, paragraphs, list items, quote blocks, table rows, and every spoken
+fenced-code line end a navigation unit and receive one 250 ms pause.  When a
+block already ends in sentence punctuation, the punctuation and block ending
+are one coincident boundary and never create an empty fragment.

@@ -410,12 +410,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
     {
       if (part.Kind == SpeechFragmentKind.Prose)
       {
-        fragments.AddRange(SentenceSegmenter.Split(part.Text).Select(sentence =>
-          new SpeechFragment(
+        fragments.AddRange(SentenceSegmenter
+          .Split(part.Text, part.PauseAfter)
+          .Select(sentence => new SpeechFragment(
             nodeId,
             node.Category,
             SpeechFragmentKind.Prose,
-            sentence)));
+            sentence.Text,
+            PauseAfter: sentence.PauseAfter)));
       }
       else
       {
@@ -427,7 +429,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceType,
           part.FenceBlockId,
           part.FenceLineIndex,
-          part.FenceLineCount));
+          part.FenceLineCount,
+          PauseAfter: part.PauseAfter));
       }
     }
     DiagnosticLog.Write("jsonl.node_accepted", new

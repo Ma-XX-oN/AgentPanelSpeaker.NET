@@ -634,7 +634,8 @@ internal sealed class SpeechService : IDisposable
       StartSpeechLocked(
         ActiveSpeechKind.Untracked,
         pending.Text,
-        pending.Profile);
+        pending.Profile,
+        pauseAfter: false);
       return;
     }
 
@@ -661,7 +662,8 @@ internal sealed class SpeechService : IDisposable
       StartSpeechLocked(
         ActiveSpeechKind.History,
         fragment.Text,
-        profile);
+        profile,
+        fragment.PauseAfter);
       ReportFenceActivityLocked(fragment, spoken: true, string.Empty);
       return;
     }
@@ -673,12 +675,13 @@ internal sealed class SpeechService : IDisposable
   private void StartSpeechLocked(
     ActiveSpeechKind kind,
     string text,
-    SpeechProfileSettings profile)
+    SpeechProfileSettings profile,
+    bool pauseAfter)
   {
     SetActiveKindLocked(kind);
     try
     {
-      SpeakConfiguredLocked(text, profile);
+      SpeakConfiguredLocked(text, profile, pauseAfter);
     }
     catch
     {
@@ -693,7 +696,8 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void SpeakConfiguredLocked(
     string text,
-    SpeechProfileSettings profile)
+    SpeechProfileSettings profile,
+    bool pauseAfter)
   {
     SpeechProfileSettings normalized = profile.Normalize();
     IReadOnlyList<string> spelledWords = _spelledWordsProvider();
@@ -703,7 +707,8 @@ internal sealed class SpeechService : IDisposable
       text,
       normalized.Pitch,
       spelledWords,
-      pronunciations);
+      pronunciations,
+      pauseAfter);
     DiagnosticLog.Write("speech.configure", new
     {
       normalized.VoiceName,

@@ -11,6 +11,9 @@ namespace AgentPanelSpeaker;
 /// <param name="FenceBlockId">Node-local fenced-block identifier.</param>
 /// <param name="FenceLineIndex">Zero-based non-empty line index.</param>
 /// <param name="FenceLineCount">Number of non-empty lines in the block.</param>
+/// <param name="PauseAfter">
+/// Whether a structural Markdown boundary follows this fragment.
+/// </param>
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -19,7 +22,8 @@ internal sealed record SpeechFragment(
   string FenceType = "",
   int FenceBlockId = -1,
   int FenceLineIndex = -1,
-  int FenceLineCount = 0);
+  int FenceLineCount = 0,
+  bool PauseAfter = false);
 
 /// <summary>
 /// Identifies how existing history should begin playback.

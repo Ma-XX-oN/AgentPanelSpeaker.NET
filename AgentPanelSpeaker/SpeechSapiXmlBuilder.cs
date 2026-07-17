@@ -11,9 +11,9 @@ namespace AgentPanelSpeaker;
 internal static partial class SpeechSapiXmlBuilder
 {
   private const int SsmlPitchPercentPerStep = 5;
-  private const string SapiHeadingPause =
+  private const string SapiBlockPause =
     "<silence msec=\"250\"/>";
-  private const string SsmlHeadingPause =
+  private const string SsmlBlockPause =
     "<break time=\"250ms\"/>";
 
   /// <summary>
@@ -23,12 +23,17 @@ internal static partial class SpeechSapiXmlBuilder
     string text,
     int pitchSetting,
     IReadOnlyList<string> spelledWords,
-    PronunciationRuleSet pronunciations)
+    PronunciationRuleSet pronunciations,
+    bool pauseAfter = false)
   {
     ArgumentNullException.ThrowIfNull(text);
     ArgumentNullException.ThrowIfNull(spelledWords);
     ArgumentNullException.ThrowIfNull(pronunciations);
     string sapiContent = BuildContent(text, spelledWords, pronunciations);
+    if (pauseAfter)
+    {
+      sapiContent += SapiBlockPause;
+    }
     string ssmlContent = ConvertContentToSsml(sapiContent);
     return new SpeechMarkup(
       WrapSapiPitch(sapiContent, pitchSetting),
@@ -101,11 +106,11 @@ internal static partial class SpeechSapiXmlBuilder
 
       if (next is null || !next.Match.Success)
       {
-        AppendTextWithPauses(output, text[position..]);
+        AppendEscaped(output, text[position..]);
         break;
       }
 
-      AppendTextWithPauses(output, text[position..next.Match.Index]);
+      AppendEscaped(output, text[position..next.Match.Index]);
       switch (next.Kind)
       {
         case SpecialMatchKind.Pronunciation:
@@ -150,8 +155,8 @@ internal static partial class SpeechSapiXmlBuilder
   {
     return sapiContent
       .Replace(
-        SapiHeadingPause,
-        SsmlHeadingPause,
+        SapiBlockPause,
+        SsmlBlockPause,
         StringComparison.Ordinal)
       .Replace(
         "<spell>",
@@ -329,28 +334,6 @@ internal static partial class SpeechSapiXmlBuilder
     return parsed.ToString(
       hasSeconds ? "h:mm:ss tt" : "h:mm tt",
       CultureInfo.CurrentCulture);
-  }
-
-  /// <summary>
-  /// Escapes ordinary text and expands retained heading-pause markers.
-  /// </summary>
-  private static void AppendTextWithPauses(
-    StringBuilder output,
-    string text)
-  {
-    int start = 0;
-    for (int index = 0; index < text.Length; ++index)
-    {
-      if (text[index] != SpeechTextMarkers.HeadingPause)
-      {
-        continue;
-      }
-
-      AppendEscaped(output, text[start..index]);
-      output.Append(SapiHeadingPause);
-      start = index + 1;
-    }
-    AppendEscaped(output, text[start..]);
   }
 
   /// <summary>

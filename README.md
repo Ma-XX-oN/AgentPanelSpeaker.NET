@@ -1,4 +1,13 @@
-# Agent Panel Speaker v25.6.6
+# Agent Panel Speaker v25.6.7
+
+## v25.6.7
+
+- Headings, paragraphs, list items, quote blocks, table rows, and each spoken
+  fenced-code line are independent sentence-navigation units.
+- A structural block boundary adds one 250 ms pause to the final sentence in
+  that block.  Sentence punctuation at the same location reuses the same unit;
+  it does not create an empty extra unit.
+- The Pronunciations button is disabled while monitoring, speaking, or paused.
 
 ## v25.6.6
 
