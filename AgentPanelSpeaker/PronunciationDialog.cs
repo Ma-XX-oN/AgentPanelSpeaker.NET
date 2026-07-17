@@ -15,7 +15,7 @@ internal sealed class PronunciationDialog : Form
   private readonly Button _pronounceButton = new();
   private readonly Panel _toolbarPanel = new();
   private readonly SplitContainer _pronunciationSplitContainer = new();
-  private readonly Label _ipaInformationLabel = new();
+  private readonly RichTextBox _ipaInformationBox = new();
   private readonly Label _validationLabel = new();
   private readonly Button _okButton = new();
   private readonly Button _cancelButton = new();
@@ -120,6 +120,7 @@ internal sealed class PronunciationDialog : Form
     _speech.SpeakingStateChanged += SpeechSpeakingStateChanged;
     FormClosing += PronunciationDialogClosing;
     ThemeManager.Apply(this, theme);
+    RefreshIdleInformationText();
     UpdateIpaButtonState();
   }
 
@@ -240,18 +241,23 @@ internal sealed class PronunciationDialog : Form
     _toolbarPanel.Dock = DockStyle.Fill;
     _toolbarPanel.Controls.Add(CreateIpaToolbarContents());
 
-    _ipaInformationLabel.AutoEllipsis = true;
-    _ipaInformationLabel.AutoSize = false;
-    _ipaInformationLabel.BorderStyle = BorderStyle.FixedSingle;
-    _ipaInformationLabel.Dock = DockStyle.Fill;
-    _ipaInformationLabel.Font = new Font(
+    _ipaInformationBox.AutoWordSelection = false;
+    _ipaInformationBox.BorderStyle = BorderStyle.FixedSingle;
+    _ipaInformationBox.Cursor = Cursors.Default;
+    _ipaInformationBox.DetectUrls = false;
+    _ipaInformationBox.Dock = DockStyle.Fill;
+    _ipaInformationBox.Font = new Font(
       FontFamily.GenericMonospace,
       10.0f);
-    _ipaInformationLabel.Padding = new Padding(6, 4, 6, 4);
-    _ipaInformationLabel.Text = IpaInformationSentences[0];
-    _ipaInformationLabel.TextAlign = ContentAlignment.MiddleLeft;
-    _ipaInformationLabel.SizeChanged += (_, _) =>
+    _ipaInformationBox.Multiline = true;
+    _ipaInformationBox.ReadOnly = true;
+    _ipaInformationBox.ScrollBars = RichTextBoxScrollBars.None;
+    _ipaInformationBox.ShortcutsEnabled = false;
+    _ipaInformationBox.TabStop = false;
+    _ipaInformationBox.WordWrap = false;
+    _ipaInformationBox.SizeChanged += (_, _) =>
       RefreshIdleInformationText();
+    SetIpaInformationText(IpaInformationSentences[0]);
 
     var editorAndButtons = new TableLayoutPanel
     {
@@ -299,7 +305,7 @@ internal sealed class PronunciationDialog : Form
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40.0f));
     layout.Controls.Add(instructions, 0, 0);
     layout.Controls.Add(_pronunciationSplitContainer, 0, 1);
-    layout.Controls.Add(_ipaInformationLabel, 0, 2);
+    layout.Controls.Add(_ipaInformationBox, 0, 2);
     page.Controls.Add(layout);
     return page;
   }
@@ -492,9 +498,10 @@ internal sealed class PronunciationDialog : Form
     _hoveredSymbol = definition;
     string displaySymbol =
       IpaSymbolCatalog.GetDisplaySymbol(definition.Symbol);
-    _ipaInformationLabel.Text =
+    string informationText =
       $"{displaySymbol} → {definition.ExampleWord} → " +
       $"/{definition.HighlightedExampleIpa}/ → {definition.Position}";
+    SetIpaInformationText(informationText, displaySymbol.Length);
     _hoverTimer.Stop();
     if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift)
     {
@@ -546,7 +553,7 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private void RefreshIdleInformationText()
   {
-    if (_hoveredSymbol is not null || _ipaInformationLabel.IsDisposed)
+    if (_hoveredSymbol is not null || _ipaInformationBox.IsDisposed)
     {
       return;
     }
@@ -554,26 +561,67 @@ internal sealed class PronunciationDialog : Form
     string combined = string.Join("  ", IpaInformationSentences);
     Size combinedSize = TextRenderer.MeasureText(
       combined,
-      _ipaInformationLabel.Font,
+      _ipaInformationBox.Font,
       Size.Empty,
       TextFormatFlags.NoPadding |
       TextFormatFlags.NoPrefix |
       TextFormatFlags.SingleLine);
     int availableWidth = Math.Max(
       0,
-      _ipaInformationLabel.ClientSize.Width -
-      _ipaInformationLabel.Padding.Horizontal);
+      _ipaInformationBox.ClientSize.Width - 12);
 
     _informationTimer.Stop();
     if (availableWidth >= combinedSize.Width)
     {
-      _ipaInformationLabel.Text = combined;
+      SetIpaInformationText(combined);
       return;
     }
 
-    _ipaInformationLabel.Text =
-      IpaInformationSentences[_informationSentenceIndex];
+    SetIpaInformationText(
+      IpaInformationSentences[_informationSentenceIndex]);
     _informationTimer.Start();
+  }
+
+  /// <summary>
+  /// Replaces the information line and optionally bolds its leading symbol.
+  /// </summary>
+  private void SetIpaInformationText(
+    string text,
+    int emphasizedPrefixLength = 0)
+  {
+    ArgumentNullException.ThrowIfNull(text);
+    if (_ipaInformationBox.IsDisposed)
+    {
+      return;
+    }
+
+    _ipaInformationBox.SuspendLayout();
+    try
+    {
+      _ipaInformationBox.Text = text;
+      _ipaInformationBox.Select(0, text.Length);
+      _ipaInformationBox.SelectionColor = _ipaInformationBox.ForeColor;
+      _ipaInformationBox.SelectionFont = _ipaInformationBox.Font;
+
+      int emphasizedLength = Math.Clamp(
+        emphasizedPrefixLength,
+        0,
+        text.Length);
+      if (emphasizedLength > 0)
+      {
+        using var emphasizedFont = new Font(
+          _ipaInformationBox.Font,
+          FontStyle.Bold);
+        _ipaInformationBox.Select(0, emphasizedLength);
+        _ipaInformationBox.SelectionFont = emphasizedFont;
+      }
+
+      _ipaInformationBox.Select(0, 0);
+    }
+    finally
+    {
+      _ipaInformationBox.ResumeLayout();
+    }
   }
 
   /// <summary>

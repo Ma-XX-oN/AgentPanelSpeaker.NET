@@ -198,7 +198,8 @@ grouped using IPA chart sections.  Each definition supplies:
 - a description and Unicode code point tooltip;
 - an example word or carrier syllable;
 - the example IPA;
-- a bracketed version that identifies the demonstrated phone;
+- a display transcription that identifies the demonstrated phone when
+  bracket highlighting is appropriate;
 - whether an isolated-phone preview is meaningful.
 
 The editor saves its selection before a toolbar button takes focus.  The
@@ -219,12 +220,10 @@ A one-second hover timer starts a preview.  Holding Shift when entering a
 symbol, or pressing Shift while it remains hovered, starts immediately.  The
 editor and toolbar are separated by a user-movable horizontal splitter.  The
 footer displays both hover instructions when they fit, otherwise alternates
-between them until an enabled symbol is hovered.  It then uses bracket notation,
-for example:
-
-```text
-æ → cat → /k[æ]t/ → middle
-```
+between them until an enabled symbol is hovered.  The footer is a read-only
+`RichTextBox`.  During hover, it applies bold character formatting only to the
+leading symbol or dotted-circle combining-mark cluster; the example word,
+transcription, arrows, and position retain the normal footer font.
 
 An independent phone is played first, followed by the example after the saved
 IPA delay.  A modifier that cannot stand alone plays only its example.  Because

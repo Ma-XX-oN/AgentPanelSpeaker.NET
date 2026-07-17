@@ -1,4 +1,11 @@
-# Agent Panel Speaker v25.6.3
+# Agent Panel Speaker v25.6.4
+
+## v25.6.4
+
+- The IPA information footer is now a read-only rich-text control.  During
+  symbol hover, only the displayed symbol or dotted-circle combining-mark
+  cluster is bold; the example word, transcription, arrows, and position
+  remain normal weight.
 
 ## v25.6.3
 
@@ -81,12 +88,9 @@ value position:
 Hovering for one second previews a symbol.  Holding Shift while entering a
 button previews immediately.  The footer states both controls when they fit;
 otherwise it alternates them at a readable interval until the pointer enters
-an enabled symbol button.  The footer then shows the example with the active
-phone bracketed, such as:
-
-```text
-æ → cat → /k[æ]t/ → middle
-```
+an enabled symbol button.  On hover, the footer bolds only the displayed
+symbol or dotted-circle combining-mark cluster while leaving the example word,
+transcription, arrows, and position at normal weight.
 
 When a phone can be synthesized independently, the preview plays the phone,
 waits for the configured IPA example delay, and then plays the example word.
