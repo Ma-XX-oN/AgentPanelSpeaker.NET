@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace AgentPanelSpeaker;
@@ -122,7 +123,7 @@ internal static class IpaSymbolCatalog
   }
 
   /// <summary>
-  /// Creates a modifier group that previews only a carrier example.
+  /// Creates a modifier group with symbol-specific examples when known.
   /// </summary>
   private static IpaSymbolGroup BuildModifierGroup(
     string name,
@@ -140,7 +141,7 @@ internal static class IpaSymbolCatalog
             description,
             "carrier example",
             $"a{symbol}",
-            $"a[{symbol}]",
+            $"a{symbol}",
             "modifier",
             CanSoundAlone: false))
         .ToArray());
@@ -201,7 +202,43 @@ internal static class IpaSymbolCatalog
       M("ˈ", "primary stress", "computer", "kəmˈpjutɚ", "kəm[ˈpju]tɚ", "middle"),
       M("ˌ", "secondary stress", "information", "ˌɪnfɚˈmeɪʃən", "[ˌɪn]fɚˈmeɪʃən", "beginning"),
       M("ː", "length mark", "fleece", "fliːs", "fl[iː]s", "middle"),
-      M(".", "syllable boundary", "button", "bʌt.ən", "bʌt[.]ən", "middle")
+      M(".", "syllable boundary", "button", "bʌt.ən", "bʌt[.]ən", "middle"),
+      M("̥", "voiceless", "play", "pʰl̥eɪ", "pʰl̥eɪ", "middle"),
+      M("̊", "voiceless, alternate above form", "cream", "kɹ̊im", "kɹ̊im", "middle"),
+      M("̬", "voiced", "zoo", "s̬u", "s̬u", "beginning"),
+      M("̤", "breathy voiced", "bhai", "b̤aɪ", "b̤aɪ", "beginning"),
+      M("̰", "creaky voiced", "uh-oh", "ʌ̰ʔoʊ", "ʌ̰ʔoʊ", "beginning"),
+      M("̼", "linguolabial", "mana", "n̼ana", "n̼ana", "beginning"),
+      M("̪", "dental", "eighth", "eɪt̪θ", "eɪt̪θ", "middle"),
+      M("̺", "apical", "pero", "peɾ̺o", "peɾ̺o", "middle"),
+      M("̻", "laminal", "see", "s̻i", "s̻i", "beginning"),
+      M("̃", "nasalized", "sans", "sɑ̃", "sɑ̃", "end"),
+      M("ⁿ", "nasal release", "hidden", "hɪdⁿn̩", "hɪdⁿn̩", "middle"),
+      M("ˡ", "lateral release", "atlas", "ætˡləs", "ætˡləs", "middle"),
+      M("̚", "no audible release", "cat", "kæt̚", "kæt̚", "end"),
+      M("̴", "velarized or pharyngealized", "feel", "fil̴", "fil̴", "end"),
+      M("̝", "raised", "Dvořák", "ˈdvor̝aːk", "ˈdvor̝aːk", "middle"),
+      M("˔", "raised, alternate spacing form", "Dvořák", "ˈdvoɹ˔aːk", "ˈdvoɹ˔aːk", "middle"),
+      M("̞", "lowered", "lobo", "loβ̞o", "loβ̞o", "middle"),
+      M("˕", "lowered, alternate spacing form", "lobo", "loβ˕o", "loβ˕o", "middle"),
+      M("̟", "advanced", "goose", "ɡu̟s", "ɡu̟s", "middle"),
+      M("̠", "retracted", "goo", "ɡ̠u", "ɡ̠u", "beginning"),
+      M("̘", "advanced tongue root", "see", "si̘", "si̘", "middle"),
+      M("̙", "retracted tongue root", "set", "sɛ̙t", "sɛ̙t", "middle"),
+      M("̈", "centralized", "roses", "ɹoʊzɪ̈z", "ɹoʊzɪ̈z", "middle"),
+      M("̽", "mid-centralized", "comma", "kɑmə̽", "kɑmə̽", "end"),
+      M("̹", "more rounded", "thought", "θɔ̹t", "θɔ̹t", "middle"),
+      M("̜", "less rounded", "foot", "fʊ̜t", "fʊ̜t", "middle"),
+      M("̩", "syllabic", "button", "bʌtn̩", "bʌtn̩", "end"),
+      M("̯", "non-syllabic", "boy", "bɔɪ̯", "bɔɪ̯", "end"),
+      M("˞", "rhoticity", "bird", "bɜ˞d", "bɜ˞d", "middle"),
+      M("ʰ", "aspirated", "pin", "pʰɪn", "pʰɪn", "beginning"),
+      M("ʷ", "labialized", "queen", "kʷin", "kʷin", "beginning"),
+      M("ʲ", "palatalized", "nyet", "nʲet", "nʲet", "beginning"),
+      M("ˠ", "velarized", "bád", "bˠaːdˠ", "bˠaːdˠ", "beginning and end"),
+      M("ˤ", "pharyngealized", "ṣād", "sˤaːd", "sˤaːd", "beginning"),
+      M("͡", "tie bar above", "church", "t͡ʃɜɹtʃ", "t͡ʃɜɹtʃ", "beginning"),
+      M("͜", "tie bar below", "church", "t͜ʃɜɹtʃ", "t͜ʃɜɹtʃ", "beginning")
     };
     return values.ToDictionary(value => value.Symbol, StringComparer.Ordinal);
   }
@@ -240,6 +277,27 @@ internal static class IpaSymbolCatalog
       highlighted,
       position,
       CanSoundAlone: false);
+  }
+
+  /// <summary>
+  /// Adds a dotted-circle carrier when a standalone combining mark is shown.
+  /// </summary>
+  public static string GetDisplaySymbol(string value)
+  {
+    ArgumentException.ThrowIfNullOrEmpty(value);
+    if (value is "͡" or "͜")
+    {
+      return $"◌{value}◌";
+    }
+
+    UnicodeCategory category =
+      CharUnicodeInfo.GetUnicodeCategory(value, 0);
+    return category is
+      UnicodeCategory.NonSpacingMark or
+      UnicodeCategory.SpacingCombiningMark or
+      UnicodeCategory.EnclosingMark
+        ? $"◌{value}"
+        : value;
   }
 
   /// <summary>

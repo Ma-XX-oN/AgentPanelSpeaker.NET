@@ -1,4 +1,13 @@
-# Agent Panel Speaker v25.6.2
+# Agent Panel Speaker v25.6.3
+
+## v25.6.3
+
+- Every IPA diacritic now has a named example word and representative IPA
+  transcription instead of the shared `carrier example` fallback.
+- Combining marks are displayed with a dotted-circle carrier in the information
+  line, and modifier examples no longer place square brackets around a
+  combining mark.
+- The upper and lower tie bars use **church** as their example.
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, and completed Codex Plan text with

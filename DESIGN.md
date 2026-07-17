@@ -381,3 +381,11 @@ duplicate suppression, emitted fragments, playback/navigation, fence outcomes,
 settings saves, missing voices, wake-tone output/failures, SAPI failures, and
 form/screen geometry.  Accepted conversation text is present in logs and should
 be reviewed before sharing.
+
+## IPA toolbar examples
+
+IPA modifier definitions carry a named example word and a representative IPA
+transcription.  Combining marks are displayed with a dotted-circle carrier in
+the information line, but the raw mark is inserted into the pronunciation
+editor.  Unsupported IPA markup still falls back to the example word's normal
+voice pronunciation.

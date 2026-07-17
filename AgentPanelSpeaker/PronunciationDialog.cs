@@ -490,8 +490,10 @@ internal sealed class PronunciationDialog : Form
 
     _informationTimer.Stop();
     _hoveredSymbol = definition;
+    string displaySymbol =
+      IpaSymbolCatalog.GetDisplaySymbol(definition.Symbol);
     _ipaInformationLabel.Text =
-      $"{definition.Symbol} → {definition.ExampleWord} → " +
+      $"{displaySymbol} → {definition.ExampleWord} → " +
       $"/{definition.HighlightedExampleIpa}/ → {definition.Position}";
     _hoverTimer.Stop();
     if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift)
