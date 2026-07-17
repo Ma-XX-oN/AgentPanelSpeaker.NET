@@ -175,25 +175,29 @@ the equivalent SSML `say-as` element:
 Pronunciation rules have these normalized forms:
 
 ```text
+TODO=to do
+TODO/i=to do
 git=ipa:ɡɪt
 git/i=ipa:ɡɪt
 ```
 
-The first form is case-sensitive.  `/i` ignores case.  Both are whole-token
-matches.  On a tie, an exact-case rule wins.  Matching precedence is:
+A value without `ipa:` is escaped and emitted as replacement speech text.  A
+value with `ipa:` is emitted as a phoneme element.  The plain form is
+case-sensitive; `/i` ignores case.  Every form is a whole-token match.  On a
+tie, an exact-case rule wins.  Matching precedence is:
 
-1. IPA pronunciation rule;
+1. spoken-text or IPA pronunciation rule;
 2. spell-out rule;
 3. date/time expansion;
 4. ordinary escaped text.
 
-An IPA match is emitted as a phoneme element inside the active pitch wrapper.
 All policy is read from the current settings for every utterance, so edits also
-affect later replay without rebuilding history.
+affect later replay without rebuilding history.  Replacement text is emitted
+literally and is not recursively matched against other pronunciation rules.
 
 ## IPA editor and toolbar
 
-The pronunciation dialog contains separate spell-out and IPA-rule tabs.  The
+The pronunciation dialog contains separate spell-out and rule tabs.  The
 IPA toolbar is manually toggled and never closes itself.  Symbol buttons are
 grouped using IPA chart sections.  Each definition supplies:
 
@@ -206,9 +210,10 @@ grouped using IPA chart sections.  Each definition supplies:
 
 The editor saves its selection before a toolbar button takes focus.  The
 Pronounce button reads only the caret's current line.  It previews explicit
-`ipa:` content through the IPA path and otherwise speaks the line's token with
-ordinary voice pronunciation, including an empty value such as `word=`.  It is
-hosted only by the Pronunciations tab.  Insertion is permitted only when:
+`ipa:` content through the IPA path and speaks a non-IPA value as replacement
+text.  An incomplete empty value previews the token's ordinary pronunciation.
+The button is hosted only by the Pronunciations tab.  Insertion is permitted
+only when:
 
 1. the current line contains `=`;
 2. the selection starts strictly to its right;

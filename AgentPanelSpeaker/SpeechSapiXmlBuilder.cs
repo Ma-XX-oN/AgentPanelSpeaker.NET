@@ -114,10 +114,18 @@ internal static partial class SpeechSapiXmlBuilder
       switch (next.Kind)
       {
         case SpecialMatchKind.Pronunciation:
-          AppendIpa(
-            output,
-            next.Match.Value,
-            next.Pronunciation!.Ipa);
+          PronunciationRule pronunciation = next.Pronunciation!;
+          if (pronunciation.Kind == PronunciationRuleKind.Ipa)
+          {
+            AppendIpa(
+              output,
+              next.Match.Value,
+              pronunciation.Value);
+          }
+          else
+          {
+            AppendEscaped(output, pronunciation.Value);
+          }
           break;
 
         case SpecialMatchKind.Spelling:

@@ -78,7 +78,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.6.8";
+    Text = "Agent Panel Speaker v25.6.9";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -753,7 +753,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Opens the spelling and IPA pronunciation editor.
+  /// Opens the spelling and pronunciation-rule editor.
   /// </summary>
   private void PronunciationsButtonClicked(
     object? sender,

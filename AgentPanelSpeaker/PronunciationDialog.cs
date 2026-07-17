@@ -5,7 +5,7 @@ using System.Text;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Edits spelling and IPA pronunciation rules and provides an IPA toolbar.
+/// Edits spelling and pronunciation rules and provides an IPA toolbar.
 /// </summary>
 internal sealed class PronunciationDialog : Form
 {
@@ -202,7 +202,7 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Creates the IPA-rule tab and its manually toggled toolbar.
+  /// Creates the pronunciation-rule tab and its manually toggled IPA toolbar.
   /// </summary>
   private TabPage CreatePronunciationPage(string pronunciations)
   {
@@ -212,8 +212,8 @@ internal sealed class PronunciationDialog : Form
       AutoSize = true,
       Dock = DockStyle.Fill,
       Text =
-        "Enter name=ipa:pronunciation for an exact-case match or " +
-        "name/i=ipa:pronunciation to ignore case. Matching uses whole tokens."
+        "Enter name=spoken text or name=ipa:pronunciation for exact case; " +
+        "use name/i=... to ignore case. Matching uses whole tokens."
     };
 
     ConfigureEditor(_pronunciationsTextBox, pronunciations);
@@ -1035,6 +1035,7 @@ internal sealed class PronunciationDialog : Form
       if (_speech.IsSpeaking ||
           !TryGetCurrentPronunciationPreview(
             out string token,
+            out string previewText,
             out string? ipa))
       {
         return;
@@ -1051,9 +1052,11 @@ internal sealed class PronunciationDialog : Form
 
       if (ipa is null)
       {
-        _activity(
-          $"Pronunciation preview: {token}; standard voice pronunciation.");
-        _speech.PreviewText(token, profile, _wakeProvider());
+        string description = previewText == token
+          ? "standard voice pronunciation"
+          : $"spoken text={previewText}";
+        _activity($"Pronunciation preview: {token}; {description}.");
+        _speech.PreviewText(previewText, profile, _wakeProvider());
       }
       else
       {
@@ -1075,10 +1078,11 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Reads the preview token and optional IPA value from the caret line.
+  /// Reads the preview token and spoken-text or IPA value from the caret line.
   /// </summary>
   private bool TryGetCurrentPronunciationPreview(
     out string token,
+    out string previewText,
     out string? ipa)
   {
     string text = _pronunciationsTextBox.Text;
@@ -1089,6 +1093,7 @@ internal sealed class PronunciationDialog : Form
     if (equals <= 0)
     {
       token = string.Empty;
+      previewText = string.Empty;
       ipa = null;
       return false;
     }
@@ -1101,6 +1106,7 @@ internal sealed class PronunciationDialog : Form
     if (left.Length == 0)
     {
       token = string.Empty;
+      previewText = string.Empty;
       ipa = null;
       return false;
     }
@@ -1109,10 +1115,12 @@ internal sealed class PronunciationDialog : Form
     string right = line[(equals + 1)..].Trim();
     if (!right.StartsWith("ipa:", StringComparison.OrdinalIgnoreCase))
     {
+      previewText = right.Length == 0 ? token : right;
       ipa = null;
       return true;
     }
 
+    previewText = token;
     ipa = right[4..].Trim();
     return ipa.Length != 0;
   }
@@ -1148,7 +1156,7 @@ internal sealed class PronunciationDialog : Form
   {
     bool enabled =
       !_speech.IsSpeaking &&
-      TryGetCurrentPronunciationPreview(out _, out _);
+      TryGetCurrentPronunciationPreview(out _, out _, out _);
     if (!enabled && _pronounceButton.Focused)
     {
       CaptureToolbarScrollPosition();

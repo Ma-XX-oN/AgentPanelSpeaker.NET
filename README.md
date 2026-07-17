@@ -1,4 +1,13 @@
-# Agent Panel Speaker v25.6.8
+# Agent Panel Speaker v25.6.9
+
+## v25.6.9
+
+- Pronunciation rules now accept spoken-text aliases as well as IPA.  For
+  example, `TODO/i=to do` speaks every case variation of `TODO` as “to do”.
+- `name=spoken text` is exact-case; `name/i=spoken text` ignores case.  Existing
+  `name=ipa:...` and `name/i=ipa:...` rules remain unchanged.
+- **Pronounce** previews the spoken-text value on the caret line instead of the
+  original token.
 
 ## v25.6.8
 
@@ -108,28 +117,33 @@ boundaries.  A match is emitted through native SAPI `spell` or the equivalent
 System.Speech SSML `say-as` element, so `IDE` is spoken letter by letter.
 Entries are trimmed and de-duplicated while preserving their first occurrence.
 
-### IPA pronunciations
+### Pronunciation aliases and IPA
 
 Enter one rule per line:
 
 ```text
+TODO=to do
+TODO/i=to do
 git=ipa:ɡɪt
 git/i=ipa:ɡɪt
 ```
 
-The first form matches exact case.  The `/i` form ignores case.  Both forms use
-whole-token boundaries, and an exact-case rule takes precedence over `/i`.
-Pronunciation rules take precedence over the spell-out list.
+A value without `ipa:` is spoken as replacement text.  A value beginning with
+`ipa:` is emitted as an IPA pronunciation.  The plain form matches exact case;
+the `/i` form ignores case.  All forms use whole-token boundaries, and an
+exact-case rule takes precedence over `/i`.  Pronunciation rules take
+precedence over the spell-out list.
 
 The pronunciation tab has a manually opened IPA symbol toolbar.  It never
 closes by itself, and its horizontal splitter lets the user resize the toolbar
 relative to the editor.  Clicking a symbol inserts it at the saved caret
 position.  The adjacent **Pronounce** button exists only on the Pronunciations
 tab and speaks the token on the caret's current line using the first enabled
-speech profile.  When the value starts with `ipa:`, that IPA is used.  When the
-prefix is absent, including an empty value such as `word=`, the token is spoken
-with the voice's standard pronunciation.  Clicking a symbol still inserts the
-`ipa:` prefix after `=` when required.
+speech profile.  When the value starts with `ipa:`, that IPA is used.
+Otherwise,
+the value is spoken as a text alias.  An incomplete empty value such as `word=`
+previews the token's standard pronunciation but cannot be saved as a rule.
+Clicking a symbol still inserts the `ipa:` prefix after `=` when required.
 
 IPA buttons are enabled only when the caret or selection starts in a valid
 value position:
@@ -270,7 +284,7 @@ Settings automatically persist at:
 ```
 
 Saved values include session choices, all voice profiles, fenced-code types,
-spelled words, IPA pronunciation rules, Bluetooth wake settings, theme,
+spelled words, pronunciation rules, Bluetooth wake settings, theme,
 polling interval, startup playback, and window placement.
 
 **Save settings** flushes pending fenced-code edits and saves immediately.

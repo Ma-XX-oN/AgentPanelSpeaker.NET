@@ -29,7 +29,7 @@ internal sealed record UserSettings(
   public string SpelledWords { get; init; } = string.Empty;
 
   /// <summary>
-  /// Gets case-sensitive and /i case-insensitive IPA pronunciation rules.
+  /// Gets case-sensitive and /i spoken-text or IPA pronunciation rules.
   /// </summary>
   public string Pronunciations { get; init; } = string.Empty;
 

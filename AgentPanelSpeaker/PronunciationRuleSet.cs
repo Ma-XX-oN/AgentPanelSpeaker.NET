@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Parses and resolves explicit IPA pronunciation overrides.
+/// Parses and resolves whole-token spoken-text and IPA overrides.
 /// </summary>
 internal sealed class PronunciationRuleSet
 {
@@ -16,7 +16,9 @@ internal sealed class PronunciationRuleSet
     NormalizedText = string.Join(
       Environment.NewLine,
       rules.Select(rule =>
-        $"{rule.Token}{(rule.IgnoreCase ? "/i" : string.Empty)}=ipa:{rule.Ipa}"));
+        $"{rule.Token}{(rule.IgnoreCase ? "/i" : string.Empty)}=" +
+        $"{(rule.Kind == PronunciationRuleKind.Ipa ? "ipa:" : string.Empty)}" +
+        rule.Value));
   }
 
   /// <summary>
@@ -63,7 +65,7 @@ internal sealed class PronunciationRuleSet
   }
 
   /// <summary>
-  /// Parses token=ipa:phones and token/i=ipa:phones lines.
+  /// Parses token=text, token=ipa:phones, and their token/i forms.
   /// </summary>
   public static PronunciationRuleSet Parse(string? text)
   {
@@ -86,7 +88,9 @@ internal sealed class PronunciationRuleSet
       int equals = line.IndexOf('=');
       if (equals <= 0)
       {
-        errors.Add($"Line {lineIndex + 1}: expected name=ipa:pronunciation.");
+        errors.Add(
+          $"Line {lineIndex + 1}: expected name=spoken text or " +
+          "name=ipa:pronunciation.");
         continue;
       }
 
@@ -99,20 +103,36 @@ internal sealed class PronunciationRuleSet
         errors.Add($"Line {lineIndex + 1}: the name is empty.");
         continue;
       }
-      if (!right.StartsWith("ipa:", StringComparison.OrdinalIgnoreCase))
+      if (right.Length == 0)
       {
-        errors.Add($"Line {lineIndex + 1}: the value must begin with ipa:.");
+        errors.Add($"Line {lineIndex + 1}: the pronunciation is empty.");
         continue;
       }
 
-      string ipa = right[4..].Trim();
-      if (ipa.Length == 0)
+      PronunciationRuleKind kind;
+      string value;
+      if (right.StartsWith("ipa:", StringComparison.OrdinalIgnoreCase))
       {
-        errors.Add($"Line {lineIndex + 1}: the IPA pronunciation is empty.");
-        continue;
+        kind = PronunciationRuleKind.Ipa;
+        value = right[4..].Trim();
+        if (value.Length == 0)
+        {
+          errors.Add(
+            $"Line {lineIndex + 1}: the IPA pronunciation is empty.");
+          continue;
+        }
+      }
+      else
+      {
+        kind = PronunciationRuleKind.Text;
+        value = right;
       }
 
-      var rule = PronunciationRule.Create(token, ipa, ignoreCase);
+      var rule = PronunciationRule.Create(
+        token,
+        value,
+        kind,
+        ignoreCase);
       string key = (ignoreCase ? "i:" : "e:") +
         (ignoreCase ? token.ToUpperInvariant() : token);
       if (keyToIndex.TryGetValue(key, out int existing))
@@ -131,11 +151,21 @@ internal sealed class PronunciationRuleSet
 }
 
 /// <summary>
-/// Defines one whole-token IPA pronunciation override.
+/// Identifies the payload used by one pronunciation rule.
+/// </summary>
+internal enum PronunciationRuleKind
+{
+  Text,
+  Ipa
+}
+
+/// <summary>
+/// Defines one whole-token spoken-text or IPA override.
 /// </summary>
 internal sealed record PronunciationRule(
   string Token,
-  string Ipa,
+  string Value,
+  PronunciationRuleKind Kind,
   bool IgnoreCase,
   Regex Matcher)
 {
@@ -144,7 +174,8 @@ internal sealed record PronunciationRule(
   /// </summary>
   public static PronunciationRule Create(
     string token,
-    string ipa,
+    string value,
+    PronunciationRuleKind kind,
     bool ignoreCase)
   {
     string pattern =
@@ -157,7 +188,8 @@ internal sealed record PronunciationRule(
     }
     return new PronunciationRule(
       token,
-      ipa,
+      value,
+      kind,
       ignoreCase,
       new Regex(pattern, options));
   }
