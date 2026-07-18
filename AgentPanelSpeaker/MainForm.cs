@@ -26,10 +26,12 @@ internal sealed class MainForm : Form
   private readonly GlyphButton _playStopButton = new();
   private readonly GlyphButton _pauseButton = new();
   private readonly Button _cancelSpeechButton = new();
+  private readonly GlyphButton _rewindSpeakerButton = new();
   private readonly GlyphButton _rewindSentenceButton = new();
   private readonly GlyphButton _forwardSentenceButton = new();
   private readonly GlyphButton _rewindNodeButton = new();
   private readonly GlyphButton _forwardNodeButton = new();
+  private readonly GlyphButton _forwardSpeakerButton = new();
   private readonly Button _saveSettingsButton = new();
   private readonly Button _resetSettingsButton = new();
   private readonly Button _openLogButton = new();
@@ -88,7 +90,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.6.11";
+    Text = "Agent Panel Speaker v25.6.12";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -107,6 +109,10 @@ internal sealed class MainForm : Form
     ConfigureButton(_detectLatestButton, "Detect latest");
     ConfigureButton(_browseButton, "Browse JSONL");
     ConfigureButton(_cancelSpeechButton, "Silence");
+    ConfigureSpeakerTransportButton(
+      _rewindSpeakerButton,
+      GlyphButtonDrawing.PreviousSpeakerTurn,
+      "Previous speaker turn (U or Alt+U)");
     ConfigureTransportButton(
       _rewindNodeButton,
       "⏮",
@@ -131,6 +137,10 @@ internal sealed class MainForm : Form
       _forwardNodeButton,
       "⏭",
       "Next JSONL node (; or Alt+;)");
+    ConfigureSpeakerTransportButton(
+      _forwardSpeakerButton,
+      GlyphButtonDrawing.NextSpeakerTurn,
+      "Next speaker turn (O or Alt+O)");
     _toolTip.SetToolTip(
       _cancelSpeechButton,
       "Silence speech; continue monitoring (' or Alt+')");
@@ -149,7 +159,7 @@ internal sealed class MainForm : Form
     });
 
     _followLatestCheckBox.AutoSize = true;
-    _followLatestCheckBox.Text = "Follow newest session";
+    _followLatestCheckBox.Text = "Auto-follow newest session";
     _previewTextBox.Multiline = true;
     _previewTextBox.ReadOnly = true;
     _previewTextBox.ScrollBars = ScrollBars.Vertical;
@@ -163,7 +173,7 @@ internal sealed class MainForm : Form
     ConfigureNumeric(_pollNumeric, 50, 2000, 150, 80);
     _fenceTypesTextBox.Width = 430;
     _speakExistingCheckBox.AutoSize = true;
-    _speakExistingCheckBox.Text = "Speak last existing enabled message on start";
+    _speakExistingCheckBox.Text = "Speak complete latest turn on start";
     _fenceDebounceTimer.Interval = 1000;
 
     var sessionControls = new FlowLayoutPanel
@@ -219,9 +229,9 @@ internal sealed class MainForm : Form
     };
     transport.Controls.AddRange(new Control[]
     {
-      _rewindNodeButton, _rewindSentenceButton, _pauseButton,
-      _playStopButton, _forwardSentenceButton, _forwardNodeButton,
-      _cancelSpeechButton
+      _rewindSpeakerButton, _rewindNodeButton, _rewindSentenceButton,
+      _pauseButton, _playStopButton, _forwardSentenceButton,
+      _forwardNodeButton, _forwardSpeakerButton, _cancelSpeechButton
     });
     var utility = new FlowLayoutPanel
     {
@@ -296,6 +306,9 @@ internal sealed class MainForm : Form
     _pauseButton.Click += PauseButtonClicked;
     _playStopButton.Click += PlayStopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
+    _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
+      _speech.TryRewindSpeaker,
+      "Previous speaker turn");
     _rewindSentenceButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSentence,
       "Previous sentence/code line");
@@ -310,6 +323,10 @@ internal sealed class MainForm : Form
       _speech.TryForwardNode,
       "Next JSONL node",
       "Past end of last JSONL node.");
+    _forwardSpeakerButton.Click += (_, _) => NavigateSpeech(
+      _speech.TryForwardSpeaker,
+      "Next speaker turn",
+      "Past end of last speaker turn.");
     _saveSettingsButton.Click += (_, _) => SaveSettingsExplicitly();
     _resetSettingsButton.Click += (_, _) => ResetSettings();
     _openLogButton.Click += OpenLogButtonClicked;
@@ -321,7 +338,7 @@ internal sealed class MainForm : Form
     FormClosing += MainFormClosing;
     _monitor.TextReady += MonitorTextReady;
     _monitor.HistoryLoaded += MonitorHistoryLoaded;
-    _monitor.SessionChanged += session => PostToUi(() => SetSessionDisplay(session));
+    _monitor.SessionChanged += MonitorSessionChanged;
     _monitor.MessagesChanged += MonitorMessagesChanged;
     _monitor.StatusChanged += status => PostToUi(() => AppendLog(status));
     _monitor.Faulted += exception => PostToUi(() =>
@@ -653,7 +670,7 @@ internal sealed class MainForm : Form
     _sessionTitleTextBox.Clear();
     _sessionPathTextBox.Clear();
     _loadingSettings = true;
-    _followLatestCheckBox.Checked = true;
+    _followLatestCheckBox.Checked = false;
     _loadingSettings = false;
     SaveControlsToSettings();
     UpdateControlState();
@@ -1134,10 +1151,35 @@ internal sealed class MainForm : Form
   /// </summary>
   private void MonitorHistoryLoaded(SpeechHistorySnapshot snapshot)
   {
+    int session = Volatile.Read(ref _monitorSession);
     PostToUi(() =>
     {
+      if (!_monitor.IsRunning || session != Volatile.Read(ref _monitorSession))
+      {
+        return;
+      }
       _speech.LoadHistory(snapshot.Fragments, snapshot.StartMode);
       AppendLog($"Indexed {snapshot.Fragments.Count} existing fragments.");
+      UpdateControlState();
+    });
+  }
+
+  /// <summary>
+  /// Cancels speech from the previous JSONL and displays the newly selected
+  /// fixed or automatically followed session.
+  /// </summary>
+  private void MonitorSessionChanged(LocatedSession session)
+  {
+    int generation = Interlocked.Increment(ref _monitorSession);
+    PostToUi(() =>
+    {
+      if (!_monitor.IsRunning || generation != Volatile.Read(ref _monitorSession))
+      {
+        return;
+      }
+      _speech.BeginLiveSession();
+      SetSessionDisplay(session);
+      AppendLog($"Active session: {session.DisplayName}");
       UpdateControlState();
     });
   }
@@ -1165,10 +1207,17 @@ internal sealed class MainForm : Form
   /// </summary>
   private void MonitorMessagesChanged(IReadOnlyList<string> messages)
   {
+    int session = Volatile.Read(ref _monitorSession);
     string preview = string.Join(
       Environment.NewLine + Environment.NewLine,
       messages.Select((message, index) => $"[{index + 1}] {message}"));
-    PostToUi(() => _previewTextBox.Text = preview);
+    PostToUi(() =>
+    {
+      if (_monitor.IsRunning && session == Volatile.Read(ref _monitorSession))
+      {
+        _previewTextBox.Text = preview;
+      }
+    });
   }
 
   /// <summary>
@@ -1279,11 +1328,13 @@ internal sealed class MainForm : Form
 
     Button? button = keyCode switch
     {
+      Keys.U => _rewindSpeakerButton,
       Keys.H => _rewindNodeButton,
       Keys.J => _rewindSentenceButton,
       Keys.I => _pauseButton,
       Keys.K => _playStopButton,
       Keys.L => _forwardSentenceButton,
+      Keys.O => _forwardSpeakerButton,
       Keys.OemSemicolon => _forwardNodeButton,
       Keys.OemQuotes => _cancelSpeechButton,
       _ => null
@@ -1333,10 +1384,12 @@ internal sealed class MainForm : Form
     UpdatePauseButton();
     UpdatePlayStopButton(playbackActive);
     _cancelSpeechButton.Enabled = playbackActive || hasHistory;
+    _rewindSpeakerButton.Enabled = hasHistory;
     _rewindSentenceButton.Enabled = hasHistory;
     _forwardSentenceButton.Enabled = hasHistory;
     _rewindNodeButton.Enabled = hasHistory;
     _forwardNodeButton.Enabled = hasHistory;
+    _forwardSpeakerButton.Enabled = hasHistory;
   }
 
   /// <summary>
@@ -1424,12 +1477,14 @@ internal sealed class MainForm : Form
     int height = _cancelSpeechButton.PreferredSize.Height;
     GlyphButton[] buttons =
     {
+      _rewindSpeakerButton,
       _rewindNodeButton,
       _rewindSentenceButton,
       _pauseButton,
       _playStopButton,
       _forwardSentenceButton,
-      _forwardNodeButton
+      _forwardNodeButton,
+      _forwardSpeakerButton
     };
     foreach (GlyphButton button in buttons)
     {
@@ -1602,8 +1657,28 @@ internal sealed class MainForm : Form
     button.AutoSize = false;
     button.Size = new Size(50, standardButtonHeight);
     button.Font = new Font("Segoe UI Symbol", 14.0f);
+    button.Drawing = GlyphButtonDrawing.Text;
     button.Glyph = symbol;
     button.UseInkBounds = true;
+    button.Text = string.Empty;
+    button.AccessibleName = accessibleName;
+    _toolTip.SetToolTip(button, accessibleName);
+  }
+
+  /// <summary>
+  /// Configures a custom speaker-turn navigation button.
+  /// </summary>
+  private void ConfigureSpeakerTransportButton(
+    GlyphButton button,
+    GlyphButtonDrawing drawing,
+    string accessibleName)
+  {
+    int standardButtonHeight = _cancelSpeechButton.PreferredSize.Height;
+    button.AutoSize = false;
+    button.Size = new Size(50, standardButtonHeight);
+    button.Drawing = drawing;
+    button.Glyph = string.Empty;
+    button.UseInkBounds = false;
     button.Text = string.Empty;
     button.AccessibleName = accessibleName;
     _toolTip.SetToolTip(button, accessibleName);

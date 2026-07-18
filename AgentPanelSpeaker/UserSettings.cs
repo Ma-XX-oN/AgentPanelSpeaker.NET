@@ -20,8 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 4;
-
+  public const int CurrentVersion = 5;
 
   /// <summary>
   /// Gets the one-token-per-line list that should be spelled out.
@@ -55,7 +54,7 @@ internal sealed record UserSettings(
     return new UserSettings(
       CurrentVersion,
       AgentSource.Auto,
-      FollowNewestSession: true,
+      FollowNewestSession: false,
       ManualSessionPath: null,
       new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },
       new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },

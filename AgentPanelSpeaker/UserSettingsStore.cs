@@ -212,6 +212,8 @@ internal sealed class UserSettingsStore
     return settings with
     {
       Version = UserSettings.CurrentVersion,
+      FollowNewestSession = settings.Version >= 5 &&
+        settings.FollowNewestSession,
       Assistant = NormalizeProfile(settings.Assistant),
       Reasoning = NormalizeProfile(settings.Reasoning),
       User = NormalizeProfile(settings.User),

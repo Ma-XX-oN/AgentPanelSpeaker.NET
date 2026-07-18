@@ -183,7 +183,7 @@ internal sealed class SpeechService : IDisposable
       _nextHistoryIndex = startMode switch
       {
         PlaybackStartMode.Beginning => FindNextEligibleLocked(0),
-        PlaybackStartMode.LastEnabledNode => FindLastEnabledNodeStartLocked(),
+        PlaybackStartMode.LatestTurn => FindLatestTurnStartLocked(),
         _ => _history.Count
       };
       if (_nextHistoryIndex < 0)
@@ -508,6 +508,105 @@ internal sealed class SpeechService : IDisposable
           return true;
         }
         candidate = end + 1;
+      }
+
+      MoveToLiveEndLocked();
+      text = string.Empty;
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Moves to the beginning of the preceding opposite-speaker run.
+  /// </summary>
+  public bool TryRewindSpeaker(out string text)
+  {
+    lock (_sync)
+    {
+      if (_history.Count == 0)
+      {
+        text = string.Empty;
+        return false;
+      }
+
+      int anchor = GetNavigationAnchorLocked();
+      if (anchor >= _history.Count)
+      {
+        int finalCandidate = _history.Count - 1;
+        while (finalCandidate >= 0)
+        {
+          int runStart = FindSpeakerRunStartLocked(finalCandidate);
+          int runEnd = FindSpeakerRunEndLocked(finalCandidate);
+          int eligible = FindNextEligibleLocked(runStart, runEnd);
+          if (eligible >= 0)
+          {
+            text = JoinEligibleSpeakerRunLocked(runStart);
+            RestartHistoryLocked(eligible);
+            return true;
+          }
+          finalCandidate = runStart - 1;
+        }
+
+        text = string.Empty;
+        return false;
+      }
+
+      bool currentIsUser = IsUserSpeaker(_history[anchor].Category);
+      int candidate = FindSpeakerRunStartLocked(anchor) - 1;
+      while (candidate >= 0)
+      {
+        int runStart = FindSpeakerRunStartLocked(candidate);
+        int runEnd = FindSpeakerRunEndLocked(candidate);
+        if (IsUserSpeaker(_history[runStart].Category) != currentIsUser)
+        {
+          int eligible = FindNextEligibleLocked(runStart, runEnd);
+          if (eligible >= 0)
+          {
+            text = JoinEligibleSpeakerRunLocked(runStart);
+            RestartHistoryLocked(eligible);
+            return true;
+          }
+        }
+        candidate = runStart - 1;
+      }
+
+      text = string.Empty;
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Moves to the beginning of the following opposite-speaker run.
+  /// </summary>
+  public bool TryForwardSpeaker(out string text)
+  {
+    lock (_sync)
+    {
+      int anchor = GetNavigationAnchorLocked();
+      if (anchor >= _history.Count)
+      {
+        MoveToLiveEndLocked();
+        text = string.Empty;
+        return false;
+      }
+
+      bool currentIsUser = IsUserSpeaker(_history[anchor].Category);
+      int candidate = FindSpeakerRunEndLocked(anchor) + 1;
+      while (candidate < _history.Count)
+      {
+        int runStart = candidate;
+        int runEnd = FindSpeakerRunEndLocked(candidate);
+        if (IsUserSpeaker(_history[runStart].Category) != currentIsUser)
+        {
+          int eligible = FindNextEligibleLocked(runStart, runEnd);
+          if (eligible >= 0)
+          {
+            text = JoinEligibleSpeakerRunLocked(runStart);
+            RestartHistoryLocked(eligible);
+            return true;
+          }
+        }
+        candidate = runEnd + 1;
       }
 
       MoveToLiveEndLocked();
@@ -932,8 +1031,26 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Finds the first eligible fragment of the final enabled node.
+  /// Finds the final User node so initial playback includes the complete latest
+  /// conversational turn, with every following AI node left in sequence.
   /// </summary>
+  private int FindLatestTurnStartLocked()
+  {
+    for (int index = _history.Count - 1; index >= 0; --index)
+    {
+      if (_history[index].Category != ContentCategory.User)
+      {
+        continue;
+      }
+
+      int start = FindNodeStartLocked(index);
+      int eligible = FindNextEligibleLocked(start);
+      return eligible < 0 ? _history.Count : eligible;
+    }
+
+    return FindLastEnabledNodeStartLocked();
+  }
+
   private int FindLastEnabledNodeStartLocked()
   {
     int eligible = FindPreviousEligibleLocked(_history.Count - 1);
@@ -990,6 +1107,62 @@ internal sealed class SpeechService : IDisposable
           out _,
           out _))
         .Select(fragment => fragment.Text));
+  }
+
+  /// <summary>
+  /// Finds the first fragment in one consecutive User or AI speaker run.
+  /// </summary>
+  private int FindSpeakerRunStartLocked(int index)
+  {
+    bool isUser = IsUserSpeaker(_history[index].Category);
+    int first = index;
+    while (first > 0 &&
+           IsUserSpeaker(_history[first - 1].Category) == isUser)
+    {
+      --first;
+    }
+    return first;
+  }
+
+  /// <summary>
+  /// Finds the final fragment in one consecutive User or AI speaker run.
+  /// </summary>
+  private int FindSpeakerRunEndLocked(int index)
+  {
+    bool isUser = IsUserSpeaker(_history[index].Category);
+    int last = index;
+    while (last + 1 < _history.Count &&
+           IsUserSpeaker(_history[last + 1].Category) == isUser)
+    {
+      ++last;
+    }
+    return last;
+  }
+
+  /// <summary>
+  /// Joins every currently eligible fragment in one speaker run.
+  /// </summary>
+  private string JoinEligibleSpeakerRunLocked(int start)
+  {
+    int end = FindSpeakerRunEndLocked(start);
+    return string.Join(
+      " ",
+      _history
+        .Skip(start)
+        .Take(end - start + 1)
+        .Where(fragment => TryGetEligibleProfileLocked(
+          fragment,
+          out _,
+          out _))
+        .Select(fragment => fragment.Text));
+  }
+
+  /// <summary>
+  /// Groups Assistant and Reasoning as AI, opposite the User speaker.
+  /// </summary>
+  private static bool IsUserSpeaker(ContentCategory category)
+  {
+    return category == ContentCategory.User;
   }
 
   /// <summary>

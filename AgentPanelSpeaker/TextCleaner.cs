@@ -492,8 +492,17 @@ internal static partial class TextCleaner
       ++fenceLength;
     }
 
-
     string info = line[fenceLength..].Trim();
+    if (info.Contains(fenceCharacter))
+    {
+      return false;
+    }
+
+    if (fenceLength < 3 && info.Any(char.IsWhiteSpace))
+    {
+      return false;
+    }
+
     fenceType = info.Split(
       (char[]?)null,
       StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;

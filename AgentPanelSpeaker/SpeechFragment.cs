@@ -31,7 +31,7 @@ internal sealed record SpeechFragment(
 internal enum PlaybackStartMode
 {
   LiveEnd,
-  LastEnabledNode,
+  LatestTurn,
   Beginning
 }
 

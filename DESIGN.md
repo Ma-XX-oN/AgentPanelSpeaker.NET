@@ -18,7 +18,7 @@ SessionLocator
   -> SpeechService playback policy
   -> SpeechSapiXmlBuilder
   -> SapiSpeechEngine STA renderer
-  -> native SAPI SpVoice or System.Speech rendered PCM
+  -> Windows.Media, native SAPI, or System.Speech rendered PCM
   -> PcmWaveData tone/silence/speech composition
   -> WaveOutPlayer single contiguous output stream
 ```
@@ -40,7 +40,9 @@ the JSONL.
 | `JsonlSessionMonitor` | Builds history and emits deduplicated fragments. |
 | `SpeechService` | Owns history, navigation, eligibility, and speech state. |
 | `SpeechSapiXmlBuilder` | Builds equivalent SAPI XML and SSML markup. |
-| `SapiSpeechEngine` | Renders providers and serializes complete buffers. |
+| `SapiSpeechEngine` | Renders three providers and serializes buffers. |
+| `InstalledSpeechVoice` | Stores provider identity and sortable metadata. |
+| `GlyphButton` | Draws centred transport and speaker-turn vector icons. |
 | `PcmWaveData` | Parses, converts, joins, and generates PCM audio. |
 | `WaveOutPlayer` | Plays one PCM buffer through one WinMM output stream. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
@@ -57,8 +59,8 @@ the JSONL.
 `GlyphButton` normally uses WinForms text rendering for IPA controls.  Main
 transport buttons enable ink-bound centring, which builds the glyph outline and
 translates its actual painted bounds to the centre of the standard-height
-button.  This avoids the vertical bias caused by centring the font's ascent and
-descent box.
+button.  The outer speaker-turn controls instead draw two offset speech bubbles
+and a directional arrow with `GraphicsPath`, avoiding font-dependent icons.
 
 ## JSONL classification
 
@@ -125,18 +127,33 @@ stable provider name stored in the profile.  Voice, rate, pitch, and volume
 edits are debounced for 350 ms and then spoken as an untracked preview unless
 monitored playback is active.
 
-Voice discovery is the case-insensitive union of enabled `System.Speech`
-voices and native `SAPI.SpVoice` tokens.  A duplicate name uses native SAPI,
-preserving the absolute-middle pitch element:
+Voice discovery merges three catalogues:
+
+1. `Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices`;
+2. native `SAPI.SpVoice` tokens;
+3. enabled `System.Speech` voices.
+
+`InstalledSpeechVoice` retains a stable settings name, the provider-specific
+voice identifier, provider kind, maker, voice name, Natural/Natural HD quality,
+language, and location.  Provider-independent catalogue keys merge duplicate
+entries.  The chosen backend priority is Windows.Media, then SAPI, then
+System.Speech, while missing display fields are filled from matching lower
+priority entries.  The existing stable name is retained when a higher-priority
+backend replaces a duplicate, so saved selections continue to resolve.
+
+Native SAPI preserves the absolute-middle pitch element:
 
 ```xml
 <pitch absmiddle="5">text</pitch>
 ```
 
-A voice available only through `System.Speech` uses a complete SSML document
-with an equivalent relative-pitch value.  Each provider renders synchronously
-to a WAVE stream on the STA worker.  The result is converted to mono 48 kHz
-16-bit PCM before any wake or inter-segment audio is added.
+System.Speech and Windows.Media receive a complete SSML document with an
+equivalent relative-pitch value.  Windows.Media additionally receives its
+provider voice ID, speaking-rate ratio, and normalized volume through
+`SpeechSynthesizerOptions`.  Each provider renders synchronously to a WAVE
+stream on the STA worker.  The result is converted to mono 48 kHz 16-bit PCM
+before any wake or inter-segment audio is added.  Failure to initialize the
+modern provider is logged and leaves the two legacy providers available.
 
 The complete PCM sequence is submitted to one `waveOut` buffer.  Normal speech,
 automatic voice-setting previews, IPA previews, wake-tone tests, and
@@ -173,8 +190,8 @@ receives them.  A trailing `Z` is spoken as UTC.
 
 The spelling list is normalized by trimming each line, removing empty lines,
 and de-duplicating case-insensitively.  Whole-token matching is
-case-insensitive.  Native SAPI matches use `spell`; System.Speech matches use
-the equivalent SSML `say-as` element:
+case-insensitive.  Native SAPI matches use `spell`; the System.Speech and
+Windows.Media paths use the equivalent SSML `say-as` element:
 
 ```xml
 <spell>IDE</spell>
@@ -274,8 +291,8 @@ ignored while any ordinary or paused speech is active.
 with `Stopwatch`, so wall-clock changes cannot alter the threshold.  For one
 playback request it:
 
-1. renders every speech segment through its selected SAPI or System.Speech
-   provider into a WAVE stream;
+1. renders every speech segment through its selected Windows.Media, SAPI,
+   or System.Speech provider into a WAVE stream;
 2. parses integer PCM and converts it to mono 48 kHz 16-bit samples;
 3. inserts IPA inter-segment delay as PCM silence when required;
 4. checks the wake threshold after rendering;
@@ -337,9 +354,15 @@ fence types.  The cursor tracks the active, pending, or next fragment.
 
 - sentence controls move one currently eligible fragment;
 - node controls move to a node containing an eligible fragment;
+- speaker controls move between opposite-speaker runs;
+- consecutive User fragments form one User run;
+- consecutive Assistant and Reasoning fragments form one AI run, even when
+  they span several JSONL nodes;
+- from AI, speaker navigation targets the adjacent User run; from User, it
+  targets the first eligible fragment of the adjacent AI run;
 - replay continues forward after navigation;
-- forwarding beyond the last eligible sentence/code line or node cancels
-  replay and moves the cursor to the live end;
+- forwarding beyond the last eligible sentence/code line, node, or speaker
+  run cancels replay and moves the cursor to the live end;
 - `Silence` cancels speech and returns to the live end;
 - the play/stop toggle stops both speech and JSONL monitoring when active;
 - pause/resume affects only the active utterance and does not stop monitoring.
@@ -348,18 +371,36 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 
 | Shortcut | Action |
 | --- | --- |
+| `U` / `Alt+U` | Previous opposite-speaker run |
 | `H` / `Alt+H` | Previous node |
 | `J` / `Alt+J` | Previous sentence/code line |
 | `I` / `Alt+I` | Toggle pause/resume |
 | `K` / `Alt+K` | Toggle start/stop |
 | `L` / `Alt+L` | Next sentence/code line |
 | `;` / `Alt+;` | Next node |
+| `O` / `Alt+O` | Next opposite-speaker run |
 | `'` / `Alt+'` | Silence |
 
 They operate only while the Agent Panel Speaker window has focus.  The invoked
 button receives focus before `PerformClick` runs.  Bare keys work in main-form
 text boxes, numeric controls, and voice dropdowns.  The fenced-code CSV box is
 exempt so it can accept normal typing; Alt variants still work there.
+
+## Session identity and startup position
+
+A path displayed after Browse or Detect latest is passed as `ExplicitPath` when
+Auto-follow is off.  Stop and Play therefore reopen the same JSONL.  Only an
+explicit Auto-follow session may periodically call `FindLatest` and switch to a
+newer file.  `SessionChanged` advances a generation counter and clears active,
+pending, and indexed speech before history or live events from the new file are
+accepted, preventing queued output from the previous conversation.
+
+Existing history is always indexed.  `PlaybackStartMode.LatestTurn` scans
+backward for the final User node, starts at its first currently eligible
+fragment, and leaves all following Reasoning/Assistant nodes in sequence.  If
+there is no User node, it falls back to the first eligible fragment in the final
+eligible node.  An automatic file switch uses `LiveEnd`, so it never replays the
+new file's old conversation.
 
 ## Settings
 
@@ -374,7 +415,9 @@ role's voice/rate/pitch/volume, fenced-code CSV, spelling rules, IPA rules,
 Bluetooth wake settings, theme, startup playback, polling interval, and normal
 window bounds.
 
-Settings version 4 adds `Pronunciations`, `AudioWake`, and `Theme`.  Creating or
+Settings version 4 added `Pronunciations`, `AudioWake`, and `Theme`.
+Settings version 5 changes follow-newest migration so existing installations
+start pinned rather than inheriting automatic session switching.  Creating or
 upgrading a settings file preserves the spelling-list migration that adds `IDE`
 when no prior list exists.  Normal controls save immediately.  The fenced-code
 CSV uses a one-second debounce.  Writes use a temporary file followed by atomic
@@ -389,7 +432,8 @@ replacement.  Missing saved voices become `Not Spoken` and are logged.
   playback time.
 - `Not Spoken` changes eligibility, not history retention.
 - Fenced-code aliases are explicit; `cpp` does not imply `c++`.
-- Only the SAPI worker thread accesses the late-bound COM voice.
+- Only the speech worker thread accesses SAPI COM, System.Speech, or WinRT
+  synthesizer instances.
 - Every sound-producing path uses the serialized worker and PCM composer.
 - A wake tone, settling silence, and its speech use one `waveOut` buffer.
 - The play/stop toggle cancels speech before stopping monitoring.
@@ -420,6 +464,8 @@ unit and receive one 250 ms pause.  Non-`md` fenced blocks instead treat every
 non-empty source line as exactly one unit and ignore punctuation within it.
 Explicit `md` fences recurse through the normal Markdown rules, including
 nested fences.  Fence delimiters may contain one or more matching backticks or
-tildes.  When a block already ends in sentence punctuation, the punctuation
+tildes.  A same-line closing marker identifies inline code and prevents that
+line from opening a block fence, so following prose is never swallowed by a
+false fence.  When a block already ends in sentence punctuation, the punctuation
 and block ending are one coincident boundary and never create an empty
 fragment.

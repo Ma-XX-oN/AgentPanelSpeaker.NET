@@ -1,4 +1,25 @@
-# Agent Panel Speaker v25.6.11
+# Agent Panel Speaker v25.6.12
+
+## v25.6.12
+
+- Added the modern `Windows.Media.SpeechSynthesis` voice catalogue and renderer.
+  Voice entries retain their provider and provider-specific identifier, and
+  duplicate catalogue entries are merged while preferring the modern backend,
+  then native SAPI, then `System.Speech`.  Natural or Natural HD quality is
+  displayed when the provider exposes that metadata.
+- Fixed inline Markdown code such as
+  `` `rt_logger/PolicyMachinery.hpp` now treats... `` so it remains ordinary
+  spoken prose.  An inline closing marker can no longer start a false fenced
+  block and consume the remainder of the message.
+- **Speak complete latest turn on start** begins at the final User node and
+  continues through every following AI reasoning/assistant node.
+- Session selection is pinned by default.  Stop and Play retain the selected
+  JSONL, and switching to another session clears queued speech from the old
+  one.  Only **Auto-follow newest session** may switch files automatically.
+- Added previous/next speaker-turn controls.  Their custom icons combine two
+  speech bubbles with a directional arrow.  `U` rewinds to the preceding
+  opposite-speaker run and `O` advances to the following one.  Consecutive AI
+  reasoning and assistant nodes count as one AI run.
 
 ## v25.6.11
 
@@ -122,11 +143,25 @@ Clicking the **Voice** heading rotates the field order left and resorts all
 voice lists.  `Not Spoken` remains the first special entry, and the stored
 provider name is unchanged by display reordering.
 
-The voice lists combine every enabled voice exposed through `System.Speech`
-with the native `SAPI.SpVoice` list.  A voice present in both lists uses
-native SAPI.  Voices exposed only through `System.Speech` use equivalent SSML
-for rate, pitch, spelling, and pronunciation markup.  Date and time patterns
-are expanded into natural spoken forms before synthesis.
+The voice lists combine every enabled voice exposed through:
+
+- `Windows.Media.SpeechSynthesis`;
+- native `SAPI.SpVoice`;
+- `System.Speech`.
+
+Each entry retains the provider-specific identifier needed to synthesize it.
+Duplicate catalogue entries are merged while preferring the modern Windows
+backend, then native SAPI, then `System.Speech`; missing display metadata is
+filled from the other matching entries.  A modern Windows voice is rendered by
+`Windows.Media.SpeechSynthesis`, while legacy voices continue through their
+working SAPI or `System.Speech` backend.  Natural/Natural HD appears only when
+an installed provider reports that quality; the application does not create
+unusable entries from display labels alone.
+
+All providers render to the same PCM composition path, so rate, pitch, volume,
+Bluetooth wake audio, IPA previews, spelling, and pronunciation aliases retain
+the existing serialized playback behaviour.  Date and time patterns are
+expanded into natural spoken forms before synthesis.
 
 ## Pronunciations and spelling
 
@@ -253,19 +288,22 @@ rewind/forward entry, regardless of punctuation inside that line.  An
 explicitly tagged `md` fence is parsed recursively as Markdown, so its headings,
 paragraphs, list items, sentences, and nested fences use the same segmentation
 rules as ordinary message text.  Fence runs may contain one or more backticks
-or tildes.  Activity logs both spoken and skipped blocks with the normalized
-fence type.
+or tildes.  A marker run with a same-line closing marker is inline code, not a
+block fence, so text following an inline code span remains in spoken prose.
+Activity logs both spoken and skipped blocks with the normalized fence type.
 
 ## Playback controls and local hotkeys
 
 | Control | Hotkey | Action |
 | --- | --- | --- |
+| bubbles + `←` | `U` or `Alt+U` | Previous opposite-speaker run |
 | `⏮` | `H` or `Alt+H` | Previous JSONL node |
 | `⏪` | `J` or `Alt+J` | Previous sentence/code line |
 | `⏸` / `▶` | `I` or `Alt+I` | Pause or resume speech |
 | `▶` / `⏹` | `K` or `Alt+K` | Start or stop monitoring |
 | `⏩` | `L` or `Alt+L` | Next sentence/code line |
 | `⏭` | `;` or `Alt+;` | Next JSONL node |
+| bubbles + `→` | `O` or `Alt+O` | Next opposite-speaker run |
 | Silence | `'` or `Alt+'` | Cancel speech; keep monitoring |
 
 Hotkeys work only while Agent Panel Speaker is active.  A hotkey focuses its
@@ -274,13 +312,13 @@ focus is in the main window's text boxes, numeric fields, and voice dropdowns.
 The fenced-code CSV box is the only main-window exception so its text can be
 edited normally.  Alt variants continue to work there.
 
-Forwarding past the final eligible entry cancels replay, returns to the live
-end, and reports either:
+Speaker navigation treats consecutive User fragments as one User run and
+consecutive Reasoning/Assistant fragments as one AI run.  From AI it jumps to
+the adjacent User run; from User it jumps to the first eligible fragment of the
+adjacent AI run.  It never stops at later AI nodes belonging to the same run.
 
-```text
-Past end of last sentence/code line.
-Past end of last JSONL node.
-```
+Forwarding past the final eligible entry cancels replay, returns to the live
+end, and reports the corresponding sentence, node, or speaker-turn end message.
 
 ## Session selection
 
@@ -291,11 +329,19 @@ Past end of last JSONL node.
 
 **Detect latest** selects the newest matching session.  **Browse JSONL** opens
 at the selected source's session directory.  The full session title and path
-are displayed separately.
+are displayed separately.  The displayed path is pinned across Stop and Play.
+Selecting a different source, detecting another latest session, or browsing to
+another file changes that pin and clears queued speech from the previous
+conversation.
+
+**Auto-follow newest session** is the only mode that may switch to a newly
+modified JSONL while monitoring.  An automatic switch starts at the new file's
+live end rather than replaying old content.
 
 Existing conversation text is indexed at start, so rewind is immediately
-available.  **Speak last existing enabled message on start** begins at the
-last node that is currently eligible instead of waiting at the live end.
+available.  **Speak complete latest turn on start** begins at the final User
+node and then speaks every following Reasoning/Assistant node in order.  If no
+User node exists, it falls back to the final currently eligible node.
 
 ## Settings
 

@@ -2,7 +2,12 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
-using System.Speech.Synthesis;
+using Windows.Media.SpeechSynthesis;
+using Windows.Storage.Streams;
+using InstalledVoice = System.Speech.Synthesis.InstalledVoice;
+using SystemSpeechSynthesizer = System.Speech.Synthesis.SpeechSynthesizer;
+using VoiceInfo = System.Speech.Synthesis.VoiceInfo;
+using WinRtSpeechSynthesizer = Windows.Media.SpeechSynthesis.SpeechSynthesizer;
 
 namespace AgentPanelSpeaker;
 
@@ -63,7 +68,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   public event Action<string>? Notice;
 
   /// <summary>
-  /// Gets all enabled voices exposed by either Windows speech provider.
+  /// Gets all enabled voices exposed by the available Windows speech providers.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> Voices => _voices;
 
@@ -209,20 +214,38 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
-  /// Creates both speech providers and services the serialized command queue.
+  /// Creates the available speech providers and services the command queue.
   /// </summary>
   private void Run()
   {
     object? voiceObject = null;
     object? voicesObject = null;
-    SpeechSynthesizer? synthesizer = null;
+    SystemSpeechSynthesizer? synthesizer = null;
+    WinRtSpeechSynthesizer? windowsMediaSynthesizer = null;
     try
     {
-      synthesizer = new SpeechSynthesizer();
+      synthesizer = new SystemSpeechSynthesizer();
       synthesizer.SetOutputToNull();
+
       var systemVoices = EnumerateSystemSpeechVoices(synthesizer);
       var sapiVoices = new Dictionary<string, SapiVoice>(
         StringComparer.OrdinalIgnoreCase);
+      IReadOnlyList<WindowsMediaVoice> windowsMediaVoices =
+        Array.Empty<WindowsMediaVoice>();
+      try
+      {
+        windowsMediaSynthesizer = new WinRtSpeechSynthesizer();
+        windowsMediaVoices = EnumerateWindowsMediaVoices();
+      }
+      catch (Exception exception)
+      {
+        DiagnosticLog.Write("speech.windows_media_unavailable", new
+        {
+          exception = exception.ToString()
+        });
+        windowsMediaSynthesizer?.Dispose();
+        windowsMediaSynthesizer = null;
+      }
 
       try
       {
@@ -248,32 +271,57 @@ internal sealed class SapiSpeechEngine : IDisposable
         sapiVoices.Clear();
       }
 
-      var voiceBackends = new Dictionary<string, VoiceBackend>(
-        StringComparer.OrdinalIgnoreCase);
-      var displayNames = new Dictionary<string, string>(
+      var registrations = new Dictionary<string, VoiceRegistration>(
         StringComparer.OrdinalIgnoreCase);
       foreach ((string name, string displayName) in systemVoices)
       {
-        voiceBackends.TryAdd(name, VoiceBackend.ForSystemSpeech());
-        AddPreferredDisplayName(displayNames, name, displayName);
-      }
-      foreach ((string name, SapiVoice sapiVoice) in sapiVoices)
-      {
-        voiceBackends[name] = VoiceBackend.ForSapi(sapiVoice.Index);
-        AddPreferredDisplayName(
-          displayNames,
+        InstalledSpeechVoice voice = InstalledSpeechVoice.CreateLegacy(
           name,
-          sapiVoice.DisplayName);
+          name,
+          SpeechVoiceProvider.SystemSpeech,
+          displayName);
+        AddVoiceRegistration(
+          registrations,
+          voice,
+          VoiceBackend.ForSystemSpeech(name));
       }
 
-      if (voiceBackends.Count == 0)
+      foreach ((string name, SapiVoice sapiVoice) in sapiVoices)
+      {
+        InstalledSpeechVoice voice = InstalledSpeechVoice.CreateLegacy(
+          name,
+          name,
+          SpeechVoiceProvider.Sapi,
+          sapiVoice.DisplayName);
+        AddVoiceRegistration(
+          registrations,
+          voice,
+          VoiceBackend.ForSapi(sapiVoice.Index, name));
+      }
+
+      foreach (WindowsMediaVoice mediaVoice in windowsMediaVoices)
+      {
+        InstalledSpeechVoice voice =
+          InstalledSpeechVoice.CreateWindowsMedia(
+            $"winrt:{mediaVoice.Id}",
+            mediaVoice.Id,
+            mediaVoice.DisplayName,
+            mediaVoice.Description,
+            mediaVoice.Language);
+        AddVoiceRegistration(
+          registrations,
+          voice,
+          VoiceBackend.ForWindowsMedia(mediaVoice.Id));
+      }
+
+      if (registrations.Count == 0)
       {
         throw new InvalidOperationException(
           "No enabled Windows speech voices were found.");
       }
 
-      _voices = voiceBackends.Keys
-        .Select(name => InstalledSpeechVoice.Create(name, displayNames[name]))
+      _voices = registrations.Values
+        .Select(registration => registration.Voice)
         .OrderBy(
           voiceInfo => voiceInfo.Location,
           StringComparer.CurrentCultureIgnoreCase)
@@ -284,18 +332,32 @@ internal sealed class SapiSpeechEngine : IDisposable
           voiceInfo => voiceInfo.VoiceName,
           StringComparer.CurrentCultureIgnoreCase)
         .ToArray();
+      IReadOnlyDictionary<string, VoiceBackend> voiceBackends =
+        registrations.Values.ToDictionary(
+          registration => registration.Voice.Name,
+          registration => registration.Backend,
+          StringComparer.OrdinalIgnoreCase);
 
       DiagnosticLog.Write("speech.voices_enumerated", new
       {
         systemSpeechCount = systemVoices.Count,
         sapiCount = sapiVoices.Count,
-        totalCount = _voices.Count
+        windowsMediaCount = windowsMediaVoices.Count,
+        totalCount = _voices.Count,
+        voices = _voices.Select(voice => new
+        {
+          voice.Name,
+          provider = voice.Provider.ToString(),
+          voice.ProviderVoiceId,
+          display = voice.ToString()
+        }).ToArray()
       });
       _initialized.Set();
       ServiceCommands(
         voiceObject,
         voicesObject,
         synthesizer,
+        windowsMediaSynthesizer,
         voiceBackends);
     }
     catch (Exception exception)
@@ -313,6 +375,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     finally
     {
       _initialized.Set();
+      windowsMediaSynthesizer?.Dispose();
       synthesizer?.Dispose();
       ReleaseComObject(voicesObject);
       ReleaseComObject(voiceObject);
@@ -320,7 +383,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   private static Dictionary<string, string> EnumerateSystemSpeechVoices(
-    SpeechSynthesizer synthesizer)
+    SystemSpeechSynthesizer synthesizer)
   {
     var voices = new Dictionary<string, string>(
       StringComparer.OrdinalIgnoreCase);
@@ -394,6 +457,73 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
+  /// <summary>
+  /// Reads every Microsoft-signed voice exposed by the modern WinRT catalogue.
+  /// </summary>
+  private static IReadOnlyList<WindowsMediaVoice> EnumerateWindowsMediaVoices()
+  {
+    return WinRtSpeechSynthesizer.AllVoices
+      .Select(voice => new WindowsMediaVoice(
+        voice.Id?.Trim() ?? string.Empty,
+        voice.DisplayName?.Trim() ?? string.Empty,
+        voice.Description?.Trim() ?? string.Empty,
+        voice.Language?.Trim() ?? string.Empty))
+      .Where(voice =>
+        voice.Id.Length != 0 && voice.DisplayName.Length != 0)
+      .ToArray();
+  }
+
+  /// <summary>
+  /// Adds one provider voice, merging duplicates while retaining the backend
+  /// with the highest feature priority and the richest display metadata.
+  /// </summary>
+  private static void AddVoiceRegistration(
+    IDictionary<string, VoiceRegistration> registrations,
+    InstalledSpeechVoice voice,
+    VoiceBackend backend)
+  {
+    string catalogueKey = voice.GetCatalogueKey();
+    string? existingKey = registrations.ContainsKey(catalogueKey)
+      ? catalogueKey
+      : registrations
+        .FirstOrDefault(pair => string.Equals(
+          pair.Value.Voice.Name,
+          voice.Name,
+          StringComparison.OrdinalIgnoreCase))
+        .Key;
+
+    if (string.IsNullOrEmpty(existingKey))
+    {
+      registrations.Add(catalogueKey, new VoiceRegistration(voice, backend));
+      return;
+    }
+
+    VoiceRegistration existing = registrations[existingKey];
+    bool useNewBackend = GetProviderPriority(voice.Provider) >
+      GetProviderPriority(existing.Voice.Provider);
+    InstalledSpeechVoice selectedVoice = useNewBackend
+      ? (voice with { Name = existing.Voice.Name })
+        .MergeDisplayMetadata(existing.Voice)
+      : existing.Voice.MergeDisplayMetadata(voice);
+    VoiceBackend selectedBackend = useNewBackend
+      ? backend
+      : existing.Backend;
+    registrations[existingKey] = new VoiceRegistration(
+      selectedVoice,
+      selectedBackend);
+  }
+
+  private static int GetProviderPriority(SpeechVoiceProvider provider)
+  {
+    return provider switch
+    {
+      SpeechVoiceProvider.WindowsMedia => 3,
+      SpeechVoiceProvider.Sapi => 2,
+      SpeechVoiceProvider.SystemSpeech => 1,
+      _ => 0
+    };
+  }
+
   private static string BuildVoiceDisplayName(
     string name,
     string? description,
@@ -433,7 +563,8 @@ internal sealed class SapiSpeechEngine : IDisposable
   private void ServiceCommands(
     object? voiceObject,
     object? voicesObject,
-    SpeechSynthesizer synthesizer,
+    SystemSpeechSynthesizer synthesizer,
+    WinRtSpeechSynthesizer? windowsMediaSynthesizer,
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends)
   {
     WaveOutPlayer? player = null;
@@ -454,6 +585,7 @@ internal sealed class SapiSpeechEngine : IDisposable
             voiceObject,
             voicesObject,
             synthesizer,
+            windowsMediaSynthesizer,
             voiceBackends,
             ref player,
             ref exiting);
@@ -490,7 +622,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     EngineCommand command,
     object? voiceObject,
     object? voicesObject,
-    SpeechSynthesizer synthesizer,
+    SystemSpeechSynthesizer synthesizer,
+    WinRtSpeechSynthesizer? windowsMediaSynthesizer,
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends,
     ref WaveOutPlayer? player,
     ref bool exiting)
@@ -504,6 +637,7 @@ internal sealed class SapiSpeechEngine : IDisposable
           voiceObject,
           voicesObject,
           synthesizer,
+          windowsMediaSynthesizer,
           voiceBackends);
         break;
 
@@ -514,6 +648,7 @@ internal sealed class SapiSpeechEngine : IDisposable
           voiceObject,
           voicesObject,
           synthesizer,
+          windowsMediaSynthesizer,
           voiceBackends);
         break;
 
@@ -555,7 +690,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     PlaybackRequest request,
     object? voiceObject,
     object? voicesObject,
-    SpeechSynthesizer synthesizer,
+    SystemSpeechSynthesizer synthesizer,
+    WinRtSpeechSynthesizer? windowsMediaSynthesizer,
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends)
   {
     if (!voiceBackends.TryGetValue(
@@ -576,7 +712,8 @@ internal sealed class SapiSpeechEngine : IDisposable
         backend,
         voiceObject,
         voicesObject,
-        synthesizer);
+        synthesizer,
+        windowsMediaSynthesizer);
       if (rendered is null)
       {
         continue;
@@ -687,7 +824,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     VoiceBackend backend,
     object? voiceObject,
     object? voicesObject,
-    SpeechSynthesizer synthesizer)
+    SystemSpeechSynthesizer synthesizer,
+    WinRtSpeechSynthesizer? windowsMediaSynthesizer)
   {
     return backend.Backend switch
     {
@@ -700,7 +838,14 @@ internal sealed class SapiSpeechEngine : IDisposable
       SpeechBackend.SystemSpeech => RenderSystemSpeech(
         markup,
         profile,
+        backend.ProviderVoiceId,
         synthesizer),
+      SpeechBackend.WindowsMedia => RenderWindowsMediaSpeech(
+        markup,
+        profile,
+        backend.ProviderVoiceId,
+        windowsMediaSynthesizer ?? throw new InvalidOperationException(
+          "The Windows.Media speech backend is unavailable.")),
       _ => throw new InvalidOperationException(
         "The selected voice has no speech backend.")
     };
@@ -716,7 +861,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     VoiceBackend backend,
     object? voiceObject,
     object? voicesObject,
-    SpeechSynthesizer synthesizer)
+    SystemSpeechSynthesizer synthesizer,
+    WinRtSpeechSynthesizer? windowsMediaSynthesizer)
   {
     try
     {
@@ -726,7 +872,8 @@ internal sealed class SapiSpeechEngine : IDisposable
         backend,
         voiceObject,
         voicesObject,
-        synthesizer);
+        synthesizer,
+        windowsMediaSynthesizer);
     }
     catch (Exception primaryException) when (
       (segment.SkipWhenRejected || segment.FallbackMarkup is not null) &&
@@ -760,7 +907,8 @@ internal sealed class SapiSpeechEngine : IDisposable
           backend,
           voiceObject,
           voicesObject,
-          synthesizer);
+          synthesizer,
+          windowsMediaSynthesizer);
         RaiseNotice(
           "The selected voice rejected this IPA example; " +
           "using its ordinary word pronunciation.");
@@ -782,7 +930,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// </summary>
   private static bool IsPreviewMarkupRejection(Exception exception)
   {
-    return exception is FormatException or COMException;
+    return exception is FormatException or COMException or ArgumentException;
   }
 
   /// <summary>
@@ -847,10 +995,11 @@ internal sealed class SapiSpeechEngine : IDisposable
   private static PcmWaveData RenderSystemSpeech(
     SpeechMarkup markup,
     SpeechProfileSettings profile,
-    SpeechSynthesizer synthesizer)
+    string providerVoiceId,
+    SystemSpeechSynthesizer synthesizer)
   {
     using var stream = new MemoryStream();
-    synthesizer.SelectVoice(profile.VoiceName);
+    synthesizer.SelectVoice(providerVoiceId);
     synthesizer.Rate = profile.Rate;
     synthesizer.Volume = profile.Volume;
     string ssml = BuildSsmlDocument(
@@ -866,6 +1015,54 @@ internal sealed class SapiSpeechEngine : IDisposable
       synthesizer.SetOutputToNull();
     }
     return PcmWaveData.Parse(stream.ToArray());
+  }
+
+  /// <summary>
+  /// Renders a modern Windows voice into its returned audio/WAVE stream.
+  /// </summary>
+  private static PcmWaveData RenderWindowsMediaSpeech(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
+    string providerVoiceId,
+    WinRtSpeechSynthesizer synthesizer)
+  {
+    VoiceInformation voice = WinRtSpeechSynthesizer.AllVoices
+      .FirstOrDefault(candidate => string.Equals(
+        candidate.Id,
+        providerVoiceId,
+        StringComparison.OrdinalIgnoreCase)) ??
+      throw new InvalidOperationException(
+        "The selected Windows.Media voice is unavailable.");
+
+    synthesizer.Voice = voice;
+    synthesizer.Options.SpeakingRate = Math.Pow(2.0, profile.Rate / 10.0);
+    synthesizer.Options.AudioPitch = 1.0;
+    synthesizer.Options.AudioVolume = profile.Volume / 100.0;
+    string ssml = BuildSsmlDocument(markup.SsmlContent, voice.Language);
+
+    using SpeechSynthesisStream stream = synthesizer
+      .SynthesizeSsmlToStreamAsync(ssml)
+      .AsTask()
+      .GetAwaiter()
+      .GetResult();
+    int byteCount = checked((int)stream.Size);
+    uint size = checked((uint)byteCount);
+    using IInputStream input = stream.GetInputStreamAt(0);
+    using var reader = new DataReader(input);
+    uint loaded = reader.LoadAsync(size)
+      .AsTask()
+      .GetAwaiter()
+      .GetResult();
+    if (loaded != size)
+    {
+      throw new InvalidDataException(
+        $"The Windows.Media speech stream ended after {loaded} of " +
+        $"{size} bytes.");
+    }
+
+    var bytes = new byte[byteCount];
+    reader.ReadBytes(bytes);
+    return PcmWaveData.Parse(bytes);
   }
 
   private static void ConfigureSapiVoice(
@@ -1121,24 +1318,50 @@ internal sealed class SapiSpeechEngine : IDisposable
     int Index,
     string DisplayName);
 
+  private readonly record struct WindowsMediaVoice(
+    string Id,
+    string DisplayName,
+    string Description,
+    string Language);
+
+  private sealed record VoiceRegistration(
+    InstalledSpeechVoice Voice,
+    VoiceBackend Backend);
+
   private readonly record struct VoiceBackend(
     SpeechBackend Backend,
-    int SapiIndex)
+    int SapiIndex,
+    string ProviderVoiceId)
   {
-    public static VoiceBackend ForSapi(int index)
+    public static VoiceBackend ForSapi(int index, string providerVoiceId)
     {
-      return new VoiceBackend(SpeechBackend.Sapi, index);
+      return new VoiceBackend(
+        SpeechBackend.Sapi,
+        index,
+        providerVoiceId);
     }
 
-    public static VoiceBackend ForSystemSpeech()
+    public static VoiceBackend ForSystemSpeech(string providerVoiceId)
     {
-      return new VoiceBackend(SpeechBackend.SystemSpeech, -1);
+      return new VoiceBackend(
+        SpeechBackend.SystemSpeech,
+        -1,
+        providerVoiceId);
+    }
+
+    public static VoiceBackend ForWindowsMedia(string providerVoiceId)
+    {
+      return new VoiceBackend(
+        SpeechBackend.WindowsMedia,
+        -1,
+        providerVoiceId);
     }
   }
 
   private enum SpeechBackend
   {
     Sapi,
-    SystemSpeech
+    SystemSpeech,
+    WindowsMedia
   }
 }

@@ -10,14 +10,18 @@ namespace AgentPanelSpeaker;
 /// </summary>
 /// <param name="RequestedSource">Source selected by the user.</param>
 /// <param name="ExplicitPath">Optional fixed JSONL path.</param>
-/// <param name="FollowLatest">Whether a newer session file can replace the current one.</param>
-/// <param name="SpeakExistingLastMessage">Speak the last existing eligible node at start.</param>
+/// <param name="FollowLatest">
+/// Whether a newer session file can replace the current one.
+/// </param>
+/// <param name="SpeakExistingLatestTurn">
+/// Speak the complete latest turn at start.
+/// </param>
 /// <param name="PollInterval">File polling interval.</param>
 internal sealed record MonitorSettings(
   AgentSource RequestedSource,
   string? ExplicitPath,
   bool FollowLatest,
-  bool SpeakExistingLastMessage,
+  bool SpeakExistingLatestTurn,
   TimeSpan PollInterval);
 
 /// <summary>
@@ -188,7 +192,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
       SpeechHistorySnapshot initialHistory = LoadExistingHistory(
         session,
-        settings.SpeakExistingLastMessage,
+        settings.SpeakExistingLatestTurn,
         ref nextNodeId,
         recentFingerprintQueue,
         recentFingerprintSet,
@@ -224,12 +228,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
             preview.Clear();
             SpeechHistorySnapshot switchedHistory = LoadExistingHistory(
               session,
-              speakLastExistingNode: false,
+              speakExistingLatestTurn: false,
               ref nextNodeId,
               recentFingerprintQueue,
               recentFingerprintSet,
-              preview,
-              playbackFromBeginning: true);
+              preview);
             HistoryLoaded?.Invoke(switchedHistory);
             MessagesChanged?.Invoke(preview.ToArray());
           }
@@ -481,12 +484,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   private SpeechHistorySnapshot LoadExistingHistory(
     LocatedSession session,
-    bool speakLastExistingNode,
+    bool speakExistingLatestTurn,
     ref long nextNodeId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
-    Queue<string> preview,
-    bool playbackFromBeginning = false)
+    Queue<string> preview)
   {
     var fragments = new List<SpeechFragment>();
     foreach (ExtractedNode node in ReadEligibleNodes(session))
@@ -502,11 +504,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
         emitLive: false);
     }
 
-    PlaybackStartMode startMode = playbackFromBeginning
-      ? PlaybackStartMode.Beginning
-      : speakLastExistingNode
-        ? PlaybackStartMode.LastEnabledNode
-        : PlaybackStartMode.LiveEnd;
+    PlaybackStartMode startMode = speakExistingLatestTurn
+      ? PlaybackStartMode.LatestTurn
+      : PlaybackStartMode.LiveEnd;
 
     DiagnosticLog.Write("monitor.history_loaded", new
     {
