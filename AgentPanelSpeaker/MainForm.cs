@@ -90,7 +90,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.6.12";
+    Text = "Agent Panel Speaker v25.6.13";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -391,7 +391,7 @@ internal sealed class MainForm : Form
     ContentCategory category,
     string label)
   {
-    var voice = new ComboBox
+    var voice = new VoiceComboBox
     {
       DropDownStyle = ComboBoxStyle.DropDownList,
       Dock = DockStyle.Fill
@@ -1810,6 +1810,54 @@ internal sealed class MainForm : Form
       : new Rectangle(
         Screen.PrimaryScreen?.WorkingArea.Location ?? Point.Empty,
         bounds.Size);
+  }
+
+  /// <summary>
+  /// Redraws owner-drawn voice fields after a table-layout resize settles.
+  /// </summary>
+  private sealed class VoiceComboBox : ComboBox
+  {
+    private bool _refreshQueued;
+
+    public VoiceComboBox()
+    {
+      SetStyle(ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnHandleCreated(EventArgs eventArgs)
+    {
+      base.OnHandleCreated(eventArgs);
+      DropDownWidth = Math.Max(1, Width);
+    }
+
+    protected override void OnResize(EventArgs eventArgs)
+    {
+      base.OnResize(eventArgs);
+      DropDownWidth = Math.Max(1, Width);
+      Invalidate();
+      QueueSettledRefresh();
+    }
+
+    private void QueueSettledRefresh()
+    {
+      if (_refreshQueued || !IsHandleCreated || IsDisposed)
+      {
+        return;
+      }
+
+      _refreshQueued = true;
+      BeginInvoke((Action)(() =>
+      {
+        _refreshQueued = false;
+        if (IsDisposed || !IsHandleCreated)
+        {
+          return;
+        }
+
+        DropDownWidth = Math.Max(1, Width);
+        Refresh();
+      }));
+    }
   }
 
   private sealed record VoiceRowControls(

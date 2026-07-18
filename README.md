@@ -1,4 +1,15 @@
-# Agent Panel Speaker v25.6.12
+# Agent Panel Speaker v25.6.13
+
+## v25.6.13
+
+- Codex `agent_message` records whose phase is `commentary`, `analysis`, or
+  `reasoning` now use the **Reasoning/thinking** voice profile.  Final-answer
+  and unphased agent messages continue to use **Assistant messages**.
+- Voice dropdowns now redraw after their table-layout width changes and update
+  their popup width to the resized field.  This removes the stale old arrow and
+  blank extension that appeared after resizing the main window.
+- The existing speaker-turn speech-bubble icons and `U`/`O` shortcuts are
+  unchanged.
 
 ## v25.6.12
 

@@ -71,7 +71,8 @@ Accepted `event_msg` payloads:
 | Payload type | Category |
 | --- | --- |
 | `user_message` | User |
-| `agent_message` | Assistant |
+| `agent_message` (`commentary`/`analysis`/`reasoning`) | Reasoning |
+| other `agent_message` phases, including `final_answer` | Assistant |
 | `agent_reasoning` | Reasoning |
 | `item_completed` with `item.type=Plan` | Assistant |
 

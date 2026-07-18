@@ -168,14 +168,15 @@ internal static partial class JsonlRecordExtractor
     }
 
     string payloadType = GetString(payload, "type");
+    string phase = GetString(payload, "phase");
     string? timestamp = GetOptionalString(root, "timestamp");
     ExtractedNode? node = payloadType switch
     {
       "agent_message" => CreateNode(
-        string.IsNullOrWhiteSpace(GetString(payload, "phase"))
+        string.IsNullOrWhiteSpace(phase)
           ? "codex.agent_message"
-          : $"codex.agent_message.{GetString(payload, "phase")}",
-        ContentCategory.Assistant,
+          : $"codex.agent_message.{phase}",
+        GetCodexAgentMessageCategory(phase),
         GetString(payload, "message"),
         timestamp),
       "agent_reasoning" => CreateNode(
@@ -202,6 +203,19 @@ internal static partial class JsonlRecordExtractor
         $"accepted codex {payloadType}",
         recordType,
         payloadType);
+  }
+
+  /// <summary>
+  /// Maps Codex agent-message phases onto the separate speech profiles.
+  /// </summary>
+  private static ContentCategory GetCodexAgentMessageCategory(string phase)
+  {
+    return phase.ToLowerInvariant() switch
+    {
+      "analysis" or "commentary" or "reasoning" =>
+        ContentCategory.Reasoning,
+      _ => ContentCategory.Assistant
+    };
   }
 
   /// <summary>
