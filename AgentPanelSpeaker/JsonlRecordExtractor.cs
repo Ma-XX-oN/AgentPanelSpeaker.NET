@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -5,7 +6,8 @@ namespace AgentPanelSpeaker;
 
 /// <summary>
 /// Extracts conversational narration from Claude and Codex JSONL records while
-/// excluding tool calls, tool results, commands, diffs, and status records.
+/// excluding non-user-facing tool calls, tool results, commands, diffs, and
+/// status records.
 /// </summary>
 internal static partial class JsonlRecordExtractor
 {
@@ -148,11 +150,17 @@ internal static partial class JsonlRecordExtractor
   }
 
   /// <summary>
-  /// Extracts Codex event messages while rejecting response-item tool data.
+  /// Extracts Codex conversational events and the user-facing input-request
+  /// function call while rejecting all other response-item tool data.
   /// </summary>
   private static ExtractionResult ExtractCodex(JsonElement root)
   {
     string recordType = GetString(root, "type");
+    if (recordType == "response_item")
+    {
+      return ExtractCodexResponseItem(root, recordType);
+    }
+
     if (recordType != "event_msg")
     {
       return Empty(
@@ -203,6 +211,240 @@ internal static partial class JsonlRecordExtractor
         $"accepted codex {payloadType}",
         recordType,
         payloadType);
+  }
+
+  /// <summary>
+  /// Extracts a Codex request_user_input function call as Assistant speech.
+  /// </summary>
+  private static ExtractionResult ExtractCodexResponseItem(
+    JsonElement root,
+    string recordType)
+  {
+    if (!root.TryGetProperty("payload", out JsonElement payload) ||
+        payload.ValueKind != JsonValueKind.Object)
+    {
+      return Empty(
+        "codex response item has no payload",
+        recordType,
+        string.Empty);
+    }
+
+    string payloadType = GetString(payload, "type");
+    string functionName = GetString(payload, "name");
+    if (!string.Equals(
+          payloadType,
+          "function_call",
+          StringComparison.Ordinal) ||
+        !string.Equals(
+          functionName,
+          "request_user_input",
+          StringComparison.Ordinal))
+    {
+      return Empty(
+        "codex response-item tool/function/diff record is skipped",
+        recordType,
+        payloadType);
+    }
+
+    if (!payload.TryGetProperty("arguments", out JsonElement arguments))
+    {
+      return Empty(
+        "codex request_user_input has no arguments",
+        recordType,
+        payloadType);
+    }
+
+    string? timestamp = GetOptionalString(root, "timestamp");
+    if (arguments.ValueKind == JsonValueKind.Object)
+    {
+      return ExtractCodexInputQuestions(
+        arguments,
+        timestamp,
+        recordType,
+        payloadType);
+    }
+
+    if (arguments.ValueKind != JsonValueKind.String ||
+        string.IsNullOrWhiteSpace(arguments.GetString()))
+    {
+      return Empty(
+        "codex request_user_input arguments are not JSON",
+        recordType,
+        payloadType);
+    }
+
+    try
+    {
+      using JsonDocument argumentDocument = JsonDocument.Parse(
+        arguments.GetString()!);
+      return ExtractCodexInputQuestions(
+        argumentDocument.RootElement,
+        timestamp,
+        recordType,
+        payloadType);
+    }
+    catch (JsonException)
+    {
+      return Empty(
+        "codex request_user_input arguments contain invalid JSON",
+        recordType,
+        payloadType);
+    }
+  }
+
+  /// <summary>
+  /// Converts every request_user_input question and its options into one
+  /// independently navigable Assistant node.
+  /// </summary>
+  private static ExtractionResult ExtractCodexInputQuestions(
+    JsonElement arguments,
+    string? timestamp,
+    string recordType,
+    string payloadType)
+  {
+    if (arguments.ValueKind != JsonValueKind.Object ||
+        !arguments.TryGetProperty("questions", out JsonElement questions) ||
+        questions.ValueKind != JsonValueKind.Array)
+    {
+      return Empty(
+        "codex request_user_input contains no questions",
+        recordType,
+        payloadType);
+    }
+
+    var nodes = new List<ExtractedNode>();
+    foreach (JsonElement question in questions.EnumerateArray())
+    {
+      if (question.ValueKind != JsonValueKind.Object)
+      {
+        continue;
+      }
+
+      string questionText = GetString(question, "question").Trim();
+      if (questionText.Length == 0)
+      {
+        questionText = GetString(question, "header").Trim();
+      }
+      if (questionText.Length == 0)
+      {
+        continue;
+      }
+
+      var spoken = new StringBuilder();
+      AppendSentence(spoken, questionText);
+      spoken.AppendLine();
+      AppendInputOptions(spoken, question);
+      AddNode(
+        nodes,
+        "codex.request_user_input",
+        ContentCategory.Assistant,
+        spoken.ToString().Trim(),
+        timestamp);
+    }
+
+    return nodes.Count == 0
+      ? Empty(
+        "codex request_user_input contains no speakable questions",
+        recordType,
+        payloadType)
+      : new ExtractionResult(
+        nodes,
+        $"accepted {nodes.Count} codex request_user_input question(s)",
+        recordType,
+        payloadType);
+  }
+
+  /// <summary>
+  /// Appends every labelled input option in source order.
+  /// </summary>
+  private static void AppendInputOptions(
+    StringBuilder spoken,
+    JsonElement question)
+  {
+    if (!question.TryGetProperty("options", out JsonElement options) ||
+        options.ValueKind != JsonValueKind.Array)
+    {
+      return;
+    }
+
+    int optionNumber = 1;
+    foreach (JsonElement option in options.EnumerateArray())
+    {
+      string label;
+      string description;
+      if (option.ValueKind == JsonValueKind.String)
+      {
+        label = option.GetString()?.Trim() ?? string.Empty;
+        description = string.Empty;
+      }
+      else if (option.ValueKind == JsonValueKind.Object)
+      {
+        label = FirstNonEmptyString(
+          option,
+          "label",
+          "title",
+          "text",
+          "value");
+        description = GetString(option, "description").Trim();
+      }
+      else
+      {
+        continue;
+      }
+
+      if (label.Length == 0 && description.Length == 0)
+      {
+        continue;
+      }
+
+      spoken.Append("- Option ");
+      spoken.Append(optionNumber++);
+      spoken.Append(": ");
+      if (label.Length != 0)
+      {
+        AppendSentence(spoken, label);
+      }
+      if (description.Length != 0)
+      {
+        if (label.Length != 0)
+        {
+          spoken.Append(' ');
+        }
+        AppendSentence(spoken, description);
+      }
+      spoken.AppendLine();
+    }
+  }
+
+  /// <summary>
+  /// Returns the first non-empty string among the named properties.
+  /// </summary>
+  private static string FirstNonEmptyString(
+    JsonElement element,
+    params string[] propertyNames)
+  {
+    foreach (string propertyName in propertyNames)
+    {
+      string value = GetString(element, propertyName).Trim();
+      if (value.Length != 0)
+      {
+        return value;
+      }
+    }
+    return string.Empty;
+  }
+
+  /// <summary>
+  /// Appends text and terminal punctuation suitable for sentence splitting.
+  /// </summary>
+  private static void AppendSentence(StringBuilder spoken, string text)
+  {
+    string trimmed = text.Trim();
+    spoken.Append(trimmed);
+    if (trimmed.Length != 0 && trimmed[^1] is not ('.' or '!' or '?' or ':'))
+    {
+      spoken.Append('.');
+    }
   }
 
   /// <summary>

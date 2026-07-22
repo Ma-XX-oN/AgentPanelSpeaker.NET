@@ -415,18 +415,151 @@ internal static partial class TextCleaner
   /// </summary>
   private static string CleanProseBlock(string text)
   {
-    string cleaned = ImageRegex().Replace(text, " ");
+    var inlineCode = new List<string>();
+    string cleaned = ProtectInlineCode(text, inlineCode);
+    cleaned = ImageRegex().Replace(cleaned, " ");
     cleaned = LinkRegex().Replace(cleaned, "$1");
     cleaned = RawUrlRegex().Replace(cleaned, " ");
-    cleaned = HtmlTagRegex().Replace(cleaned, " ");
-    cleaned = InlineCodeRegex().Replace(cleaned, "$1");
+    cleaned = RemoveHtmlMarkup(cleaned);
     cleaned = StripMarkdownPrefixes(cleaned);
     cleaned = MarkdownDecorationRegex().Replace(cleaned, "$1");
     cleaned = cleaned.Replace('\uFFFC', ' ');
     cleaned = WebUtility.HtmlDecode(cleaned);
     cleaned = WhitespaceRegex().Replace(cleaned, " ");
     cleaned = SpaceBeforePunctuationRegex().Replace(cleaned, "$1");
+    cleaned = RestoreInlineCode(cleaned, inlineCode);
     return cleaned.Trim();
+  }
+
+  /// <summary>
+  /// Replaces Markdown inline-code spans with opaque placeholders before any
+  /// prose cleanup can mistake code punctuation for links, HTML, or markup.
+  /// </summary>
+  private static string ProtectInlineCode(
+    string text,
+    ICollection<string> inlineCode)
+  {
+    var protectedText = new StringBuilder(text.Length);
+    int index = 0;
+    while (index < text.Length)
+    {
+      if (text[index] != '`')
+      {
+        protectedText.Append(text[index++]);
+        continue;
+      }
+
+      int openingStart = index;
+      while (index < text.Length && text[index] == '`')
+      {
+        ++index;
+      }
+
+      int markerLength = index - openingStart;
+      int closingStart = FindClosingBacktickRun(text, index, markerLength);
+      if (closingStart < 0)
+      {
+        protectedText.Append(text, openingStart, markerLength);
+        continue;
+      }
+
+      string code = text[index..closingStart].Replace("\r\n", "\n");
+      code = WhitespaceRegex().Replace(code, " ");
+      if (code.Length >= 2 &&
+          code[0] == ' ' &&
+          code[^1] == ' ' &&
+          code.Any(character => character != ' '))
+      {
+        code = code[1..^1];
+      }
+
+      int placeholderIndex = inlineCode.Count;
+      inlineCode.Add(WebUtility.HtmlDecode(code));
+      protectedText.Append(GetInlineCodePlaceholder(placeholderIndex));
+      index = closingStart + markerLength;
+    }
+
+    return protectedText.ToString();
+  }
+
+  /// <summary>
+  /// Finds the next backtick run whose length exactly matches the opener.
+  /// </summary>
+  private static int FindClosingBacktickRun(
+    string text,
+    int startIndex,
+    int markerLength)
+  {
+    int index = startIndex;
+    while (index < text.Length)
+    {
+      int runStart = text.IndexOf('`', index);
+      if (runStart < 0)
+      {
+        return -1;
+      }
+
+      int runEnd = runStart;
+      while (runEnd < text.Length && text[runEnd] == '`')
+      {
+        ++runEnd;
+      }
+
+      if (runEnd - runStart == markerLength)
+      {
+        return runStart;
+      }
+
+      index = runEnd;
+    }
+
+    return -1;
+  }
+
+  /// <summary>
+  /// Restores protected inline-code contents after all destructive cleanup.
+  /// </summary>
+  private static string RestoreInlineCode(
+    string text,
+    IReadOnlyList<string> inlineCode)
+  {
+    string restored = text;
+    for (int index = 0; index < inlineCode.Count; ++index)
+    {
+      restored = restored.Replace(
+        GetInlineCodePlaceholder(index),
+        inlineCode[index],
+        StringComparison.Ordinal);
+    }
+    return restored;
+  }
+
+  /// <summary>
+  /// Returns one placeholder that cannot be interpreted as Markdown or HTML.
+  /// </summary>
+  private static string GetInlineCodePlaceholder(int index)
+  {
+    return $"\uE000{index}\uE001";
+  }
+
+  /// <summary>
+  /// Removes balanced common HTML elements and genuine void elements without
+  /// treating arbitrary angle-bracket expressions as tags.
+  /// </summary>
+  private static string RemoveHtmlMarkup(string text)
+  {
+    string cleaned = HtmlCommentRegex().Replace(text, " ");
+    for (int pass = 0; pass < 8; ++pass)
+    {
+      string next = HtmlPairedTagRegex().Replace(cleaned, "$2");
+      if (string.Equals(next, cleaned, StringComparison.Ordinal))
+      {
+        break;
+      }
+      cleaned = next;
+    }
+
+    return HtmlVoidTagRegex().Replace(cleaned, " ");
   }
 
   /// <summary>
@@ -525,11 +658,28 @@ internal static partial class TextCleaner
   [GeneratedRegex(@"https?://\S+", RegexOptions.IgnoreCase)]
   private static partial Regex RawUrlRegex();
 
-  [GeneratedRegex(@"<[^>]+>")]
-  private static partial Regex HtmlTagRegex();
+  [GeneratedRegex(@"<!--[\s\S]*?-->")]
+  private static partial Regex HtmlCommentRegex();
 
-  [GeneratedRegex(@"`+([^`]+?)`+")]
-  private static partial Regex InlineCodeRegex();
+  [GeneratedRegex(
+    @"<\s*(a|abbr|address|article|aside|audio|b|blockquote|button|" +
+    @"canvas|caption|cite|code|data|datalist|dd|del|details|dfn|" +
+    @"dialog|div|dl|dt|em|fieldset|figcaption|figure|footer|form|" +
+    @"h[1-6]|header|hgroup|i|iframe|ins|kbd|label|legend|li|main|" +
+    @"map|mark|menu|meter|nav|noscript|object|ol|optgroup|option|" +
+    @"output|p|picture|pre|progress|q|rp|rt|ruby|s|samp|script|" +
+    @"search|section|select|slot|small|span|strong|style|sub|summary|" +
+    @"sup|table|tbody|td|template|textarea|tfoot|th|thead|time|" +
+    @"title|tr|u|ul|var|video)\b[^<>]*>([\s\S]*?)" +
+    @"<\s*/\s*\1\s*>",
+    RegexOptions.IgnoreCase)]
+  private static partial Regex HtmlPairedTagRegex();
+
+  [GeneratedRegex(
+    @"<\s*(?:area|base|br|col|embed|hr|img|input|link|meta|param|" +
+    @"source|track|wbr)\b[^<>]*/?\s*>",
+    RegexOptions.IgnoreCase)]
+  private static partial Regex HtmlVoidTagRegex();
 
   [GeneratedRegex(@"^\s{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$")]
   private static partial Regex AtxHeadingRegex();

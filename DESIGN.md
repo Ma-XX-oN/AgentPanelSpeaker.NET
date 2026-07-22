@@ -34,7 +34,7 @@ the JSONL.
 | --- | --- |
 | `SessionLocator` | Finds latest or explicitly selected Claude/Codex JSONL. |
 | `JsonlTailReader` | Reads only complete newly appended JSONL lines. |
-| `JsonlRecordExtractor` | Classifies user, assistant, reasoning, and Plans. |
+| `JsonlRecordExtractor` | Classifies conversation and input questions. |
 | `TextCleaner` | Cleans prose and preserves typed fenced-code lines. |
 | `SentenceSegmenter` | Splits cleaned prose into navigable sentences. |
 | `JsonlSessionMonitor` | Builds history and emits deduplicated fragments. |
@@ -76,9 +76,11 @@ Accepted `event_msg` payloads:
 | `agent_reasoning` | Reasoning |
 | `item_completed` with `item.type=Plan` | Assistant |
 
-Other `item_completed` item types and all `response_item` records are
-rejected.  This excludes command calls, command output, tool calls, patches,
-diffs, and file-edit details.
+Other `item_completed` item types are rejected.  A `response_item`
+`function_call` is accepted only when its name is `request_user_input`; each
+question and its ordered options become Assistant speech.  All other
+`response_item` records remain excluded, including command calls, command
+output, tool calls, patches, diffs, and file-edit details.
 
 ### Claude
 
@@ -110,6 +112,13 @@ one navigation entry, and punctuation inside that line is ignored.  An
 explicit `md` fence is parsed recursively with normal Markdown block and
 sentence segmentation while retaining fenced-block playback policy.  Node
 navigation groups fragments carrying the same `NodeId`.
+
+Inline Markdown code is protected before link, HTML, and decoration cleanup,
+then restored as ordinary Prose.  It is therefore spoken under the containing
+content profile and is never controlled by the fenced-code allow-list.  HTML
+cleanup removes balanced common elements, comments, and void elements rather
+than treating every angle-bracket range as a tag; comparisons such as `a < b`
+and C++ template/cast text remain intact.
 
 ## Playback policy
 

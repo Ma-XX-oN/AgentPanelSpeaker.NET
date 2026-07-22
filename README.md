@@ -1,4 +1,19 @@
-# Agent Panel Speaker v25.6.14
+# Agent Panel Speaker v25.6.26
+
+## v25.6.26
+
+- Inline Markdown code is protected before prose cleanup and restored as
+  ordinary speakable text.  C++ templates, casts, and comparisons such as
+  `PacketRingForChannel<`, `static_cast<void*>`, and `a < b` are no longer
+  mistaken for HTML and deleted.
+- General HTML cleanup now removes only balanced common HTML elements,
+  comments, and genuine void elements.  It no longer applies the destructive
+  catch-all `<[^>]+>` expression to arbitrary prose.
+- Codex `request_user_input` function calls are the sole user-facing exception
+  to tool-call exclusion.  Each question is spoken with the Assistant profile,
+  followed by its numbered options and option descriptions in source order.
+  Every other function call, tool call, result, command, diff, and status record
+  remains excluded.
 
 ## v25.6.14
 
@@ -137,10 +152,10 @@
 - The upper and lower tie bars use **church** as their example.
 
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
-speaks user, assistant, reasoning, and completed Codex Plan text with
-separate voice profiles.  Plans use the Assistant profile.  Tool calls, tool
-results, command output, patches, diffs, and unrelated status records are
-excluded.
+speaks user, assistant, reasoning, completed Codex Plan text, and Codex
+user-input questions with separate voice profiles.  Plans and interactive
+questions use the Assistant profile.  Other tool calls, tool results, command
+output, patches, diffs, and unrelated status records are excluded.
 
 See [DESIGN.md](DESIGN.md) for the internal architecture and invariants.
 
