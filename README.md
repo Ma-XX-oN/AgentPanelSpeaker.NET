@@ -1,4 +1,12 @@
-# Agent Panel Speaker v25.6.13
+# Agent Panel Speaker v25.6.14
+
+## v25.6.14
+
+- **Pronunciations...** remains available while monitoring, paused, or speaking,
+  so spelling and pronunciation rules can be reviewed and edited at any time.
+- Controls that would start preview audio remain unavailable while another
+  utterance is active.  **Pronounce** is disabled, pending IPA hover playback is
+  cancelled, and IPA keys remain usable for symbol insertion.
 
 ## v25.6.13
 
@@ -76,7 +84,8 @@
 - A structural block boundary adds one 250 ms pause to the final sentence in
   that block.  Sentence punctuation at the same location reuses the same unit;
   it does not create an empty extra unit.
-- The Pronunciations button is disabled while monitoring, speaking, or paused.
+- The original playback lockout for **Pronunciations...** was removed in
+  v25.6.14; only preview-audio actions are now disabled during speech.
 
 ## v25.6.6
 

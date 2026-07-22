@@ -645,6 +645,10 @@ internal sealed class PronunciationDialog : Form
     _activeSymbol = definition;
     ShowIpaSymbolInformation(definition);
     _hoverTimer.Stop();
+    if (_speech.IsSpeaking)
+    {
+      return;
+    }
     if (immediateWhenShiftHeld &&
         (Control.ModifierKeys & Keys.Shift) == Keys.Shift)
     {
@@ -1162,7 +1166,7 @@ internal sealed class PronunciationDialog : Form
   }
 
   /// <summary>
-  /// Refreshes the Pronounce button when speech starts or stops.
+  /// Refreshes controls that can start preview audio when speech changes.
   /// </summary>
   private void SpeechSpeakingStateChanged(bool speaking)
   {
@@ -1175,12 +1179,24 @@ internal sealed class PronunciationDialog : Form
     {
       try
       {
-        BeginInvoke((Action)UpdatePronounceButtonState);
+        BeginInvoke((Action)UpdateAudioPreviewState);
       }
       catch (InvalidOperationException)
       {
       }
       return;
+    }
+    UpdateAudioPreviewState();
+  }
+
+  /// <summary>
+  /// Stops pending hover audio and refreshes preview-only controls.
+  /// </summary>
+  private void UpdateAudioPreviewState()
+  {
+    if (_speech.IsSpeaking)
+    {
+      _hoverTimer.Stop();
     }
     UpdatePronounceButtonState();
   }

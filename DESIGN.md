@@ -273,8 +273,10 @@ independent sound plays only its example.  Real-word examples retain ordinary
 text fallback.  Carrier examples deliberately have no text fallback, so a
 provider rejection skips the carrier instead of speaking an unrelated fake
 word.  Only `FormatException` and `COMException` select this recovery path;
-unrelated synthesis and playback failures remain fatal and visible.  Preview is
-ignored while any ordinary or paused speech is active.
+unrelated synthesis and playback failures remain fatal and visible.  The rule
+editor remains available while ordinary or paused speech is active, but its
+Pronounce action and pending IPA hover audio are disabled until speech is idle.
+IPA symbol insertion remains available because it does not require audio.
 
 ## Bluetooth wake sequence
 

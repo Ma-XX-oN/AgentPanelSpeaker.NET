@@ -90,7 +90,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.6.13";
+    Text = "Agent Panel Speaker v25.6.14";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -955,11 +955,6 @@ internal sealed class MainForm : Form
     object? sender,
     EventArgs eventArgs)
   {
-    if (_monitor.IsRunning || _speech.IsSpeaking)
-    {
-      return;
-    }
-
     SaveControlsToSettings();
     UserSettings current = _settingsStore.Current;
     using var dialog = new PronunciationDialog(
@@ -1379,7 +1374,7 @@ internal sealed class MainForm : Form
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
     _playStopButton.Enabled = !_playStopTransitioning;
-    _pronunciationsButton.Enabled = !playbackActive;
+    _pronunciationsButton.Enabled = true;
     _pauseButton.Enabled = _speech.IsSpeaking;
     UpdatePauseButton();
     UpdatePlayStopButton(playbackActive);
