@@ -25,7 +25,8 @@ internal sealed class MainForm : Form
   private readonly CheckBox _speakExistingCheckBox = new();
   private readonly GlyphButton _playStopButton = new();
   private readonly GlyphButton _pauseButton = new();
-  private readonly Button _cancelSpeechButton = new();
+  private readonly GlyphButton _cancelSpeechButton = new();
+  private readonly GlyphButton _processingTimeButton = new();
   private readonly GlyphButton _rewindSpeakerButton = new();
   private readonly GlyphButton _rewindSentenceButton = new();
   private readonly GlyphButton _forwardSentenceButton = new();
@@ -57,6 +58,7 @@ internal sealed class MainForm : Form
   private bool _closing;
   private bool _playStopTransitioning;
   private bool _voiceSettingPreviewActive;
+  private string? _pendingPlayStopTrigger;
   private int _monitorSession;
 
   /// <summary>
@@ -90,7 +92,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v25.6.26";
+    Text = "Agent Panel Speaker v26";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -108,8 +110,7 @@ internal sealed class MainForm : Form
     ConfigureReadOnlyTextBox(_sessionPathTextBox);
     ConfigureButton(_detectLatestButton, "Detect latest");
     ConfigureButton(_browseButton, "Browse JSONL");
-    ConfigureButton(_cancelSpeechButton, "Silence");
-    ConfigureSpeakerTransportButton(
+    ConfigureCustomTransportButton(
       _rewindSpeakerButton,
       GlyphButtonDrawing.PreviousSpeakerTurn,
       "Previous speaker turn (U or Alt+U)");
@@ -137,13 +138,18 @@ internal sealed class MainForm : Form
       _forwardNodeButton,
       "⏭",
       "Next JSONL node (; or Alt+;)");
-    ConfigureSpeakerTransportButton(
+    ConfigureCustomTransportButton(
       _forwardSpeakerButton,
       GlyphButtonDrawing.NextSpeakerTurn,
       "Next speaker turn (O or Alt+O)");
-    _toolTip.SetToolTip(
+    ConfigureCustomTransportButton(
       _cancelSpeechButton,
-      "Silence speech; continue monitoring (' or Alt+')");
+      GlyphButtonDrawing.SilenceNow,
+      "Silence current speech; continue monitoring (' or Alt+')");
+    ConfigureCustomTransportButton(
+      _processingTimeButton,
+      GlyphButtonDrawing.ProcessingClock,
+      "Speak AI processing time (T or Alt+T)");
     ConfigureButton(_saveSettingsButton, "Save settings");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
@@ -231,7 +237,8 @@ internal sealed class MainForm : Form
     {
       _rewindSpeakerButton, _rewindNodeButton, _rewindSentenceButton,
       _pauseButton, _playStopButton, _forwardSentenceButton,
-      _forwardNodeButton, _forwardSpeakerButton, _cancelSpeechButton
+      _forwardNodeButton, _forwardSpeakerButton, _cancelSpeechButton,
+      _processingTimeButton
     });
     var utility = new FlowLayoutPanel
     {
@@ -306,6 +313,7 @@ internal sealed class MainForm : Form
     _pauseButton.Click += PauseButtonClicked;
     _playStopButton.Click += PlayStopButtonClicked;
     _cancelSpeechButton.Click += CancelSpeechButtonClicked;
+    _processingTimeButton.Click += ProcessingTimeButtonClicked;
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
       "Previous speaker turn");
@@ -353,6 +361,8 @@ internal sealed class MainForm : Form
       UpdateAllVoiceRowStates();
       UpdateControlState();
     });
+    _speech.ProcessingTimeAnnouncementStateChanged += _ => PostToUi(
+      UpdateControlState);
   }
 
   /// <summary>
@@ -847,6 +857,14 @@ internal sealed class MainForm : Form
   /// </summary>
   private async void PlayStopButtonClicked(object? sender, EventArgs eventArgs)
   {
+    string trigger = _pendingPlayStopTrigger ?? "button";
+    _pendingPlayStopTrigger = null;
+    DiagnosticLog.Write("transport.play_stop_requested", new
+    {
+      trigger,
+      monitoring = _monitor.IsRunning,
+      speaking = _speech.IsSpeaking
+    });
     if (_playStopTransitioning)
     {
       return;
@@ -860,7 +878,7 @@ internal sealed class MainForm : Form
     }
     else if (_monitor.IsRunning || _speech.IsSpeaking)
     {
-      StopMonitoringAndSpeech();
+      StopMonitoringAndSpeech(trigger);
       return;
     }
 
@@ -914,11 +932,11 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Stops monitoring and speech immediately.
   /// </summary>
-  private void StopMonitoringAndSpeech()
+  private void StopMonitoringAndSpeech(string trigger)
   {
     Interlocked.Increment(ref _monitorSession);
     _speech.CancelAll();
-    _monitor.Stop();
+    _monitor.Stop(trigger);
     AppendLog("Monitoring and speech stopped.");
     UpdateControlState();
   }
@@ -928,8 +946,30 @@ internal sealed class MainForm : Form
   /// </summary>
   private void CancelSpeechButtonClicked(object? sender, EventArgs eventArgs)
   {
+    DiagnosticLog.Write("speech.silence_requested");
     _speech.CancelAll();
     AppendLog("Speech silenced; monitoring continues.");
+    UpdateControlState();
+  }
+
+  /// <summary>
+  /// Queues the selected AI turn's processing duration in the User voice.
+  /// </summary>
+  private void ProcessingTimeButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    if (_speech.TryQueueProcessingTimeAnnouncement(
+          out string announcement,
+          out string unavailableReason))
+    {
+      AppendLog($"Processing-time announcement queued: {announcement}");
+    }
+    else
+    {
+      AppendLog(
+        $"Processing-time announcement unavailable: {unavailableReason}.");
+    }
     UpdateControlState();
   }
 
@@ -1316,7 +1356,7 @@ internal sealed class MainForm : Form
     {
       return base.ProcessCmdKey(ref message, keyData);
     }
-    if (hasNoModifiers && _fenceTypesTextBox.ContainsFocus)
+    if (hasNoModifiers && IsEditableControlFocused())
     {
       return base.ProcessCmdKey(ref message, keyData);
     }
@@ -1330,6 +1370,7 @@ internal sealed class MainForm : Form
       Keys.K => _playStopButton,
       Keys.L => _forwardSentenceButton,
       Keys.O => _forwardSpeakerButton,
+      Keys.T => _processingTimeButton,
       Keys.OemSemicolon => _forwardNodeButton,
       Keys.OemQuotes => _cancelSpeechButton,
       _ => null
@@ -1339,9 +1380,53 @@ internal sealed class MainForm : Form
       return base.ProcessCmdKey(ref message, keyData);
     }
 
+    string shortcut = hasAltOnly
+      ? $"Alt+{keyCode}"
+      : keyCode.ToString();
+    if (ReferenceEquals(button, _playStopButton))
+    {
+      _pendingPlayStopTrigger = $"keyboard:{shortcut}";
+    }
+    DiagnosticLog.Write("transport.shortcut_requested", new
+    {
+      shortcut,
+      action = button.AccessibleName
+    });
     button.Focus();
     button.PerformClick();
     return true;
+  }
+
+  /// <summary>
+  /// Returns whether keyboard input currently belongs to an editable control.
+  /// </summary>
+  private bool IsEditableControlFocused()
+  {
+    Control? focused = this;
+    while (focused is ContainerControl container &&
+           container.ActiveControl is Control active)
+    {
+      focused = active;
+    }
+
+    for (Control? control = focused; control is not null;
+         control = control.Parent)
+    {
+      if (control is TextBoxBase textBox && !textBox.ReadOnly)
+      {
+        return true;
+      }
+      if (control is UpDownBase)
+      {
+        return true;
+      }
+      if (control is ComboBox comboBox &&
+          comboBox.DropDownStyle != ComboBoxStyle.DropDownList)
+      {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// <summary>
@@ -1379,6 +1464,9 @@ internal sealed class MainForm : Form
     UpdatePauseButton();
     UpdatePlayStopButton(playbackActive);
     _cancelSpeechButton.Enabled = playbackActive || hasHistory;
+    _processingTimeButton.Enabled =
+      _speech.CanRequestProcessingTimeAnnouncement &&
+      !_speech.IsProcessingTimeAnnouncementPending;
     _rewindSpeakerButton.Enabled = hasHistory;
     _rewindSentenceButton.Enabled = hasHistory;
     _forwardSentenceButton.Enabled = hasHistory;
@@ -1465,7 +1553,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Keeps every glyph transport button equal to the standard Silence button.
+  /// Keeps every glyph transport button at one standard height.
   /// </summary>
   private void SynchronizeTransportButtonHeights()
   {
@@ -1479,7 +1567,9 @@ internal sealed class MainForm : Form
       _playStopButton,
       _forwardSentenceButton,
       _forwardNodeButton,
-      _forwardSpeakerButton
+      _forwardSpeakerButton,
+      _cancelSpeechButton,
+      _processingTimeButton
     };
     foreach (GlyphButton button in buttons)
     {
@@ -1661,9 +1751,9 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Configures a custom speaker-turn navigation button.
+  /// Configures a custom vector transport button.
   /// </summary>
-  private void ConfigureSpeakerTransportButton(
+  private void ConfigureCustomTransportButton(
     GlyphButton button,
     GlyphButtonDrawing drawing,
     string accessibleName)

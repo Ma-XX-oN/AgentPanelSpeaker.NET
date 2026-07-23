@@ -123,7 +123,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// <summary>
   /// Stops monitoring and waits briefly for the worker thread.
   /// </summary>
-  public void Stop()
+  public void Stop(string trigger = "unspecified")
   {
     Thread? thread;
     CancellationTokenSource? cancellation;
@@ -138,7 +138,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       return;
     }
 
-    DiagnosticLog.Write("monitor.stop_requested");
+    DiagnosticLog.Write("monitor.stop_requested", new { trigger });
     cancellation.Cancel();
     bool joined = thread.Join(TimeSpan.FromSeconds(2));
     DiagnosticLog.Write("monitor.stop_join", new { joined });
@@ -166,7 +166,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       return;
     }
 
-    Stop();
+    Stop("dispose");
     _disposed = true;
   }
 
@@ -403,6 +403,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       recentFingerprintQueue,
       recentFingerprintSet);
     long nodeId = nextNodeId++;
+    DateTimeOffset? nodeTimestampUtc = ParseTimestampUtc(node.Timestamp);
     string previewText = string.Join(" ", parts.Select(part => part.Text));
     AddPreview(
       preview,
@@ -427,7 +428,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
             part.FenceBlockId,
             part.FenceLineIndex,
             part.FenceLineCount,
-            PauseAfter: sentence.PauseAfter)));
+            PauseAfter: sentence.PauseAfter,
+            NodeTimestampUtc: nodeTimestampUtc)));
       }
       else
       {
@@ -440,7 +442,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceBlockId,
           part.FenceLineIndex,
           part.FenceLineCount,
-          PauseAfter: part.PauseAfter));
+          PauseAfter: part.PauseAfter,
+          NodeTimestampUtc: nodeTimestampUtc));
       }
     }
     DiagnosticLog.Write("jsonl.node_accepted", new
@@ -557,13 +560,23 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   private static bool IsAtOrAfter(string? timestamp, DateTime minimumUtc)
   {
+    DateTimeOffset? parsed = ParseTimestampUtc(timestamp);
+    return parsed is not null && parsed.Value.UtcDateTime >= minimumUtc;
+  }
+
+  /// <summary>
+  /// Parses one source timestamp and normalizes it to UTC.
+  /// </summary>
+  private static DateTimeOffset? ParseTimestampUtc(string? timestamp)
+  {
     return timestamp is not null &&
       DateTimeOffset.TryParse(
         timestamp,
         CultureInfo.InvariantCulture,
         DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-        out DateTimeOffset parsed) &&
-      parsed.UtcDateTime >= minimumUtc;
+        out DateTimeOffset parsed)
+          ? parsed.ToUniversalTime()
+          : null;
   }
 
   /// <summary>

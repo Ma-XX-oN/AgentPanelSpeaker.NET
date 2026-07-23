@@ -14,6 +14,9 @@ namespace AgentPanelSpeaker;
 /// <param name="PauseAfter">
 /// Whether a structural Markdown boundary follows this fragment.
 /// </param>
+/// <param name="NodeTimestampUtc">
+/// Source-node timestamp normalized to UTC when available.
+/// </param>
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -23,7 +26,8 @@ internal sealed record SpeechFragment(
   int FenceBlockId = -1,
   int FenceLineIndex = -1,
   int FenceLineCount = 0,
-  bool PauseAfter = false);
+  bool PauseAfter = false,
+  DateTimeOffset? NodeTimestampUtc = null);
 
 /// <summary>
 /// Identifies how existing history should begin playback.

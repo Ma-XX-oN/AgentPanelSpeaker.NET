@@ -9,7 +9,9 @@ internal enum GlyphButtonDrawing
 {
   Text,
   PreviousSpeakerTurn,
-  NextSpeakerTurn
+  NextSpeakerTurn,
+  SilenceNow,
+  ProcessingClock
 }
 
 /// <summary>
@@ -77,7 +79,19 @@ internal sealed class GlyphButton : Button
     Color glyphColor = Enabled ? ForeColor : SystemColors.GrayText;
     if (_drawing != GlyphButtonDrawing.Text)
     {
-      DrawSpeakerTurnIcon(eventArgs.Graphics, glyphColor);
+      switch (_drawing)
+      {
+        case GlyphButtonDrawing.PreviousSpeakerTurn:
+        case GlyphButtonDrawing.NextSpeakerTurn:
+          DrawSpeakerTurnIcon(eventArgs.Graphics, glyphColor);
+          break;
+        case GlyphButtonDrawing.SilenceNow:
+          DrawSilenceNowIcon(eventArgs.Graphics, glyphColor);
+          break;
+        case GlyphButtonDrawing.ProcessingClock:
+          DrawProcessingClockIcon(eventArgs.Graphics, glyphColor);
+          break;
+      }
       return;
     }
 
@@ -200,6 +214,171 @@ internal sealed class GlyphButton : Button
       graphics.SmoothingMode = oldSmoothingMode;
       graphics.PixelOffsetMode = oldPixelOffsetMode;
     }
+  }
+
+  /// <summary>
+  /// Draws a speech bubble with an upright finger for a momentary shush action.
+  /// </summary>
+  private void DrawSilenceNowIcon(Graphics graphics, Color glyphColor)
+  {
+    if (ClientSize.Width <= 0 || ClientSize.Height <= 0)
+    {
+      return;
+    }
+
+    const float designWidth = 29.0f;
+    const float designHeight = 22.0f;
+    float scale = Math.Min(
+      ClientSize.Width / (designWidth + 8.0f),
+      ClientSize.Height / (designHeight + 6.0f));
+    scale = Math.Max(0.5f, scale);
+    float originX = (ClientSize.Width - designWidth * scale) / 2.0f;
+    float originY = (ClientSize.Height - designHeight * scale) / 2.0f;
+
+    SmoothingMode oldSmoothingMode = graphics.SmoothingMode;
+    PixelOffsetMode oldPixelOffsetMode = graphics.PixelOffsetMode;
+    try
+    {
+      graphics.SmoothingMode = SmoothingMode.AntiAlias;
+      graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+      using var pen = new Pen(glyphColor, 1.7f * scale)
+      {
+        StartCap = LineCap.Round,
+        EndCap = LineCap.Round,
+        LineJoin = LineJoin.Round
+      };
+      using var brush = new SolidBrush(glyphColor);
+      using GraphicsPath bubble = CreateSpeechBubblePath(
+        originX + 1.0f * scale,
+        originY + 1.0f * scale,
+        21.0f * scale,
+        13.0f * scale,
+        2.5f * scale);
+      graphics.DrawPath(pen, bubble);
+      for (int index = 0; index < 3; ++index)
+      {
+        float dotX = originX + (6.0f + index * 4.3f) * scale;
+        float dotY = originY + 6.2f * scale;
+        graphics.FillEllipse(
+          brush,
+          dotX,
+          dotY,
+          1.7f * scale,
+          1.7f * scale);
+      }
+
+      using GraphicsPath finger = CreateRoundedRectanglePath(
+        originX + 19.0f * scale,
+        originY + 7.0f * scale,
+        6.0f * scale,
+        14.0f * scale,
+        3.0f * scale);
+      using var backgroundBrush = new SolidBrush(BackColor);
+      graphics.FillPath(backgroundBrush, finger);
+      graphics.DrawPath(pen, finger);
+      graphics.DrawLine(
+        pen,
+        originX + 19.0f * scale,
+        originY + 17.0f * scale,
+        originX + 15.5f * scale,
+        originY + 18.5f * scale);
+    }
+    finally
+    {
+      graphics.SmoothingMode = oldSmoothingMode;
+      graphics.PixelOffsetMode = oldPixelOffsetMode;
+    }
+  }
+
+  /// <summary>
+  /// Draws a clock used to request the selected turn's processing duration.
+  /// </summary>
+  private void DrawProcessingClockIcon(Graphics graphics, Color glyphColor)
+  {
+    if (ClientSize.Width <= 0 || ClientSize.Height <= 0)
+    {
+      return;
+    }
+
+    float scale = Math.Min(ClientSize.Width, ClientSize.Height) / 30.0f;
+    scale = Math.Max(0.5f, scale);
+    float radius = 9.0f * scale;
+    float centreX = ClientSize.Width / 2.0f;
+    float centreY = ClientSize.Height / 2.0f;
+    SmoothingMode oldSmoothingMode = graphics.SmoothingMode;
+    PixelOffsetMode oldPixelOffsetMode = graphics.PixelOffsetMode;
+    try
+    {
+      graphics.SmoothingMode = SmoothingMode.AntiAlias;
+      graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+      using var pen = new Pen(glyphColor, 1.8f * scale)
+      {
+        StartCap = LineCap.Round,
+        EndCap = LineCap.Round,
+        LineJoin = LineJoin.Round
+      };
+      graphics.DrawEllipse(
+        pen,
+        centreX - radius,
+        centreY - radius,
+        radius * 2.0f,
+        radius * 2.0f);
+      graphics.DrawLine(
+        pen,
+        centreX,
+        centreY,
+        centreX,
+        centreY - 5.2f * scale);
+      graphics.DrawLine(
+        pen,
+        centreX,
+        centreY,
+        centreX + 4.5f * scale,
+        centreY + 2.8f * scale);
+    }
+    finally
+    {
+      graphics.SmoothingMode = oldSmoothingMode;
+      graphics.PixelOffsetMode = oldPixelOffsetMode;
+    }
+  }
+
+  /// <summary>
+  /// Creates a rounded rectangle path.
+  /// </summary>
+  private static GraphicsPath CreateRoundedRectanglePath(
+    float x,
+    float y,
+    float width,
+    float height,
+    float radius)
+  {
+    float diameter = radius * 2.0f;
+    var path = new GraphicsPath();
+    path.AddArc(x, y, diameter, diameter, 180.0f, 90.0f);
+    path.AddArc(
+      x + width - diameter,
+      y,
+      diameter,
+      diameter,
+      270.0f,
+      90.0f);
+    path.AddArc(
+      x + width - diameter,
+      y + height - diameter,
+      diameter,
+      diameter,
+      0.0f,
+      90.0f);
+    path.AddArc(
+      x,
+      y + height - diameter,
+      diameter,
+      diameter,
+      90.0f,
+      90.0f);
+    path.CloseFigure();
+    return path;
   }
 
   private static void DrawArrow(
