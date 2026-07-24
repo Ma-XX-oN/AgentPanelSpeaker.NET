@@ -1,5 +1,18 @@
-# Agent Panel Speaker v28
+# Agent Panel Speaker v29
 
+
+## v29
+
+- After each Codex `request_user_input` question and its ordered options, the
+  selected response is spoken with the **User messages** voice.  A labelled
+  choice is announced as `Selected option N: Label`; free-form input is
+  announced as `Selected: text`.
+- Input selections remain part of the existing AI turn.  They use the User
+  voice for narration but do not become new User prompts for processing-time,
+  latest-turn, or turn-boundary calculations.
+- Selection output is accepted only when its call ID matches a retained
+  `request_user_input` call.  Unrelated function outputs remain excluded, and
+  answers to secret questions are never narrated.
 
 ## v28
 
@@ -32,8 +45,9 @@
 - Codex `request_user_input` function calls are the sole user-facing exception
   to tool-call exclusion.  Each question is spoken with the Assistant profile,
   followed by its numbered options and option descriptions in source order.
-  Every other function call, tool call, result, command, diff, and status record
-  remains excluded.
+  Starting in v29, the matched selection is then spoken with the User profile.
+  Every unrelated function call, tool call, result, command, diff, and status
+  record remains excluded.
 
 ## v25.6.14
 
@@ -174,8 +188,9 @@
 Agent Panel Speaker reads Claude and Codex conversation JSONL directly and
 speaks user, assistant, reasoning, completed Codex Plan text, and Codex
 user-input questions with separate voice profiles.  Plans and interactive
-questions use the Assistant profile.  Other tool calls, tool results, command
-output, patches, diffs, and unrelated status records are excluded.
+questions use the Assistant profile; the selected input response uses the User
+profile.  Other tool calls, tool results, command output, patches, diffs, and
+unrelated status records are excluded.
 
 See [DESIGN.md](DESIGN.md) for the internal architecture and invariants.
 

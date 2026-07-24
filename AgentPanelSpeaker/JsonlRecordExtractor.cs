@@ -131,7 +131,8 @@ internal static partial class JsonlRecordExtractor
             "claude.user_text",
             ContentCategory.User,
             StripSystemText(GetString(block, "text")),
-            timestamp);
+            timestamp,
+            startsUserTurn: true);
         }
       }
     }
@@ -206,7 +207,8 @@ internal static partial class JsonlRecordExtractor
         "codex.user_message",
         ContentCategory.User,
         StripCodexUserPreamble(GetString(payload, "message")),
-        timestamp),
+        timestamp,
+        startsUserTurn: true),
       "item_completed" => CreateCodexCompletedItemNode(payload, timestamp),
       _ => null
     };
@@ -224,7 +226,7 @@ internal static partial class JsonlRecordExtractor
   }
 
   /// <summary>
-  /// Extracts a Codex request_user_input function call as Assistant speech.
+  /// Extracts the user-facing portions of Codex response-item records.
   /// </summary>
   private static ExtractionResult ExtractCodexResponseItem(
     JsonElement root,
@@ -240,6 +242,14 @@ internal static partial class JsonlRecordExtractor
     }
 
     string payloadType = GetString(payload, "type");
+    if (string.Equals(
+          payloadType,
+          "function_call_output",
+          StringComparison.Ordinal))
+    {
+      return ExtractCodexInputResponse(root, payload, recordType, payloadType);
+    }
+
     string functionName = GetString(payload, "name");
     if (!string.Equals(
           payloadType,
@@ -264,11 +274,13 @@ internal static partial class JsonlRecordExtractor
         payloadType);
     }
 
+    string callId = FirstNonEmptyString(payload, "call_id", "id");
     string? timestamp = GetOptionalString(root, "timestamp");
     if (arguments.ValueKind == JsonValueKind.Object)
     {
       return ExtractCodexInputQuestions(
         arguments,
+        callId,
         timestamp,
         recordType,
         payloadType);
@@ -289,6 +301,7 @@ internal static partial class JsonlRecordExtractor
         arguments.GetString()!);
       return ExtractCodexInputQuestions(
         argumentDocument.RootElement,
+        callId,
         timestamp,
         recordType,
         payloadType);
@@ -304,10 +317,11 @@ internal static partial class JsonlRecordExtractor
 
   /// <summary>
   /// Converts every request_user_input question and its options into one
-  /// independently navigable Assistant node.
+  /// independently navigable Assistant node and retains its answer metadata.
   /// </summary>
   private static ExtractionResult ExtractCodexInputQuestions(
     JsonElement arguments,
+    string callId,
     string? timestamp,
     string recordType,
     string payloadType)
@@ -323,6 +337,7 @@ internal static partial class JsonlRecordExtractor
     }
 
     var nodes = new List<ExtractedNode>();
+    var inputQuestions = new List<CodexInputQuestion>();
     foreach (JsonElement question in questions.EnumerateArray())
     {
       if (question.ValueKind != JsonValueKind.Object)
@@ -340,44 +355,62 @@ internal static partial class JsonlRecordExtractor
         continue;
       }
 
+      IReadOnlyList<CodexInputOption> options = ReadInputOptions(question);
       var spoken = new StringBuilder();
       AppendSentence(spoken, questionText);
       spoken.AppendLine();
-      AppendInputOptions(spoken, question);
+      AppendInputOptions(spoken, options);
       AddNode(
         nodes,
         "codex.request_user_input",
         ContentCategory.Assistant,
         spoken.ToString().Trim(),
         timestamp);
+
+      string questionId = GetString(question, "id").Trim();
+      if (questionId.Length != 0)
+      {
+        inputQuestions.Add(new CodexInputQuestion(
+          questionId,
+          GetBoolean(question, "isSecret") ||
+            GetBoolean(question, "is_secret"),
+          options));
+      }
     }
 
-    return nodes.Count == 0
-      ? Empty(
+    if (nodes.Count == 0)
+    {
+      return Empty(
         "codex request_user_input contains no speakable questions",
         recordType,
-        payloadType)
-      : new ExtractionResult(
-        nodes,
-        $"accepted {nodes.Count} codex request_user_input question(s)",
-        recordType,
         payloadType);
+    }
+
+    CodexInputRequest? inputRequest =
+      callId.Length != 0 && inputQuestions.Count != 0
+        ? new CodexInputRequest(callId, inputQuestions)
+        : null;
+    return new ExtractionResult(
+      nodes,
+      $"accepted {nodes.Count} codex request_user_input question(s)",
+      recordType,
+      payloadType,
+      InputRequest: inputRequest);
   }
 
   /// <summary>
-  /// Appends every labelled input option in source order.
+  /// Reads every labelled input option in source order.
   /// </summary>
-  private static void AppendInputOptions(
-    StringBuilder spoken,
+  private static IReadOnlyList<CodexInputOption> ReadInputOptions(
     JsonElement question)
   {
     if (!question.TryGetProperty("options", out JsonElement options) ||
         options.ValueKind != JsonValueKind.Array)
     {
-      return;
+      return Array.Empty<CodexInputOption>();
     }
 
-    int optionNumber = 1;
+    var result = new List<CodexInputOption>();
     foreach (JsonElement option in options.EnumerateArray())
     {
       string label;
@@ -402,27 +435,181 @@ internal static partial class JsonlRecordExtractor
         continue;
       }
 
-      if (label.Length == 0 && description.Length == 0)
+      if (label.Length != 0 || description.Length != 0)
       {
-        continue;
+        result.Add(new CodexInputOption(label, description));
       }
+    }
+    return result;
+  }
 
+  /// <summary>
+  /// Appends every input option in source order.
+  /// </summary>
+  private static void AppendInputOptions(
+    StringBuilder spoken,
+    IReadOnlyList<CodexInputOption> options)
+  {
+    for (int index = 0; index < options.Count; ++index)
+    {
+      CodexInputOption option = options[index];
       spoken.Append("- Option ");
-      spoken.Append(optionNumber++);
+      spoken.Append(index + 1);
       spoken.Append(": ");
-      if (label.Length != 0)
+      if (option.Label.Length != 0)
       {
-        AppendSentence(spoken, label);
+        AppendSentence(spoken, option.Label);
       }
-      if (description.Length != 0)
+      if (option.Description.Length != 0)
       {
-        if (label.Length != 0)
+        if (option.Label.Length != 0)
         {
           spoken.Append(' ');
         }
-        AppendSentence(spoken, description);
+        AppendSentence(spoken, option.Description);
       }
       spoken.AppendLine();
+    }
+  }
+
+  /// <summary>
+  /// Extracts structured answers from a function-call output.  The monitor
+  /// accepts them only when the call ID matches a pending input request.
+  /// </summary>
+  private static ExtractionResult ExtractCodexInputResponse(
+    JsonElement root,
+    JsonElement payload,
+    string recordType,
+    string payloadType)
+  {
+    string callId = FirstNonEmptyString(payload, "call_id", "id");
+    if (callId.Length == 0 ||
+        !payload.TryGetProperty("output", out JsonElement output))
+    {
+      return Empty(
+        "codex function-call output has no input-response identity",
+        recordType,
+        payloadType);
+    }
+
+    var answers = new Dictionary<string, IReadOnlyList<string>>(
+      StringComparer.Ordinal);
+    if (!TryReadInputAnswers(output, answers))
+    {
+      return Empty(
+        "codex function-call output is not a user-input answer",
+        recordType,
+        payloadType);
+    }
+
+    return new ExtractionResult(
+      Array.Empty<ExtractedNode>(),
+      $"accepted codex input response for {answers.Count} question(s)",
+      recordType,
+      payloadType,
+      InputResponse: new CodexInputResponse(
+        callId,
+        answers,
+        GetOptionalString(root, "timestamp")));
+  }
+
+  /// <summary>
+  /// Reads the supported direct, string-encoded, or body-wrapped answer form.
+  /// </summary>
+  private static bool TryReadInputAnswers(
+    JsonElement output,
+    IDictionary<string, IReadOnlyList<string>> answers)
+  {
+    if (output.ValueKind == JsonValueKind.String)
+    {
+      string? json = output.GetString();
+      if (string.IsNullOrWhiteSpace(json))
+      {
+        return false;
+      }
+
+      try
+      {
+        using JsonDocument document = JsonDocument.Parse(json);
+        return TryReadInputAnswers(document.RootElement, answers);
+      }
+      catch (JsonException)
+      {
+        return false;
+      }
+    }
+
+    if (output.ValueKind != JsonValueKind.Object)
+    {
+      return false;
+    }
+
+    if (output.TryGetProperty("body", out JsonElement body) &&
+        TryReadInputAnswers(body, answers))
+    {
+      return true;
+    }
+
+    if (!output.TryGetProperty("answers", out JsonElement answerMap) ||
+        answerMap.ValueKind != JsonValueKind.Object)
+    {
+      return false;
+    }
+
+    foreach (JsonProperty answerProperty in answerMap.EnumerateObject())
+    {
+      IReadOnlyList<string> selected = ReadSelectedAnswers(
+        answerProperty.Value);
+      if (selected.Count != 0)
+      {
+        answers[answerProperty.Name] = selected;
+      }
+    }
+    return answers.Count != 0;
+  }
+
+  /// <summary>
+  /// Reads one question's selected labels or free-form response text.
+  /// </summary>
+  private static IReadOnlyList<string> ReadSelectedAnswers(JsonElement value)
+  {
+    JsonElement selected = value;
+    if (value.ValueKind == JsonValueKind.Object &&
+        value.TryGetProperty("answers", out JsonElement nested))
+    {
+      selected = nested;
+    }
+
+    var result = new List<string>();
+    if (selected.ValueKind == JsonValueKind.Array)
+    {
+      foreach (JsonElement item in selected.EnumerateArray())
+      {
+        if (item.ValueKind == JsonValueKind.String)
+        {
+          AddDistinctAnswer(result, item.GetString());
+        }
+      }
+    }
+    else if (selected.ValueKind == JsonValueKind.String)
+    {
+      AddDistinctAnswer(result, selected.GetString());
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// Adds one non-empty answer without repeating it.
+  /// </summary>
+  private static void AddDistinctAnswer(
+    ICollection<string> answers,
+    string? answer)
+  {
+    string trimmed = answer?.Trim() ?? string.Empty;
+    if (trimmed.Length != 0 &&
+        !answers.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+    {
+      answers.Add(trimmed);
     }
   }
 
@@ -519,9 +706,15 @@ internal static partial class JsonlRecordExtractor
     string kind,
     ContentCategory category,
     string text,
-    string? timestamp)
+    string? timestamp,
+    bool startsUserTurn = false)
   {
-    ExtractedNode? node = CreateNode(kind, category, text, timestamp);
+    ExtractedNode? node = CreateNode(
+      kind,
+      category,
+      text,
+      timestamp,
+      startsUserTurn);
     if (node is not null)
     {
       nodes.Add(node);
@@ -535,11 +728,17 @@ internal static partial class JsonlRecordExtractor
     string kind,
     ContentCategory category,
     string text,
-    string? timestamp)
+    string? timestamp,
+    bool startsUserTurn = false)
   {
     return string.IsNullOrWhiteSpace(text)
       ? null
-      : new ExtractedNode(kind, category, text, timestamp);
+      : new ExtractedNode(
+        kind,
+        category,
+        text,
+        timestamp,
+        startsUserTurn);
   }
 
   /// <summary>

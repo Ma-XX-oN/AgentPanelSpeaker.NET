@@ -963,7 +963,8 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Finds the nearest User fragment at or before one history position.
+  /// Finds the nearest actual User-turn start at or before one history
+  /// position.
   /// </summary>
   private int FindUserAtOrBeforeLocked(int startIndex)
   {
@@ -971,7 +972,7 @@ internal sealed class SpeechService : IDisposable
          index >= 0;
          --index)
     {
-      if (_history[index].Category == ContentCategory.User)
+      if (_history[index].StartsUserTurn)
       {
         return index;
       }
@@ -1007,7 +1008,8 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Gets the next User node timestamp that bounds the selected response.
+  /// Gets the next actual User-turn timestamp that bounds the selected
+  /// response.
   /// </summary>
   private DateTimeOffset? FindNextUserTimestampLocked(int responseStart)
   {
@@ -1016,7 +1018,7 @@ internal sealed class SpeechService : IDisposable
          ++index)
     {
       SpeechFragment fragment = _history[index];
-      if (fragment.Category == ContentCategory.User)
+      if (fragment.StartsUserTurn)
       {
         return fragment.NodeTimestampUtc;
       }
@@ -1039,7 +1041,7 @@ internal sealed class SpeechService : IDisposable
          ++index)
     {
       SpeechFragment fragment = _history[index];
-      if (fragment.Category == ContentCategory.User)
+      if (fragment.StartsUserTurn)
       {
         break;
       }
@@ -1450,14 +1452,14 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Finds the final User node so initial playback includes the complete latest
-  /// conversational turn, with every following AI node left in sequence.
+  /// Finds the final actual User prompt so initial playback includes the
+  /// complete latest turn, including input-selection narration.
   /// </summary>
   private int FindLatestTurnStartLocked()
   {
     for (int index = _history.Count - 1; index >= 0; --index)
     {
-      if (_history[index].Category != ContentCategory.User)
+      if (!_history[index].StartsUserTurn)
       {
         continue;
       }

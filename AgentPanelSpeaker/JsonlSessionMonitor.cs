@@ -183,6 +183,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var recentFingerprintQueue = new Queue<string>();
     var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
     var preview = new Queue<string>();
+    var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
+      StringComparer.Ordinal);
     long nextNodeId = 1;
     DateTime nextLatestRefreshUtc = DateTime.MinValue;
 
@@ -201,7 +203,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
         ref nextNodeId,
         recentFingerprintQueue,
         recentFingerprintSet,
-        preview);
+        preview,
+        pendingInputRequests);
       HistoryLoaded?.Invoke(initialHistory);
       MessagesChanged?.Invoke(preview.ToArray());
 
@@ -231,13 +234,15 @@ internal sealed class JsonlSessionMonitor : IDisposable
             recentFingerprintQueue.Clear();
             recentFingerprintSet.Clear();
             preview.Clear();
+            pendingInputRequests.Clear();
             SpeechHistorySnapshot switchedHistory = LoadExistingHistory(
               session,
               speakExistingLatestTurn: false,
               ref nextNodeId,
               recentFingerprintQueue,
               recentFingerprintSet,
-              preview);
+              preview,
+              pendingInputRequests);
             HistoryLoaded?.Invoke(switchedHistory);
             MessagesChanged?.Invoke(preview.ToArray());
           }
@@ -253,6 +258,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
             recentFingerprintQueue,
             recentFingerprintSet,
             preview,
+            pendingInputRequests,
             tailReader.Offset);
         }
 
@@ -316,6 +322,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
+    IDictionary<string, CodexInputRequest> pendingInputRequests,
     long byteOffset)
   {
     try
@@ -323,6 +330,10 @@ internal sealed class JsonlSessionMonitor : IDisposable
       ExtractionResult result = JsonlRecordExtractor.Extract(
         session.Source,
         line);
+      RegisterInputRequest(result.InputRequest, pendingInputRequests);
+      IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
+        result.InputResponse,
+        pendingInputRequests);
       DiagnosticLog.Write("jsonl.record", new
       {
         session.Source,
@@ -331,9 +342,20 @@ internal sealed class JsonlSessionMonitor : IDisposable
         result.RecordType,
         result.PayloadType,
         result.Decision,
-        acceptedNodes = result.Nodes.Count,
+        acceptedNodes = result.Nodes.Count + responseNodes.Count,
         linePreview = Abbreviate(line, 240)
       });
+
+      foreach (ExtractedNode node in result.Nodes.Concat(responseNodes))
+      {
+        ProcessNode(
+          session,
+          node,
+          ref nextNodeId,
+          recentFingerprintQueue,
+          recentFingerprintSet,
+          preview);
+      }
 
       TurnCompletion? completion = CreateTurnCompletion(
         result.CompletionTimestamp);
@@ -346,17 +368,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
           completion.TimestampUtc
         });
         TurnCompleted?.Invoke(completion);
-      }
-
-      foreach (ExtractedNode node in result.Nodes)
-      {
-        ProcessNode(
-          session,
-          node,
-          ref nextNodeId,
-          recentFingerprintQueue,
-          recentFingerprintSet,
-          preview);
       }
     }
     catch (JsonException exception)
@@ -399,7 +410,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     string fingerprint = CreateFingerprint(
-      node.Category + "|" + string.Join(
+      node.Category + "|" + node.StartsUserTurn + "|" + string.Join(
         "|",
         parts.Select(part =>
           $"{part.Kind}:{part.FenceType}:{part.Text}")));
@@ -447,7 +458,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
             part.FenceLineIndex,
             part.FenceLineCount,
             PauseAfter: sentence.PauseAfter,
-            NodeTimestampUtc: nodeTimestampUtc)));
+            NodeTimestampUtc: nodeTimestampUtc,
+            StartsUserTurn: node.StartsUserTurn)));
       }
       else
       {
@@ -461,7 +473,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceLineIndex,
           part.FenceLineCount,
           PauseAfter: part.PauseAfter,
-          NodeTimestampUtc: nodeTimestampUtc));
+          NodeTimestampUtc: nodeTimestampUtc,
+          StartsUserTurn: node.StartsUserTurn));
       }
     }
     DiagnosticLog.Write("jsonl.node_accepted", new
@@ -500,6 +513,132 @@ internal sealed class JsonlSessionMonitor : IDisposable
   }
 
   /// <summary>
+  /// Retains one request_user_input call until its matching output arrives.
+  /// </summary>
+  private static void RegisterInputRequest(
+    CodexInputRequest? request,
+    IDictionary<string, CodexInputRequest> pendingInputRequests)
+  {
+    if (request is not null)
+    {
+      pendingInputRequests[request.CallId] = request;
+    }
+  }
+
+  /// <summary>
+  /// Converts a matched input response into User-profile narration without
+  /// treating the selection as a new conversational turn.
+  /// </summary>
+  private static IReadOnlyList<ExtractedNode> ResolveInputResponse(
+    CodexInputResponse? response,
+    IDictionary<string, CodexInputRequest> pendingInputRequests)
+  {
+    if (response is null)
+    {
+      return Array.Empty<ExtractedNode>();
+    }
+
+    if (!pendingInputRequests.TryGetValue(
+          response.CallId,
+          out CodexInputRequest? request) ||
+        request is null)
+    {
+      return Array.Empty<ExtractedNode>();
+    }
+    pendingInputRequests.Remove(response.CallId);
+
+    var nodes = new List<ExtractedNode>();
+    foreach (CodexInputQuestion question in request.Questions)
+    {
+      if (question.IsSecret ||
+          !response.Answers.TryGetValue(
+            question.Id,
+            out IReadOnlyList<string>? selectedAnswers) ||
+          selectedAnswers is null)
+      {
+        continue;
+      }
+
+      var spokenSelections = new List<string>();
+      foreach (string selectedAnswer in selectedAnswers)
+      {
+        int optionIndex = FindSelectedOptionIndex(
+          selectedAnswer,
+          question.Options);
+        if (optionIndex >= 0)
+        {
+          CodexInputOption option = question.Options[optionIndex];
+          string optionText = option.Label.Length != 0
+            ? option.Label
+            : option.Description;
+          spokenSelections.Add(EnsureTerminalPunctuation(
+            $"Selected option {optionIndex + 1}: {optionText}"));
+        }
+        else
+        {
+          spokenSelections.Add(EnsureTerminalPunctuation(
+            $"Selected: {selectedAnswer}"));
+        }
+      }
+
+      if (spokenSelections.Count != 0)
+      {
+        nodes.Add(new ExtractedNode(
+          "codex.user_input_answer",
+          ContentCategory.User,
+          string.Join(" ", spokenSelections),
+          response.Timestamp,
+          StartsUserTurn: false));
+      }
+    }
+    return nodes;
+  }
+
+  /// <summary>
+  /// Matches a returned label or option-number form to its source option.
+  /// </summary>
+  private static int FindSelectedOptionIndex(
+    string selectedAnswer,
+    IReadOnlyList<CodexInputOption> options)
+  {
+    string trimmed = selectedAnswer.Trim();
+    for (int index = 0; index < options.Count; ++index)
+    {
+      if (string.Equals(
+            trimmed,
+            options[index].Label,
+            StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(
+            trimmed,
+            $"Option {index + 1}",
+            StringComparison.OrdinalIgnoreCase) ||
+          trimmed.StartsWith(
+            $"Option {index + 1}:",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        return index;
+      }
+    }
+
+    return int.TryParse(trimmed, out int optionNumber) &&
+      optionNumber >= 1 &&
+      optionNumber <= options.Count
+        ? optionNumber - 1
+        : -1;
+  }
+
+  /// <summary>
+  /// Ensures each generated selection is one independently split sentence.
+  /// </summary>
+  private static string EnsureTerminalPunctuation(string text)
+  {
+    string trimmed = text.Trim();
+    return trimmed.Length != 0 && trimmed[^1] is not ('.' or '!' or '?')
+      ? trimmed + "."
+      : trimmed;
+  }
+
+  /// <summary>
   /// Loads existing eligible speech into navigation history without replaying
   /// the whole conversation.
   /// </summary>
@@ -509,10 +648,13 @@ internal sealed class JsonlSessionMonitor : IDisposable
     ref long nextNodeId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
-    Queue<string> preview)
+    Queue<string> preview,
+    IDictionary<string, CodexInputRequest> pendingInputRequests)
   {
     var fragments = new List<SpeechFragment>();
-    EligibleHistory eligibleHistory = ReadEligibleHistory(session);
+    EligibleHistory eligibleHistory = ReadEligibleHistory(
+      session,
+      pendingInputRequests);
     foreach (ExtractedNode node in eligibleHistory.Nodes)
     {
       ProcessNode(
@@ -548,8 +690,10 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   private static EligibleHistory ReadEligibleHistory(
     LocatedSession session,
+    IDictionary<string, CodexInputRequest> pendingInputRequests,
     DateTime? minimumTimestampUtc = null)
   {
+    pendingInputRequests.Clear();
     var nodes = new List<ExtractedNode>();
     var completions = new List<TurnCompletion>();
     foreach (string line in ReadSharedLines(session.Path))
@@ -559,20 +703,27 @@ internal sealed class JsonlSessionMonitor : IDisposable
         ExtractionResult result = JsonlRecordExtractor.Extract(
           session.Source,
           line);
-        TurnCompletion? completion = CreateTurnCompletion(
-          result.CompletionTimestamp);
-        if (completion is not null &&
-            (minimumTimestampUtc is null ||
-             completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value))
-        {
-          completions.Add(completion);
-        }
-        foreach (ExtractedNode node in result.Nodes)
+        RegisterInputRequest(result.InputRequest, pendingInputRequests);
+        IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
+          result.InputResponse,
+          pendingInputRequests);
+        foreach (ExtractedNode node in result.Nodes.Concat(responseNodes))
         {
           if (minimumTimestampUtc is null ||
               IsAtOrAfter(node.Timestamp, minimumTimestampUtc.Value))
           {
             nodes.Add(node);
+          }
+        }
+
+        TurnCompletion? completion = CreateTurnCompletion(
+          result.CompletionTimestamp);
+        if (completion is not null)
+        {
+          if (minimumTimestampUtc is null ||
+              completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value)
+          {
+            completions.Add(completion);
           }
         }
       }

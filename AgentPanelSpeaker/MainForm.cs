@@ -94,7 +94,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v28";
+    Text = "Agent Panel Speaker v29";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);

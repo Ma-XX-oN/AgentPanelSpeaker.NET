@@ -34,10 +34,10 @@ the JSONL.
 | --- | --- |
 | `SessionLocator` | Finds latest or explicitly selected Claude/Codex JSONL. |
 | `JsonlTailReader` | Reads only complete newly appended JSONL lines. |
-| `JsonlRecordExtractor` | Classifies conversation and input questions. |
+| `JsonlRecordExtractor` | Classifies conversation, questions, and answers. |
 | `TextCleaner` | Cleans prose and preserves typed fenced-code lines. |
 | `SentenceSegmenter` | Splits cleaned prose into navigable sentences. |
-| `JsonlSessionMonitor` | Builds history and emits deduplicated fragments. |
+| `JsonlSessionMonitor` | Correlates input calls and builds speech history. |
 | `SpeechService` | Owns history, navigation, eligibility, and speech state. |
 | `SpeechSapiXmlBuilder` | Builds equivalent SAPI XML and SSML markup. |
 | `SapiSpeechEngine` | Renders three providers and serializes buffers. |
@@ -79,9 +79,12 @@ Accepted `event_msg` payloads:
 
 Other `item_completed` item types are rejected.  A `response_item`
 `function_call` is accepted only when its name is `request_user_input`; each
-question and its ordered options become Assistant speech.  All other
-`response_item` records remain excluded, including command calls, command
-output, tool calls, patches, diffs, and file-edit details.
+question and its ordered options become Assistant speech.  The monitor retains
+that call by `call_id`.  A later matching `function_call_output` contributes
+only its structured selected answers, which become User-profile narration in
+question order.  Secret answers are excluded.  Every unmatched or unrelated
+`response_item` remains excluded, including command calls, command output,
+tool calls, patches, diffs, and file-edit details.
 
 ### Claude
 
@@ -103,6 +106,7 @@ Each `SpeechFragment` retains:
 
 - JSONL node identity;
 - content category;
+- whether it starts an actual User turn;
 - fragment kind (`Prose` or `FencedCodeLine`);
 - text;
 - normalized fence type;
@@ -113,7 +117,11 @@ Prose is sentence-split.  Every non-empty line in a non-`md` fenced block is
 one navigation entry, and punctuation inside that line is ignored.  An
 explicit `md` fence is parsed recursively with normal Markdown block and
 sentence segmentation while retaining fenced-block playback policy.  Node
-navigation groups fragments carrying the same `NodeId`.
+navigation groups fragments carrying the same `NodeId`.  A selected Codex input
+answer carries the User category so it uses the **User messages** voice, but its
+`StartsUserTurn` flag remains false.  Processing-time and latest-turn logic use
+that flag rather than the voice category, so an answer selection cannot create
+a false turn boundary.
 
 Inline Markdown code is protected before link, HTML, and decoration cleanup,
 then restored as ordinary Prose.  It is therefore spoken under the containing

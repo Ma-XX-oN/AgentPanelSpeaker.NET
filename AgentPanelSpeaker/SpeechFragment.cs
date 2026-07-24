@@ -17,6 +17,9 @@ namespace AgentPanelSpeaker;
 /// <param name="NodeTimestampUtc">
 /// Source-node timestamp normalized to UTC when available.
 /// </param>
+/// <param name="StartsUserTurn">
+/// Whether this fragment belongs to an actual User prompt that starts a turn.
+/// </param>
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -27,7 +30,8 @@ internal sealed record SpeechFragment(
   int FenceLineIndex = -1,
   int FenceLineCount = 0,
   bool PauseAfter = false,
-  DateTimeOffset? NodeTimestampUtc = null);
+  DateTimeOffset? NodeTimestampUtc = null,
+  bool StartsUserTurn = false);
 
 /// <summary>
 /// Identifies how existing history should begin playback.
