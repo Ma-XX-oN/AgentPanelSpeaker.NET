@@ -11,6 +11,7 @@ internal sealed class SpeechService : IDisposable
   private readonly object _sync = new();
   private readonly SapiSpeechEngine _engine = new();
   private readonly List<SpeechFragment> _history = new();
+  private readonly List<TurnCompletion> _turnCompletions = new();
   private Func<ContentCategory, SpeechProfileSettings> _profileProvider =
     _ => new SpeechProfileSettings(
       SpeechProfileSettings.NotSpoken,
@@ -182,6 +183,7 @@ internal sealed class SpeechService : IDisposable
     {
       ThrowIfDisposed();
       _history.Clear();
+      _turnCompletions.Clear();
       _pendingHistoryIndex = null;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
@@ -200,9 +202,11 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   public void LoadHistory(
     IReadOnlyList<SpeechFragment> fragments,
+    IReadOnlyList<TurnCompletion> completions,
     PlaybackStartMode startMode)
   {
     ArgumentNullException.ThrowIfNull(fragments);
+    ArgumentNullException.ThrowIfNull(completions);
     lock (_sync)
     {
       ThrowIfDisposed();
@@ -212,6 +216,11 @@ internal sealed class SpeechService : IDisposable
       _activeHistoryIndex = -1;
       _lastFenceActivity = null;
       _history.Clear();
+      _turnCompletions.Clear();
+      _turnCompletions.AddRange(
+        completions
+          .OrderBy(completion => completion.TimestampUtc)
+          .TakeLast(MaximumHistoryEntries));
 
       int firstRetained = Math.Max(0, fragments.Count - MaximumHistoryEntries);
       foreach (SpeechFragment fragment in fragments.Skip(firstRetained))
@@ -272,6 +281,27 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Retains a source-provided terminal completion marker for timing queries.
+  /// </summary>
+  public void RegisterTurnCompletion(TurnCompletion completion)
+  {
+    ArgumentNullException.ThrowIfNull(completion);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      _turnCompletions.Add(completion);
+      _turnCompletions.Sort(static (left, right) =>
+        left.TimestampUtc.CompareTo(right.TimestampUtc));
+      if (_turnCompletions.Count > MaximumHistoryEntries)
+      {
+        _turnCompletions.RemoveRange(
+          0,
+          _turnCompletions.Count - MaximumHistoryEntries);
+      }
+    }
+  }
+
+  /// <summary>
   /// Queues an AI-processing-time announcement at the next node boundary.
   /// </summary>
   public bool TryQueueProcessingTimeAnnouncement(
@@ -310,6 +340,7 @@ internal sealed class SpeechService : IDisposable
         waitForNodeId,
         context.UserNodeId,
         context.IsLatestTurn,
+        context.IsProcessing,
         context.StartUtc,
         context.EndUtc);
       _processingTimeAnnouncementRequested = true;
@@ -319,6 +350,7 @@ internal sealed class SpeechService : IDisposable
         announcement,
         context.UserNodeId,
         context.IsLatestTurn,
+        context.IsProcessing,
         context.StartUtc,
         context.EndUtc,
         waitForNodeId
@@ -801,6 +833,7 @@ internal sealed class SpeechService : IDisposable
           text = completedProcessing?.Text,
           userNodeId = completedProcessing?.UserNodeId,
           isLatestTurn = completedProcessing?.IsLatestTurn,
+          isProcessing = completedProcessing?.IsProcessing,
           startUtc = completedProcessing?.StartUtc,
           endUtc = completedProcessing?.EndUtc
         });
@@ -887,18 +920,25 @@ internal sealed class SpeechService : IDisposable
     bool isLatestTurn = latestUserIndex >= 0 &&
       _history[FindNodeStartLocked(latestUserIndex)].NodeId ==
         userFragment.NodeId;
+    int responseStart = FindNodeEndLocked(userStart) + 1;
+    DateTimeOffset? nextUserUtc = FindNextUserTimestampLocked(responseStart);
+    bool isProcessing = false;
     DateTimeOffset endUtc;
-    if (isLatestTurn)
+    bool hasCompletedEndpoint = TryFindTurnCompletionLocked(
+      startUtc,
+      nextUserUtc,
+      out endUtc) ||
+      TryFindUserFacingResponseTailLocked(responseStart, out endUtc);
+    if (!hasCompletedEndpoint)
     {
+      if (!isLatestTurn)
+      {
+        context = ProcessingTimeContext.Unavailable(
+          "the selected response has no completed user-facing AI message");
+        return false;
+      }
       endUtc = requestedAtUtc;
-    }
-    else if (!TryFindHistoricalResponseEndLocked(
-               FindNodeEndLocked(userStart) + 1,
-               out endUtc))
-    {
-      context = ProcessingTimeContext.Unavailable(
-        "the selected response has no retained AI timestamp");
-      return false;
+      isProcessing = true;
     }
 
     if (endUtc < startUtc)
@@ -909,12 +949,13 @@ internal sealed class SpeechService : IDisposable
     }
 
     string duration = FormatProcessingDuration(endUtc - startUtc);
-    announcement = isLatestTurn
+    announcement = isProcessing
       ? $"AI has been processing for {duration}."
       : $"AI has processed for {duration}.";
     context = new ProcessingTimeContext(
       userFragment.NodeId,
       isLatestTurn,
+      isProcessing,
       startUtc,
       endUtc,
       string.Empty);
@@ -939,12 +980,59 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Finds the last timestamp in one historical AI response.
+  /// Finds the first terminal marker belonging to the selected User turn.
   /// </summary>
-  private bool TryFindHistoricalResponseEndLocked(
+  private bool TryFindTurnCompletionLocked(
+    DateTimeOffset startUtc,
+    DateTimeOffset? nextUserUtc,
+    out DateTimeOffset endUtc)
+  {
+    foreach (TurnCompletion completion in _turnCompletions)
+    {
+      if (completion.TimestampUtc < startUtc)
+      {
+        continue;
+      }
+      if (nextUserUtc is not null &&
+          completion.TimestampUtc >= nextUserUtc.Value)
+      {
+        break;
+      }
+      endUtc = completion.TimestampUtc;
+      return true;
+    }
+
+    endUtc = default;
+    return false;
+  }
+
+  /// <summary>
+  /// Gets the next User node timestamp that bounds the selected response.
+  /// </summary>
+  private DateTimeOffset? FindNextUserTimestampLocked(int responseStart)
+  {
+    for (int index = Math.Max(0, responseStart);
+         index < _history.Count;
+         ++index)
+    {
+      SpeechFragment fragment = _history[index];
+      if (fragment.Category == ContentCategory.User)
+      {
+        return fragment.NodeTimestampUtc;
+      }
+    }
+    return null;
+  }
+
+  /// <summary>
+  /// Uses the response tail only when the last retained AI message is
+  /// user-facing rather than reasoning/thinking.
+  /// </summary>
+  private bool TryFindUserFacingResponseTailLocked(
     int responseStart,
     out DateTimeOffset endUtc)
   {
+    ContentCategory? finalCategory = null;
     DateTimeOffset? finalTimestamp = null;
     for (int index = Math.Max(0, responseStart);
          index < _history.Count;
@@ -955,14 +1043,19 @@ internal sealed class SpeechService : IDisposable
       {
         break;
       }
-      if (fragment.NodeTimestampUtc is DateTimeOffset timestamp)
-      {
-        finalTimestamp = timestamp;
-      }
+      finalCategory = fragment.Category;
+      finalTimestamp = fragment.NodeTimestampUtc;
     }
 
-    endUtc = finalTimestamp ?? default;
-    return finalTimestamp is not null;
+    if (finalCategory == ContentCategory.Assistant &&
+        finalTimestamp is DateTimeOffset timestamp)
+    {
+      endUtc = timestamp;
+      return true;
+    }
+
+    endUtc = default;
+    return false;
   }
 
   /// <summary>
@@ -1554,12 +1647,14 @@ internal sealed class SpeechService : IDisposable
     long? WaitForNodeId,
     long UserNodeId,
     bool IsLatestTurn,
+    bool IsProcessing,
     DateTimeOffset StartUtc,
     DateTimeOffset EndUtc);
 
   private sealed record ProcessingTimeContext(
     long UserNodeId,
     bool IsLatestTurn,
+    bool IsProcessing,
     DateTimeOffset StartUtc,
     DateTimeOffset EndUtc,
     string UnavailableReason)
@@ -1568,6 +1663,7 @@ internal sealed class SpeechService : IDisposable
     {
       return new ProcessingTimeContext(
         0,
+        false,
         false,
         default,
         default,

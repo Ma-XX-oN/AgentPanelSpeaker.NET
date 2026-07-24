@@ -50,6 +50,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
   public event Action<SpeechHistorySnapshot>? HistoryLoaded;
 
   /// <summary>
+  /// Raised when the source records a terminal AI-turn completion.
+  /// </summary>
+  public event Action<TurnCompletion>? TurnCompleted;
+
+  /// <summary>
   /// Raised when the selected or followed session changes.
   /// </summary>
   public event Action<LocatedSession>? SessionChanged;
@@ -330,6 +335,19 @@ internal sealed class JsonlSessionMonitor : IDisposable
         linePreview = Abbreviate(line, 240)
       });
 
+      TurnCompletion? completion = CreateTurnCompletion(
+        result.CompletionTimestamp);
+      if (completion is not null)
+      {
+        DiagnosticLog.Write("jsonl.turn_completed", new
+        {
+          session.Source,
+          session.Path,
+          completion.TimestampUtc
+        });
+        TurnCompleted?.Invoke(completion);
+      }
+
       foreach (ExtractedNode node in result.Nodes)
       {
         ProcessNode(
@@ -494,7 +512,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> preview)
   {
     var fragments = new List<SpeechFragment>();
-    foreach (ExtractedNode node in ReadEligibleNodes(session))
+    EligibleHistory eligibleHistory = ReadEligibleHistory(session);
+    foreach (ExtractedNode node in eligibleHistory.Nodes)
     {
       ProcessNode(
         session,
@@ -518,17 +537,21 @@ internal sealed class JsonlSessionMonitor : IDisposable
       fragmentCount = fragments.Count,
       startMode
     });
-    return new SpeechHistorySnapshot(fragments, startMode);
+    return new SpeechHistorySnapshot(
+      fragments,
+      eligibleHistory.Completions,
+      startMode);
   }
 
   /// <summary>
-  /// Reads all currently present conversational nodes.
+  /// Reads all currently present conversational nodes and turn completions.
   /// </summary>
-  private static IReadOnlyList<ExtractedNode> ReadEligibleNodes(
+  private static EligibleHistory ReadEligibleHistory(
     LocatedSession session,
     DateTime? minimumTimestampUtc = null)
   {
     var nodes = new List<ExtractedNode>();
+    var completions = new List<TurnCompletion>();
     foreach (string line in ReadSharedLines(session.Path))
     {
       try
@@ -536,6 +559,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
         ExtractionResult result = JsonlRecordExtractor.Extract(
           session.Source,
           line);
+        TurnCompletion? completion = CreateTurnCompletion(
+          result.CompletionTimestamp);
+        if (completion is not null &&
+            (minimumTimestampUtc is null ||
+             completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value))
+        {
+          completions.Add(completion);
+        }
         foreach (ExtractedNode node in result.Nodes)
         {
           if (minimumTimestampUtc is null ||
@@ -551,9 +582,24 @@ internal sealed class JsonlSessionMonitor : IDisposable
       }
     }
 
-    return nodes;
+    return new EligibleHistory(nodes, completions);
   }
 
+  /// <summary>
+  /// Parses one terminal event timestamp without exposing it as speech.
+  /// </summary>
+  private static TurnCompletion? CreateTurnCompletion(string? timestamp)
+  {
+    DateTimeOffset? parsed = ParseTimestampUtc(timestamp);
+    return parsed is DateTimeOffset value
+      ? new TurnCompletion(value)
+      : null;
+  }
+
+
+  private sealed record EligibleHistory(
+    IReadOnlyList<ExtractedNode> Nodes,
+    IReadOnlyList<TurnCompletion> Completions);
 
   /// <summary>
   /// Checks whether an ISO timestamp is at or after a UTC threshold.

@@ -1,22 +1,24 @@
-# Agent Panel Speaker v26
+# Agent Panel Speaker v28
 
 
-## v26
+## v28
 
-- Added a clock transport button to the right of the silence control.  `T` or
-  `Alt+T` queues the AI processing duration for the turn at the playback
-  cursor.
-- The latest prompt says "AI has been processing for ..."; historical turns
-  say "AI has processed for ...".  The announcement uses the User-message
-  voice and waits for the current JSONL node to finish speaking.
-- The clock button remains disabled until its queued announcement completes.
-- Replaced the text Silence button with a custom speech-bubble-and-finger icon
-  that represents a momentary shush action rather than persistent mute.
-- Bare transport shortcuts no longer fire while any editable control has focus.
-- Stop diagnostics now identify whether the Play/Stop action came from the
-  button, a bare shortcut, an Alt shortcut, or disposal.
-- Retained the safe inline-code/angle-bracket handling and spoken Codex
-  `request_user_input` questions/options introduced in the previous package.
+- Removed the separate Silence control.  Contiguous WAV playback already stops
+  immediately through the Play/Stop control, so the duplicate action and its
+  speech-bubble-and-finger icon are no longer present.
+- Reassigned `'` and `Alt+'` to the processing-time clock.  The former `T` and
+  `Alt+T` shortcuts are removed.
+- Codex `task_complete` records are retained as non-spoken terminal markers and
+  take precedence when selecting a turn's end time.
+- Without a terminal marker, a turn is complete when its last retained AI
+  message is user-facing Assistant text.  A latest turn whose tail remains
+  Reasoning/thinking is measured to the current request time and reported as
+  still processing.  This corrects Claude timing after a final response.
+- Transport buttons now use an explicit taller height, and custom speaker-turn
+  icons retain additional vertical inset so their strokes do not crowd the
+  button borders.
+- Bare transport shortcuts remain inactive while an editable control has focus;
+  their Alt variants remain available.
 
 ## v25.6.26
 
@@ -356,8 +358,7 @@ Activity logs both spoken and skipped blocks with the normalized fence type.
 | `⏩` | `L` or `Alt+L` | Next sentence/code line |
 | `⏭` | `;` or `Alt+;` | Next JSONL node |
 | bubbles + `→` | `O` or `Alt+O` | Next opposite-speaker run |
-| bubble + finger | `'` or `Alt+'` | Cancel speech; keep monitoring |
-| clock | `T` or `Alt+T` | Speak processing time for selected turn |
+| clock | `'` or `Alt+'` | Speak processing time for selected turn |
 
 Hotkeys work only while Agent Panel Speaker is active.  A hotkey focuses its
 corresponding button before invoking it.  Bare hotkeys do not fire while an

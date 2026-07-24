@@ -42,7 +42,7 @@ the JSONL.
 | `SpeechSapiXmlBuilder` | Builds equivalent SAPI XML and SSML markup. |
 | `SapiSpeechEngine` | Renders three providers and serializes buffers. |
 | `InstalledSpeechVoice` | Stores provider identity and sortable metadata. |
-| `GlyphButton` | Draws centred transport, speaker, shush, and clock icons. |
+| `GlyphButton` | Draws centred transport, speaker-turn, and clock icons. |
 | `PcmWaveData` | Parses, converts, joins, and generates PCM audio. |
 | `WaveOutPlayer` | Plays one PCM buffer through one WinMM output stream. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
@@ -59,8 +59,9 @@ the JSONL.
 `GlyphButton` normally uses WinForms text rendering for IPA controls.  Main
 transport buttons enable ink-bound centring, which builds the glyph outline and
 translates its actual painted bounds to the centre of the standard-height
-button.  Custom controls use `GraphicsPath` for the two-bubble speaker arrows,
-the speech-bubble-and-finger shush action, and the processing-time clock.
+button.  Custom controls use `GraphicsPath` for the two-bubble speaker arrows
+and the processing-time clock.  The transport row uses an explicit taller
+button height, and vector icons preserve extra vertical inset.
 
 ## JSONL classification
 
@@ -376,8 +377,6 @@ fence types.  The cursor tracks the active, pending, or next fragment.
 - replay continues forward after navigation;
 - forwarding beyond the last eligible sentence/code line, node, or speaker
   run cancels replay and moves the cursor to the live end;
-- the bubble-and-finger shush control cancels speech and returns to the live
-  end without stopping monitoring;
 - the clock control queues one User-voice processing-time announcement after
   the current JSONL node finishes speaking;
 - the play/stop toggle stops both speech and JSONL monitoring when active;
@@ -395,8 +394,7 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 | `L` / `Alt+L` | Next sentence/code line |
 | `;` / `Alt+;` | Next node |
 | `O` / `Alt+O` | Next opposite-speaker run |
-| `'` / `Alt+'` | Silence current speech |
-| `T` / `Alt+T` | Speak AI processing time |
+| `'` / `Alt+'` | Speak AI processing time |
 
 They operate only while the Agent Panel Speaker window has focus.  The invoked
 button receives focus before `PerformClick` runs.  Bare keys are ignored while
@@ -406,10 +404,12 @@ available there.
 ## Processing-time announcements
 
 Every `SpeechFragment` retains its source-node timestamp.  The clock action
-finds the User node that owns the playback cursor's response.  For the latest
-turn it measures from the prompt timestamp to the request time and uses present
-progressive wording.  For a historical turn it measures to the final retained
-AI timestamp before the next User node and uses past-tense wording.
+finds the User node that owns the playback cursor's response.  A Codex
+`task_complete` timestamp is the preferred endpoint.  Otherwise, the response
+is complete only when its final retained AI message is user-facing Assistant
+text rather than Reasoning/thinking.  A latest response with no completed
+endpoint is measured to the request time and uses present-progressive wording;
+completed responses use past-tense wording.
 
 `SpeechService` retains a pending announcement and the active node identifier.
 Normal playback continues through the remaining fragments of that node.  At

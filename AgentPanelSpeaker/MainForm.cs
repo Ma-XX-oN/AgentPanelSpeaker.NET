@@ -8,6 +8,9 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class MainForm : Form
 {
+  private const int TransportButtonWidth = 50;
+  private const int TransportButtonHeight = 34;
+
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
   private readonly ToolTip _toolTip = new();
@@ -25,7 +28,6 @@ internal sealed class MainForm : Form
   private readonly CheckBox _speakExistingCheckBox = new();
   private readonly GlyphButton _playStopButton = new();
   private readonly GlyphButton _pauseButton = new();
-  private readonly GlyphButton _cancelSpeechButton = new();
   private readonly GlyphButton _processingTimeButton = new();
   private readonly GlyphButton _rewindSpeakerButton = new();
   private readonly GlyphButton _rewindSentenceButton = new();
@@ -92,7 +94,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v26";
+    Text = "Agent Panel Speaker v28";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -143,13 +145,9 @@ internal sealed class MainForm : Form
       GlyphButtonDrawing.NextSpeakerTurn,
       "Next speaker turn (O or Alt+O)");
     ConfigureCustomTransportButton(
-      _cancelSpeechButton,
-      GlyphButtonDrawing.SilenceNow,
-      "Silence current speech; continue monitoring (' or Alt+')");
-    ConfigureCustomTransportButton(
       _processingTimeButton,
       GlyphButtonDrawing.ProcessingClock,
-      "Speak AI processing time (T or Alt+T)");
+      "Speak AI processing time (' or Alt+')");
     ConfigureButton(_saveSettingsButton, "Save settings");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
@@ -237,8 +235,7 @@ internal sealed class MainForm : Form
     {
       _rewindSpeakerButton, _rewindNodeButton, _rewindSentenceButton,
       _pauseButton, _playStopButton, _forwardSentenceButton,
-      _forwardNodeButton, _forwardSpeakerButton, _cancelSpeechButton,
-      _processingTimeButton
+      _forwardNodeButton, _forwardSpeakerButton, _processingTimeButton
     });
     var utility = new FlowLayoutPanel
     {
@@ -312,7 +309,6 @@ internal sealed class MainForm : Form
     _browseButton.Click += BrowseButtonClicked;
     _pauseButton.Click += PauseButtonClicked;
     _playStopButton.Click += PlayStopButtonClicked;
-    _cancelSpeechButton.Click += CancelSpeechButtonClicked;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
@@ -346,6 +342,7 @@ internal sealed class MainForm : Form
     FormClosing += MainFormClosing;
     _monitor.TextReady += MonitorTextReady;
     _monitor.HistoryLoaded += MonitorHistoryLoaded;
+    _monitor.TurnCompleted += MonitorTurnCompleted;
     _monitor.SessionChanged += MonitorSessionChanged;
     _monitor.MessagesChanged += MonitorMessagesChanged;
     _monitor.StatusChanged += status => PostToUi(() => AppendLog(status));
@@ -942,17 +939,6 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Cancels speech while monitoring continues.
-  /// </summary>
-  private void CancelSpeechButtonClicked(object? sender, EventArgs eventArgs)
-  {
-    DiagnosticLog.Write("speech.silence_requested");
-    _speech.CancelAll();
-    AppendLog("Speech silenced; monitoring continues.");
-    UpdateControlState();
-  }
-
-  /// <summary>
   /// Queues the selected AI turn's processing duration in the User voice.
   /// </summary>
   private void ProcessingTimeButtonClicked(
@@ -1193,8 +1179,28 @@ internal sealed class MainForm : Form
       {
         return;
       }
-      _speech.LoadHistory(snapshot.Fragments, snapshot.StartMode);
+      _speech.LoadHistory(
+        snapshot.Fragments,
+        snapshot.Completions,
+        snapshot.StartMode);
       AppendLog($"Indexed {snapshot.Fragments.Count} existing fragments.");
+      UpdateControlState();
+    });
+  }
+
+  /// <summary>
+  /// Adds a source-provided terminal marker to processing-time history.
+  /// </summary>
+  private void MonitorTurnCompleted(TurnCompletion completion)
+  {
+    int session = Volatile.Read(ref _monitorSession);
+    PostToUi(() =>
+    {
+      if (!_monitor.IsRunning || session != Volatile.Read(ref _monitorSession))
+      {
+        return;
+      }
+      _speech.RegisterTurnCompletion(completion);
       UpdateControlState();
     });
   }
@@ -1370,9 +1376,8 @@ internal sealed class MainForm : Form
       Keys.K => _playStopButton,
       Keys.L => _forwardSentenceButton,
       Keys.O => _forwardSpeakerButton,
-      Keys.T => _processingTimeButton,
       Keys.OemSemicolon => _forwardNodeButton,
-      Keys.OemQuotes => _cancelSpeechButton,
+      Keys.OemQuotes => _processingTimeButton,
       _ => null
     };
     if (button is null)
@@ -1463,7 +1468,6 @@ internal sealed class MainForm : Form
     _pauseButton.Enabled = _speech.IsSpeaking;
     UpdatePauseButton();
     UpdatePlayStopButton(playbackActive);
-    _cancelSpeechButton.Enabled = playbackActive || hasHistory;
     _processingTimeButton.Enabled =
       _speech.CanRequestProcessingTimeAnnouncement &&
       !_speech.IsProcessingTimeAnnouncementPending;
@@ -1557,7 +1561,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void SynchronizeTransportButtonHeights()
   {
-    int height = _cancelSpeechButton.PreferredSize.Height;
+    int height = TransportButtonHeight;
     GlyphButton[] buttons =
     {
       _rewindSpeakerButton,
@@ -1568,7 +1572,6 @@ internal sealed class MainForm : Form
       _forwardSentenceButton,
       _forwardNodeButton,
       _forwardSpeakerButton,
-      _cancelSpeechButton,
       _processingTimeButton
     };
     foreach (GlyphButton button in buttons)
@@ -1738,9 +1741,8 @@ internal sealed class MainForm : Form
     string symbol,
     string accessibleName)
   {
-    int standardButtonHeight = _cancelSpeechButton.PreferredSize.Height;
     button.AutoSize = false;
-    button.Size = new Size(50, standardButtonHeight);
+    button.Size = new Size(TransportButtonWidth, TransportButtonHeight);
     button.Font = new Font("Segoe UI Symbol", 14.0f);
     button.Drawing = GlyphButtonDrawing.Text;
     button.Glyph = symbol;
@@ -1758,9 +1760,8 @@ internal sealed class MainForm : Form
     GlyphButtonDrawing drawing,
     string accessibleName)
   {
-    int standardButtonHeight = _cancelSpeechButton.PreferredSize.Height;
     button.AutoSize = false;
-    button.Size = new Size(50, standardButtonHeight);
+    button.Size = new Size(TransportButtonWidth, TransportButtonHeight);
     button.Drawing = drawing;
     button.Glyph = string.Empty;
     button.UseInkBounds = false;

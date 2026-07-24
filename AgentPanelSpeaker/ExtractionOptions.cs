@@ -20,4 +20,5 @@ internal sealed record ExtractionResult(
   IReadOnlyList<ExtractedNode> Nodes,
   string Decision,
   string RecordType,
-  string PayloadType);
+  string PayloadType,
+  string? CompletionTimestamp = null);

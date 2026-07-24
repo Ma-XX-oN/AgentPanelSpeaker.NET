@@ -40,8 +40,15 @@ internal enum PlaybackStartMode
 }
 
 /// <summary>
-/// Carries indexed history and its requested initial playback mode.
+/// Identifies a non-spoken terminal marker for one completed AI turn.
+/// </summary>
+internal sealed record TurnCompletion(DateTimeOffset TimestampUtc);
+
+/// <summary>
+/// Carries indexed history, terminal completion markers, and its requested
+/// initial playback mode.
 /// </summary>
 internal sealed record SpeechHistorySnapshot(
   IReadOnlyList<SpeechFragment> Fragments,
+  IReadOnlyList<TurnCompletion> Completions,
   PlaybackStartMode StartMode);

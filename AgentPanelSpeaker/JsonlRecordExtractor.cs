@@ -178,6 +178,16 @@ internal static partial class JsonlRecordExtractor
     string payloadType = GetString(payload, "type");
     string phase = GetString(payload, "phase");
     string? timestamp = GetOptionalString(root, "timestamp");
+    if (payloadType == "task_complete")
+    {
+      return new ExtractionResult(
+        Array.Empty<ExtractedNode>(),
+        "accepted codex task completion marker",
+        recordType,
+        payloadType,
+        timestamp);
+    }
+
     ExtractedNode? node = payloadType switch
     {
       "agent_message" => CreateNode(
