@@ -49,10 +49,11 @@ internal enum PlaybackStartMode
 internal sealed record TurnCompletion(DateTimeOffset TimestampUtc);
 
 /// <summary>
-/// Carries indexed history, terminal completion markers, and its requested
-/// initial playback mode.
+/// Carries indexed history, terminal completion markers, background-work
+/// timing, and its requested initial playback mode.
 /// </summary>
 internal sealed record SpeechHistorySnapshot(
   IReadOnlyList<SpeechFragment> Fragments,
   IReadOnlyList<TurnCompletion> Completions,
+  IReadOnlyList<BackgroundWorkEvent> BackgroundWorkEvents,
   PlaybackStartMode StartMode);

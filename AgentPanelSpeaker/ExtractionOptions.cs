@@ -48,6 +48,19 @@ internal sealed record CodexInputResponse(
   string? Timestamp);
 
 /// <summary>
+/// Records one background-agent lifecycle transition for timing queries.
+/// </summary>
+/// <param name="Id">Stable tool-use or task identifier.</param>
+/// <param name="Description">Readable task description when available.</param>
+/// <param name="StartUtc">Recorded or duration-derived start timestamp.</param>
+/// <param name="EndUtc">Completion timestamp, or null while running.</param>
+internal sealed record BackgroundWorkEvent(
+  string Id,
+  string Description,
+  DateTimeOffset StartUtc,
+  DateTimeOffset? EndUtc);
+
+/// <summary>
 /// Carries extraction output and diagnostic classification for one record.
 /// </summary>
 internal sealed record ExtractionResult(
@@ -57,4 +70,5 @@ internal sealed record ExtractionResult(
   string PayloadType,
   string? CompletionTimestamp = null,
   CodexInputRequest? InputRequest = null,
-  CodexInputResponse? InputResponse = null);
+  CodexInputResponse? InputResponse = null,
+  IReadOnlyList<BackgroundWorkEvent>? BackgroundWorkEvents = null);

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace AgentPanelSpeaker;
 
@@ -30,7 +31,8 @@ internal static partial class JsonlRecordExtractor
         return AgentSource.Codex;
       }
 
-      if (type is "assistant" or "user" or "queue-operation")
+      if (type is "assistant" or "user" or "queue-operation" or
+          "attachment")
       {
         return AgentSource.Claude;
       }
@@ -71,7 +73,12 @@ internal static partial class JsonlRecordExtractor
 
     if (recordType == "queue-operation")
     {
-      return Empty("claude queue-operation record", recordType, string.Empty);
+      return ExtractClaudeTaskNotification(root, recordType);
+    }
+
+    if (recordType == "attachment")
+    {
+      return ExtractClaudeQueuedCommand(root, recordType);
     }
 
     if (!root.TryGetProperty("message", out JsonElement message) ||
@@ -85,7 +92,10 @@ internal static partial class JsonlRecordExtractor
           "<synthetic>",
           StringComparison.Ordinal))
     {
-      return Empty("claude synthetic assistant record", recordType, string.Empty);
+      return Empty(
+        "claude synthetic assistant record",
+        recordType,
+        string.Empty);
     }
 
     if (!message.TryGetProperty("content", out JsonElement content))
@@ -95,6 +105,7 @@ internal static partial class JsonlRecordExtractor
 
     string? timestamp = GetOptionalString(root, "timestamp");
     var nodes = new List<ExtractedNode>();
+    var workEvents = new List<BackgroundWorkEvent>();
     if (recordType == "assistant")
     {
       foreach (JsonElement block in EnumerateContent(content))
@@ -118,13 +129,21 @@ internal static partial class JsonlRecordExtractor
             GetString(block, "text"),
             timestamp);
         }
+        else if (blockType == "tool_use" && string.Equals(
+                   GetString(block, "name"),
+                   "Agent",
+                   StringComparison.OrdinalIgnoreCase))
+        {
+          ExtractClaudeAgentStart(block, timestamp, nodes, workEvents);
+        }
       }
     }
     else if (recordType == "user")
     {
       foreach (JsonElement block in EnumerateContent(content))
       {
-        if (GetString(block, "type") == "text")
+        string blockType = GetString(block, "type");
+        if (blockType == "text")
         {
           AddNode(
             nodes,
@@ -134,20 +153,294 @@ internal static partial class JsonlRecordExtractor
             timestamp,
             startsUserTurn: true);
         }
+        else if (blockType == "tool_result")
+        {
+          ExtractClaudeAgentResult(
+            root,
+            block,
+            timestamp,
+            nodes,
+            workEvents);
+        }
       }
     }
     else
     {
-      return Empty("claude record is not user/assistant", recordType, string.Empty);
+      return Empty(
+        "claude record is not user/assistant",
+        recordType,
+        string.Empty);
     }
 
     return new ExtractionResult(
       nodes,
-      nodes.Count == 0
+      nodes.Count == 0 && workEvents.Count == 0
         ? "claude record contained no conversational text"
         : $"accepted {nodes.Count} claude conversational block(s)",
       recordType,
-      string.Empty);
+      string.Empty,
+      BackgroundWorkEvents: workEvents);
+  }
+
+
+  /// <summary>
+  /// Extracts a real User command queued while Claude is still working.
+  /// </summary>
+  private static ExtractionResult ExtractClaudeQueuedCommand(
+    JsonElement root,
+    string recordType)
+  {
+    if (!root.TryGetProperty("attachment", out JsonElement attachment) ||
+        attachment.ValueKind != JsonValueKind.Object ||
+        !string.Equals(
+          GetString(attachment, "type"),
+          "queued_command",
+          StringComparison.OrdinalIgnoreCase) ||
+        !attachment.TryGetProperty("prompt", out JsonElement prompt))
+    {
+      return Empty(
+        "claude attachment is not a queued User command",
+        recordType,
+        string.Empty);
+    }
+
+    var textParts = new List<string>();
+    if (prompt.ValueKind == JsonValueKind.String)
+    {
+      string text = StripSystemText(prompt.GetString() ?? string.Empty);
+      if (text.Length != 0)
+      {
+        textParts.Add(text);
+      }
+    }
+    else
+    {
+      foreach (JsonElement block in EnumerateContent(prompt))
+      {
+        if (GetString(block, "type") == "text")
+        {
+          string text = StripSystemText(GetString(block, "text"));
+          if (text.Length != 0)
+          {
+            textParts.Add(text);
+          }
+        }
+      }
+    }
+
+    ExtractedNode? node = CreateNode(
+      "claude.queued_command",
+      ContentCategory.User,
+      string.Join(Environment.NewLine, textParts),
+      GetOptionalString(root, "timestamp"),
+      startsUserTurn: true);
+    return node is null
+      ? Empty(
+        "claude queued User command is empty",
+        recordType,
+        string.Empty)
+      : new ExtractionResult(
+        new[] { node },
+        "accepted claude queued User command",
+        recordType,
+        string.Empty);
+  }
+
+  /// <summary>
+  /// Extracts one top-level Claude Agent start and its spoken announcement.
+  /// </summary>
+  private static void ExtractClaudeAgentStart(
+    JsonElement block,
+    string? timestamp,
+    ICollection<ExtractedNode> nodes,
+    ICollection<BackgroundWorkEvent> workEvents)
+  {
+    string id = GetString(block, "id").Trim();
+    DateTimeOffset? startUtc = ParseTimestamp(timestamp);
+    if (id.Length == 0 || startUtc is null)
+    {
+      return;
+    }
+
+    string description = string.Empty;
+    if (block.TryGetProperty("input", out JsonElement input) &&
+        input.ValueKind == JsonValueKind.Object)
+    {
+      description = GetString(input, "description").Trim();
+    }
+
+    string announcement = description.Length == 0
+      ? "Starting subagent."
+      : $"Starting subagent: {description}.";
+    AddNode(
+      nodes,
+      "claude.subagent.started",
+      ContentCategory.SubagentAssistant,
+      announcement,
+      timestamp);
+    workEvents.Add(new BackgroundWorkEvent(
+      id,
+      description,
+      startUtc.Value,
+      EndUtc: null));
+  }
+
+  /// <summary>
+  /// Extracts the result of one top-level Claude Agent tool call.
+  /// </summary>
+  private static void ExtractClaudeAgentResult(
+    JsonElement root,
+    JsonElement block,
+    string? timestamp,
+    ICollection<ExtractedNode> nodes,
+    ICollection<BackgroundWorkEvent> workEvents)
+  {
+    string id = GetString(block, "tool_use_id").Trim();
+    if (id.Length == 0 ||
+        !root.TryGetProperty("toolUseResult", out JsonElement resultObject) ||
+        resultObject.ValueKind != JsonValueKind.Object ||
+        !string.Equals(
+          GetString(resultObject, "agentType"),
+          "general-purpose",
+          StringComparison.OrdinalIgnoreCase))
+    {
+      return;
+    }
+
+    DateTimeOffset? endUtc = ParseTimestamp(timestamp);
+    long durationMilliseconds = GetInt64(resultObject, "totalDurationMs");
+    if (endUtc is null || durationMilliseconds < 0)
+    {
+      return;
+    }
+
+    TimeSpan duration = TimeSpan.FromMilliseconds(durationMilliseconds);
+    AddNode(
+      nodes,
+      "claude.subagent.finished",
+      ContentCategory.Assistant,
+      $"Subagent finished. Took {FormatDetailedDuration(duration)} " +
+        "to complete.",
+      timestamp);
+
+    string resultText = ReadClaudeToolResultText(block);
+    if (resultText.Length != 0)
+    {
+      AddNode(
+        nodes,
+        "claude.subagent.result",
+        ContentCategory.SubagentAssistant,
+        resultText,
+        timestamp);
+    }
+
+    workEvents.Add(new BackgroundWorkEvent(
+      id,
+      string.Empty,
+      endUtc.Value - duration,
+      endUtc.Value));
+  }
+
+  /// <summary>
+  /// Extracts one child-agent task notification from Claude queue metadata.
+  /// </summary>
+  private static ExtractionResult ExtractClaudeTaskNotification(
+    JsonElement root,
+    string recordType)
+  {
+    if (!string.Equals(
+          GetString(root, "operation"),
+          "enqueue",
+          StringComparison.OrdinalIgnoreCase))
+    {
+      return Empty("claude queue-operation record", recordType, string.Empty);
+    }
+
+    string content = GetString(root, "content");
+    if (string.IsNullOrWhiteSpace(content))
+    {
+      return Empty("claude queue-operation record", recordType, string.Empty);
+    }
+
+    try
+    {
+      XDocument document = XDocument.Parse(
+        content,
+        LoadOptions.PreserveWhitespace);
+      XElement? notification = document.Root;
+      if (notification is null ||
+          notification.Name.LocalName != "task-notification")
+      {
+        return Empty("claude queue-operation record", recordType, string.Empty);
+      }
+
+      string status = ElementValue(notification, "status");
+      if (!string.Equals(
+            status,
+            "completed",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        return Empty(
+          "claude task notification is not completed",
+          recordType,
+          string.Empty);
+      }
+
+      string taskId = ElementValue(notification, "task-id");
+      string summary = ElementValue(notification, "summary");
+      string description = ExtractTaskDescription(summary);
+      string result = StripReportedTimingFooter(
+        ElementValue(notification, "result"));
+      long durationMilliseconds = ParseInt64(
+        ElementValue(notification.Element("usage"), "duration_ms"));
+      DateTimeOffset? endUtc = ParseTimestamp(
+        GetOptionalString(root, "timestamp"));
+      if (taskId.Length == 0 || endUtc is null || durationMilliseconds < 0)
+      {
+        return Empty(
+          "claude task notification lacks timing metadata",
+          recordType,
+          string.Empty);
+      }
+
+      TimeSpan duration = TimeSpan.FromMilliseconds(durationMilliseconds);
+      var nodes = new List<ExtractedNode>();
+      string descriptionSuffix = description.Length == 0
+        ? string.Empty
+        : $": {description}";
+      AddNode(
+        nodes,
+        "claude.subagent.finished",
+        ContentCategory.Assistant,
+        $"Subagent finished{descriptionSuffix}. Took " +
+          $"{FormatDetailedDuration(duration)} to complete.",
+        GetOptionalString(root, "timestamp"));
+      AddNode(
+        nodes,
+        "claude.subagent.result",
+        ContentCategory.SubagentAssistant,
+        result,
+        GetOptionalString(root, "timestamp"));
+
+      var workEvent = new BackgroundWorkEvent(
+        taskId + "@" + endUtc.Value.ToString("O"),
+        description,
+        endUtc.Value - duration,
+        endUtc.Value);
+      return new ExtractionResult(
+        nodes,
+        "accepted claude completed subagent notification",
+        recordType,
+        string.Empty,
+        BackgroundWorkEvents: new[] { workEvent });
+    }
+    catch (System.Xml.XmlException)
+    {
+      return Empty(
+        "claude task notification contains invalid XML",
+        recordType,
+        string.Empty);
+    }
   }
 
   /// <summary>
@@ -699,6 +992,148 @@ internal static partial class JsonlRecordExtractor
   }
 
   /// <summary>
+  /// Reads speakable text from one Claude tool_result content value.
+  /// </summary>
+  private static string ReadClaudeToolResultText(JsonElement block)
+  {
+    if (!block.TryGetProperty("content", out JsonElement content))
+    {
+      return string.Empty;
+    }
+
+    var parts = new List<string>();
+    if (content.ValueKind == JsonValueKind.String)
+    {
+      AddClaudeResultPart(parts, content.GetString());
+    }
+    else if (content.ValueKind == JsonValueKind.Array)
+    {
+      foreach (JsonElement item in content.EnumerateArray())
+      {
+        if (item.ValueKind == JsonValueKind.Object &&
+            GetString(item, "type") == "text")
+        {
+          AddClaudeResultPart(parts, GetString(item, "text"));
+        }
+      }
+    }
+    return StripReportedTimingFooter(string.Join(Environment.NewLine, parts));
+  }
+
+  /// <summary>
+  /// Adds one non-metadata Claude Agent result part.
+  /// </summary>
+  private static void AddClaudeResultPart(
+    ICollection<string> parts,
+    string? text)
+  {
+    string trimmed = text?.Trim() ?? string.Empty;
+    if (trimmed.Length == 0 ||
+        trimmed.StartsWith("agentId:", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Contains("worktreePath:", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Contains("worktreeBranch:", StringComparison.OrdinalIgnoreCase))
+    {
+      return;
+    }
+    parts.Add(trimmed);
+  }
+
+  /// <summary>
+  /// Extracts the quoted task name from a Claude task summary.
+  /// </summary>
+  private static string ExtractTaskDescription(string summary)
+  {
+    Match match = TaskSummaryRegex().Match(summary);
+    return match.Success ? match.Groups[1].Value.Trim() : summary.Trim();
+  }
+
+  /// <summary>
+  /// Removes an agent-authored START/END/ELAPSED footer from returned text.
+  /// </summary>
+  private static string StripReportedTimingFooter(string text)
+  {
+    return ReportedTimingFooterRegex().Replace(text, string.Empty).Trim();
+  }
+
+  /// <summary>
+  /// Reads one child element's value without throwing for a missing parent.
+  /// </summary>
+  private static string ElementValue(XElement? parent, string name)
+  {
+    return parent?.Elements().FirstOrDefault(element =>
+      element.Name.LocalName == name)?.Value.Trim() ?? string.Empty;
+  }
+
+  /// <summary>
+  /// Parses one invariant non-negative integer or returns -1.
+  /// </summary>
+  private static long ParseInt64(string text)
+  {
+    return long.TryParse(
+      text,
+      System.Globalization.NumberStyles.Integer,
+      System.Globalization.CultureInfo.InvariantCulture,
+      out long value) && value >= 0
+        ? value
+        : -1;
+  }
+
+  /// <summary>
+  /// Gets one JSON integer property or -1.
+  /// </summary>
+  private static long GetInt64(JsonElement element, string propertyName)
+  {
+    return element.TryGetProperty(propertyName, out JsonElement value) &&
+      value.ValueKind == JsonValueKind.Number &&
+      value.TryGetInt64(out long result) && result >= 0
+        ? result
+        : -1;
+  }
+
+  /// <summary>
+  /// Parses an ISO timestamp and normalizes it to UTC.
+  /// </summary>
+  private static DateTimeOffset? ParseTimestamp(string? timestamp)
+  {
+    return DateTimeOffset.TryParse(
+      timestamp,
+      System.Globalization.CultureInfo.InvariantCulture,
+      System.Globalization.DateTimeStyles.AssumeUniversal |
+        System.Globalization.DateTimeStyles.AdjustToUniversal,
+      out DateTimeOffset parsed)
+        ? parsed
+        : null;
+  }
+
+  /// <summary>
+  /// Formats a subagent duration with second precision.
+  /// </summary>
+  private static string FormatDetailedDuration(TimeSpan duration)
+  {
+    long totalSeconds = Math.Max(0L, (long)Math.Round(duration.TotalSeconds));
+    long hours = totalSeconds / 3600;
+    long minutes = totalSeconds % 3600 / 60;
+    long seconds = totalSeconds % 60;
+    var parts = new List<string>();
+    if (hours != 0)
+    {
+      parts.Add(hours == 1 ? "1 hour" : $"{hours} hours");
+    }
+    if (minutes != 0)
+    {
+      parts.Add(minutes == 1 ? "1 minute" : $"{minutes} minutes");
+    }
+    if (seconds != 0 || parts.Count == 0)
+    {
+      parts.Add(seconds == 1 ? "1 second" : $"{seconds} seconds");
+    }
+    return parts.Count == 1
+      ? parts[0]
+      : string.Join(", ", parts.Take(parts.Count - 1)) +
+        " and " + parts[^1];
+  }
+
+  /// <summary>
   /// Adds a non-empty node.
   /// </summary>
   private static void AddNode(
@@ -802,6 +1237,16 @@ internal static partial class JsonlRecordExtractor
     return element.TryGetProperty(propertyName, out JsonElement value) &&
       value.ValueKind == JsonValueKind.True;
   }
+
+  [GeneratedRegex(
+    "Agent\\s+[\"“](.*?)[\"”]\\s+came to rest",
+    RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+  private static partial Regex TaskSummaryRegex();
+
+  [GeneratedRegex(
+    @"\s*```text\s*START=.*?END=.*?ELAPSED=.*?```\s*$",
+    RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+  private static partial Regex ReportedTimingFooterRegex();
 
   [GeneratedRegex(
     @"<(?:ide_opened_file|ide_selection|system[-_]reminder|system|env|" +

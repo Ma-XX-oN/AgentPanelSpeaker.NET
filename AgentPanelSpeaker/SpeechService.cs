@@ -12,6 +12,8 @@ internal sealed class SpeechService : IDisposable
   private readonly SapiSpeechEngine _engine = new();
   private readonly List<SpeechFragment> _history = new();
   private readonly List<TurnCompletion> _turnCompletions = new();
+  private readonly Dictionary<string, BackgroundWorkState> _backgroundWork =
+    new(StringComparer.Ordinal);
   private Func<ContentCategory, SpeechProfileSettings> _profileProvider =
     _ => new SpeechProfileSettings(
       SpeechProfileSettings.NotSpoken,
@@ -184,6 +186,7 @@ internal sealed class SpeechService : IDisposable
       ThrowIfDisposed();
       _history.Clear();
       _turnCompletions.Clear();
+      _backgroundWork.Clear();
       _pendingHistoryIndex = null;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
@@ -203,10 +206,12 @@ internal sealed class SpeechService : IDisposable
   public void LoadHistory(
     IReadOnlyList<SpeechFragment> fragments,
     IReadOnlyList<TurnCompletion> completions,
+    IReadOnlyList<BackgroundWorkEvent> backgroundWorkEvents,
     PlaybackStartMode startMode)
   {
     ArgumentNullException.ThrowIfNull(fragments);
     ArgumentNullException.ThrowIfNull(completions);
+    ArgumentNullException.ThrowIfNull(backgroundWorkEvents);
     lock (_sync)
     {
       ThrowIfDisposed();
@@ -217,6 +222,12 @@ internal sealed class SpeechService : IDisposable
       _lastFenceActivity = null;
       _history.Clear();
       _turnCompletions.Clear();
+      _backgroundWork.Clear();
+      foreach (BackgroundWorkEvent workEvent in
+               backgroundWorkEvents.OrderBy(item => item.StartUtc))
+      {
+        RegisterBackgroundWorkEventLocked(workEvent);
+      }
       _turnCompletions.AddRange(
         completions
           .OrderBy(completion => completion.TimestampUtc)
@@ -298,6 +309,19 @@ internal sealed class SpeechService : IDisposable
           0,
           _turnCompletions.Count - MaximumHistoryEntries);
       }
+    }
+  }
+
+  /// <summary>
+  /// Retains one background-agent lifecycle update for timing queries.
+  /// </summary>
+  public void RegisterBackgroundWorkEvent(BackgroundWorkEvent workEvent)
+  {
+    ArgumentNullException.ThrowIfNull(workEvent);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      RegisterBackgroundWorkEventLocked(workEvent);
     }
   }
 
@@ -870,6 +894,40 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Merges one background-work start or completion by stable identifier.
+  /// </summary>
+  private void RegisterBackgroundWorkEventLocked(BackgroundWorkEvent workEvent)
+  {
+    if (_backgroundWork.TryGetValue(
+          workEvent.Id,
+          out BackgroundWorkState? existing) &&
+        existing is not null)
+    {
+      string description = workEvent.Description.Length != 0
+        ? workEvent.Description
+        : existing.Description;
+      DateTimeOffset startUtc = workEvent.StartUtc < existing.StartUtc
+        ? workEvent.StartUtc
+        : existing.StartUtc;
+      DateTimeOffset? endUtc = workEvent.EndUtc ?? existing.EndUtc;
+      _backgroundWork[workEvent.Id] = new BackgroundWorkState(
+        workEvent.Id,
+        description,
+        startUtc,
+        endUtc,
+        IsChildRunId(workEvent.Id));
+      return;
+    }
+
+    _backgroundWork[workEvent.Id] = new BackgroundWorkState(
+      workEvent.Id,
+      workEvent.Description,
+      workEvent.StartUtc,
+      workEvent.EndUtc,
+      IsChildRunId(workEvent.Id));
+  }
+
+  /// <summary>
   /// Builds the processing-time sentence for the turn containing the playback
   /// cursor.
   /// </summary>
@@ -922,16 +980,21 @@ internal sealed class SpeechService : IDisposable
         userFragment.NodeId;
     int responseStart = FindNodeEndLocked(userStart) + 1;
     DateTimeOffset? nextUserUtc = FindNextUserTimestampLocked(responseStart);
-    bool isProcessing = false;
-    DateTimeOffset endUtc;
-    bool hasCompletedEndpoint = TryFindTurnCompletionLocked(
+    IReadOnlyList<BackgroundWorkState> turnWork = GetTurnBackgroundWorkLocked(
       startUtc,
-      nextUserUtc,
-      out endUtc) ||
-      TryFindUserFacingResponseTailLocked(responseStart, out endUtc);
+      nextUserUtc);
+    bool hasRunningBackgroundWork = turnWork.Any(work => work.EndUtc is null);
+    bool isProcessing = false;
+    DateTimeOffset endUtc = default;
+    bool hasCompletedEndpoint = !hasRunningBackgroundWork &&
+      (TryFindTurnCompletionLocked(
+        startUtc,
+        nextUserUtc,
+        out endUtc) ||
+       TryFindUserFacingResponseTailLocked(responseStart, out endUtc));
     if (!hasCompletedEndpoint)
     {
-      if (!isLatestTurn)
+      if (!isLatestTurn && !hasRunningBackgroundWork)
       {
         context = ProcessingTimeContext.Unavailable(
           "the selected response has no completed user-facing AI message");
@@ -952,6 +1015,13 @@ internal sealed class SpeechService : IDisposable
     announcement = isProcessing
       ? $"AI has been processing for {duration}."
       : $"AI has processed for {duration}.";
+    string backgroundAnnouncement = BuildBackgroundWorkAnnouncement(
+      turnWork,
+      requestedAtUtc);
+    if (backgroundAnnouncement.Length != 0)
+    {
+      announcement += " " + backgroundAnnouncement;
+    }
     context = new ProcessingTimeContext(
       userFragment.NodeId,
       isLatestTurn,
@@ -1049,7 +1119,8 @@ internal sealed class SpeechService : IDisposable
       finalTimestamp = fragment.NodeTimestampUtc;
     }
 
-    if (finalCategory == ContentCategory.Assistant &&
+    if ((finalCategory is ContentCategory.Assistant or
+           ContentCategory.SubagentAssistant) &&
         finalTimestamp is DateTimeOffset timestamp)
     {
       endUtc = timestamp;
@@ -1058,6 +1129,113 @@ internal sealed class SpeechService : IDisposable
 
     endUtc = default;
     return false;
+  }
+
+  /// <summary>
+  /// Gets background work whose start belongs to one retained User turn.
+  /// </summary>
+  private IReadOnlyList<BackgroundWorkState> GetTurnBackgroundWorkLocked(
+    DateTimeOffset startUtc,
+    DateTimeOffset? nextUserUtc)
+  {
+    return _backgroundWork.Values
+      .Where(work =>
+        work.StartUtc >= startUtc &&
+        (nextUserUtc is null || work.StartUtc < nextUserUtc.Value))
+      .OrderBy(work => work.StartUtc)
+      .ToArray();
+  }
+
+  /// <summary>
+  /// Appends running and recently completed background-agent timing.
+  /// </summary>
+  private static string BuildBackgroundWorkAnnouncement(
+    IReadOnlyList<BackgroundWorkState> work,
+    DateTimeOffset requestedAtUtc)
+  {
+    if (work.Count == 0)
+    {
+      return string.Empty;
+    }
+
+    BackgroundWorkState[] running = work
+      .Where(item => item.EndUtc is null)
+      .ToArray();
+    BackgroundWorkState[] completedParents = work
+      .Where(item => item.EndUtc is not null && !item.IsChildRun)
+      .ToArray();
+    int completedChildCount = work.Count(item =>
+      item.EndUtc is not null && item.IsChildRun);
+    var sentences = new List<string>();
+    if (running.Length != 0)
+    {
+      if (running.Length > 1)
+      {
+        sentences.Add($"{running.Length} subagents are running.");
+      }
+      foreach (BackgroundWorkState item in running)
+      {
+        string name = item.Description.Length == 0
+          ? "Subagent"
+          : $"Subagent “{item.Description}”";
+        sentences.Add(
+          $"{name} has been running for " +
+          $"{FormatDetailedDuration(requestedAtUtc - item.StartUtc)}.");
+      }
+    }
+
+    foreach (BackgroundWorkState item in completedParents)
+    {
+      TimeSpan duration = item.EndUtc!.Value - item.StartUtc;
+      string name = item.Description.Length == 0
+        ? "The background agent"
+        : $"Background agent “{item.Description}”";
+      sentences.Add(
+        $"{name} ran for {FormatDetailedDuration(duration)} and completed.");
+    }
+    if (completedChildCount != 0)
+    {
+      sentences.Add(completedChildCount == 1
+        ? "1 child-agent run completed."
+        : $"{completedChildCount} child-agent runs completed.");
+    }
+    return string.Join(" ", sentences);
+  }
+
+  /// <summary>
+  /// Formats background-agent duration with second precision.
+  /// </summary>
+  private static string FormatDetailedDuration(TimeSpan duration)
+  {
+    long totalSeconds = Math.Max(0L, (long)Math.Round(duration.TotalSeconds));
+    long hours = totalSeconds / 3600;
+    long minutes = totalSeconds % 3600 / 60;
+    long seconds = totalSeconds % 60;
+    var parts = new List<string>();
+    if (hours != 0)
+    {
+      parts.Add(hours == 1 ? "1 hour" : $"{hours} hours");
+    }
+    if (minutes != 0)
+    {
+      parts.Add(minutes == 1 ? "1 minute" : $"{minutes} minutes");
+    }
+    if (seconds != 0 || parts.Count == 0)
+    {
+      parts.Add(seconds == 1 ? "1 second" : $"{seconds} seconds");
+    }
+    return parts.Count == 1
+      ? parts[0]
+      : string.Join(", ", parts.Take(parts.Count - 1)) +
+        " and " + parts[^1];
+  }
+
+  /// <summary>
+  /// Identifies child task-notification run identifiers.
+  /// </summary>
+  private static bool IsChildRunId(string id)
+  {
+    return id.Contains('@');
   }
 
   /// <summary>
@@ -1652,6 +1830,13 @@ internal sealed class SpeechService : IDisposable
     bool IsProcessing,
     DateTimeOffset StartUtc,
     DateTimeOffset EndUtc);
+
+  private sealed record BackgroundWorkState(
+    string Id,
+    string Description,
+    DateTimeOffset StartUtc,
+    DateTimeOffset? EndUtc,
+    bool IsChildRun);
 
   private sealed record ProcessingTimeContext(
     long UserNodeId,

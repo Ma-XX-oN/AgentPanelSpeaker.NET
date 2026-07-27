@@ -20,7 +20,20 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 5;
+  public const int CurrentVersion = 6;
+
+
+  /// <summary>
+  /// Gets the foreground speech profile used for background-agent results.
+  /// </summary>
+  public SpeechProfileSettings SubagentAssistant { get; init; } =
+    new(SpeechProfileSettings.NotSpoken, 0, 0) { Volume = 100 };
+
+  /// <summary>
+  /// Gets the background speech profile used for subagent reasoning.
+  /// </summary>
+  public SpeechProfileSettings SubagentReasoning { get; init; } =
+    new(SpeechProfileSettings.NotSpoken, 0, 0) { Volume = 100 };
 
   /// <summary>
   /// Gets the one-token-per-line list that should be spelled out.
@@ -77,7 +90,15 @@ internal sealed record UserSettings(
       SpelledWords = "IDE",
       Pronunciations = string.Empty,
       AudioWake = AudioWakeSettings.Default,
-      Theme = AppTheme.System
+      Theme = AppTheme.System,
+      SubagentAssistant = new SpeechProfileSettings(voice, 0, 0)
+      {
+        Volume = 100
+      },
+      SubagentReasoning = new SpeechProfileSettings(voice, 0, 0)
+      {
+        Volume = 100
+      }
     };
   }
 
@@ -90,8 +111,13 @@ internal sealed record UserSettings(
     {
       ContentCategory.Assistant => Assistant,
       ContentCategory.Reasoning => Reasoning,
+      ContentCategory.SubagentAssistant => SubagentAssistant,
+      ContentCategory.SubagentReasoning => SubagentReasoning,
       ContentCategory.User => User,
-      _ => throw new ArgumentOutOfRangeException(nameof(category), category, null)
+      _ => throw new ArgumentOutOfRangeException(
+        nameof(category),
+        category,
+        null)
     };
   }
 }

@@ -216,6 +216,14 @@ internal sealed class UserSettingsStore
         settings.FollowNewestSession,
       Assistant = NormalizeProfile(settings.Assistant),
       Reasoning = NormalizeProfile(settings.Reasoning),
+      SubagentAssistant = NormalizeProfile(
+        settings.Version < 6
+          ? settings.Assistant
+          : settings.SubagentAssistant),
+      SubagentReasoning = NormalizeProfile(
+        settings.Version < 6
+          ? settings.Reasoning
+          : settings.SubagentReasoning),
       User = NormalizeProfile(settings.User),
       SpokenFencedCodeTypes = FencedCodeTypeSet
         .Parse(settings.SpokenFencedCodeTypes)

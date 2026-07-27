@@ -43,7 +43,7 @@ internal sealed class MainForm : Form
   private readonly ComboBox _themeComboBox = new();
   private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
-  private readonly Dictionary<ContentCategory, VoiceRowControls> _voiceRows = new();
+  private readonly Dictionary<SpeechRole, VoiceRowControls> _voiceRows = new();
   private readonly VoiceDisplayField[] _voiceDisplayOrder =
   {
     VoiceDisplayField.Location,
@@ -94,7 +94,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v29";
+    Text = "Agent Panel Speaker v31";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -103,8 +103,9 @@ internal sealed class MainForm : Form
     _instructionsLabel.AutoSize = true;
     _instructionsLabel.Dock = DockStyle.Fill;
     _instructionsLabel.Text =
-      "Reads Claude/Codex JSONL directly. Tool calls, results, commands, " +
-      "diffs, and status records are excluded.";
+      "Reads Claude/Codex JSONL directly. Ordinary tool calls and " +
+      "results are " +
+      "excluded; background-agent lifecycle and results are narrated.";
 
     _sourceComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
     _sourceComboBox.Width = 110;
@@ -195,21 +196,36 @@ internal sealed class MainForm : Form
     var speechTable = new TableLayoutPanel
     {
       AutoSize = true,
-      ColumnCount = 5,
+      ColumnCount = 7,
       RowCount = 4,
       Dock = DockStyle.Fill,
       CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
     };
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
-    for (int index = 0; index < 3; ++index)
+    for (int index = 0; index < 5; ++index)
     {
       speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     }
     AddSpeechHeader(speechTable);
-    AddVoiceRow(speechTable, 1, ContentCategory.Assistant, "Assistant messages");
-    AddVoiceRow(speechTable, 2, ContentCategory.Reasoning, "Reasoning/thinking");
-    AddVoiceRow(speechTable, 3, ContentCategory.User, "User messages");
+    AddVoiceRow(
+      speechTable,
+      1,
+      SpeechRole.Agent,
+      "AI agent",
+      hasBackgroundStyle: true);
+    AddVoiceRow(
+      speechTable,
+      2,
+      SpeechRole.Subagent,
+      "AI subagent",
+      hasBackgroundStyle: true);
+    AddVoiceRow(
+      speechTable,
+      3,
+      SpeechRole.User,
+      "User",
+      hasBackgroundStyle: false);
 
     var options = new FlowLayoutPanel
     {
@@ -343,6 +359,7 @@ internal sealed class MainForm : Form
     _monitor.TextReady += MonitorTextReady;
     _monitor.HistoryLoaded += MonitorHistoryLoaded;
     _monitor.TurnCompleted += MonitorTurnCompleted;
+    _monitor.BackgroundWorkChanged += MonitorBackgroundWorkChanged;
     _monitor.SessionChanged += MonitorSessionChanged;
     _monitor.MessagesChanged += MonitorMessagesChanged;
     _monitor.StatusChanged += status => PostToUi(() => AppendLog(status));
@@ -379,7 +396,10 @@ internal sealed class MainForm : Form
     table.Controls.Add(_voiceHeaderLabel, 1, 0);
     UpdateVoiceHeaderLabel();
 
-    string[] remainingHeadings = { "Rate", "Pitch", "Volume" };
+    string[] remainingHeadings =
+    {
+      "FG rate", "FG pitch", "BG rate", "BG pitch", "Volume"
+    };
     for (int index = 0; index < remainingHeadings.Length; ++index)
     {
       table.Controls.Add(
@@ -390,13 +410,15 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Adds one role-specific voice row.
+  /// Adds one shared-voice role row with foreground and optional background
+  /// rate/pitch controls.
   /// </summary>
   private void AddVoiceRow(
     TableLayoutPanel table,
     int row,
-    ContentCategory category,
-    string label)
+    SpeechRole role,
+    string label,
+    bool hasBackgroundStyle)
   {
     var voice = new VoiceComboBox
     {
@@ -405,35 +427,74 @@ internal sealed class MainForm : Form
     };
     voice.FormattingEnabled = true;
     voice.Format += VoiceComboBoxFormat;
-    var rate = CreateNumeric(-10, 10, 0, 60);
-    var pitch = CreateNumeric(-10, 10, 0, 60);
-    VolumeSliderControls volume = CreateVolumeSlider();
+    var foregroundRate = CreateNumeric(-10, 10, 0, 60);
+    var foregroundPitch = CreateNumeric(-10, 10, 0, 60);
+    NumericUpDown? backgroundRate = hasBackgroundStyle
+      ? CreateNumeric(-10, 10, 0, 60)
+      : null;
+    NumericUpDown? backgroundPitch = hasBackgroundStyle
+      ? CreateNumeric(-10, 10, 0, 60)
+      : null;
+    var volume = CreateNumeric(0, 100, 100, 70);
     var previewTimer = new System.Windows.Forms.Timer
     {
       Interval = 350
     };
     var controls = new VoiceRowControls(
       voice,
-      rate,
-      pitch,
-      volume.Slider,
-      volume.ValueLabel,
+      foregroundRate,
+      foregroundPitch,
+      backgroundRate,
+      backgroundPitch,
+      volume,
       previewTimer,
-      $"{category} speech is working.");
-    _voiceRows.Add(category, controls);
+      $"{role} foreground speech is working.");
+    _voiceRows.Add(role, controls);
     table.Controls.Add(MakeInlineLabel(label), 0, row);
     table.Controls.Add(voice, 1, row);
-    table.Controls.Add(rate, 2, row);
-    table.Controls.Add(pitch, 3, row);
-    table.Controls.Add(volume.Container, 4, row);
-    voice.SelectedIndexChanged += (_, _) => VoiceRowChanged(category);
-    rate.ValueChanged += (_, _) => VoiceRowChanged(category);
-    pitch.ValueChanged += (_, _) => VoiceRowChanged(category);
-    volume.Slider.ValueChanged += (_, _) =>
-      VolumeSliderChanged(category);
-    previewTimer.Tick += (_, _) => PreviewVoiceSettings(category);
-    volume.Slider.AccessibleName = $"{label} volume";
-    _toolTip.SetToolTip(volume.Slider, $"{label} volume");
+    table.Controls.Add(foregroundRate, 2, row);
+    table.Controls.Add(foregroundPitch, 3, row);
+    if (backgroundRate is not null && backgroundPitch is not null)
+    {
+      table.Controls.Add(backgroundRate, 4, row);
+      table.Controls.Add(backgroundPitch, 5, row);
+    }
+    else
+    {
+      table.Controls.Add(MakeUnavailableStyleLabel(), 4, row);
+      table.Controls.Add(MakeUnavailableStyleLabel(), 5, row);
+    }
+    table.Controls.Add(volume, 6, row);
+    voice.SelectedIndexChanged += (_, _) => VoiceRowChanged(role);
+    foregroundRate.ValueChanged += (_, _) => VoiceRowChanged(role);
+    foregroundPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
+    if (backgroundRate is not null)
+    {
+      backgroundRate.ValueChanged += (_, _) => VoiceRowChanged(role);
+    }
+    if (backgroundPitch is not null)
+    {
+      backgroundPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
+    }
+    volume.ValueChanged += (_, _) => VoiceRowChanged(role);
+    previewTimer.Tick += (_, _) => PreviewVoiceSettings(role);
+    volume.AccessibleName = $"{label} volume";
+    _toolTip.SetToolTip(volume, $"{label} volume");
+  }
+
+  /// <summary>
+  /// Creates the intentional no-background-style marker for the User row.
+  /// </summary>
+  private static Label MakeUnavailableStyleLabel()
+  {
+    return new Label
+    {
+      AutoSize = true,
+      Dock = DockStyle.Fill,
+      Text = "—",
+      TextAlign = ContentAlignment.MiddleCenter,
+      Margin = new Padding(6, 4, 6, 4)
+    };
   }
 
   /// <summary>
@@ -504,12 +565,12 @@ internal sealed class MainForm : Form
   /// </summary>
   private void RepopulateVoiceRows(bool preserveSelections)
   {
-    var selectedNames = new Dictionary<ContentCategory, string>();
+    var selectedNames = new Dictionary<SpeechRole, string>();
     if (preserveSelections)
     {
-      foreach ((ContentCategory category, VoiceRowControls row) in _voiceRows)
+      foreach ((SpeechRole role, VoiceRowControls row) in _voiceRows)
       {
-        selectedNames[category] = GetVoiceName(row.Voice.SelectedItem);
+        selectedNames[role] = GetVoiceName(row.Voice.SelectedItem);
       }
     }
 
@@ -538,7 +599,7 @@ internal sealed class MainForm : Form
     _loadingSettings = true;
     try
     {
-      foreach ((ContentCategory category, VoiceRowControls row) in _voiceRows)
+      foreach ((SpeechRole role, VoiceRowControls row) in _voiceRows)
       {
         row.Voice.BeginUpdate();
         try
@@ -550,7 +611,7 @@ internal sealed class MainForm : Form
           {
             row.Voice.SelectedItem = FindVoiceItem(
               row.Voice,
-              selectedNames[category]);
+              selectedNames[role]);
           }
         }
         finally
@@ -594,9 +655,15 @@ internal sealed class MainForm : Form
       _speakExistingCheckBox.Checked = settings.SpeakLastExistingEnabledMessage;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
       _themeComboBox.SelectedItem = settings.Theme;
-      LoadVoiceRow(ContentCategory.Assistant, settings.Assistant);
-      LoadVoiceRow(ContentCategory.Reasoning, settings.Reasoning);
-      LoadVoiceRow(ContentCategory.User, settings.User);
+      LoadVoiceRow(
+        SpeechRole.Agent,
+        settings.Assistant,
+        settings.Reasoning);
+      LoadVoiceRow(
+        SpeechRole.Subagent,
+        settings.SubagentAssistant,
+        settings.SubagentReasoning);
+      LoadVoiceRow(SpeechRole.User, settings.User, backgroundProfile: null);
       if (settings.HasWindowPlacement)
       {
         StartPosition = FormStartPosition.Manual;
@@ -618,18 +685,27 @@ internal sealed class MainForm : Form
   /// Loads one profile row.
   /// </summary>
   private void LoadVoiceRow(
-    ContentCategory category,
-    SpeechProfileSettings profile)
+    SpeechRole role,
+    SpeechProfileSettings foregroundProfile,
+    SpeechProfileSettings? backgroundProfile)
   {
-    VoiceRowControls row = _voiceRows[category];
-    row.Voice.SelectedItem = FindVoiceItem(row.Voice, profile.VoiceName);
-    row.Rate.Value = profile.Rate;
-    row.Pitch.Value = profile.Pitch;
-    row.Volume.Value = profile.Volume;
-    UpdateVolumeLabel(row);
-    UpdateVoiceRowState(category);
+    VoiceRowControls row = _voiceRows[role];
+    row.Voice.SelectedItem = FindVoiceItem(
+      row.Voice,
+      foregroundProfile.VoiceName);
+    row.ForegroundRate.Value = foregroundProfile.Rate;
+    row.ForegroundPitch.Value = foregroundProfile.Pitch;
+    if (row.BackgroundRate is not null && backgroundProfile is not null)
+    {
+      row.BackgroundRate.Value = backgroundProfile.Rate;
+    }
+    if (row.BackgroundPitch is not null && backgroundProfile is not null)
+    {
+      row.BackgroundPitch.Value = backgroundProfile.Pitch;
+    }
+    row.Volume.Value = foregroundProfile.Volume;
+    UpdateVoiceRowState(role);
   }
-
 
   /// <summary>
   /// Finds the dropdown item representing one stored provider voice name.
@@ -723,49 +799,38 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Handles a role-profile change and persists it immediately.
   /// </summary>
-  private void VoiceRowChanged(ContentCategory category)
+  private void VoiceRowChanged(SpeechRole role)
   {
     if (_loadingSettings)
     {
       return;
     }
-    UpdateVoiceRowState(category);
+    UpdateVoiceRowState(role);
     SaveControlsToSettings();
-    ScheduleVoiceSettingsPreview(category);
+    ScheduleVoiceSettingsPreview(role);
   }
 
   /// <summary>
-  /// Updates one volume label and persists the current profile.
+  /// Enables style and volume controls only when the row has a spoken voice.
   /// </summary>
-  private void VolumeSliderChanged(ContentCategory category)
+  private void UpdateVoiceRowState(SpeechRole role)
   {
-    VoiceRowControls row = _voiceRows[category];
-    UpdateVolumeLabel(row);
-    VoiceRowChanged(category);
-  }
-
-  /// <summary>
-  /// Displays one volume slider's current percentage.
-  /// </summary>
-  private static void UpdateVolumeLabel(VoiceRowControls row)
-  {
-    row.VolumeValue.Text = $"{row.Volume.Value}%";
-  }
-
-  /// <summary>
-  /// Enables rate, pitch, and volume only when the row has a spoken voice.
-  /// </summary>
-  private void UpdateVoiceRowState(ContentCategory category)
-  {
-    VoiceRowControls row = _voiceRows[category];
+    VoiceRowControls row = _voiceRows[role];
     bool enabled = !string.Equals(
       GetVoiceName(row.Voice.SelectedItem),
       SpeechProfileSettings.NotSpoken,
       StringComparison.Ordinal);
-    row.Rate.Enabled = enabled;
-    row.Pitch.Enabled = enabled;
+    row.ForegroundRate.Enabled = enabled;
+    row.ForegroundPitch.Enabled = enabled;
+    if (row.BackgroundRate is not null)
+    {
+      row.BackgroundRate.Enabled = enabled;
+    }
+    if (row.BackgroundPitch is not null)
+    {
+      row.BackgroundPitch.Enabled = enabled;
+    }
     row.Volume.Enabled = enabled;
-    row.VolumeValue.Enabled = enabled;
   }
 
   /// <summary>
@@ -773,25 +838,27 @@ internal sealed class MainForm : Form
   /// </summary>
   private void UpdateAllVoiceRowStates()
   {
-    foreach (ContentCategory category in _voiceRows.Keys)
+    foreach (SpeechRole role in _voiceRows.Keys)
     {
-      UpdateVoiceRowState(category);
+      UpdateVoiceRowState(role);
     }
   }
 
   /// <summary>
-  /// Debounces a profile edit before speaking its automatic test message.
+  /// Debounces a role edit before speaking its foreground test message.
   /// </summary>
-  private void ScheduleVoiceSettingsPreview(ContentCategory category)
+  private void ScheduleVoiceSettingsPreview(SpeechRole role)
   {
-    VoiceRowControls row = _voiceRows[category];
+    VoiceRowControls row = _voiceRows[role];
     row.PreviewTimer.Stop();
     if (_monitor.IsRunning || _playStopTransitioning)
     {
       return;
     }
 
-    SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
+    SpeechProfileSettings profile = ReadRoleProfile(
+      role,
+      background: false).Normalize();
     if (profile.IsSpoken)
     {
       row.PreviewTimer.Start();
@@ -799,11 +866,11 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Speaks the edited role profile unless monitored playback owns speech.
+  /// Speaks the edited foreground role profile unless monitoring owns speech.
   /// </summary>
-  private void PreviewVoiceSettings(ContentCategory category)
+  private void PreviewVoiceSettings(SpeechRole role)
   {
-    VoiceRowControls row = _voiceRows[category];
+    VoiceRowControls row = _voiceRows[role];
     row.PreviewTimer.Stop();
     if (_monitor.IsRunning || _playStopTransitioning ||
         (_speech.IsSpeaking && !_voiceSettingPreviewActive))
@@ -813,7 +880,9 @@ internal sealed class MainForm : Form
 
     try
     {
-      SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
+      SpeechProfileSettings profile = ReadRoleProfile(
+        role,
+        background: false).Normalize();
       if (!profile.IsSpoken)
       {
         return;
@@ -821,7 +890,7 @@ internal sealed class MainForm : Form
 
       _voiceSettingPreviewActive = true;
       AppendLog(
-        $"Previewing {category}: voice={profile.VoiceName}; " +
+        $"Previewing {role}: voice={profile.VoiceName}; " +
         $"rate={profile.Rate}; pitch={profile.Pitch}; " +
         $"volume={profile.Volume}%.");
       _speech.SpeakUntracked(row.PreviewMessage, profile);
@@ -1061,13 +1130,19 @@ internal sealed class MainForm : Form
     return new[]
     {
       new AudioWakeTestProfile(
-        "Assistant messages",
+        "AI agent foreground",
         ReadVoiceProfile(ContentCategory.Assistant)),
       new AudioWakeTestProfile(
-        "Reasoning/thinking",
+        "AI agent background",
         ReadVoiceProfile(ContentCategory.Reasoning)),
       new AudioWakeTestProfile(
-        "User messages",
+        "AI subagent foreground",
+        ReadVoiceProfile(ContentCategory.SubagentAssistant)),
+      new AudioWakeTestProfile(
+        "AI subagent background",
+        ReadVoiceProfile(ContentCategory.SubagentReasoning)),
+      new AudioWakeTestProfile(
+        "User",
         ReadVoiceProfile(ContentCategory.User))
     };
   }
@@ -1081,6 +1156,8 @@ internal sealed class MainForm : Form
     {
       ContentCategory.Assistant,
       ContentCategory.Reasoning,
+      ContentCategory.SubagentAssistant,
+      ContentCategory.SubagentReasoning,
       ContentCategory.User
     })
     {
@@ -1182,6 +1259,7 @@ internal sealed class MainForm : Form
       _speech.LoadHistory(
         snapshot.Fragments,
         snapshot.Completions,
+        snapshot.BackgroundWorkEvents,
         snapshot.StartMode);
       AppendLog($"Indexed {snapshot.Fragments.Count} existing fragments.");
       UpdateControlState();
@@ -1201,6 +1279,23 @@ internal sealed class MainForm : Form
         return;
       }
       _speech.RegisterTurnCompletion(completion);
+      UpdateControlState();
+    });
+  }
+
+  /// <summary>
+  /// Adds one background-work lifecycle update to clock timing state.
+  /// </summary>
+  private void MonitorBackgroundWorkChanged(BackgroundWorkEvent workEvent)
+  {
+    int session = Volatile.Read(ref _monitorSession);
+    PostToUi(() =>
+    {
+      if (!_monitor.IsRunning || session != Volatile.Read(ref _monitorSession))
+      {
+        return;
+      }
+      _speech.RegisterBackgroundWorkEvent(workEvent);
       UpdateControlState();
     });
   }
@@ -1281,6 +1376,10 @@ internal sealed class MainForm : Form
       ManualSessionPath = _pathIsManual ? _sessionPathTextBox.Text : null,
       Assistant = ReadVoiceProfile(ContentCategory.Assistant),
       Reasoning = ReadVoiceProfile(ContentCategory.Reasoning),
+      SubagentAssistant = ReadVoiceProfile(
+        ContentCategory.SubagentAssistant),
+      SubagentReasoning = ReadVoiceProfile(
+        ContentCategory.SubagentReasoning),
       User = ReadVoiceProfile(ContentCategory.User),
       SpokenFencedCodeTypes = FencedCodeTypeSet
         .Parse(_fenceTypesTextBox.Text)
@@ -1339,14 +1438,60 @@ internal sealed class MainForm : Form
   /// </summary>
   private SpeechProfileSettings ReadVoiceProfile(ContentCategory category)
   {
-    VoiceRowControls row = _voiceRows[category];
+    return ReadRoleProfile(
+      GetSpeechRole(category),
+      IsBackgroundCategory(category));
+  }
+
+  /// <summary>
+  /// Reads one foreground or background profile from a shared voice row.
+  /// </summary>
+  private SpeechProfileSettings ReadRoleProfile(
+    SpeechRole role,
+    bool background)
+  {
+    VoiceRowControls row = _voiceRows[role];
+    NumericUpDown rate = background
+      ? row.BackgroundRate ?? row.ForegroundRate
+      : row.ForegroundRate;
+    NumericUpDown pitch = background
+      ? row.BackgroundPitch ?? row.ForegroundPitch
+      : row.ForegroundPitch;
     return new SpeechProfileSettings(
       GetVoiceName(row.Voice.SelectedItem),
-      Decimal.ToInt32(row.Rate.Value),
-      Decimal.ToInt32(row.Pitch.Value))
+      Decimal.ToInt32(rate.Value),
+      Decimal.ToInt32(pitch.Value))
     {
-      Volume = row.Volume.Value
+      Volume = Decimal.ToInt32(row.Volume.Value)
     };
+  }
+
+  /// <summary>
+  /// Maps one fragment category to its shared voice row.
+  /// </summary>
+  private static SpeechRole GetSpeechRole(ContentCategory category)
+  {
+    return category switch
+    {
+      ContentCategory.Assistant or ContentCategory.Reasoning =>
+        SpeechRole.Agent,
+      ContentCategory.SubagentAssistant or
+        ContentCategory.SubagentReasoning => SpeechRole.Subagent,
+      ContentCategory.User => SpeechRole.User,
+      _ => throw new ArgumentOutOfRangeException(
+        nameof(category),
+        category,
+        null)
+    };
+  }
+
+  /// <summary>
+  /// Returns whether one category uses the background rate and pitch.
+  /// </summary>
+  private static bool IsBackgroundCategory(ContentCategory category)
+  {
+    return category is ContentCategory.Reasoning or
+      ContentCategory.SubagentReasoning;
   }
 
   /// <summary>
@@ -1805,47 +1950,6 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Creates a zero-to-100 volume slider with a percentage label.
-  /// </summary>
-  private static VolumeSliderControls CreateVolumeSlider()
-  {
-    var slider = new TrackBar
-    {
-      AutoSize = false,
-      Anchor = AnchorStyles.Left,
-      Height = 32,
-      LargeChange = 10,
-      Maximum = 100,
-      Minimum = 0,
-      SmallChange = 1,
-      TickFrequency = 10,
-      Value = 100,
-      Width = 140
-    };
-    var valueLabel = new Label
-    {
-      AutoSize = true,
-      Anchor = AnchorStyles.Right,
-      Margin = new Padding(3, 7, 3, 0),
-      Text = "100%",
-      TextAlign = ContentAlignment.MiddleRight
-    };
-    var container = new TableLayoutPanel
-    {
-      AutoSize = true,
-      ColumnCount = 2,
-      Dock = DockStyle.Fill,
-      Margin = Padding.Empty,
-      RowCount = 1
-    };
-    container.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-    container.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-    container.Controls.Add(slider, 0, 0);
-    container.Controls.Add(valueLabel, 1, 0);
-    return new VolumeSliderControls(container, slider, valueLabel);
-  }
-
-  /// <summary>
   /// Creates one numeric control.
   /// </summary>
   private static NumericUpDown CreateNumeric(
@@ -1948,17 +2052,14 @@ internal sealed class MainForm : Form
 
   private sealed record VoiceRowControls(
     ComboBox Voice,
-    NumericUpDown Rate,
-    NumericUpDown Pitch,
-    TrackBar Volume,
-    Label VolumeValue,
+    NumericUpDown ForegroundRate,
+    NumericUpDown ForegroundPitch,
+    NumericUpDown? BackgroundRate,
+    NumericUpDown? BackgroundPitch,
+    NumericUpDown Volume,
     System.Windows.Forms.Timer PreviewTimer,
     string PreviewMessage);
 
-  private sealed record VolumeSliderControls(
-    Control Container,
-    TrackBar Slider,
-    Label ValueLabel);
 }
 
 /// <summary>

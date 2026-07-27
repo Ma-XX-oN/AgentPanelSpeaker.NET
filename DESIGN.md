@@ -1,5 +1,32 @@
 # Agent Panel Speaker internal design
 
+## v31 compiler correction
+
+Version 31 keeps the version 30 voice-role and background-agent design and
+corrects two C# flow-analysis failures in `SpeechService.cs`: nullable
+dictionary lookup output and the processing-time endpoint's definite assignment.
+
+## v30 voice roles and background agents
+
+The speech matrix has three shared-voice roles: AI agent, AI subagent, and User.
+Both AI roles have foreground and background rate/pitch controls.  The User role
+has only foreground rate/pitch because typed prompts, Codex selections, and
+Claude queued commands all represent the same user-originated speech.
+
+Claude `Agent` tool-use records create `SubagentAssistant` start announcements.
+The matching top-level `tool_result` and completed `<task-notification>`
+records create an `Assistant` completion announcement followed by one
+`SubagentAssistant` result node.  A Not Spoken subagent voice therefore
+suppresses the start and result while preserving the main-agent
+completion/duration report.
+Each result is appended before the next JSONL record is processed, preserving a
+non-interleaved completion/result group.
+
+`BackgroundWorkEvent` records stable IDs, descriptions, starts, and optional end
+times.  `SpeechService` merges these events and includes active and completed
+background work in processing-time announcements for the selected User turn.
+
+
 ## Purpose
 
 Agent Panel Speaker tails Claude and Codex conversation JSONL files and speaks
@@ -93,12 +120,15 @@ Accepted records:
 | Record/block | Category |
 | --- | --- |
 | `user` / `text` | User |
+| `attachment` / `queued_command` | User |
 | `assistant` / `text` | Assistant |
 | `assistant` / `thinking` | Reasoning |
 
-Rejected data includes `tool_use`, `tool_result`, sidechain,
-`queue-operation`, image, and synthetic-assistant records.  System/IDE XML
-context is stripped from user text.
+Ordinary `tool_use`, `tool_result`, and `queue-operation` data remains
+rejected.  Claude `Agent` tool calls, matching completed Agent results, and
+completed `<task-notification>` records are the background-agent exceptions.
+Sidechain, image, and synthetic-assistant records remain excluded.  System/IDE
+XML context is stripped from user text.
 
 ## Speech fragments
 

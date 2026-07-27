@@ -1,4 +1,41 @@
-# Agent Panel Speaker v29
+# Agent Panel Speaker v31
+
+
+## v31
+
+Version 31 fixes the nullable-flow and definite-assignment compiler errors in
+`SpeechService.RegisterBackgroundWorkEventLocked()` and
+`SpeechService.TryBuildProcessingTimeAnnouncementLocked()`.  Background-agent
+behaviour is otherwise unchanged from version 30.
+
+- Replaced the separate Assistant, Reasoning, and User profile rows with this
+  shared-voice matrix:
+
+  | Content | Voice | FG rate | FG pitch | BG rate | BG pitch | Volume |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | AI agent | Dropdown | Spin | Spin | Spin | Spin | Spin |
+  | AI subagent | Dropdown | Spin | Spin | Spin | Spin | Spin |
+  | User | Dropdown | Spin | Spin | — | — | Spin |
+
+  Each AI row shares one voice and volume across its foreground/background
+  styles.  The User row has foreground controls only.  Ordinary prompts,
+  Claude queued commands and Codex request-user-input selections use that
+  one User foreground profile.
+- Claude `Agent` tool calls now announce `Starting subagent` with the AI
+  subagent foreground profile.  A matching Agent result announces completion
+  and authoritative duration with the AI agent foreground profile, then speaks
+  the returned contents with the AI subagent foreground profile.
+- Completed Claude task notifications are correlated by task ID, announced by
+  the AI agent, and spoken completely with the AI subagent voice.  Wrapper
+  output-file paths, token counts, parent agent-ID/worktree metadata, and
+  self-reported timing footers are excluded.
+- Concurrent background work is retained by ID.  Result nodes are queued as
+  complete contiguous groups, so two subagent responses cannot interleave.
+- The processing-time clock appends running background-agent durations, the
+  completed top-level spawned-agent runtime, and the number of completed
+  child-agent runs.
+  Completed background timing remains attached to the turn until the next real
+  User prompt.
 
 
 ## v29

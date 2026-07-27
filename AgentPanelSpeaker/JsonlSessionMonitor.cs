@@ -55,6 +55,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
   public event Action<TurnCompletion>? TurnCompleted;
 
   /// <summary>
+  /// Raised when one background-agent task starts or completes.
+  /// </summary>
+  public event Action<BackgroundWorkEvent>? BackgroundWorkChanged;
+
+  /// <summary>
   /// Raised when the selected or followed session changes.
   /// </summary>
   public event Action<LocatedSession>? SessionChanged;
@@ -357,6 +362,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
           preview);
       }
 
+      foreach (BackgroundWorkEvent workEvent in
+               result.BackgroundWorkEvents ??
+                 Array.Empty<BackgroundWorkEvent>())
+      {
+        DiagnosticLog.Write("jsonl.background_work", workEvent);
+        BackgroundWorkChanged?.Invoke(workEvent);
+      }
+
       TurnCompletion? completion = CreateTurnCompletion(
         result.CompletionTimestamp);
       if (completion is not null)
@@ -410,7 +423,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     string fingerprint = CreateFingerprint(
-      node.Category + "|" + node.StartsUserTurn + "|" + string.Join(
+      node.Category + "|" + node.Kind + "|" + node.Timestamp + "|" +
+      node.StartsUserTurn + "|" + string.Join(
         "|",
         parts.Select(part =>
           $"{part.Kind}:{part.FenceType}:{part.Text}")));
@@ -682,6 +696,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     return new SpeechHistorySnapshot(
       fragments,
       eligibleHistory.Completions,
+      eligibleHistory.BackgroundWorkEvents,
       startMode);
   }
 
@@ -696,6 +711,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     pendingInputRequests.Clear();
     var nodes = new List<ExtractedNode>();
     var completions = new List<TurnCompletion>();
+    var backgroundWorkEvents = new List<BackgroundWorkEvent>();
     foreach (string line in ReadSharedLines(session.Path))
     {
       try
@@ -716,6 +732,19 @@ internal sealed class JsonlSessionMonitor : IDisposable
           }
         }
 
+        foreach (BackgroundWorkEvent workEvent in
+                 result.BackgroundWorkEvents ??
+                   Array.Empty<BackgroundWorkEvent>())
+        {
+          if (minimumTimestampUtc is null ||
+              workEvent.StartUtc.UtcDateTime >= minimumTimestampUtc.Value ||
+              workEvent.EndUtc is DateTimeOffset endUtc &&
+                endUtc.UtcDateTime >= minimumTimestampUtc.Value)
+          {
+            backgroundWorkEvents.Add(workEvent);
+          }
+        }
+
         TurnCompletion? completion = CreateTurnCompletion(
           result.CompletionTimestamp);
         if (completion is not null)
@@ -733,7 +762,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       }
     }
 
-    return new EligibleHistory(nodes, completions);
+    return new EligibleHistory(nodes, completions, backgroundWorkEvents);
   }
 
   /// <summary>
@@ -750,7 +779,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
   private sealed record EligibleHistory(
     IReadOnlyList<ExtractedNode> Nodes,
-    IReadOnlyList<TurnCompletion> Completions);
+    IReadOnlyList<TurnCompletion> Completions,
+    IReadOnlyList<BackgroundWorkEvent> BackgroundWorkEvents);
 
   /// <summary>
   /// Checks whether an ISO timestamp is at or after a UTC threshold.

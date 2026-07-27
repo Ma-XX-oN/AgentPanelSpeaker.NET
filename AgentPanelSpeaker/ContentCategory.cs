@@ -1,12 +1,25 @@
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Identifies the conversational role that owns one speech fragment.
+/// Identifies the conversational role and foreground/background style that owns
+/// one speech fragment.
 /// </summary>
 internal enum ContentCategory
 {
   Assistant,
   Reasoning,
+  SubagentAssistant,
+  SubagentReasoning,
+  User
+}
+
+/// <summary>
+/// Identifies one shared voice row in the speech-settings matrix.
+/// </summary>
+internal enum SpeechRole
+{
+  Agent,
+  Subagent,
   User
 }
 
