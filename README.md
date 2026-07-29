@@ -1,5 +1,12 @@
-# Agent Panel Speaker v31
+# Agent Panel Speaker v32
 
+## v32
+
+Version 32 adds **Keep display on while speaking**.  When enabled, active
+speech requests `ES_DISPLAY_REQUIRED` from Windows.  The request is released
+when speech stops or pauses, when the option is disabled, and when the
+application exits.  It does not request `ES_SYSTEM_REQUIRED`, so the option is
+limited to the display behaviour it names.
 
 ## v31
 

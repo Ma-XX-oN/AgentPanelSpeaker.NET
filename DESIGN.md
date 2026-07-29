@@ -1,5 +1,17 @@
 # Agent Panel Speaker internal design
 
+## v32 display-awake ownership
+
+`MainForm.UpdateDisplayAwakeState()` is the single policy point for display
+sleep prevention.  It enables `DisplayAwakeController` only when the checkbox
+is selected, `SpeechService.IsSpeaking` is true, and
+`SpeechService.IsPaused` is false.
+
+`DisplayAwakeController` calls `SetThreadExecutionState()` on the UI thread
+with `ES_CONTINUOUS | ES_DISPLAY_REQUIRED`.  It clears the request with
+`ES_CONTINUOUS` when speech pauses or ends and during form disposal.  No
+`ES_SYSTEM_REQUIRED` flag is used.
+
 ## v31 compiler correction
 
 Version 31 keeps the version 30 voice-role and background-agent design and

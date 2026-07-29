@@ -214,6 +214,8 @@ internal sealed class UserSettingsStore
       Version = UserSettings.CurrentVersion,
       FollowNewestSession = settings.Version >= 5 &&
         settings.FollowNewestSession,
+      KeepDisplayOnWhileSpeaking = settings.Version >= 7 &&
+        settings.KeepDisplayOnWhileSpeaking,
       Assistant = NormalizeProfile(settings.Assistant),
       Reasoning = NormalizeProfile(settings.Reasoning),
       SubagentAssistant = NormalizeProfile(

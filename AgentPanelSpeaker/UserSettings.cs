@@ -20,8 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 6;
-
+  public const int CurrentVersion = 7;
 
   /// <summary>
   /// Gets the foreground speech profile used for background-agent results.
@@ -98,9 +97,15 @@ internal sealed record UserSettings(
       SubagentReasoning = new SpeechProfileSettings(voice, 0, 0)
       {
         Volume = 100
-      }
+      },
+      KeepDisplayOnWhileSpeaking = false
     };
   }
+
+  /// <summary>
+  /// Gets whether active speech should keep the Windows display awake.
+  /// </summary>
+  public bool KeepDisplayOnWhileSpeaking { get; init; }
 
   /// <summary>
   /// Gets one category's profile.

@@ -26,6 +26,7 @@ internal sealed class MainForm : Form
   private readonly NumericUpDown _pollNumeric = new();
   private readonly TextBox _fenceTypesTextBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
+  private readonly CheckBox _keepDisplayOnCheckBox = new();
   private readonly GlyphButton _playStopButton = new();
   private readonly GlyphButton _pauseButton = new();
   private readonly GlyphButton _processingTimeButton = new();
@@ -54,6 +55,7 @@ internal sealed class MainForm : Form
   };
   private readonly IReadOnlyList<InstalledSpeechVoice> _installedVoices;
   private readonly UserSettingsStore _settingsStore;
+  private readonly DisplayAwakeController _displayAwake = new();
 
   private bool _pathIsManual;
   private bool _loadingSettings;
@@ -94,7 +96,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v31";
+    Text = "Agent Panel Speaker v32";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -179,6 +181,11 @@ internal sealed class MainForm : Form
     _fenceTypesTextBox.Width = 430;
     _speakExistingCheckBox.AutoSize = true;
     _speakExistingCheckBox.Text = "Speak complete latest turn on start";
+    _keepDisplayOnCheckBox.AutoSize = true;
+    _keepDisplayOnCheckBox.Text = "Keep display on while speaking";
+    _toolTip.SetToolTip(
+      _keepDisplayOnCheckBox,
+      "Prevents Windows from turning off the display during active speech.");
     _fenceDebounceTimer.Interval = 1000;
 
     var sessionControls = new FlowLayoutPanel
@@ -238,7 +245,7 @@ internal sealed class MainForm : Form
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
       _pronunciationsButton, _audioWakeButton,
       MakeInlineLabel("Poll ms:"), _pollNumeric,
-      _speakExistingCheckBox
+      _speakExistingCheckBox, _keepDisplayOnCheckBox
     });
 
     var transport = new FlowLayoutPanel
@@ -318,7 +325,13 @@ internal sealed class MainForm : Form
     _sourceComboBox.SelectedIndexChanged += SourceSelectionChanged;
     _followLatestCheckBox.CheckedChanged += (_, _) => SaveControlsToSettings();
     _pollNumeric.ValueChanged += (_, _) => SaveControlsToSettings();
-    _speakExistingCheckBox.CheckedChanged += (_, _) => SaveControlsToSettings();
+    _speakExistingCheckBox.CheckedChanged += (_, _) =>
+      SaveControlsToSettings();
+    _keepDisplayOnCheckBox.CheckedChanged += (_, _) =>
+    {
+      SaveControlsToSettings();
+      UpdateDisplayAwakeState();
+    };
     _fenceTypesTextBox.TextChanged += FenceTypesTextChanged;
     _fenceDebounceTimer.Tick += FenceDebounceTimerTick;
     _detectLatestButton.Click += async (_, _) => await DetectLatestAsync();
@@ -366,12 +379,14 @@ internal sealed class MainForm : Form
     _monitor.Faulted += exception => PostToUi(() =>
       AppendLog($"Monitoring failed: {exception.Message}"));
     _speech.Activity += message => PostToUi(() => AppendLog(message));
+    _displayAwake.Activity += message => PostToUi(() => AppendLog(message));
     _speech.SpeakingStateChanged += speaking => PostToUi(() =>
     {
       if (!speaking)
       {
         _voiceSettingPreviewActive = false;
       }
+      UpdateDisplayAwakeState();
       UpdateAllVoiceRowStates();
       UpdateControlState();
     });
@@ -653,6 +668,8 @@ internal sealed class MainForm : Form
       _sessionPathTextBox.Text = settings.ManualSessionPath ?? string.Empty;
       _pollNumeric.Value = settings.PollIntervalMilliseconds;
       _speakExistingCheckBox.Checked = settings.SpeakLastExistingEnabledMessage;
+      _keepDisplayOnCheckBox.Checked =
+        settings.KeepDisplayOnWhileSpeaking;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
       _themeComboBox.SelectedItem = settings.Theme;
       LoadVoiceRow(
@@ -1385,6 +1402,7 @@ internal sealed class MainForm : Form
         .Parse(_fenceTypesTextBox.Text)
         .NormalizedCsv,
       SpeakLastExistingEnabledMessage = _speakExistingCheckBox.Checked,
+      KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
       Theme = GetSelectedTheme(),
       WindowX = includeWindowPlacement ? bounds.X : current.WindowX,
@@ -1588,6 +1606,17 @@ internal sealed class MainForm : Form
     {
       row.PreviewTimer.Stop();
     }
+  }
+
+  /// <summary>
+  /// Keeps the display awake only while enabled speech is actively playing.
+  /// </summary>
+  private void UpdateDisplayAwakeState()
+  {
+    bool shouldKeepAwake = _keepDisplayOnCheckBox.Checked &&
+      _speech.IsSpeaking &&
+      !_speech.IsPaused;
+    _displayAwake.SetActive(shouldKeepAwake);
   }
 
   /// <summary>
@@ -1848,6 +1877,7 @@ internal sealed class MainForm : Form
     _closing = true;
     Interlocked.Increment(ref _monitorSession);
     _monitor.Dispose();
+    _displayAwake.Dispose();
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
