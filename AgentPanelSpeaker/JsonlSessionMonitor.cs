@@ -427,7 +427,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       node.StartsUserTurn + "|" + string.Join(
         "|",
         parts.Select(part =>
-          $"{part.Kind}:{part.FenceType}:{part.Text}")));
+          $"{part.Kind}:{part.Style}:{part.FenceType}:{part.Text}")));
     if (recentFingerprintSet.Contains(fingerprint))
     {
       DiagnosticLog.Write("jsonl.node_skipped", new
@@ -455,6 +455,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var fragments = new List<SpeechFragment>();
     foreach (SpeechTextPart part in parts)
     {
+      ContentCategory fragmentCategory =
+        node.Category == ContentCategory.User &&
+        part.Style == SpeechTextStyle.Context
+          ? ContentCategory.UserContext
+          : node.Category;
       if (part.Kind == SpeechFragmentKind.Prose)
       {
         SpeechFragmentKind fragmentKind = part.FenceType.Length == 0
@@ -464,7 +469,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           .Split(part.Text, part.PauseAfter)
           .Select(sentence => new SpeechFragment(
             nodeId,
-            node.Category,
+            fragmentCategory,
             fragmentKind,
             sentence.Text,
             part.FenceType,
@@ -479,7 +484,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       {
         fragments.Add(new SpeechFragment(
           nodeId,
-          node.Category,
+          fragmentCategory,
           SpeechFragmentKind.FencedCodeLine,
           part.Text,
           part.FenceType,

@@ -1,4 +1,16 @@
-# Agent Panel Speaker v32
+# Agent Panel Speaker v33
+
+## v33
+
+Version 33 renames the speech-style columns to **Main** and **Context** and
+provides both styles for all three shared voice rows.  AI reasoning uses its
+role's Context rate and pitch.  Explicit Markdown blockquotes in genuine User
+records retain the User voice but use the User Context rate and pitch.
+
+The quote rule is deliberately structural: source lines beginning with `>` and
+their Markdown lazy-continuation lines are User Context.  Headings, ordinary
+quotation marks, and unquoted prose remain User Main.  Agent Panel Speaker does
+not infer who originally wrote quoted material.
 
 ## v32
 
@@ -18,16 +30,15 @@ behaviour is otherwise unchanged from version 30.
 - Replaced the separate Assistant, Reasoning, and User profile rows with this
   shared-voice matrix:
 
-  | Content | Voice | FG rate | FG pitch | BG rate | BG pitch | Volume |
+  | Content | Voice | Main R | Main P | Context R | Context P | Volume |
   | --- | --- | --- | --- | --- | --- | --- |
   | AI agent | Dropdown | Spin | Spin | Spin | Spin | Spin |
   | AI subagent | Dropdown | Spin | Spin | Spin | Spin | Spin |
-  | User | Dropdown | Spin | Spin | — | — | Spin |
+  | User | Dropdown | Spin | Spin | Spin | Spin | Spin |
 
-  Each AI row shares one voice and volume across its foreground/background
-  styles.  The User row has foreground controls only.  Ordinary prompts,
-  Claude queued commands and Codex request-user-input selections use that
-  one User foreground profile.
+  Each row shares one voice and volume across Main and Context styles.  AI
+  Context is reasoning; User Context is explicit Markdown blockquotes.
+  Ordinary prompts, queued commands, and input selections use User Main.
 - Claude `Agent` tool calls now announce `Starting subagent` with the AI
   subagent foreground profile.  A matching Agent result announces completion
   and authoritative duration with the AI agent foreground profile, then speaks

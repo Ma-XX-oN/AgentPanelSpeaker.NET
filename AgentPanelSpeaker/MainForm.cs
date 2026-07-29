@@ -96,7 +96,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v32";
+    Text = "Agent Panel Speaker v33";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -220,19 +220,19 @@ internal sealed class MainForm : Form
       1,
       SpeechRole.Agent,
       "AI agent",
-      hasBackgroundStyle: true);
+      hasContextStyle: true);
     AddVoiceRow(
       speechTable,
       2,
       SpeechRole.Subagent,
       "AI subagent",
-      hasBackgroundStyle: true);
+      hasContextStyle: true);
     AddVoiceRow(
       speechTable,
       3,
       SpeechRole.User,
       "User",
-      hasBackgroundStyle: false);
+      hasContextStyle: true);
 
     var options = new FlowLayoutPanel
     {
@@ -413,7 +413,7 @@ internal sealed class MainForm : Form
 
     string[] remainingHeadings =
     {
-      "FG rate", "FG pitch", "BG rate", "BG pitch", "Volume"
+      "Main rate", "Main pitch", "Context rate", "Context pitch", "Volume"
     };
     for (int index = 0; index < remainingHeadings.Length; ++index)
     {
@@ -425,7 +425,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Adds one shared-voice role row with foreground and optional background
+  /// Adds one shared-voice role row with main and optional context
   /// rate/pitch controls.
   /// </summary>
   private void AddVoiceRow(
@@ -433,7 +433,7 @@ internal sealed class MainForm : Form
     int row,
     SpeechRole role,
     string label,
-    bool hasBackgroundStyle)
+    bool hasContextStyle)
   {
     var voice = new VoiceComboBox
     {
@@ -442,12 +442,12 @@ internal sealed class MainForm : Form
     };
     voice.FormattingEnabled = true;
     voice.Format += VoiceComboBoxFormat;
-    var foregroundRate = CreateNumeric(-10, 10, 0, 60);
-    var foregroundPitch = CreateNumeric(-10, 10, 0, 60);
-    NumericUpDown? backgroundRate = hasBackgroundStyle
+    var mainRate = CreateNumeric(-10, 10, 0, 60);
+    var mainPitch = CreateNumeric(-10, 10, 0, 60);
+    NumericUpDown? contextRate = hasContextStyle
       ? CreateNumeric(-10, 10, 0, 60)
       : null;
-    NumericUpDown? backgroundPitch = hasBackgroundStyle
+    NumericUpDown? contextPitch = hasContextStyle
       ? CreateNumeric(-10, 10, 0, 60)
       : null;
     var volume = CreateNumeric(0, 100, 100, 70);
@@ -457,59 +457,39 @@ internal sealed class MainForm : Form
     };
     var controls = new VoiceRowControls(
       voice,
-      foregroundRate,
-      foregroundPitch,
-      backgroundRate,
-      backgroundPitch,
+      mainRate,
+      mainPitch,
+      contextRate,
+      contextPitch,
       volume,
       previewTimer,
-      $"{role} foreground speech is working.");
+      $"{role} main speech is working.");
     _voiceRows.Add(role, controls);
     table.Controls.Add(MakeInlineLabel(label), 0, row);
     table.Controls.Add(voice, 1, row);
-    table.Controls.Add(foregroundRate, 2, row);
-    table.Controls.Add(foregroundPitch, 3, row);
-    if (backgroundRate is not null && backgroundPitch is not null)
+    table.Controls.Add(mainRate, 2, row);
+    table.Controls.Add(mainPitch, 3, row);
+    if (contextRate is not null && contextPitch is not null)
     {
-      table.Controls.Add(backgroundRate, 4, row);
-      table.Controls.Add(backgroundPitch, 5, row);
-    }
-    else
-    {
-      table.Controls.Add(MakeUnavailableStyleLabel(), 4, row);
-      table.Controls.Add(MakeUnavailableStyleLabel(), 5, row);
+      table.Controls.Add(contextRate, 4, row);
+      table.Controls.Add(contextPitch, 5, row);
     }
     table.Controls.Add(volume, 6, row);
     voice.SelectedIndexChanged += (_, _) => VoiceRowChanged(role);
-    foregroundRate.ValueChanged += (_, _) => VoiceRowChanged(role);
-    foregroundPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
-    if (backgroundRate is not null)
+    mainRate.ValueChanged += (_, _) => VoiceRowChanged(role);
+    mainPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
+    if (contextRate is not null)
     {
-      backgroundRate.ValueChanged += (_, _) => VoiceRowChanged(role);
+      contextRate.ValueChanged += (_, _) => VoiceRowChanged(role);
     }
-    if (backgroundPitch is not null)
+    if (contextPitch is not null)
     {
-      backgroundPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
+      contextPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
     }
     volume.ValueChanged += (_, _) => VoiceRowChanged(role);
     previewTimer.Tick += (_, _) => PreviewVoiceSettings(role);
     volume.AccessibleName = $"{label} volume";
     _toolTip.SetToolTip(volume, $"{label} volume");
-  }
-
-  /// <summary>
-  /// Creates the intentional no-background-style marker for the User row.
-  /// </summary>
-  private static Label MakeUnavailableStyleLabel()
-  {
-    return new Label
-    {
-      AutoSize = true,
-      Dock = DockStyle.Fill,
-      Text = "—",
-      TextAlign = ContentAlignment.MiddleCenter,
-      Margin = new Padding(6, 4, 6, 4)
-    };
   }
 
   /// <summary>
@@ -680,7 +660,7 @@ internal sealed class MainForm : Form
         SpeechRole.Subagent,
         settings.SubagentAssistant,
         settings.SubagentReasoning);
-      LoadVoiceRow(SpeechRole.User, settings.User, backgroundProfile: null);
+      LoadVoiceRow(SpeechRole.User, settings.User, settings.UserContext);
       if (settings.HasWindowPlacement)
       {
         StartPosition = FormStartPosition.Manual;
@@ -703,24 +683,24 @@ internal sealed class MainForm : Form
   /// </summary>
   private void LoadVoiceRow(
     SpeechRole role,
-    SpeechProfileSettings foregroundProfile,
-    SpeechProfileSettings? backgroundProfile)
+    SpeechProfileSettings mainProfile,
+    SpeechProfileSettings? contextProfile)
   {
     VoiceRowControls row = _voiceRows[role];
     row.Voice.SelectedItem = FindVoiceItem(
       row.Voice,
-      foregroundProfile.VoiceName);
-    row.ForegroundRate.Value = foregroundProfile.Rate;
-    row.ForegroundPitch.Value = foregroundProfile.Pitch;
-    if (row.BackgroundRate is not null && backgroundProfile is not null)
+      mainProfile.VoiceName);
+    row.MainRate.Value = mainProfile.Rate;
+    row.MainPitch.Value = mainProfile.Pitch;
+    if (row.ContextRate is not null && contextProfile is not null)
     {
-      row.BackgroundRate.Value = backgroundProfile.Rate;
+      row.ContextRate.Value = contextProfile.Rate;
     }
-    if (row.BackgroundPitch is not null && backgroundProfile is not null)
+    if (row.ContextPitch is not null && contextProfile is not null)
     {
-      row.BackgroundPitch.Value = backgroundProfile.Pitch;
+      row.ContextPitch.Value = contextProfile.Pitch;
     }
-    row.Volume.Value = foregroundProfile.Volume;
+    row.Volume.Value = mainProfile.Volume;
     UpdateVoiceRowState(role);
   }
 
@@ -837,15 +817,15 @@ internal sealed class MainForm : Form
       GetVoiceName(row.Voice.SelectedItem),
       SpeechProfileSettings.NotSpoken,
       StringComparison.Ordinal);
-    row.ForegroundRate.Enabled = enabled;
-    row.ForegroundPitch.Enabled = enabled;
-    if (row.BackgroundRate is not null)
+    row.MainRate.Enabled = enabled;
+    row.MainPitch.Enabled = enabled;
+    if (row.ContextRate is not null)
     {
-      row.BackgroundRate.Enabled = enabled;
+      row.ContextRate.Enabled = enabled;
     }
-    if (row.BackgroundPitch is not null)
+    if (row.ContextPitch is not null)
     {
-      row.BackgroundPitch.Enabled = enabled;
+      row.ContextPitch.Enabled = enabled;
     }
     row.Volume.Enabled = enabled;
   }
@@ -862,7 +842,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Debounces a role edit before speaking its foreground test message.
+  /// Debounces a role edit before speaking its main test message.
   /// </summary>
   private void ScheduleVoiceSettingsPreview(SpeechRole role)
   {
@@ -875,7 +855,7 @@ internal sealed class MainForm : Form
 
     SpeechProfileSettings profile = ReadRoleProfile(
       role,
-      background: false).Normalize();
+      context: false).Normalize();
     if (profile.IsSpoken)
     {
       row.PreviewTimer.Start();
@@ -883,7 +863,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Speaks the edited foreground role profile unless monitoring owns speech.
+  /// Speaks the edited main role profile unless monitoring owns speech.
   /// </summary>
   private void PreviewVoiceSettings(SpeechRole role)
   {
@@ -899,7 +879,7 @@ internal sealed class MainForm : Form
     {
       SpeechProfileSettings profile = ReadRoleProfile(
         role,
-        background: false).Normalize();
+        context: false).Normalize();
       if (!profile.IsSpoken)
       {
         return;
@@ -1147,20 +1127,23 @@ internal sealed class MainForm : Form
     return new[]
     {
       new AudioWakeTestProfile(
-        "AI agent foreground",
+        "AI agent main",
         ReadVoiceProfile(ContentCategory.Assistant)),
       new AudioWakeTestProfile(
-        "AI agent background",
+        "AI agent context",
         ReadVoiceProfile(ContentCategory.Reasoning)),
       new AudioWakeTestProfile(
-        "AI subagent foreground",
+        "AI subagent main",
         ReadVoiceProfile(ContentCategory.SubagentAssistant)),
       new AudioWakeTestProfile(
-        "AI subagent background",
+        "AI subagent context",
         ReadVoiceProfile(ContentCategory.SubagentReasoning)),
       new AudioWakeTestProfile(
-        "User",
-        ReadVoiceProfile(ContentCategory.User))
+        "User main",
+        ReadVoiceProfile(ContentCategory.User)),
+      new AudioWakeTestProfile(
+        "User context",
+        ReadVoiceProfile(ContentCategory.UserContext))
     };
   }
 
@@ -1175,7 +1158,8 @@ internal sealed class MainForm : Form
       ContentCategory.Reasoning,
       ContentCategory.SubagentAssistant,
       ContentCategory.SubagentReasoning,
-      ContentCategory.User
+      ContentCategory.User,
+      ContentCategory.UserContext
     })
     {
       SpeechProfileSettings profile = ReadVoiceProfile(category).Normalize();
@@ -1398,6 +1382,7 @@ internal sealed class MainForm : Form
       SubagentReasoning = ReadVoiceProfile(
         ContentCategory.SubagentReasoning),
       User = ReadVoiceProfile(ContentCategory.User),
+      UserContext = ReadVoiceProfile(ContentCategory.UserContext),
       SpokenFencedCodeTypes = FencedCodeTypeSet
         .Parse(_fenceTypesTextBox.Text)
         .NormalizedCsv,
@@ -1458,23 +1443,23 @@ internal sealed class MainForm : Form
   {
     return ReadRoleProfile(
       GetSpeechRole(category),
-      IsBackgroundCategory(category));
+      IsContextCategory(category));
   }
 
   /// <summary>
-  /// Reads one foreground or background profile from a shared voice row.
+  /// Reads one main or context profile from a shared voice row.
   /// </summary>
   private SpeechProfileSettings ReadRoleProfile(
     SpeechRole role,
-    bool background)
+    bool context)
   {
     VoiceRowControls row = _voiceRows[role];
-    NumericUpDown rate = background
-      ? row.BackgroundRate ?? row.ForegroundRate
-      : row.ForegroundRate;
-    NumericUpDown pitch = background
-      ? row.BackgroundPitch ?? row.ForegroundPitch
-      : row.ForegroundPitch;
+    NumericUpDown rate = context
+      ? row.ContextRate ?? row.MainRate
+      : row.MainRate;
+    NumericUpDown pitch = context
+      ? row.ContextPitch ?? row.MainPitch
+      : row.MainPitch;
     return new SpeechProfileSettings(
       GetVoiceName(row.Voice.SelectedItem),
       Decimal.ToInt32(rate.Value),
@@ -1495,7 +1480,7 @@ internal sealed class MainForm : Form
         SpeechRole.Agent,
       ContentCategory.SubagentAssistant or
         ContentCategory.SubagentReasoning => SpeechRole.Subagent,
-      ContentCategory.User => SpeechRole.User,
+      ContentCategory.User or ContentCategory.UserContext => SpeechRole.User,
       _ => throw new ArgumentOutOfRangeException(
         nameof(category),
         category,
@@ -1504,12 +1489,12 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Returns whether one category uses the background rate and pitch.
+  /// Returns whether one category uses the context rate and pitch.
   /// </summary>
-  private static bool IsBackgroundCategory(ContentCategory category)
+  private static bool IsContextCategory(ContentCategory category)
   {
     return category is ContentCategory.Reasoning or
-      ContentCategory.SubagentReasoning;
+      ContentCategory.SubagentReasoning or ContentCategory.UserContext;
   }
 
   /// <summary>
@@ -2082,10 +2067,10 @@ internal sealed class MainForm : Form
 
   private sealed record VoiceRowControls(
     ComboBox Voice,
-    NumericUpDown ForegroundRate,
-    NumericUpDown ForegroundPitch,
-    NumericUpDown? BackgroundRate,
-    NumericUpDown? BackgroundPitch,
+    NumericUpDown MainRate,
+    NumericUpDown MainPitch,
+    NumericUpDown? ContextRate,
+    NumericUpDown? ContextPitch,
     NumericUpDown Volume,
     System.Windows.Forms.Timer PreviewTimer,
     string PreviewMessage);

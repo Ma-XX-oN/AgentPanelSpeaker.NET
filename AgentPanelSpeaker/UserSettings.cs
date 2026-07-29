@@ -20,18 +20,24 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 7;
+  public const int CurrentVersion = 8;
 
   /// <summary>
-  /// Gets the foreground speech profile used for background-agent results.
+  /// Gets the main speech profile used for background-agent results.
   /// </summary>
   public SpeechProfileSettings SubagentAssistant { get; init; } =
     new(SpeechProfileSettings.NotSpoken, 0, 0) { Volume = 100 };
 
   /// <summary>
-  /// Gets the background speech profile used for subagent reasoning.
+  /// Gets the context speech profile used for subagent reasoning.
   /// </summary>
   public SpeechProfileSettings SubagentReasoning { get; init; } =
+    new(SpeechProfileSettings.NotSpoken, 0, 0) { Volume = 100 };
+
+  /// <summary>
+  /// Gets the User context profile used for explicit Markdown blockquotes.
+  /// </summary>
+  public SpeechProfileSettings UserContext { get; init; } =
     new(SpeechProfileSettings.NotSpoken, 0, 0) { Volume = 100 };
 
   /// <summary>
@@ -63,6 +69,13 @@ internal sealed record UserSettings(
     string voice = string.IsNullOrWhiteSpace(defaultVoice)
       ? SpeechProfileSettings.NotSpoken
       : defaultVoice;
+    var userProfile = new SpeechProfileSettings(
+      SpeechProfileSettings.NotSpoken,
+      0,
+      0)
+    {
+      Volume = 100
+    };
     return new UserSettings(
       CurrentVersion,
       AgentSource.Auto,
@@ -70,13 +83,7 @@ internal sealed record UserSettings(
       ManualSessionPath: null,
       new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },
       new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },
-      new SpeechProfileSettings(
-        SpeechProfileSettings.NotSpoken,
-        0,
-        0)
-      {
-        Volume = 100
-      },
+      userProfile,
       SpokenFencedCodeTypes: string.Empty,
       SpeakLastExistingEnabledMessage: false,
       PollIntervalMilliseconds: 150,
@@ -98,6 +105,7 @@ internal sealed record UserSettings(
       {
         Volume = 100
       },
+      UserContext = userProfile,
       KeepDisplayOnWhileSpeaking = false
     };
   }
@@ -119,6 +127,7 @@ internal sealed record UserSettings(
       ContentCategory.SubagentAssistant => SubagentAssistant,
       ContentCategory.SubagentReasoning => SubagentReasoning,
       ContentCategory.User => User,
+      ContentCategory.UserContext => UserContext,
       _ => throw new ArgumentOutOfRangeException(
         nameof(category),
         category,

@@ -1757,11 +1757,11 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Groups Assistant and Reasoning as AI, opposite the User speaker.
+  /// Groups AI categories opposite both User main and User context speech.
   /// </summary>
   private static bool IsUserSpeaker(ContentCategory category)
   {
-    return category == ContentCategory.User;
+    return category is ContentCategory.User or ContentCategory.UserContext;
   }
 
   /// <summary>

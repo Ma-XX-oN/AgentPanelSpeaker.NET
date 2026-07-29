@@ -227,6 +227,8 @@ internal sealed class UserSettingsStore
           ? settings.Reasoning
           : settings.SubagentReasoning),
       User = NormalizeProfile(settings.User),
+      UserContext = NormalizeProfile(
+        settings.Version < 8 ? settings.User : settings.UserContext),
       SpokenFencedCodeTypes = FencedCodeTypeSet
         .Parse(settings.SpokenFencedCodeTypes)
         .NormalizedCsv,

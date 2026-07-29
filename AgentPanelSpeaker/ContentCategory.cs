@@ -1,8 +1,8 @@
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Identifies the conversational role and foreground/background style that owns
-/// one speech fragment.
+/// Identifies the conversational role and main/context style that owns one
+/// speech fragment.
 /// </summary>
 internal enum ContentCategory
 {
@@ -10,7 +10,8 @@ internal enum ContentCategory
   Reasoning,
   SubagentAssistant,
   SubagentReasoning,
-  User
+  User,
+  UserContext
 }
 
 /// <summary>
@@ -30,4 +31,14 @@ internal enum SpeechFragmentKind
 {
   Prose,
   FencedCodeLine
+}
+
+/// <summary>
+/// Identifies whether cleaned Markdown belongs to ordinary narration or quoted
+/// context.
+/// </summary>
+internal enum SpeechTextStyle
+{
+  Main,
+  Context
 }

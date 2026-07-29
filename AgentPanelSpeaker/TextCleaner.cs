@@ -197,7 +197,8 @@ internal static partial class TextCleaner
           heading.Groups[1].Value,
           fenceType,
           fenceBlockId,
-          fenceLineCount);
+          fenceLineCount,
+          SpeechTextStyle.Main);
         continue;
       }
 
@@ -217,7 +218,8 @@ internal static partial class TextCleaner
           line,
           fenceType,
           fenceBlockId,
-          fenceLineCount);
+          fenceLineCount,
+          SpeechTextStyle.Main);
         ++index;
         continue;
       }
@@ -280,7 +282,8 @@ internal static partial class TextCleaner
           IndentedCodeRegex().Replace(line, "$1"),
           fenceType,
           fenceBlockId,
-          fenceLineCount);
+          fenceLineCount,
+          SpeechTextStyle.Main);
         continue;
       }
 
@@ -298,7 +301,8 @@ internal static partial class TextCleaner
           NormalizeTableRow(line),
           fenceType,
           fenceBlockId,
-          fenceLineCount);
+          fenceLineCount,
+          SpeechTextStyle.Main);
         continue;
       }
 
@@ -336,7 +340,10 @@ internal static partial class TextCleaner
         current.ToString(),
         fenceType,
         fenceBlockId,
-        fenceLineCount);
+        fenceLineCount,
+        currentKind == ProseBlockKind.Quote
+          ? SpeechTextStyle.Context
+          : SpeechTextStyle.Main);
       current.Clear();
     }
     currentKind = ProseBlockKind.None;
@@ -350,7 +357,8 @@ internal static partial class TextCleaner
     string text,
     string fenceType,
     int fenceBlockId,
-    int fenceLineCount)
+    int fenceLineCount,
+    SpeechTextStyle style)
   {
     string cleaned = CleanProseBlock(text);
     if (cleaned.Length == 0)
@@ -365,7 +373,8 @@ internal static partial class TextCleaner
       fenceBlockId,
       -1,
       fenceLineCount,
-      PauseAfter: true));
+      PauseAfter: true,
+      Style: style));
   }
 
   /// <summary>
@@ -406,7 +415,8 @@ internal static partial class TextCleaner
         blockId,
         index,
         nonEmpty.Length,
-        PauseAfter: true));
+        PauseAfter: true,
+        Style: SpeechTextStyle.Main));
     }
   }
 
@@ -737,4 +747,5 @@ internal sealed record SpeechTextPart(
   int FenceBlockId,
   int FenceLineIndex,
   int FenceLineCount,
-  bool PauseAfter);
+  bool PauseAfter,
+  SpeechTextStyle Style);

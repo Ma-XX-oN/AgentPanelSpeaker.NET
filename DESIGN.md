@@ -1,5 +1,18 @@
 # Agent Panel Speaker internal design
 
+## v33 Main/Context speech styles
+
+`ContentCategory.UserContext` identifies cleaned prose that came from an
+explicit Markdown blockquote inside a genuine User record.  `TextCleaner`
+retains `SpeechTextStyle.Context` on quote blocks after removing Markdown
+prefixes.  `JsonlSessionMonitor` maps only quoted User parts to that
+category.
+
+The three shared voice rows expose Main and Context rate/pitch controls.  The
+AI rows use Context for reasoning, while the User row uses Context for quoted
+material.  Voice and volume remain shared within each row, so quote playback
+changes tone without claiming a different speaker.
+
 ## v32 display-awake ownership
 
 `MainForm.UpdateDisplayAwakeState()` is the single policy point for display
@@ -21,9 +34,9 @@ dictionary lookup output and the processing-time endpoint's definite assignment.
 ## v30 voice roles and background agents
 
 The speech matrix has three shared-voice roles: AI agent, AI subagent, and User.
-Both AI roles have foreground and background rate/pitch controls.  The User role
-has only foreground rate/pitch because typed prompts, Codex selections, and
-Claude queued commands all represent the same user-originated speech.
+All three roles now expose Main and Context rate/pitch controls.  AI Context
+is reasoning; User Context is explicit Markdown blockquotes.  Typed prompts,
+Codex selections, and Claude queued commands otherwise use User Main.
 
 Claude `Agent` tool-use records create `SubagentAssistant` start announcements.
 The matching top-level `tool_result` and completed `<task-notification>`
