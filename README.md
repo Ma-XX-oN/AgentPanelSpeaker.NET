@@ -1,4 +1,27 @@
-# Agent Panel Speaker v33
+# Agent Panel Speaker v35
+
+## v35
+
+Version 35 fixes the nullable-flow compiler error in
+`SessionLocator.ReadClaudeTitle()`.  The cached title returned by
+`ConcurrentDictionary.TryGetValue()` is treated as nullable until both lookup
+success and a non-null value are established.  Session-title behaviour is
+otherwise unchanged from version 34.
+
+## v34
+
+Version 34 compacts the Main/Context speech columns by wrapping their headings
+onto two lines at the numeric-control width.  Bare transport hotkeys now remain
+active while a spin control has focus, while editable text and editable combo
+boxes continue to retain ordinary typing.
+
+Claude session names now prefer the JSONL `ai-title` value shown by Claude Code.
+The first-message fallback skips Markdown fence markers such as ` ```json `, so
+a fence opener can no longer become the displayed session name.
+
+While monitoring, **Auto-follow newest session** remains visibly checked at its
+normal contrast.  The checkbox is temporarily non-toggling until monitoring
+stops, rather than being disabled and rendered with a faded checkmark.
 
 ## v33
 
@@ -431,9 +454,10 @@ Activity logs both spoken and skipped blocks with the normalized fence type.
 | clock | `'` or `Alt+'` | Speak processing time for selected turn |
 
 Hotkeys work only while Agent Panel Speaker is active.  A hotkey focuses its
-corresponding button before invoking it.  Bare hotkeys do not fire while an
-editable text, numeric, or drop-down field has focus.  Alt variants remain
-available from editable controls.
+corresponding button before invoking it.  Bare hotkeys remain active while a
+spin control has focus because the shortcuts are not numeric.  Editable text
+and editable drop-down fields retain bare keys; Alt variants remain available
+from those controls.
 
 Speaker navigation treats consecutive User fragments as one User run and
 consecutive Reasoning/Assistant fragments as one AI run.  From AI it jumps to
@@ -458,8 +482,10 @@ another file changes that pin and clears queued speech from the previous
 conversation.
 
 **Auto-follow newest session** is the only mode that may switch to a newly
-modified JSONL while monitoring.  An automatic switch starts at the new file's
-live end rather than replaying old content.
+modified JSONL while monitoring.  Its checkmark remains at normal contrast
+while monitoring, but the value cannot be changed until monitoring stops.  An
+automatic switch starts at the new file's live end rather than replaying old
+content.
 
 Existing conversation text is indexed at start, so rewind is immediately
 available.  **Speak complete latest turn on start** begins at the final User

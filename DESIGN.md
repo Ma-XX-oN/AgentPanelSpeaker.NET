@@ -1,5 +1,28 @@
 # Agent Panel Speaker internal design
 
+## v35 compiler correction
+
+`SessionLocator.ReadClaudeTitle()` receives the
+`ConcurrentDictionary.TryGetValue()` output as `string?` and returns it only
+after an explicit non-null check.  This satisfies nullable flow analysis
+without changing cache lookup or title fallback behaviour.
+
+## v34 compact controls, title authority, and stable follow state
+
+`MainForm.AddSpeechHeader()` uses fixed-width two-line labels for Main and
+Context rate/pitch columns.  Their widths match the associated
+`NumericUpDown` controls, so header text no longer expands the table columns.
+
+`MainForm.ProcessCmdKey()` permits bare transport shortcuts when focus is inside
+an `UpDownBase`.  Editable `TextBoxBase` and editable `ComboBox` controls still
+retain bare input, and every Alt shortcut remains global to the active form.
+
+`SessionLocator.ReadClaudeTitle()` prefers Claude's authoritative `ai-title`,
+then falls back to the first User or Assistant text.  Fallback extraction skips
+Markdown fence-only lines.  `MainForm.UpdateControlState()` keeps Auto-follow
+enabled for normal rendering while setting `AutoCheck` false during monitoring,
+so its state remains visible but immutable until Stop.
+
 ## v33 Main/Context speech styles
 
 `ContentCategory.UserContext` identifies cleaned prose that came from an
@@ -460,9 +483,9 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 | `'` / `Alt+'` | Speak AI processing time |
 
 They operate only while the Agent Panel Speaker window has focus.  The invoked
-button receives focus before `PerformClick` runs.  Bare keys are ignored while
-an editable text, numeric, or drop-down control has focus; Alt variants remain
-available there.
+button receives focus before `PerformClick` runs.  Bare keys remain active in
+numeric spin controls.  Editable text and editable drop-down controls retain
+bare keys; Alt variants remain available there.
 
 ## Processing-time announcements
 

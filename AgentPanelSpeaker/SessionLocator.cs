@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -9,6 +10,10 @@ namespace AgentPanelSpeaker;
 internal static partial class SessionLocator
 {
   private const int MaximumTitleLength = 160;
+  private const int MaximumClaudeTitleRecords = 4096;
+
+  private static readonly ConcurrentDictionary<string, string>
+    ClaudeTitleCache = new(StringComparer.OrdinalIgnoreCase);
 
   /// <summary>
   /// Finds the most recently written session for the requested source.
@@ -268,14 +273,24 @@ internal static partial class SessionLocator
   }
 
   /// <summary>
-  /// Reads the first real Claude user message, with assistant fallback.
+  /// Reads Claude's session title, with conversational fallbacks.
   /// </summary>
   private static string ReadClaudeTitle(string sessionPath)
   {
+    if (ClaudeTitleCache.TryGetValue(
+          sessionPath,
+          out string? cachedTitle) &&
+        cachedTitle is not null)
+    {
+      return cachedTitle;
+    }
+
+    string userFallback = string.Empty;
     string assistantFallback = string.Empty;
     try
     {
-      foreach (string line in ReadSharedLines(sessionPath))
+      foreach (string line in ReadSharedLines(sessionPath)
+        .Take(MaximumClaudeTitleRecords))
       {
         using JsonDocument document = JsonDocument.Parse(line);
         JsonElement root = document.RootElement;
@@ -285,8 +300,25 @@ internal static partial class SessionLocator
           continue;
         }
 
-        if (!TryGetString(root, "type", out string recordType) ||
-            !root.TryGetProperty("message", out JsonElement message) ||
+        if (!TryGetString(root, "type", out string recordType))
+        {
+          continue;
+        }
+
+        if (recordType.Equals("ai-title", StringComparison.Ordinal) &&
+            TryGetString(root, "aiTitle", out string resolvedTitle))
+        {
+          string candidate = FirstMeaningfulLine(resolvedTitle);
+          if (candidate.Length != 0)
+          {
+            string title = LimitTitle(candidate);
+            ClaudeTitleCache[sessionPath] = title;
+            return title;
+          }
+          continue;
+        }
+
+        if (!root.TryGetProperty("message", out JsonElement message) ||
             !message.TryGetProperty("content", out JsonElement content) ||
             content.ValueKind != JsonValueKind.Array)
         {
@@ -316,9 +348,10 @@ internal static partial class SessionLocator
             continue;
           }
 
-          if (recordType.Equals("user", StringComparison.Ordinal))
+          if (recordType.Equals("user", StringComparison.Ordinal) &&
+              userFallback.Length == 0)
           {
-            return LimitTitle(title);
+            userFallback = LimitTitle(title);
           }
 
           if (recordType.Equals("assistant", StringComparison.Ordinal) &&
@@ -336,6 +369,10 @@ internal static partial class SessionLocator
     {
     }
 
+    if (userFallback.Length != 0)
+    {
+      return userFallback;
+    }
     return assistantFallback.Length == 0
       ? Path.GetFileNameWithoutExtension(sessionPath)
       : assistantFallback;
@@ -469,13 +506,22 @@ internal static partial class SessionLocator
     foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
     {
       string candidate = line.Trim();
-      if (candidate.Length != 0)
+      if (candidate.Length != 0 && !IsMarkdownFence(candidate))
       {
         return candidate;
       }
     }
 
     return string.Empty;
+  }
+
+  /// <summary>
+  /// Returns whether one complete line is only a Markdown fence marker.
+  /// </summary>
+  private static bool IsMarkdownFence(string line)
+  {
+    return line.StartsWith("```", StringComparison.Ordinal) ||
+      line.StartsWith("~~~", StringComparison.Ordinal);
   }
 
   /// <summary>

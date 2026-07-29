@@ -10,6 +10,8 @@ internal sealed class MainForm : Form
 {
   private const int TransportButtonWidth = 50;
   private const int TransportButtonHeight = 34;
+  private const int SpeechNumericWidth = 60;
+  private const int SpeechVolumeWidth = 70;
 
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
@@ -96,7 +98,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v33";
+    Text = "Agent Panel Speaker v35";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -411,14 +413,20 @@ internal sealed class MainForm : Form
     table.Controls.Add(_voiceHeaderLabel, 1, 0);
     UpdateVoiceHeaderLabel();
 
-    string[] remainingHeadings =
+    (string Text, int Width)[] remainingHeadings =
     {
-      "Main rate", "Main pitch", "Context rate", "Context pitch", "Volume"
+      ("Main\nrate", SpeechNumericWidth),
+      ("Main\npitch", SpeechNumericWidth),
+      ("Context\nrate", SpeechNumericWidth),
+      ("Context\npitch", SpeechNumericWidth),
+      ("Volume", SpeechVolumeWidth)
     };
     for (int index = 0; index < remainingHeadings.Length; ++index)
     {
       table.Controls.Add(
-        MakeSectionLabel(remainingHeadings[index]),
+        MakeSpeechColumnHeader(
+          remainingHeadings[index].Text,
+          remainingHeadings[index].Width),
         index + 2,
         0);
     }
@@ -442,15 +450,15 @@ internal sealed class MainForm : Form
     };
     voice.FormattingEnabled = true;
     voice.Format += VoiceComboBoxFormat;
-    var mainRate = CreateNumeric(-10, 10, 0, 60);
-    var mainPitch = CreateNumeric(-10, 10, 0, 60);
+    var mainRate = CreateNumeric(-10, 10, 0, SpeechNumericWidth);
+    var mainPitch = CreateNumeric(-10, 10, 0, SpeechNumericWidth);
     NumericUpDown? contextRate = hasContextStyle
-      ? CreateNumeric(-10, 10, 0, 60)
+      ? CreateNumeric(-10, 10, 0, SpeechNumericWidth)
       : null;
     NumericUpDown? contextPitch = hasContextStyle
-      ? CreateNumeric(-10, 10, 0, 60)
+      ? CreateNumeric(-10, 10, 0, SpeechNumericWidth)
       : null;
-    var volume = CreateNumeric(0, 100, 100, 70);
+    var volume = CreateNumeric(0, 100, 100, SpeechVolumeWidth);
     var previewTimer = new System.Windows.Forms.Timer
     {
       Interval = 350
@@ -1510,10 +1518,6 @@ internal sealed class MainForm : Form
     {
       return base.ProcessCmdKey(ref message, keyData);
     }
-    if (hasNoModifiers && IsEditableControlFocused())
-    {
-      return base.ProcessCmdKey(ref message, keyData);
-    }
 
     Button? button = keyCode switch
     {
@@ -1529,6 +1533,10 @@ internal sealed class MainForm : Form
       _ => null
     };
     if (button is null)
+    {
+      return base.ProcessCmdKey(ref message, keyData);
+    }
+    if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
     {
       return base.ProcessCmdKey(ref message, keyData);
     }
@@ -1551,9 +1559,9 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Returns whether keyboard input currently belongs to an editable control.
+  /// Returns whether a text-entry control should retain one bare shortcut.
   /// </summary>
-  private bool IsEditableControlFocused()
+  private bool IsTransportShortcutBlockedByFocusedControl()
   {
     Control? focused = this;
     while (focused is ContainerControl container &&
@@ -1562,14 +1570,21 @@ internal sealed class MainForm : Form
       focused = active;
     }
 
+    var ancestry = new List<Control>();
     for (Control? control = focused; control is not null;
          control = control.Parent)
     {
+      ancestry.Add(control);
+    }
+
+    if (ancestry.Any(control => control is UpDownBase))
+    {
+      return false;
+    }
+
+    foreach (Control control in ancestry)
+    {
       if (control is TextBoxBase textBox && !textBox.ReadOnly)
-      {
-        return true;
-      }
-      if (control is UpDownBase)
       {
         return true;
       }
@@ -1619,7 +1634,8 @@ internal sealed class MainForm : Form
     _sourceComboBox.Enabled = !running;
     _detectLatestButton.Enabled = !running;
     _browseButton.Enabled = !running;
-    _followLatestCheckBox.Enabled = !running && !_pathIsManual;
+    _followLatestCheckBox.AutoCheck = !running;
+    _followLatestCheckBox.Enabled = !_pathIsManual;
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
     _playStopButton.Enabled = !_playStopTransitioning;
@@ -2002,6 +2018,23 @@ internal sealed class MainForm : Form
       Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
       Margin = new Padding(4),
       Text = text
+    };
+  }
+
+  /// <summary>
+  /// Creates a compact two-line speech-table column heading.
+  /// </summary>
+  private static Label MakeSpeechColumnHeader(string text, int width)
+  {
+    return new Label
+    {
+      AutoSize = false,
+      Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
+      Height = 38,
+      Margin = new Padding(3),
+      Text = text,
+      TextAlign = ContentAlignment.MiddleCenter,
+      Width = width
     };
   }
 
