@@ -1,5 +1,27 @@
 # Agent Panel Speaker internal design
 
+## v50 low-latency marker channel and bounded colour updates
+
+`TranscriptView` sends `playback` and `settings` messages with
+`CoreWebView2.PostWebMessageAsJson()`.  Playback messages are one-way and carry a
+monotonic sequence number; the page ignores stale values.  Settings live in one
+C# mailbox and are sampled at 100 ms, so pointer motion cannot append an
+unbounded series of WebView calls.
+
+`TranscriptSettingsPopup` updates its native swatches immediately but publishes
+colour changes at most once per 75 ms.  `MainForm` also updates the speech
+worker's boundary-poll interval only when the tracking setting itself changes.
+
+The page fades retired words with the Web Animations API.  Each word owns at
+most one fade animation, and applying an active or paused marker cancels that
+animation first.  `clearMarkers()` touches only the current range instead of
+walking the complete transcript on every word boundary.  These changes avoid
+both timer backlogs and an O(total rendered words) operation per spoken token.
+
+`ParentAutoCloseRequested` implements the nested-overlay grace-period contract
+directly.  Expiry or a revisit-and-leave closes the parent even when the pointer
+is still over another part of the parent overlay.
+
 ## v49 render reuse and coalesced WebView updates
 
 `TranscriptView.SelectSession()` treats a matching source and path as an

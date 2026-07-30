@@ -15,6 +15,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private readonly TrackBar _trackingSlider = new();
   private readonly Label _trackingValue = new();
   private readonly System.Windows.Forms.Timer _colourOpenTimer = new();
+  private readonly System.Windows.Forms.Timer _colourNotificationTimer = new();
   private readonly System.Windows.Forms.Timer _parentCloseSuppressionTimer = new();
   private TranscriptColourPopup? _colourPopup;
   private Color _previousColour;
@@ -22,6 +23,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private bool _dark;
   private bool _updating;
   private bool _suppressColourHoverUntilLeave;
+  private bool _colourNotificationPending;
   private bool _parentCloseSuppressed;
   private bool _returnedToColourAnchor;
 
@@ -118,13 +120,19 @@ internal sealed class TranscriptSettingsPopup : UserControl
         ShowColourPopup(focusPopup: false);
       }
     };
+    _colourNotificationTimer.Interval = 75;
+    _colourNotificationTimer.Tick += (_, _) =>
+    {
+      _colourNotificationTimer.Stop();
+      PublishPendingColourChange();
+    };
     _parentCloseSuppressionTimer.Interval = 3000;
     _parentCloseSuppressionTimer.Tick += (_, _) =>
     {
       _parentCloseSuppressionTimer.Stop();
       _parentCloseSuppressed = false;
       _returnedToColourAnchor = false;
-      PointerLeft?.Invoke(this, EventArgs.Empty);
+      ParentAutoCloseRequested?.Invoke(this, EventArgs.Empty);
     };
 
     Paint += PaintBorder;
@@ -137,6 +145,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public event EventHandler<FocusTraversalRequestedEventArgs>?
     FocusTraversalRequested;
   public event EventHandler? DismissRequested;
+  public event EventHandler? ParentAutoCloseRequested;
   public event EventHandler? PointerEntered;
   public event EventHandler? PointerLeft;
 
@@ -184,6 +193,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public void PrepareForHide()
   {
     _colourOpenTimer.Stop();
+    FlushPendingColourChange();
     _parentCloseSuppressionTimer.Stop();
     _parentCloseSuppressed = false;
     _returnedToColourAnchor = false;
@@ -232,6 +242,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     if (disposing)
     {
       _colourOpenTimer.Dispose();
+      _colourNotificationTimer.Dispose();
       _parentCloseSuppressionTimer.Dispose();
       _colourPopup?.Dispose();
     }
@@ -348,6 +359,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       popup.Visible = false;
     }
+    FlushPendingColourChange();
     _suppressColourHoverUntilLeave = suppressHoverUntilLeave &&
       IsPointerInside(_currentSwatch);
     if (returnFocus && _currentSwatch.CanFocus)
@@ -393,7 +405,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       _parentCloseSuppressionTimer.Stop();
       _parentCloseSuppressed = false;
       _returnedToColourAnchor = false;
-      PointerLeft?.Invoke(this, EventArgs.Empty);
+      ParentAutoCloseRequested?.Invoke(this, EventArgs.Empty);
     }
   }
 
@@ -424,6 +436,35 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       popup.SetColours(_currentColour, _previousColour);
     }
+    if (sender is TranscriptColourPopup)
+    {
+      _colourNotificationPending = true;
+      if (!_colourNotificationTimer.Enabled)
+      {
+        _colourNotificationTimer.Start();
+      }
+    }
+    else
+    {
+      _colourNotificationTimer.Stop();
+      _colourNotificationPending = false;
+      SettingsChanged?.Invoke(this, EventArgs.Empty);
+    }
+  }
+
+  private void FlushPendingColourChange()
+  {
+    _colourNotificationTimer.Stop();
+    PublishPendingColourChange();
+  }
+
+  private void PublishPendingColourChange()
+  {
+    if (!_colourNotificationPending)
+    {
+      return;
+    }
+    _colourNotificationPending = false;
     SettingsChanged?.Invoke(this, EventArgs.Empty);
   }
 

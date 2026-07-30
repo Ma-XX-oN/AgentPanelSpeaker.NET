@@ -16,6 +16,7 @@ internal sealed class TranscriptView : UserControl
   private readonly Label _loadingLabel = new();
   private readonly Label _failureLabel = new();
   private readonly System.Windows.Forms.Timer _refreshTimer = new();
+  private readonly System.Windows.Forms.Timer _settingsApplyTimer = new();
   private readonly MarkdownPipeline _pipeline;
   private string? _sessionPath;
   private string _sessionDisplayName = string.Empty;
@@ -33,10 +34,9 @@ internal sealed class TranscriptView : UserControl
   private CancellationTokenSource? _renderCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
-  private bool _settingsApplyInProgress;
   private bool _settingsApplyPending;
-  private bool _playbackApplyInProgress;
-  private bool _playbackApplyPending;
+  private long _settingsMessageSequence;
+  private long _playbackMessageSequence;
 
   /// <summary>
   /// Initializes the embedded renderer and live-file refresh timer.
@@ -65,6 +65,8 @@ internal sealed class TranscriptView : UserControl
       WebViewInitializationCompleted;
     _refreshTimer.Interval = 250;
     _refreshTimer.Tick += RefreshTimerTick;
+    _settingsApplyTimer.Interval = 100;
+    _settingsApplyTimer.Tick += SettingsApplyTimerTick;
     _ = InitializeAsync();
   }
 
@@ -148,106 +150,104 @@ internal sealed class TranscriptView : UserControl
     _failureLabel.ForeColor = text;
     if (_initialized)
     {
-      QueueSettingsApply();
+      QueueSettingsApply(immediate: false);
     }
   }
 
   /// <summary>
-  /// Updates the filled or paused transcript marker.
+  /// Updates the filled or paused transcript marker through a low-latency,
+  /// one-way WebView message.
   /// </summary>
   public void ShowPlaybackPosition(TranscriptPlaybackPosition position)
   {
     _pendingPosition = position;
-    if (!_initialized)
+    if (_initialized && !_refreshInProgress)
     {
-      return;
+      PostPlaybackPosition(position);
     }
-
-    QueuePlaybackApply();
   }
 
-  private void QueueSettingsApply()
+  private void QueueSettingsApply(bool immediate)
   {
     if (!_initialized)
     {
       return;
     }
-    if (_settingsApplyInProgress)
+
+    _settingsApplyPending = true;
+    if (immediate)
     {
-      _settingsApplyPending = true;
+      _settingsApplyTimer.Stop();
+      PostLatestSettings();
       return;
     }
-    _ = ApplyLatestSettingsAsync();
+    if (!_settingsApplyTimer.Enabled)
+    {
+      _settingsApplyTimer.Start();
+    }
   }
 
-  private async Task ApplyLatestSettingsAsync()
+  private void SettingsApplyTimerTick(object? sender, EventArgs eventArgs)
   {
-    _settingsApplyInProgress = true;
+    _settingsApplyTimer.Stop();
+    PostLatestSettings();
+  }
+
+  private void PostLatestSettings()
+  {
+    if (!_initialized || !_settingsApplyPending)
+    {
+      return;
+    }
+
+    _settingsApplyPending = false;
+    TranscriptSettings settings = _settings;
+    bool dark = _dark;
+    Color colour = settings.GetHighlightColour(dark);
+    PostMessage(new
+    {
+      type = "settings",
+      sequence = ++_settingsMessageSequence,
+      highlight = ToCss(colour),
+      duration = settings.FadeMilliseconds,
+      follow = settings.FollowSpeech,
+      dark
+    });
+  }
+
+  private void PostPlaybackPosition(TranscriptPlaybackPosition position)
+  {
+    PostMessage(new
+    {
+      type = "playback",
+      sequence = ++_playbackMessageSequence,
+      state = ToScriptState(position.State),
+      fragmentText = position.FragmentText,
+      wordIndex = position.WordIndex,
+      wordText = position.Word,
+      nodeId = position.NodeId,
+      follow = _settings.FollowSpeech
+    });
+  }
+
+  private void PostMessage<T>(T message)
+  {
     try
     {
-      do
+      CoreWebView2? core = _webView.CoreWebView2;
+      if (!_initialized || _webView.IsDisposed || core is null)
       {
-        _settingsApplyPending = false;
-        TranscriptSettings settings = _settings;
-        bool dark = _dark;
-        Color colour = settings.GetHighlightColour(dark);
-        await ExecuteAsync(
-          $"applySettings({JsonSerializer.Serialize(ToCss(colour))}," +
-          $"{settings.FadeMilliseconds}," +
-          $"{JsonSerializer.Serialize(settings.FollowSpeech)}," +
-          $"{JsonSerializer.Serialize(dark)});");
+        return;
       }
-      while (_settingsApplyPending && !_webView.IsDisposed);
+      core.PostWebMessageAsJson(JsonSerializer.Serialize(message));
     }
-    finally
+    catch (Exception exception) when (
+      exception is InvalidOperationException or ObjectDisposedException)
     {
-      _settingsApplyInProgress = false;
-    }
-  }
-
-  private void QueuePlaybackApply()
-  {
-    if (!_initialized)
-    {
-      return;
-    }
-    if (_playbackApplyInProgress || _refreshInProgress)
-    {
-      _playbackApplyPending = true;
-      return;
-    }
-    _ = ApplyLatestPlaybackPositionAsync();
-  }
-
-  private async Task ApplyLatestPlaybackPositionAsync()
-  {
-    _playbackApplyInProgress = true;
-    try
-    {
-      do
+      DiagnosticLog.Write("transcript.message_failed", new
       {
-        _playbackApplyPending = false;
-        TranscriptPlaybackPosition? position = _pendingPosition;
-        if (position is not null)
-        {
-          await ExecuteAsync(BuildPlaybackScript(
-            position,
-            ToScriptState(position.State)));
-        }
-      }
-      while (_playbackApplyPending &&
-             !_refreshInProgress &&
-             !_webView.IsDisposed);
-    }
-    finally
-    {
-      _playbackApplyInProgress = false;
-      if (_playbackApplyPending &&
-          !_refreshInProgress &&
-          !_webView.IsDisposed)
-      {
-        QueuePlaybackApply();
-      }
+        exception = exception.ToString()
+      });
     }
   }
 
@@ -268,6 +268,8 @@ internal sealed class TranscriptView : UserControl
       CancelActiveRender();
       _refreshTimer.Stop();
       _refreshTimer.Dispose();
+      _settingsApplyTimer.Stop();
+      _settingsApplyTimer.Dispose();
       _webView.Dispose();
     }
     base.Dispose(disposing);
@@ -327,6 +329,7 @@ internal sealed class TranscriptView : UserControl
     _failureLabel.Visible = false;
     _webView.Visible = true;
     ApplySettings(_settings, _dark);
+    QueueSettingsApply(immediate: true);
     if (string.IsNullOrWhiteSpace(_sessionPath))
     {
       ShowLoading("Select a session to view its transcript.");
@@ -434,10 +437,6 @@ internal sealed class TranscriptView : UserControl
         JsonSerializer.Serialize(payload.Html) + "," +
         JsonSerializer.Serialize(!force) + "," +
         JsonSerializer.Serialize(payload.Identities) + ");";
-      if (_pendingPosition is TranscriptPlaybackPosition pending)
-      {
-        script += BuildPlaybackScript(pending, ToScriptState(pending.State));
-      }
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
       {
@@ -450,8 +449,11 @@ internal sealed class TranscriptView : UserControl
       _lastLength = info.Length;
       HideLoading();
       _restoredFromSettings = false;
-      QueueSettingsApply();
-      QueuePlaybackApply();
+      QueueSettingsApply(immediate: true);
+      if (_pendingPosition is TranscriptPlaybackPosition pending)
+      {
+        PostPlaybackPosition(pending);
+      }
       DiagnosticLog.Write("transcript.render_completed", new
       {
         path,
@@ -498,10 +500,6 @@ internal sealed class TranscriptView : UserControl
           _refreshPendingForce = false;
           QueueRefresh(pendingForce);
         }
-        else if (_playbackApplyPending)
-        {
-          QueuePlaybackApply();
-        }
       }
     }
   }
@@ -540,19 +538,6 @@ internal sealed class TranscriptView : UserControl
   private void HideLoading()
   {
     _loadingLabel.Visible = false;
-  }
-
-  private string BuildPlaybackScript(
-    TranscriptPlaybackPosition position,
-    string state)
-  {
-    return "setPlayback(" +
-      JsonSerializer.Serialize(state) + "," +
-      JsonSerializer.Serialize(position.FragmentText) + "," +
-      position.WordIndex + "," +
-      JsonSerializer.Serialize(position.Word) + "," +
-      position.NodeId + "," +
-      JsonSerializer.Serialize(_settings.FollowSpeech) + ");";
   }
 
   private static string ToScriptState(TranscriptPlaybackState state)
@@ -781,9 +766,8 @@ details {
   background: color-mix(in srgb, var(--panel) 65%, transparent);
 }
 summary { cursor: pointer; color: var(--muted); font-weight: 600; }
-.word { border-radius: 2px; transition: background-color var(--fade-ms) linear; }
-.word.active { background: var(--highlight); transition: none; }
-.word.fading { background: transparent; }
+.word { border-radius: 2px; }
+.word.active { background: var(--highlight); }
 .word.paused {
   outline: 2px solid var(--highlight);
   outline-offset: 1px;
@@ -820,6 +804,9 @@ let currentFragmentEnd = -1;
 let currentBoundaryWordIndex = -1;
 let fadeMs = 250;
 let followSpeech = true;
+let latestPlaybackSequence = 0;
+let latestSettingsSequence = 0;
+const fadingAnimations = new WeakMap();
 let knownNodeIds = new Set();
 let displayWordsByRecord = new Map();
 let lexicalWordsByRecord = new Map();
@@ -1222,22 +1209,34 @@ function reveal(element) {
   }
 }
 
+function cancelFade(word) {
+  const animation = fadingAnimations.get(word);
+  if (animation) {
+    animation.cancel();
+    fadingAnimations.delete(word);
+  }
+}
+
 function retireCurrentWord(useFade) {
   if (currentIndex < 0) return;
   const end = Math.max(currentIndex, currentEndIndex);
+  const highlight = getComputedStyle(document.documentElement)
+    .getPropertyValue('--highlight').trim();
   for (let index = currentIndex; index <= end; ++index) {
     const previous = words[index];
     if (!previous) continue;
     previous.classList.remove('active');
+    cancelFade(previous);
     if (useFade && fadeMs > 0) {
-      previous.style.backgroundColor = 'var(--highlight)';
-      requestAnimationFrame(() => {
-        previous.classList.add('fading');
-        setTimeout(() => {
-          previous.classList.remove('fading');
-          previous.style.backgroundColor = '';
-        }, fadeMs);
-      });
+      const animation = previous.animate(
+        [
+          {backgroundColor: highlight},
+          {backgroundColor: 'transparent'}
+        ],
+        {duration: fadeMs, easing: 'linear'});
+      fadingAnimations.set(previous, animation);
+      animation.onfinish = () => fadingAnimations.delete(previous);
+      animation.oncancel = () => fadingAnimations.delete(previous);
     }
   }
   currentIndex = -1;
@@ -1245,7 +1244,12 @@ function retireCurrentWord(useFade) {
 }
 
 function clearMarkers() {
-  for (const word of words) word.classList.remove('paused');
+  if (currentIndex >= 0) {
+    const end = Math.max(currentIndex, currentEndIndex);
+    for (let index = currentIndex; index <= end; ++index) {
+      words[index]?.classList.remove('paused');
+    }
+  }
   liveEndMarker.style.display = 'none';
 }
 
@@ -1306,7 +1310,10 @@ function findBoundaryRange(fragmentRange, wordText, wordIndex, reset) {
 
 function applyRangeClass(range, className) {
   for (let index = range.start; index <= range.end; ++index) {
-    words[index]?.classList.add(className);
+    const word = words[index];
+    if (!word) continue;
+    cancelFade(word);
+    word.classList.add(className);
   }
 }
 
@@ -1372,7 +1379,22 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
 
 chrome.webview.addEventListener('message', event => {
   const data = event.data;
-  if (!data || data.type !== 'playback') return;
+  if (!data) return;
+  if (data.type === 'settings') {
+    const sequence = Number(data.sequence || 0);
+    if (sequence < latestSettingsSequence) return;
+    latestSettingsSequence = sequence;
+    applySettings(
+      data.highlight,
+      data.duration,
+      data.follow,
+      data.dark);
+    return;
+  }
+  if (data.type !== 'playback') return;
+  const sequence = Number(data.sequence || 0);
+  if (sequence < latestPlaybackSequence) return;
+  latestPlaybackSequence = sequence;
   setPlayback(
     data.state,
     data.fragmentText,

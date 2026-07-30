@@ -97,6 +97,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _voiceSettingPreviewActive;
   private bool _diagnosticsMaximized;
   private bool _suppressTranscriptSettingsHoverUntilLeave;
+  private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
   private int _monitorSession;
 
@@ -132,7 +133,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v49";
+    Text = "Agent Panel Speaker v50";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -427,6 +428,10 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsPopup.DismissRequested += (_, _) =>
       HideTranscriptSettingsPopup(
         returnFocus: true,
+        suppressHoverUntilLeave: true);
+    _transcriptSettingsPopup.ParentAutoCloseRequested += (_, _) =>
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
         suppressHoverUntilLeave: true);
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
     _transcriptSettingsOpenTimer.Tick += (_, _) =>
@@ -803,6 +808,8 @@ internal sealed class MainForm : Form, IMessageFilter
         ThemeManager.IsDark(settings.Theme));
       _speech.SetWordBoundaryPollMilliseconds(
         settings.Transcript.HighlightUpdateMilliseconds);
+      _appliedTranscriptTrackingMilliseconds =
+        settings.Transcript.HighlightUpdateMilliseconds;
       _diagnosticsMaximized = settings.Transcript.Maximized;
       LoadVoiceRow(
         SpeechRole.Agent,
@@ -1620,8 +1627,14 @@ internal sealed class MainForm : Form, IMessageFilter
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
     _transcriptView.ApplySettings(settings, dark);
-    _speech.SetWordBoundaryPollMilliseconds(
-      settings.HighlightUpdateMilliseconds);
+    if (_appliedTranscriptTrackingMilliseconds !=
+        settings.HighlightUpdateMilliseconds)
+    {
+      _speech.SetWordBoundaryPollMilliseconds(
+        settings.HighlightUpdateMilliseconds);
+      _appliedTranscriptTrackingMilliseconds =
+        settings.HighlightUpdateMilliseconds;
+    }
     _transcriptSettingsSaveTimer.Stop();
     _transcriptSettingsSaveTimer.Start();
   }

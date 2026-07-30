@@ -1,4 +1,26 @@
-# Agent Panel Speaker v49
+# Agent Panel Speaker v50
+
+## v50
+
+Version 50 sends speech-marker updates through one-way WebView messages instead
+of one acknowledged `ExecuteScriptAsync()` call per spoken token.  Playback
+updates therefore no longer wait behind transcript-colour updates.
+
+Transcript settings use a latest-value mailbox sampled at 100 ms.  Continuous
+colour-wheel movement replaces the pending colour instead of adding WebView
+work, and the nested picker limits parent notifications to one every 75 ms.
+The final colour is flushed when the picker closes.
+
+Retired word highlights now use Web Animations rather than inline styles plus
+queued timers.  A new active word cancels any older fade on that word, preventing
+a delayed WebView event loop from leaving a long highlighted trail.  Each word
+update also clears only the previous marker instead of scanning every rendered
+word in a large transcript.
+
+The parent Transcript Settings overlay now closes directly when the nested
+colour picker's three-second grace period expires, or when the pointer revisits
+and leaves the colour swatch.  That close no longer depends on a second hover
+check that kept the parent open while the pointer remained inside it.
 
 ## v49
 
