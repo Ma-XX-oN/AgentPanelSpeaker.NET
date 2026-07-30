@@ -1,5 +1,67 @@
 # Agent Panel Speaker internal design
 
+## v46 WebView keyboard bridge correction
+
+`TranscriptView` does not subscribe to a native accelerator event.  The
+Microsoft.Web.WebView2 1.0.4078.44 WinForms wrapper used by the project exposes
+neither `CoreWebView2Controller` nor `AcceleratorKeyPressed`.  The rendered page
+handles transport keys during DOM capture, suppresses their browser action, and
+posts a `transport` message through `chrome.webview`.  `WebMessageReceived` maps
+that message to `TransportKeyPressed`; `MainForm` remains the single owner of the
+transport command.
+
+## v45 symbol-aware playback
+
+The rendered token index now contains lexical words and individual visible
+symbols.  `TranscriptNodeIdentityMap` segments are matched against the complete
+token stream first; lexical-only matching remains the fallback for Markdown
+constructs whose punctuation is not present in the rendered DOM.  Each matched
+segment assigns its node ID to the entire displayed range, including operators
+between words.
+
+Playback resolves `SpeechWordBoundary.Text` inside the mapped fragment range
+instead of treating the boundary ordinal as a direct DOM-word offset.  A single
+speech boundary can activate a range of symbol spans, while unspoken punctuation
+does not advance the marker.  `SpeechTokenization` supplies the matching C# rule
+for approximate boundaries, initial markers, and restart positions.
+
+## v44 nested colour editor, asynchronous rendering, and pause unlock
+
+`TranscriptSettingsPopup` owns a compact `TranscriptColourPopup` child overlay.
+The child is attached to the same `MainForm` rather than creating a top-level
+window.  Boundary Tab traversal and Escape hide only the child and return focus
+to the current-colour swatch.  Pointer dismissal arms a three-second parent
+close suppression interval; revisiting and leaving the swatch ends that interval
+early.  `TranscriptColourPopup.ApplyTheme()` supplies explicit dark and light
+surfaces for the Cyotek `ColorWheel` and its swatches.
+
+`MainForm.UpdateControlState()` treats paused monitored playback as a
+reconfiguration state rather than an active-playback lock.  Source-changing
+commands call `StopPausedMonitoringForReconfiguration()` before replacing the
+session, preserving one monitor and one speech-history owner.
+
+`TranscriptView` performs `TranscriptMarkdownFormatter.Format()` and
+`TranscriptNodeIdentityMap.Build()` in one serialized background render task.
+The UI displays a themed loading surface until `replaceTranscript()` completes.
+Generation checks discard a render belonging to a previously selected file,
+and one pending refresh is coalesced while a render is active.
+
+`TextCleaner` recursively parses the contents of Markdown blockquotes after
+removing one quote prefix.  Every nested heading, paragraph, list item, and
+fenced-code line therefore produces its own `SpeechTextPart`; a source block
+boundary is a navigation break without requiring terminal punctuation.
+
+`MainForm.PreFilterMessage()` associates key messages with the form through
+`GetAncestor(..., GA_ROOT)` instead of `Form.ActiveForm`.  This preserves bare
+transport shortcuts when a native WebView2 child owns focus in maximized mode.
+The controller accelerator and in-page JavaScript paths remain fallbacks.
+
+`DiagnosticLog.OpenCurrentLogInExplorer()` runs an STA Shell Automation worker.
+It selects the current JSONL log in an Explorer window already at the Logs
+folder, otherwise navigates the first reusable Explorer window there and waits
+for navigation before selecting the file.  A new Explorer window is the final
+fallback.
+
 ## v43 queued-command rendering and record-scoped identity
 
 `TranscriptMarkdownFormatter` now renders Claude `attachment` records whose

@@ -17,6 +17,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmLineScroll = 0x00B6;
   private const int WmKeyDown = 0x0100;
   private const int WmSystemKeyDown = 0x0104;
+  private const uint GaRoot = 2;
 
   [DllImport("user32.dll", CharSet = CharSet.Auto)]
   private static extern IntPtr SendMessage(
@@ -24,6 +25,9 @@ internal sealed class MainForm : Form, IMessageFilter
     int message,
     IntPtr wordParameter,
     IntPtr longParameter);
+
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetAncestor(IntPtr window, uint flags);
 
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
@@ -126,7 +130,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v43";
+    Text = "Agent Panel Speaker v46";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -427,9 +431,12 @@ internal sealed class MainForm : Form, IMessageFilter
       _transcriptSettingsCloseTimer.Stop();
       if (!_transcriptSettingsButton.ClientRectangle.Contains(
             _transcriptSettingsButton.PointToClient(Cursor.Position)) &&
-          !_transcriptSettingsPopup.IsPointerInside())
+          !_transcriptSettingsPopup.IsPointerInsideComposite() &&
+          !_transcriptSettingsPopup.SuppressesParentAutoClose)
       {
-        _transcriptSettingsPopup.Visible = false;
+        HideTranscriptSettingsPopup(
+          returnFocus: false,
+          suppressHoverUntilLeave: false);
       }
     };
     _transcriptSettingsButton.MouseEnter += (_, _) =>
@@ -448,7 +455,12 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsPopup.PointerEntered += (_, _) =>
       _transcriptSettingsCloseTimer.Stop();
     _transcriptSettingsPopup.PointerLeft += (_, _) =>
-      _transcriptSettingsCloseTimer.Start();
+    {
+      if (!_transcriptSettingsPopup.SuppressesParentAutoClose)
+      {
+        _transcriptSettingsCloseTimer.Start();
+      }
+    };
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
@@ -868,11 +880,35 @@ internal sealed class MainForm : Form, IMessageFilter
 
 
   /// <summary>
+  /// Ends a paused monitor before controls select a different session.
+  /// </summary>
+  private bool StopPausedMonitoringForReconfiguration(string trigger)
+  {
+    if (!_monitor.IsRunning)
+    {
+      return true;
+    }
+    if (!_speech.IsPaused)
+    {
+      return false;
+    }
+
+    Interlocked.Increment(ref _monitorSession);
+    _monitor.Stop(trigger);
+    _speech.CancelAll();
+    _speech.BeginLiveSession();
+    AppendLog("Paused monitoring stopped for session reconfiguration.");
+    UpdateControlState();
+    return true;
+  }
+
+  /// <summary>
   /// Clears stale fixed-session state after a deliberate source change.
   /// </summary>
   private void SourceSelectionChanged(object? sender, EventArgs eventArgs)
   {
-    if (_loadingSettings || _monitor.IsRunning)
+    if (_loadingSettings ||
+        !StopPausedMonitoringForReconfiguration("source changed"))
     {
       return;
     }
@@ -1289,6 +1325,10 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void BrowseButtonClicked(object? sender, EventArgs eventArgs)
   {
+    if (!StopPausedMonitoringForReconfiguration("browse session"))
+    {
+      return;
+    }
     AgentSource source = GetSelectedSource();
     using var dialog = new OpenFileDialog
     {
@@ -1331,7 +1371,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private async Task<bool> DetectLatestAsync()
   {
-    if (_monitor.IsRunning)
+    if (!StopPausedMonitoringForReconfiguration("detect latest session"))
     {
       return false;
     }
@@ -1519,6 +1559,7 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     _transcriptSettingsOpenTimer.Stop();
     _transcriptSettingsCloseTimer.Stop();
+    _transcriptSettingsPopup.PrepareForHide();
     _transcriptSettingsPopup.Visible = false;
     bool pointerInsideButton =
       _transcriptSettingsButton.ClientRectangle.Contains(
@@ -1952,7 +1993,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private void WireProfileEditorOutsideClicks(Control control)
   {
     if (control is SpeechProfilePopup or SpeechProfileCompactControl or
-        TranscriptSettingsPopup)
+        TranscriptSettingsPopup or TranscriptColourPopup)
     {
       return;
     }
@@ -2014,7 +2055,7 @@ internal sealed class MainForm : Form, IMessageFilter
   public bool PreFilterMessage(ref Message message)
   {
     if (message.Msg is not (WmKeyDown or WmSystemKeyDown) ||
-        !ReferenceEquals(Form.ActiveForm, this))
+        GetAncestor(message.HWnd, GaRoot) != Handle)
     {
       return false;
     }
@@ -2196,19 +2237,22 @@ internal sealed class MainForm : Form, IMessageFilter
   private void UpdateControlState()
   {
     bool running = _monitor.IsRunning;
-    bool playbackOwned = running || _speech.IsSpeaking;
+    bool paused = _speech.IsPaused;
+    bool configurationLocked = running && !paused;
+    bool playbackOwned = (running || _speech.IsSpeaking) && !paused;
     bool hasHistory = _speech.HasHistory;
     if (playbackOwned && !_voiceSettingPreviewActive)
     {
       StopVoicePreviewTimers();
     }
-    _sourceComboBox.Enabled = !running;
-    _detectLatestButton.Enabled = !running;
-    _browseButton.Enabled = !running;
-    _followLatestCheckBox.AutoCheck = !running;
-    _followLatestCheckBox.Enabled = !_pathIsManual;
-    _pollNumeric.Enabled = !running;
-    _speakExistingCheckBox.Enabled = !running;
+    _sourceComboBox.Enabled = !configurationLocked;
+    _detectLatestButton.Enabled = !configurationLocked;
+    _browseButton.Enabled = !configurationLocked;
+    _followLatestCheckBox.AutoCheck = !configurationLocked;
+    _followLatestCheckBox.Enabled =
+      !_pathIsManual && !configurationLocked;
+    _pollNumeric.Enabled = !configurationLocked;
+    _speakExistingCheckBox.Enabled = !configurationLocked;
     _playPauseButton.Enabled = !_playPauseTransitioning;
     _pronunciationsButton.Enabled = true;
     UpdatePlayPauseButton(running);

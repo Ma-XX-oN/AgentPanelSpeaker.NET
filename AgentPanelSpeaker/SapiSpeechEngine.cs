@@ -1189,9 +1189,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private static IReadOnlyList<SpeechWordBoundary>
     CreateApproximateBoundaries(string text, TimeSpan duration)
   {
-    MatchCollection matches = Regex.Matches(
-      text,
-      @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*");
+    MatchCollection matches = SpeechTokenization.Matches(text);
     if (matches.Count == 0)
     {
       return Array.Empty<SpeechWordBoundary>();

@@ -1560,9 +1560,7 @@ internal sealed class SpeechService : IDisposable
 
   private static int GetWordCharacterPosition(string text, int wordIndex)
   {
-    MatchCollection matches = System.Text.RegularExpressions.Regex.Matches(
-      text,
-      @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*");
+    MatchCollection matches = SpeechTokenization.Matches(text);
     if (matches.Count == 0)
     {
       return 0;
@@ -1573,11 +1571,7 @@ internal sealed class SpeechService : IDisposable
 
   private static string FirstWord(string text)
   {
-    System.Text.RegularExpressions.Match match =
-      System.Text.RegularExpressions.Regex.Match(
-        text,
-        @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*");
-    return match.Success ? match.Value : string.Empty;
+    return SpeechTokenization.First(text);
   }
 
   /// <summary>

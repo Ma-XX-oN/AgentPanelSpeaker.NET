@@ -65,6 +65,7 @@ internal static partial class TextCleaner
           FlushProse(
             result,
             prose,
+            ref nextFenceBlockId,
             enclosingFenceType,
             enclosingFenceBlockId,
             enclosingFenceLineCount);
@@ -123,6 +124,7 @@ internal static partial class TextCleaner
       FlushProse(
         result,
         prose,
+        ref nextFenceBlockId,
         enclosingFenceType,
         enclosingFenceBlockId,
         enclosingFenceLineCount);
@@ -135,6 +137,7 @@ internal static partial class TextCleaner
   private static void FlushProse(
     ICollection<SpeechTextPart> result,
     StringBuilder prose,
+    ref int nextFenceBlockId,
     string fenceType,
     int fenceBlockId,
     int fenceLineCount)
@@ -149,6 +152,7 @@ internal static partial class TextCleaner
     AppendProseBlocks(
       result,
       text.Replace("\r\n", "\n").Split('\n'),
+      ref nextFenceBlockId,
       fenceType,
       fenceBlockId,
       fenceLineCount);
@@ -160,6 +164,7 @@ internal static partial class TextCleaner
   private static void AppendProseBlocks(
     ICollection<SpeechTextPart> result,
     IReadOnlyList<string> lines,
+    ref int nextFenceBlockId,
     string fenceType,
     int fenceBlockId,
     int fenceLineCount)
@@ -253,18 +258,50 @@ internal static partial class TextCleaner
 
       if (QuoteLineRegex().IsMatch(line))
       {
-        if (currentKind != ProseBlockKind.Quote)
+        FlushCurrentBlock(
+          result,
+          current,
+          ref currentKind,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
+
+        var quotedLines = new List<string>();
+        int quotedIndex = index;
+        while (quotedIndex < lines.Count)
         {
-          FlushCurrentBlock(
-            result,
-            current,
-            ref currentKind,
-            fenceType,
-            fenceBlockId,
-            fenceLineCount);
-          currentKind = ProseBlockKind.Quote;
+          string quotedLine = lines[quotedIndex];
+          if (QuoteLineRegex().IsMatch(quotedLine))
+          {
+            quotedLines.Add(QuoteLineRegex().Replace(
+              quotedLine,
+              string.Empty,
+              1));
+            ++quotedIndex;
+            continue;
+          }
+          if (!string.IsNullOrWhiteSpace(quotedLine))
+          {
+            quotedLines.Add(quotedLine);
+            ++quotedIndex;
+            continue;
+          }
+          break;
         }
-        current.AppendLine(line);
+
+        var quotedParts = new List<SpeechTextPart>();
+        ParseMarkdownInto(
+          quotedParts,
+          string.Join("\n", quotedLines),
+          ref nextFenceBlockId,
+          fenceType,
+          fenceBlockId,
+          fenceLineCount);
+        foreach (SpeechTextPart part in quotedParts)
+        {
+          result.Add(part with { Style = SpeechTextStyle.Context });
+        }
+        index = quotedIndex - 1;
         continue;
       }
 
@@ -341,9 +378,7 @@ internal static partial class TextCleaner
         fenceType,
         fenceBlockId,
         fenceLineCount,
-        currentKind == ProseBlockKind.Quote
-          ? SpeechTextStyle.Context
-          : SpeechTextStyle.Main);
+        SpeechTextStyle.Main);
       current.Clear();
     }
     currentKind = ProseBlockKind.None;
@@ -732,8 +767,7 @@ internal static partial class TextCleaner
   {
     None,
     Paragraph,
-    ListItem,
-    Quote
+    ListItem
   }
 }
 

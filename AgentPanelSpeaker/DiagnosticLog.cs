@@ -1,4 +1,6 @@
+using Microsoft.CSharp.RuntimeBinder;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace AgentPanelSpeaker;
@@ -9,6 +11,12 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal static class DiagnosticLog
 {
+  private const int SelectItemFlags = 0x1 | 0x4 | 0x8 | 0x10;
+
+  #pragma warning disable SYSLIB1054
+  [DllImport("user32.dll")]
+  private static extern bool SetForegroundWindow(IntPtr window);
+  #pragma warning restore SYSLIB1054
   private static readonly object Sync = new();
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
@@ -47,7 +55,7 @@ internal static class DiagnosticLog
 
     Write("app.start", new
     {
-      version = "26",
+      version = "27",
       processId = Environment.ProcessId,
       processPath = Environment.ProcessPath,
       osVersion = Environment.OSVersion.VersionString,
@@ -102,12 +110,235 @@ internal static class DiagnosticLog
   public static void OpenCurrentLogInExplorer()
   {
     Initialize();
-    Process.Start(new ProcessStartInfo
+    var thread = new Thread(OpenCurrentLogInExplorerWorker)
     {
-      FileName = "explorer.exe",
-      Arguments = $"/select,\"{CurrentLogPath}\"",
-      UseShellExecute = true
-    });
+      IsBackground = true,
+      Name = "AgentPanelSpeaker Explorer reuse"
+    };
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+  }
+
+  private static void OpenCurrentLogInExplorerWorker()
+  {
+    try
+    {
+      if (TrySelectInExistingExplorerWindow())
+      {
+        return;
+      }
+
+      Process.Start(new ProcessStartInfo
+      {
+        FileName = "explorer.exe",
+        Arguments = $"/select,\"{CurrentLogPath}\"",
+        UseShellExecute = true
+      });
+    }
+    catch (Exception exception)
+    {
+      Write("diagnostic.explorer_open_failed", new
+      {
+        exception = exception.ToString()
+      });
+    }
+  }
+
+  /// <summary>
+  /// Reuses an Explorer window, preferring one already showing the log folder.
+  /// </summary>
+  private static bool TrySelectInExistingExplorerWindow()
+  {
+    object? shell = null;
+    object? windows = null;
+    try
+    {
+      Type? shellType = Type.GetTypeFromProgID("Shell.Application");
+      if (shellType is null)
+      {
+        return false;
+      }
+
+      shell = Activator.CreateInstance(shellType);
+      if (shell is null)
+      {
+        return false;
+      }
+      windows = ((dynamic)shell).Windows();
+      if (windows is null)
+      {
+        return false;
+      }
+      int count = Convert.ToInt32(((dynamic)windows).Count);
+      string directory = Path.GetDirectoryName(CurrentLogPath) ?? string.Empty;
+      string fileName = Path.GetFileName(CurrentLogPath);
+
+      for (int index = 0; index < count; ++index)
+      {
+        if (TryUseExplorerWindow(
+              windows,
+              index,
+              directory,
+              fileName,
+              navigate: false))
+        {
+          return true;
+        }
+      }
+
+      for (int index = 0; index < count; ++index)
+      {
+        if (TryUseExplorerWindow(
+              windows,
+              index,
+              directory,
+              fileName,
+              navigate: true))
+        {
+          return true;
+        }
+      }
+    }
+    catch (Exception exception) when (
+      exception is COMException or InvalidCastException or
+      RuntimeBinderException or ArgumentException)
+    {
+      Write("diagnostic.explorer_reuse_failed", new
+      {
+        exception = exception.ToString()
+      });
+    }
+    finally
+    {
+      ReleaseComObject(windows);
+      ReleaseComObject(shell);
+    }
+    return false;
+  }
+
+  private static bool TryUseExplorerWindow(
+    object windows,
+    int index,
+    string directory,
+    string fileName,
+    bool navigate)
+  {
+    object? window = null;
+    try
+    {
+      window = ((dynamic)windows).Item(index);
+      if (window is null || !IsExplorerWindow(window))
+      {
+        return false;
+      }
+
+      if (!IsWindowAtDirectory(window, directory))
+      {
+        if (!navigate)
+        {
+          return false;
+        }
+        ((dynamic)window).Navigate2(directory);
+        if (!WaitForExplorerDirectory(window, directory))
+        {
+          return false;
+        }
+      }
+
+      return SelectExplorerItem(window, fileName);
+    }
+    catch (Exception exception) when (
+      exception is COMException or InvalidCastException or
+      RuntimeBinderException or ArgumentException)
+    {
+      _ = exception;
+      return false;
+    }
+    finally
+    {
+      ReleaseComObject(window);
+    }
+  }
+
+  private static bool IsExplorerWindow(object? window)
+  {
+    if (window is null)
+    {
+      return false;
+    }
+    string fullName = Convert.ToString(((dynamic)window).FullName) ??
+      string.Empty;
+    return string.Equals(
+      Path.GetFileName(fullName),
+      "explorer.exe",
+      StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static bool WaitForExplorerDirectory(
+    object window,
+    string directory)
+  {
+    DateTime deadline = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < deadline)
+    {
+      if (!Convert.ToBoolean(((dynamic)window).Busy) &&
+          IsWindowAtDirectory(window, directory))
+      {
+        return true;
+      }
+      Thread.Sleep(50);
+    }
+    return IsWindowAtDirectory(window, directory);
+  }
+
+  private static bool IsWindowAtDirectory(object window, string directory)
+  {
+    string locationUrl = Convert.ToString(((dynamic)window).LocationURL) ??
+      string.Empty;
+    if (!Uri.TryCreate(locationUrl, UriKind.Absolute, out Uri? location) ||
+        !location.IsFile)
+    {
+      return false;
+    }
+    return string.Equals(
+      Path.GetFullPath(location.LocalPath).TrimEnd(Path.DirectorySeparatorChar),
+      Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar),
+      StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static bool SelectExplorerItem(object window, string fileName)
+  {
+    object? document = null;
+    object? folder = null;
+    object? item = null;
+    try
+    {
+      document = ((dynamic)window).Document;
+      folder = ((dynamic)document).Folder;
+      item = ((dynamic)folder).ParseName(fileName);
+      if (item is null)
+      {
+        return false;
+      }
+      ((dynamic)document).SelectItem(item, SelectItemFlags);
+      long handle = Convert.ToInt64(((dynamic)window).HWND);
+      _ = SetForegroundWindow(new IntPtr(handle));
+      return true;
+    }
+    finally
+    {
+      ReleaseComObject(item);
+      ReleaseComObject(folder);
+      ReleaseComObject(document);
+    }
+  }
+
+  private static void ReleaseComObject(object? value)
+  {
+    if (value is not null && Marshal.IsComObject(value))
+    {
+      _ = Marshal.FinalReleaseComObject(value);
+    }
   }
 
   /// <summary>

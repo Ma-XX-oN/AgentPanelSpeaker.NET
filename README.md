@@ -1,4 +1,58 @@
-# Agent Panel Speaker v43
+# Agent Panel Speaker v46
+
+## v46
+
+Version 46 removes the unsupported native accelerator subscription introduced
+in v45.  The Microsoft.Web.WebView2 1.0.4078.44 WinForms control used by this
+project exposes neither `CoreWebView2Controller` nor `AcceleratorKeyPressed`.
+Transcript hotkeys therefore use the existing in-page `keydown` handler and
+`CoreWebView2.WebMessageReceived` bridge, while `MainForm` continues to handle
+keys received through normal WinForms message routing.
+
+The v45 symbol-aware tokenization and highlighting changes are retained.
+
+## v45
+
+Version 45 introduced symbol-aware playback highlighting.
+
+Transcript highlighting now wraps visible operators and punctuation as speech
+units in addition to lexical words.  Node mapping first uses the complete
+visible token stream and falls back to lexical matching when Markdown removes
+source punctuation.  Playback uses the speech engine's reported token text to
+select one or more rendered spans, so spoken symbols such as `/`, `+`, and
+multi-character operators receive the same active, paused, and fading markers
+as words.  Approximate word-boundary generation and paused-speech restart use
+the same shared tokenization rule.
+
+## v44
+
+Version 44 moves the transcript highlight colour wheel into a compact nested
+popup opened from the current-colour swatch.  Escape returns focus to the
+Transcript Settings overlay.  Tab and Shift+Tab leave the nested popup only at
+its final and first controls.  Pointer exit closes only the colour popup; the
+parent overlay remains open until the pointer returns to the colour swatch and
+leaves again, or until three seconds elapse.  Both overlays follow the active
+light or dark theme.
+
+Pausing monitored playback now unlocks the session source, detection, browse,
+auto-follow, polling, and startup-history controls.  Selecting another session
+while paused performs the internal monitor cancellation that the removed Stop
+button previously provided.
+
+Transcript formatting and node-identity construction now run away from the UI
+thread.  A themed **Loading transcript view…** surface remains visible until
+the WebView has installed the completed HTML and identity map.  Structural
+blocks inside quoted Claude Code cards are parsed independently, so headings,
+labels, fenced code, and following prose are separate navigation fragments even
+when the preceding block lacks sentence punctuation.  This also keeps playback
+highlighting aligned with the rendered block boundaries.
+
+The application message filter now identifies key messages by their native
+root window instead of relying on `Form.ActiveForm`, which is not dependable
+while WebView2 owns focus in maximized Transcript mode.  The WebView keyboard
+bridge remains as a second path.  **Open diagnostic log** reuses an existing
+Explorer window, preferring one already showing the Logs folder and otherwise
+navigating an existing Explorer window before opening a new one.
 
 ## v43
 
