@@ -194,7 +194,12 @@ internal sealed class UserSettingsStore
     SpeechProfileSettings NormalizeProfile(SpeechProfileSettings profile)
     {
       SpeechProfileSettings normalized = profile.Normalize();
-      if (normalized.IsSpoken && !_installedVoices.Contains(normalized.VoiceName))
+      bool hasSelectedVoice = !string.Equals(
+        normalized.VoiceName,
+        SpeechProfileSettings.NotSpoken,
+        StringComparison.OrdinalIgnoreCase);
+      if (hasSelectedVoice &&
+          !_installedVoices.Contains(normalized.VoiceName))
       {
         DiagnosticLog.Write("settings.voice_missing", new
         {

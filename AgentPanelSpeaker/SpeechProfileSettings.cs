@@ -19,9 +19,9 @@ internal sealed record SpeechProfileSettings(
   public int Volume { get; init; } = 100;
 
   /// <summary>
-  /// Gets whether this category is currently eligible for playback.
+  /// Gets whether the selected voice and profile volume permit playback.
   /// </summary>
-  public bool IsSpoken => !string.Equals(
+  public bool IsSpoken => Volume > 0 && !string.Equals(
     VoiceName,
     NotSpoken,
     StringComparison.OrdinalIgnoreCase);

@@ -10,8 +10,7 @@ internal sealed class MainForm : Form
 {
   private const int TransportButtonWidth = 50;
   private const int TransportButtonHeight = 34;
-  private const int SpeechNumericWidth = 60;
-  private const int SpeechVolumeWidth = 70;
+  private const int SpeechProfileWidth = 88;
 
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
@@ -98,7 +97,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v35";
+    Text = "Agent Panel Speaker v38";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -205,36 +204,19 @@ internal sealed class MainForm : Form
     var speechTable = new TableLayoutPanel
     {
       AutoSize = true,
-      ColumnCount = 7,
+      ColumnCount = 4,
       RowCount = 4,
       Dock = DockStyle.Fill,
       CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
     };
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
-    for (int index = 0; index < 5; ++index)
-    {
-      speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-    }
+    speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+    speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     AddSpeechHeader(speechTable);
-    AddVoiceRow(
-      speechTable,
-      1,
-      SpeechRole.Agent,
-      "AI agent",
-      hasContextStyle: true);
-    AddVoiceRow(
-      speechTable,
-      2,
-      SpeechRole.Subagent,
-      "AI subagent",
-      hasContextStyle: true);
-    AddVoiceRow(
-      speechTable,
-      3,
-      SpeechRole.User,
-      "User",
-      hasContextStyle: true);
+    AddVoiceRow(speechTable, 1, SpeechRole.Agent, "AI agent");
+    AddVoiceRow(speechTable, 2, SpeechRole.Subagent, "AI subagent");
+    AddVoiceRow(speechTable, 3, SpeechRole.User, "User");
 
     var options = new FlowLayoutPanel
     {
@@ -317,6 +299,7 @@ internal sealed class MainForm : Form
     layout.Controls.Add(MakeSectionLabel("Activity:"), 0, 10);
     layout.Controls.Add(_logTextBox, 0, 11);
     Controls.Add(layout);
+    WireProfileEditorOutsideClicks(this);
   }
 
   /// <summary>
@@ -413,91 +396,87 @@ internal sealed class MainForm : Form
     table.Controls.Add(_voiceHeaderLabel, 1, 0);
     UpdateVoiceHeaderLabel();
 
-    (string Text, int Width)[] remainingHeadings =
-    {
-      ("Main\nrate", SpeechNumericWidth),
-      ("Main\npitch", SpeechNumericWidth),
-      ("Context\nrate", SpeechNumericWidth),
-      ("Context\npitch", SpeechNumericWidth),
-      ("Volume", SpeechVolumeWidth)
-    };
-    for (int index = 0; index < remainingHeadings.Length; ++index)
-    {
-      table.Controls.Add(
-        MakeSpeechColumnHeader(
-          remainingHeadings[index].Text,
-          remainingHeadings[index].Width),
-        index + 2,
-        0);
-    }
+    table.Controls.Add(
+      MakeSpeechColumnHeader("Main", SpeechProfileWidth),
+      2,
+      0);
+    table.Controls.Add(
+      MakeSpeechColumnHeader("Context", SpeechProfileWidth),
+      3,
+      0);
   }
 
   /// <summary>
-  /// Adds one shared-voice role row with main and optional context
-  /// rate/pitch controls.
+  /// Adds one shared-voice role row with independent Main and Context
+  /// profiles.
   /// </summary>
   private void AddVoiceRow(
     TableLayoutPanel table,
     int row,
     SpeechRole role,
-    string label,
-    bool hasContextStyle)
+    string label)
   {
     var voice = new VoiceComboBox
     {
+      Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
       DropDownStyle = ComboBoxStyle.DropDownList,
-      Dock = DockStyle.Fill
+      Dock = DockStyle.Top
     };
     voice.FormattingEnabled = true;
     voice.Format += VoiceComboBoxFormat;
-    var mainRate = CreateNumeric(-10, 10, 0, SpeechNumericWidth);
-    var mainPitch = CreateNumeric(-10, 10, 0, SpeechNumericWidth);
-    NumericUpDown? contextRate = hasContextStyle
-      ? CreateNumeric(-10, 10, 0, SpeechNumericWidth)
-      : null;
-    NumericUpDown? contextPitch = hasContextStyle
-      ? CreateNumeric(-10, 10, 0, SpeechNumericWidth)
-      : null;
-    var volume = CreateNumeric(0, 100, 100, SpeechVolumeWidth);
+    int firstTabIndex = (row - 1) * 3;
+    voice.TabIndex = firstTabIndex;
+
+    var mainProfile = new SpeechProfileCompactControl(
+      $"{label} Main speech profile")
+    {
+      Width = SpeechProfileWidth
+    };
+    mainProfile.TabIndex = firstTabIndex + 1;
+    var contextProfile = new SpeechProfileCompactControl(
+      $"{label} Context speech profile")
+    {
+      Width = SpeechProfileWidth,
+      TabIndex = firstTabIndex + 2
+    };
     var previewTimer = new System.Windows.Forms.Timer
     {
       Interval = 350
     };
     var controls = new VoiceRowControls(
       voice,
-      mainRate,
-      mainPitch,
-      contextRate,
-      contextPitch,
-      volume,
+      mainProfile,
+      contextProfile,
       previewTimer,
-      $"{role} main speech is working.");
+      $"{role} main speech is working.",
+      $"{role} context speech is working.");
     _voiceRows.Add(role, controls);
+
     table.Controls.Add(MakeInlineLabel(label), 0, row);
     table.Controls.Add(voice, 1, row);
-    table.Controls.Add(mainRate, 2, row);
-    table.Controls.Add(mainPitch, 3, row);
-    if (contextRate is not null && contextPitch is not null)
-    {
-      table.Controls.Add(contextRate, 4, row);
-      table.Controls.Add(contextPitch, 5, row);
-    }
-    table.Controls.Add(volume, 6, row);
-    voice.SelectedIndexChanged += (_, _) => VoiceRowChanged(role);
-    mainRate.ValueChanged += (_, _) => VoiceRowChanged(role);
-    mainPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
-    if (contextRate is not null)
-    {
-      contextRate.ValueChanged += (_, _) => VoiceRowChanged(role);
-    }
-    if (contextPitch is not null)
-    {
-      contextPitch.ValueChanged += (_, _) => VoiceRowChanged(role);
-    }
-    volume.ValueChanged += (_, _) => VoiceRowChanged(role);
+    table.Controls.Add(mainProfile, 2, row);
+    table.Controls.Add(contextProfile, 3, row);
+
+    voice.SelectedIndexChanged += (_, _) =>
+      VoiceRowChanged(role, context: false);
+    mainProfile.ProfileChanged += (_, _) =>
+      VoiceRowChanged(role, context: false);
+    contextProfile.ProfileChanged += (_, _) =>
+      VoiceRowChanged(role, context: true);
+    mainProfile.ProfileActivated += ProfileControlActivated;
+    contextProfile.ProfileActivated += ProfileControlActivated;
+    mainProfile.TransportKeyPressed += ProfileTransportKeyPressed;
+    contextProfile.TransportKeyPressed += ProfileTransportKeyPressed;
+    mainProfile.FocusTraversalRequested += ProfileFocusTraversalRequested;
+    contextProfile.FocusTraversalRequested += ProfileFocusTraversalRequested;
     previewTimer.Tick += (_, _) => PreviewVoiceSettings(role);
-    volume.AccessibleName = $"{label} volume";
-    _toolTip.SetToolTip(volume, $"{label} volume");
+
+    _toolTip.SetToolTip(
+      mainProfile,
+      $"{label} Main rate, pitch, and volume. Volume 0 mutes Main.");
+    _toolTip.SetToolTip(
+      contextProfile,
+      $"{label} Context rate, pitch, and volume. Volume 0 mutes Context.");
   }
 
   /// <summary>
@@ -687,28 +666,25 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Loads one profile row.
+  /// Loads one shared-voice profile row.
   /// </summary>
   private void LoadVoiceRow(
     SpeechRole role,
     SpeechProfileSettings mainProfile,
-    SpeechProfileSettings? contextProfile)
+    SpeechProfileSettings contextProfile)
   {
     VoiceRowControls row = _voiceRows[role];
     row.Voice.SelectedItem = FindVoiceItem(
       row.Voice,
       mainProfile.VoiceName);
-    row.MainRate.Value = mainProfile.Rate;
-    row.MainPitch.Value = mainProfile.Pitch;
-    if (row.ContextRate is not null && contextProfile is not null)
-    {
-      row.ContextRate.Value = contextProfile.Rate;
-    }
-    if (row.ContextPitch is not null && contextProfile is not null)
-    {
-      row.ContextPitch.Value = contextProfile.Pitch;
-    }
-    row.Volume.Value = mainProfile.Volume;
+    row.MainProfile.SetProfile(
+      mainProfile.Rate,
+      mainProfile.Pitch,
+      mainProfile.Volume);
+    row.ContextProfile.SetProfile(
+      contextProfile.Rate,
+      contextProfile.Pitch,
+      contextProfile.Volume);
     UpdateVoiceRowState(role);
   }
 
@@ -804,7 +780,7 @@ internal sealed class MainForm : Form
   /// <summary>
   /// Handles a role-profile change and persists it immediately.
   /// </summary>
-  private void VoiceRowChanged(SpeechRole role)
+  private void VoiceRowChanged(SpeechRole role, bool context)
   {
     if (_loadingSettings)
     {
@@ -812,11 +788,11 @@ internal sealed class MainForm : Form
     }
     UpdateVoiceRowState(role);
     SaveControlsToSettings();
-    ScheduleVoiceSettingsPreview(role);
+    ScheduleVoiceSettingsPreview(role, context);
   }
 
   /// <summary>
-  /// Enables style and volume controls only when the row has a spoken voice.
+  /// Enables both compact profiles only when the row has a spoken voice.
   /// </summary>
   private void UpdateVoiceRowState(SpeechRole role)
   {
@@ -825,17 +801,8 @@ internal sealed class MainForm : Form
       GetVoiceName(row.Voice.SelectedItem),
       SpeechProfileSettings.NotSpoken,
       StringComparison.Ordinal);
-    row.MainRate.Enabled = enabled;
-    row.MainPitch.Enabled = enabled;
-    if (row.ContextRate is not null)
-    {
-      row.ContextRate.Enabled = enabled;
-    }
-    if (row.ContextPitch is not null)
-    {
-      row.ContextPitch.Enabled = enabled;
-    }
-    row.Volume.Enabled = enabled;
+    row.MainProfile.Enabled = enabled;
+    row.ContextProfile.Enabled = enabled;
   }
 
   /// <summary>
@@ -850,20 +817,21 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Debounces a role edit before speaking its main test message.
+  /// Debounces one Main or Context edit before speaking its test message.
   /// </summary>
-  private void ScheduleVoiceSettingsPreview(SpeechRole role)
+  private void ScheduleVoiceSettingsPreview(
+    SpeechRole role,
+    bool context)
   {
     VoiceRowControls row = _voiceRows[role];
     row.PreviewTimer.Stop();
+    row.PreviewContext = context;
     if (_monitor.IsRunning || _playStopTransitioning)
     {
       return;
     }
 
-    SpeechProfileSettings profile = ReadRoleProfile(
-      role,
-      context: false).Normalize();
+    SpeechProfileSettings profile = ReadRoleProfile(role, context).Normalize();
     if (profile.IsSpoken)
     {
       row.PreviewTimer.Start();
@@ -871,7 +839,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Speaks the edited main role profile unless monitoring owns speech.
+  /// Speaks the edited role profile unless monitoring owns speech.
   /// </summary>
   private void PreviewVoiceSettings(SpeechRole role)
   {
@@ -885,9 +853,10 @@ internal sealed class MainForm : Form
 
     try
     {
+      bool context = row.PreviewContext;
       SpeechProfileSettings profile = ReadRoleProfile(
         role,
-        context: false).Normalize();
+        context).Normalize();
       if (!profile.IsSpoken)
       {
         return;
@@ -895,10 +864,13 @@ internal sealed class MainForm : Form
 
       _voiceSettingPreviewActive = true;
       AppendLog(
-        $"Previewing {role}: voice={profile.VoiceName}; " +
-        $"rate={profile.Rate}; pitch={profile.Pitch}; " +
-        $"volume={profile.Volume}%.");
-      _speech.SpeakUntracked(row.PreviewMessage, profile);
+        $"Previewing {role} {(context ? "Context" : "Main")}: " +
+        $"voice={profile.VoiceName}; rate={profile.Rate}; " +
+        $"pitch={profile.Pitch}; volume={profile.Volume}%.");
+      string message = context
+        ? row.ContextPreviewMessage
+        : row.MainPreviewMessage;
+      _speech.SpeakUntracked(message, profile);
     }
     catch (Exception exception) when (
       exception is ArgumentException or InvalidOperationException)
@@ -1455,25 +1427,22 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Reads one main or context profile from a shared voice row.
+  /// Reads one Main or Context profile from a shared voice row.
   /// </summary>
   private SpeechProfileSettings ReadRoleProfile(
     SpeechRole role,
     bool context)
   {
     VoiceRowControls row = _voiceRows[role];
-    NumericUpDown rate = context
-      ? row.ContextRate ?? row.MainRate
-      : row.MainRate;
-    NumericUpDown pitch = context
-      ? row.ContextPitch ?? row.MainPitch
-      : row.MainPitch;
+    SpeechProfileCompactControl profile = context
+      ? row.ContextProfile
+      : row.MainProfile;
     return new SpeechProfileSettings(
       GetVoiceName(row.Voice.SelectedItem),
-      Decimal.ToInt32(rate.Value),
-      Decimal.ToInt32(pitch.Value))
+      profile.Rate,
+      profile.Pitch)
     {
-      Volume = Decimal.ToInt32(row.Volume.Value)
+      Volume = profile.Volume
     };
   }
 
@@ -1497,7 +1466,7 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Returns whether one category uses the context rate and pitch.
+  /// Returns whether one category uses the Context profile.
   /// </summary>
   private static bool IsContextCategory(ContentCategory category)
   {
@@ -1506,10 +1475,182 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Handles application-local transport shortcuts.
+  /// Closes any other profile editor before one profile becomes active.
+  /// </summary>
+  private void ProfileControlActivated(object? sender, EventArgs eventArgs)
+  {
+    if (sender is not SpeechProfileCompactControl active)
+    {
+      return;
+    }
+
+    foreach (SpeechProfileCompactControl profile in GetProfileControls())
+    {
+      if (!ReferenceEquals(profile, active) && profile.IsEditorVisible)
+      {
+        profile.CloseEditor(returnFocus: false);
+      }
+    }
+  }
+
+  /// <summary>
+  /// Routes a transport key raised while a profile editor owns focus.
+  /// </summary>
+  private void ProfileTransportKeyPressed(
+    object? sender,
+    TransportKeyPressedEventArgs eventArgs)
+  {
+    string shortcut = FormatTransportKey(eventArgs.KeyCode);
+    _ = ActivateTransportShortcut(eventArgs.KeyCode, shortcut);
+  }
+
+  /// <summary>
+  /// Continues the speech matrix's explicit row-wise tab order.
+  /// </summary>
+  private void ProfileFocusTraversalRequested(
+    object? sender,
+    FocusTraversalRequestedEventArgs eventArgs)
+  {
+    if (sender is not SpeechProfileCompactControl profile ||
+        !TryLocateProfileControl(profile, out SpeechRole role, out bool context))
+    {
+      return;
+    }
+
+    Control target = GetProfileTraversalTarget(
+      role,
+      context,
+      eventArgs.Forward);
+    BeginInvoke(new Action(() =>
+    {
+      profile.CompleteFocusTraversal();
+      if (IsDisposed || target.IsDisposed || !target.CanFocus)
+      {
+        return;
+      }
+
+      target.Focus();
+    }));
+  }
+
+  private bool TryLocateProfileControl(
+    SpeechProfileCompactControl profile,
+    out SpeechRole role,
+    out bool context)
+  {
+    foreach ((SpeechRole candidateRole, VoiceRowControls row) in _voiceRows)
+    {
+      if (ReferenceEquals(profile, row.MainProfile))
+      {
+        role = candidateRole;
+        context = false;
+        return true;
+      }
+      if (ReferenceEquals(profile, row.ContextProfile))
+      {
+        role = candidateRole;
+        context = true;
+        return true;
+      }
+    }
+
+    role = default;
+    context = false;
+    return false;
+  }
+
+  private Control GetProfileTraversalTarget(
+    SpeechRole role,
+    bool context,
+    bool forward)
+  {
+    VoiceRowControls row = _voiceRows[role];
+    if (!forward)
+    {
+      return context ? row.MainProfile : row.Voice;
+    }
+    if (!context)
+    {
+      return row.ContextProfile;
+    }
+
+    return role switch
+    {
+      SpeechRole.Agent => _voiceRows[SpeechRole.Subagent].Voice,
+      SpeechRole.Subagent => _voiceRows[SpeechRole.User].Voice,
+      _ => _fenceTypesTextBox
+    };
+  }
+
+  /// <summary>
+  /// Closes profile editors when another ordinary control is clicked.
+  /// </summary>
+  private void WireProfileEditorOutsideClicks(Control control)
+  {
+    if (control is SpeechProfilePopup or SpeechProfileCompactControl)
+    {
+      return;
+    }
+
+    control.MouseDown += OutsideProfileEditorMouseDown;
+    foreach (Control child in control.Controls)
+    {
+      WireProfileEditorOutsideClicks(child);
+    }
+
+    control.ControlAdded += (_, eventArgs) =>
+    {
+      Control? child = eventArgs.Control;
+      if (child is not null)
+      {
+        WireProfileEditorOutsideClicks(child);
+      }
+    };
+  }
+
+  private void OutsideProfileEditorMouseDown(
+    object? sender,
+    MouseEventArgs eventArgs)
+  {
+    foreach (SpeechProfileCompactControl profile in GetProfileControls())
+    {
+      if (profile.IsEditorVisible)
+      {
+        profile.CloseEditor(returnFocus: false);
+      }
+    }
+  }
+
+  private SpeechProfileCompactControl? GetOpenProfileControl()
+  {
+    return GetProfileControls().FirstOrDefault(
+      profile => profile.IsEditorVisible);
+  }
+
+  private IEnumerable<SpeechProfileCompactControl> GetProfileControls()
+  {
+    foreach (VoiceRowControls row in _voiceRows.Values)
+    {
+      yield return row.MainProfile;
+      yield return row.ContextProfile;
+    }
+  }
+
+  /// <summary>
+  /// Handles profile-editor dismissal and application transport shortcuts.
   /// </summary>
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
+    if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
+    {
+      SpeechProfileCompactControl? openProfile = GetOpenProfileControl();
+      if (openProfile is not null)
+      {
+        openProfile.CloseEditorFromDismissKey();
+        return true;
+      }
+    }
+
     Keys modifiers = keyData & Keys.Modifiers;
     Keys keyCode = keyData & Keys.KeyCode;
     bool hasAltOnly = modifiers == Keys.Alt;
@@ -1518,7 +1659,23 @@ internal sealed class MainForm : Form
     {
       return base.ProcessCmdKey(ref message, keyData);
     }
+    if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
+    {
+      return base.ProcessCmdKey(ref message, keyData);
+    }
 
+    string shortcut = hasAltOnly
+      ? $"Alt+{FormatTransportKey(keyCode)}"
+      : FormatTransportKey(keyCode);
+    return ActivateTransportShortcut(keyCode, shortcut) ||
+      base.ProcessCmdKey(ref message, keyData);
+  }
+
+  /// <summary>
+  /// Activates one transport command from the form or profile editor.
+  /// </summary>
+  private bool ActivateTransportShortcut(Keys keyCode, string shortcut)
+  {
     Button? button = keyCode switch
     {
       Keys.U => _rewindSpeakerButton,
@@ -1534,16 +1691,9 @@ internal sealed class MainForm : Form
     };
     if (button is null)
     {
-      return base.ProcessCmdKey(ref message, keyData);
-    }
-    if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
-    {
-      return base.ProcessCmdKey(ref message, keyData);
+      return false;
     }
 
-    string shortcut = hasAltOnly
-      ? $"Alt+{keyCode}"
-      : keyCode.ToString();
     if (ReferenceEquals(button, _playStopButton))
     {
       _pendingPlayStopTrigger = $"keyboard:{shortcut}";
@@ -1556,6 +1706,19 @@ internal sealed class MainForm : Form
     button.Focus();
     button.PerformClick();
     return true;
+  }
+
+  /// <summary>
+  /// Formats punctuation transport keys for logs.
+  /// </summary>
+  private static string FormatTransportKey(Keys keyCode)
+  {
+    return keyCode switch
+    {
+      Keys.OemSemicolon => ";",
+      Keys.OemQuotes => "'",
+      _ => keyCode.ToString()
+    };
   }
 
   /// <summary>
@@ -1727,7 +1890,13 @@ internal sealed class MainForm : Form
   /// </summary>
   private void ApplyCurrentTheme()
   {
-    ThemeManager.Apply(this, GetSelectedTheme());
+    AppTheme theme = GetSelectedTheme();
+    ThemeManager.Apply(this, theme);
+    bool dark = ThemeManager.IsDark(theme);
+    foreach (SpeechProfileCompactControl profile in GetProfileControls())
+    {
+      profile.ApplyTheme(dark);
+    }
     SynchronizeTransportButtonHeights();
   }
 
@@ -1976,23 +2145,11 @@ internal sealed class MainForm : Form
   {
     control.Minimum = minimum;
     control.Maximum = maximum;
+    control.TextAlign = HorizontalAlignment.Right;
     control.Value = value;
     control.Width = width;
   }
 
-  /// <summary>
-  /// Creates one numeric control.
-  /// </summary>
-  private static NumericUpDown CreateNumeric(
-    decimal minimum,
-    decimal maximum,
-    decimal value,
-    int width)
-  {
-    var control = new NumericUpDown();
-    ConfigureNumeric(control, minimum, maximum, value, width);
-    return control;
-  }
 
   /// <summary>
   /// Creates an inline label.
@@ -2026,14 +2183,18 @@ internal sealed class MainForm : Form
   /// </summary>
   private static Label MakeSpeechColumnHeader(string text, int width)
   {
+    float headerSize = Math.Max(7.0f, SystemFonts.DefaultFont.Size - 1.0f);
     return new Label
     {
       AutoSize = false,
-      Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
+      Font = new Font(
+        SystemFonts.DefaultFont.FontFamily,
+        headerSize,
+        FontStyle.Bold),
       Height = 38,
       Margin = new Padding(3),
       Text = text,
-      TextAlign = ContentAlignment.MiddleCenter,
+      TextAlign = ContentAlignment.TopCenter,
       Width = width
     };
   }
@@ -2098,15 +2259,38 @@ internal sealed class MainForm : Form
     }
   }
 
-  private sealed record VoiceRowControls(
-    ComboBox Voice,
-    NumericUpDown MainRate,
-    NumericUpDown MainPitch,
-    NumericUpDown? ContextRate,
-    NumericUpDown? ContextPitch,
-    NumericUpDown Volume,
-    System.Windows.Forms.Timer PreviewTimer,
-    string PreviewMessage);
+  private sealed class VoiceRowControls
+  {
+    public VoiceRowControls(
+      ComboBox voice,
+      SpeechProfileCompactControl mainProfile,
+      SpeechProfileCompactControl contextProfile,
+      System.Windows.Forms.Timer previewTimer,
+      string mainPreviewMessage,
+      string contextPreviewMessage)
+    {
+      Voice = voice;
+      MainProfile = mainProfile;
+      ContextProfile = contextProfile;
+      PreviewTimer = previewTimer;
+      MainPreviewMessage = mainPreviewMessage;
+      ContextPreviewMessage = contextPreviewMessage;
+    }
+
+    public ComboBox Voice { get; }
+
+    public SpeechProfileCompactControl MainProfile { get; }
+
+    public SpeechProfileCompactControl ContextProfile { get; }
+
+    public System.Windows.Forms.Timer PreviewTimer { get; }
+
+    public string MainPreviewMessage { get; }
+
+    public string ContextPreviewMessage { get; }
+
+    public bool PreviewContext { get; set; }
+  }
 
 }
 

@@ -1,5 +1,53 @@
 # Agent Panel Speaker internal design
 
+## v38 designer serialization metadata
+
+`SpeechProfileCompactControl.Rate`, `Pitch`, and `Volume` are runtime-owned
+properties.  Each is marked with `DesignerSerializationVisibility.Hidden`,
+matching the other custom runtime-only WinForms properties in the project.
+This prevents the .NET 10 WinForms analyzer from requiring generated-code
+serialization semantics for controls that `MainForm` creates and configures
+entirely in code.
+
+## v37 compact Main and Context profiles
+
+`MainForm` now presents four speech-table columns: Content, shared Voice, Main,
+and Context.  Each Main or Context cell owns a
+`SpeechProfileCompactControl`, which stores its own rate, pitch, and volume.
+The shared Voice dropdown is the row-wide master switch.  A profile with volume
+zero remains editable but is not eligible for playback; its compact rendering
+is replaced by crossed-out lips.
+
+The compact control uses the selected no-band visualization.  Signed rate and
+pitch retain the horizontal `-10..10` scale, draw positive values only above
+the centre axis and negative values only below it, and give small nonzero
+values a minimum visible height.  Volume uses a right-triangle fill from zero
+to 100.
+
+`SpeechProfilePopup` is a child overlay of `MainForm`, not a top-level window.
+It is centred over its compact control and therefore cannot change owner-window
+activation or stacking.  The compact control treats its anchor and overlay as
+one delayed-hover region.  Escape and Alt+F4 hide the overlay without disposing
+it or closing the application.  Outside clicks close visible overlays.
+
+The editor's Tab traversal is Rate, Pitch, Volume, then normal form tab order.
+When volume is zero, Rate and Pitch are disabled and either Tab direction from
+Volume exits the editor.  Profile sliders forward the existing bare transport
+keys to `MainForm`; editable text controls retain their ordinary typing rules.
+
+`SpeechProfileSettings.IsSpoken` now requires both a selected voice and volume
+greater than zero.  `MainForm.ReadRoleProfile()` reads each compact profile's
+volume independently, and settings version 9 persists those values without a
+schema-breaking migration.
+
+## v36 speech-table alignment
+
+`MainForm.MakeSpeechColumnHeader()` uses a compact bold font and top-centred
+text so both `Context` headings fit on two lines without widening their
+columns.  `MainForm.ConfigureNumeric()` right-aligns every `NumericUpDown`
+value.  Each voice selector is docked to the top of its table cell so its
+vertical placement matches the spin controls.
+
 ## v35 compiler correction
 
 `SessionLocator.ReadClaudeTitle()` receives the
@@ -118,6 +166,8 @@ the JSONL.
 | `SapiSpeechEngine` | Renders three providers and serializes buffers. |
 | `InstalledSpeechVoice` | Stores provider identity and sortable metadata. |
 | `GlyphButton` | Draws centred transport, speaker-turn, and clock icons. |
+| `SpeechProfileCompactControl` | Draws and owns one Main/Context profile. |
+| `SpeechProfilePopup` | Edits one compact profile in a child overlay. |
 | `PcmWaveData` | Parses, converts, joins, and generates PCM audio. |
 | `WaveOutPlayer` | Plays one PCM buffer through one WinMM output stream. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
@@ -484,7 +534,8 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 
 They operate only while the Agent Panel Speaker window has focus.  The invoked
 button receives focus before `PerformClick` runs.  Bare keys remain active in
-numeric spin controls.  Editable text and editable drop-down controls retain
+numeric spin controls and compact speech-profile sliders.  Editable text and
+editable drop-down controls retain
 bare keys; Alt variants remain available there.
 
 ## Processing-time announcements

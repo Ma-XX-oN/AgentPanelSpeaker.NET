@@ -1,4 +1,40 @@
-# Agent Panel Speaker v35
+# Agent Panel Speaker v38
+
+## v38
+
+Version 38 marks the compact profile control's `Rate`, `Pitch`, and `Volume`
+properties as hidden from WinForms designer serialization.  The properties
+remain public runtime settings, but the designer no longer attempts to infer
+how their values should be emitted into generated code.  This fixes the three
+`WFO1000` warnings that were promoted to build errors in version 37.
+
+## v37
+
+Version 37 replaces the separate Main/Context rate, pitch, and volume spin
+columns with two compact speech-profile controls per row.  Each control draws
+rate, pitch, and volume in the selected no-band triangle design.  Volume zero
+shows the crossed-out lips symbol and independently mutes only that Main or
+Context profile.  The row's Voice dropdown remains the master switch for both.
+
+Hovering for 250 ms or tabbing to a compact control opens an in-window editor
+centred over it.  The editor provides Rate, Pitch, and Volume sliders, closes
+200 ms after the pointer leaves both regions, and never creates a separate
+window.  Escape and Alt+F4 dismiss only the editor.  Tab traverses Rate, Pitch,
+and Volume before continuing through the form; while muted, only Volume is
+focusable.  Existing transport keys remain active while a slider has focus.
+
+Existing settings migrate without losing profile values.  Main and Context
+now persist and preview their volumes independently; a profile is eligible for
+speech only when its shared row voice is selected and its own volume is above
+zero.
+
+## v36
+
+Version 36 makes the speech-profile table visually consistent.  Main and
+Context headings use compact two-line labels that fit the same fixed-width
+columns as their spin controls.  Numeric text is right-aligned, and each voice
+selector is anchored to the top of its row rather than filling the cell
+vertically.
 
 ## v35
 
@@ -274,15 +310,25 @@ See [DESIGN.md](DESIGN.md) for the internal architecture and invariants.
 
 ## Speech by content
 
-Each content row has its own:
+Each row has one shared Voice dropdown and two independent compact profiles:
+**Main** and **Context**.  Each compact profile contains:
 
-- voice (`Not Spoken` disables that category);
 - rate (`-10..10`);
 - pitch (`-10..10`);
-- volume slider (`0..100` percent).
+- volume (`0..100` percent).
 
-Changing any of those values automatically speaks the row's test message after
-350 ms without another edit.  Automatic previews are suppressed during
+`Not Spoken` in the Voice dropdown disables the entire row.  Volume zero in a
+compact profile mutes only that profile and displays crossed-out lips.  AI
+Context is reasoning; User Context is explicit Markdown blockquotes.
+
+Hover over a compact profile for 250 ms, click it, or Tab to it to open its
+centred in-window editor.  The editor closes 200 ms after the pointer leaves
+both the control and editor.  Rate and Pitch are skipped while volume is zero.
+Tab after Volume continues to the next form control; Shift+Tab before Rate
+continues to the previous control.  Escape or Alt+F4 closes only the editor.
+
+Changing a profile value automatically speaks that Main or Context test message
+after 350 ms without another edit.  Automatic previews are suppressed during
 monitored playback and do not alter transcript history.
 
 Voice labels initially display location, language, name, Natural quality when
