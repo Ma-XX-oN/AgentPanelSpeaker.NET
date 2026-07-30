@@ -69,6 +69,19 @@ internal static partial class TranscriptMarkdownFormatter
         continue;
       }
 
+      if (type == "attachment")
+      {
+        if (TryExtractClaudeQueuedCommandText(root, out string queuedText) &&
+            queuedText.Length != 0 && queuedText != lastUserText)
+        {
+          lastUserText = queuedText;
+          AppendHeading(output, "User", record, root);
+          output.AppendLine(QuoteMarkdown(queuedText));
+          output.AppendLine();
+        }
+        continue;
+      }
+
       if (type == "user")
       {
         if (!TryGetMessageContent(root, out JsonElement content))
@@ -309,10 +322,30 @@ internal static partial class TranscriptMarkdownFormatter
     TranscriptRecord record,
     JsonElement root)
   {
+    AppendRecordAnchor(output, record, root);
     output.Append("## ").Append(speaker);
     AppendRecordSuffix(output, record, root);
     output.AppendLine();
     output.AppendLine();
+  }
+
+  private static void AppendRecordAnchor(
+    StringBuilder output,
+    TranscriptRecord record,
+    JsonElement root)
+  {
+    string sourceId = JsonlRecordIdentity.GetSourceId(
+      TryGetString(root, "type", out string type) &&
+      type is "event_msg" or "response_item" or "session_meta"
+        ? AgentSource.Codex
+        : AgentSource.Claude,
+      root,
+      record.Number);
+    output.Append("<span class=\"record-anchor\" data-jsonl-record=\"")
+      .Append(record.Number)
+      .Append("\" data-source-id=\"")
+      .Append(HtmlEscape(sourceId))
+      .AppendLine("\"></span>");
   }
 
   private static void AppendRecordSuffix(
@@ -417,6 +450,7 @@ internal static partial class TranscriptMarkdownFormatter
     StringBuilder output,
     SubagentTranscript subagent)
   {
+    AppendRecordAnchor(output, subagent.Record, subagent.Root);
     output.Append("## Claude Sub-agent ");
     output.Append(subagent.Id);
     AppendRecordSuffix(output, subagent.Record, subagent.Root);
@@ -532,6 +566,52 @@ internal static partial class TranscriptMarkdownFormatter
       record,
       root);
     return true;
+  }
+
+  private static bool TryExtractClaudeQueuedCommandText(
+    JsonElement root,
+    out string text)
+  {
+    text = string.Empty;
+    if (!TryGetProperty(root, "attachment", out JsonElement attachment) ||
+        attachment.ValueKind != JsonValueKind.Object ||
+        !TryGetString(attachment, "type", out string attachmentType) ||
+        !attachmentType.Equals(
+          "queued_command",
+          StringComparison.OrdinalIgnoreCase) ||
+        !TryGetProperty(attachment, "prompt", out JsonElement prompt))
+    {
+      return false;
+    }
+
+    var parts = new List<string>();
+    if (prompt.ValueKind == JsonValueKind.String)
+    {
+      string value = StripInjectedXml(prompt.GetString() ?? string.Empty);
+      if (value.Length != 0)
+      {
+        parts.Add(value);
+      }
+    }
+    else
+    {
+      foreach (JsonElement block in EnumerateArray(prompt))
+      {
+        if (TryGetString(block, "type", out string blockType) &&
+            blockType == "text" &&
+            TryGetString(block, "text", out string value))
+        {
+          value = StripInjectedXml(value);
+          if (value.Length != 0)
+          {
+            parts.Add(value);
+          }
+        }
+      }
+    }
+
+    text = string.Join("\n\n", parts).Trim();
+    return text.Length != 0;
   }
 
   private static string ExtractClaudeUserText(JsonElement content)

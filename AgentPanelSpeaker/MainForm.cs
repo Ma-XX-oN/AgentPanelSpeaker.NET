@@ -7,7 +7,7 @@ namespace AgentPanelSpeaker;
 /// Provides JSONL session selection, role-specific speech settings, navigation,
 /// persistence, and diagnostics.
 /// </summary>
-internal sealed class MainForm : Form
+internal sealed class MainForm : Form, IMessageFilter
 {
   private const int TransportButtonWidth = 50;
   private const int TransportButtonHeight = 34;
@@ -15,6 +15,8 @@ internal sealed class MainForm : Form
   private const int EmGetFirstVisibleLine = 0x00CE;
   private const int EmGetLineCount = 0x00BA;
   private const int EmLineScroll = 0x00B6;
+  private const int WmKeyDown = 0x0100;
+  private const int WmSystemKeyDown = 0x0104;
 
   [DllImport("user32.dll", CharSet = CharSet.Auto)]
   private static extern IntPtr SendMessage(
@@ -113,6 +115,7 @@ internal sealed class MainForm : Form
     ConnectEvents();
     UpdateControlState();
     ApplyCurrentTheme();
+    Application.AddMessageFilter(this);
     SystemEvents.UserPreferenceChanged += WindowsUserPreferenceChanged;
     AppendLog($"Diagnostic log: {DiagnosticLog.FilePath}");
     AppendLog($"Settings: {UserSettingsStore.FilePath}");
@@ -123,7 +126,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v42";
+    Text = "Agent Panel Speaker v43";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2006,6 +2009,36 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
+  /// Handles transport hotkeys before focused child windows consume them.
+  /// </summary>
+  public bool PreFilterMessage(ref Message message)
+  {
+    if (message.Msg is not (WmKeyDown or WmSystemKeyDown) ||
+        !ReferenceEquals(Form.ActiveForm, this))
+    {
+      return false;
+    }
+
+    Keys keyCode = (Keys)(int)message.WParam & Keys.KeyCode;
+    Keys modifiers = Control.ModifierKeys & Keys.Modifiers;
+    bool hasAltOnly = modifiers == Keys.Alt;
+    bool hasNoModifiers = modifiers == Keys.None;
+    if (!hasAltOnly && !hasNoModifiers)
+    {
+      return false;
+    }
+    if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
+    {
+      return false;
+    }
+
+    string shortcut = hasAltOnly
+      ? $"Alt+{FormatTransportKey(keyCode)}"
+      : FormatTransportKey(keyCode);
+    return ActivateTransportShortcut(keyCode, shortcut);
+  }
+
+  /// <summary>
   /// Handles profile-editor dismissal and application transport shortcuts.
   /// </summary>
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
@@ -2406,6 +2439,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void MainFormClosing(object? sender, FormClosingEventArgs eventArgs)
   {
+    Application.RemoveMessageFilter(this);
     SystemEvents.UserPreferenceChanged -= WindowsUserPreferenceChanged;
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();

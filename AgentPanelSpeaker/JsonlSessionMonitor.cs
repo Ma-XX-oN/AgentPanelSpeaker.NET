@@ -453,21 +453,28 @@ internal sealed class JsonlSessionMonitor : IDisposable
       $"[{session.Source} {node.Category} {node.Kind}] {previewText}");
 
     var fragments = new List<SpeechFragment>();
-    foreach (SpeechTextPart part in parts)
+    for (int partIndex = 0; partIndex < parts.Count; ++partIndex)
     {
+      SpeechTextPart part = parts[partIndex];
       ContentCategory fragmentCategory =
         node.Category == ContentCategory.User &&
         part.Style == SpeechTextStyle.Context
           ? ContentCategory.UserContext
           : node.Category;
+      bool startsUserTurn = node.StartsUserTurn && partIndex == 0;
       if (part.Kind == SpeechFragmentKind.Prose)
       {
         SpeechFragmentKind fragmentKind = part.FenceType.Length == 0
           ? SpeechFragmentKind.Prose
           : SpeechFragmentKind.FencedCodeLine;
-        fragments.AddRange(SentenceSegmenter
-          .Split(part.Text, part.PauseAfter)
-          .Select(sentence => new SpeechFragment(
+        IReadOnlyList<SentenceSegment> sentences = SentenceSegmenter
+          .Split(part.Text, part.PauseAfter);
+        for (int sentenceIndex = 0;
+             sentenceIndex < sentences.Count;
+             ++sentenceIndex)
+        {
+          SentenceSegment sentence = sentences[sentenceIndex];
+          fragments.Add(new SpeechFragment(
             nodeId,
             fragmentCategory,
             fragmentKind,
@@ -478,7 +485,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
             part.FenceLineCount,
             PauseAfter: sentence.PauseAfter,
             NodeTimestampUtc: nodeTimestampUtc,
-            StartsUserTurn: node.StartsUserTurn)));
+            StartsUserTurn: startsUserTurn && sentenceIndex == 0));
+        }
       }
       else
       {
@@ -493,7 +501,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceLineCount,
           PauseAfter: part.PauseAfter,
           NodeTimestampUtc: nodeTimestampUtc,
-          StartsUserTurn: node.StartsUserTurn));
+          StartsUserTurn: startsUserTurn));
       }
     }
     DiagnosticLog.Write("jsonl.node_accepted", new

@@ -59,7 +59,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     _previousSwatch.TabIndex = 3;
     _currentSwatch.TabStop = false;
 
-    ConfigureSlider(_fadeSlider, 0, 8, 1);
+    ConfigureSlider(_fadeSlider, 0, 32, 2);
     _fadeSlider.TabIndex = 4;
     ConfigureValueLabel(_fadeValue);
 
@@ -431,7 +431,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void UpdateDisplays()
   {
-    _fadeValue.Text = $"{_fadeSlider.Value / 16.0:0.####}s";
+    _fadeValue.Text = $"{_fadeSlider.Value / 64.0:0.####}s";
     _trackingValue.Text = $"{_trackingSlider.Value * 5} ms";
     _currentSwatch.BackColor = CurrentColour;
     _previousSwatch.BackColor = _previousColour;
@@ -441,12 +441,15 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private static int FadeMillisecondsFromStep(int step)
   {
-    return (int)Math.Round(Math.Clamp(step, 0, 8) * 62.5);
+    return (int)Math.Round(Math.Clamp(step, 0, 32) * 1000.0 / 64.0);
   }
 
   private static int FadeStepFromMilliseconds(int milliseconds)
   {
-    return Math.Clamp((int)Math.Round(milliseconds / 62.5), 0, 8);
+    return Math.Clamp(
+      (int)Math.Round(milliseconds * 64.0 / 1000.0),
+      0,
+      32);
   }
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)

@@ -1,5 +1,35 @@
 # Agent Panel Speaker internal design
 
+## v43 queued-command rendering and record-scoped identity
+
+`TranscriptMarkdownFormatter` now renders Claude `attachment` records whose
+attachment type is `queued_command`.  This removes the previous split in which
+`JsonlRecordExtractor` created speech history for the record while the rendered
+Transcript omitted it.
+
+Every rendered record begins with a hidden `record-anchor` carrying the JSONL
+record number and source UUID.  `TranscriptNodeIdentityMap` carries the same
+record number with each accepted node.  JavaScript first limits segment matching
+to words owned by that source ID and record number, then assigns the monitor
+node ID.  Text matching remains inside the record because Markdown cleanup can
+alter punctuation and markup.  Mapping and playback failures are reported
+once per unique failure.
+
+`JsonlRecordExtractor` splits a queued-command attachment into a generated
+User-context node and an actual User node.  Both retain the same source record
+identity and both remain navigable.  `JsonlSessionMonitor` places
+`StartsUserTurn` only on the first fragment of the actual User node rather than
+on every fragment.  `SpeechService.FindLatestTurnStartLocked` starts at that
+fragment directly instead of rewinding to the node boundary.
+
+`MainForm` implements `IMessageFilter` so transport keys are captured from
+focused child HWNDs, including WebView2 in maximized Transcript mode.  The
+existing editable-control exclusion is applied before dispatch.
+
+`TranscriptSettings.FadeMilliseconds` is normalized to 1/64-second increments
+from 0--500 ms.  `tools/ColourPickerComparison` is a standalone picker test
+harness and does not select a replacement for the production picker.
+
 ## v42 transcript identity, colour, and timing corrections
 
 `TranscriptNodeIdentityMap` reconstructs the same accepted-node numbering and
@@ -634,7 +664,8 @@ fence types.  The cursor tracks the active, pending, or next fragment.
   and automatic speech of future live fragments;
 - reaching the current live end remains an active waiting state.
 
-Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
+Application-local hotkeys are processed first by `MainForm.PreFilterMessage`
+and retain `MainForm.ProcessCmdKey` as a control-level fallback:
 
 | Shortcut | Action |
 | --- | --- |

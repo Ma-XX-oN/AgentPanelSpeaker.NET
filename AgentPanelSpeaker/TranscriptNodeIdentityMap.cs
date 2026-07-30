@@ -23,6 +23,7 @@ internal static class TranscriptNodeIdentityMap
     var recentQueue = new Queue<string>();
     var recentSet = new HashSet<string>(StringComparer.Ordinal);
     long nextNodeId = 1;
+    int recordNumber = 0;
     var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
       StringComparer.Ordinal);
 
@@ -32,10 +33,17 @@ internal static class TranscriptNodeIdentityMap
       {
         continue;
       }
+      recordNumber++;
 
       ExtractionResult extraction;
+      string sourceId;
       try
       {
+        using JsonDocument document = JsonDocument.Parse(line);
+        sourceId = JsonlRecordIdentity.GetSourceId(
+          source,
+          document.RootElement,
+          recordNumber);
         extraction = JsonlRecordExtractor.Extract(source, line);
       }
       catch (JsonException)
@@ -74,6 +82,8 @@ internal static class TranscriptNodeIdentityMap
         RememberFingerprint(fingerprint, recentQueue, recentSet);
         result.Add(new TranscriptNodeIdentity(
           nextNodeId++,
+          recordNumber,
+          sourceId,
           IsRenderedKind(source, node.Kind)
             ? parts.Select(part => part.Text).ToArray()
             : Array.Empty<string>()));
@@ -87,8 +97,10 @@ internal static class TranscriptNodeIdentityMap
   {
     if (source == AgentSource.Claude)
     {
-      return kind is "claude.user_text" or "claude.thinking" or
-        "claude.text" or "claude.subagent.result";
+      return kind is "claude.user_text" or
+        "claude.queued_command.context" or "claude.queued_command" or
+        "claude.thinking" or "claude.text" or
+        "claude.subagent.result";
     }
 
     return kind == "codex.user_message" ||
@@ -225,4 +237,6 @@ internal static class TranscriptNodeIdentityMap
 /// </summary>
 internal sealed record TranscriptNodeIdentity(
   long NodeId,
+  int RecordNumber,
+  string SourceId,
   IReadOnlyList<string> Segments);

@@ -1806,8 +1806,7 @@ internal sealed class SpeechService : IDisposable
         continue;
       }
 
-      int start = FindNodeStartLocked(index);
-      int eligible = FindNextEligibleLocked(start);
+      int eligible = FindNextEligibleLocked(index);
       return eligible < 0 ? _history.Count : eligible;
     }
 

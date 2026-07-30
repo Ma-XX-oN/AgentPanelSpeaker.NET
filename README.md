@@ -1,4 +1,30 @@
-# Agent Panel Speaker v42
+# Agent Panel Speaker v43
+
+## v43
+
+Version 43 renders Claude `attachment` / `queued_command` records in the
+Transcript instead of indexing them for speech while omitting them from the
+page.  Queued-command extraction separates Claude Code's generated quoted card from
+the actual User text while retaining both in navigation and rendering.
+Existing-history playback marks only the first actual User fragment as the
+turn start, so startup does not rewind into the generated context.
+
+Rendered records now carry their JSONL record number and source UUID in the
+DOM.  `TranscriptNodeIdentityMap` uses the source ID and record number as the first
+mapping scope, then uses cleaned segment text inside that record.  Unmapped node and
+playback fragments are written to the diagnostic log.  Collapsed reasoning
+remains in the DOM and opens automatically when its highlighted word is
+reached.
+
+Transport keys are intercepted by an application message filter before a
+focused WebView2 child can consume them, including while Transcript is
+maximized.  Editable text controls still retain bare keys and all Alt variants
+remain transport shortcuts.
+
+Transcript fade retains the 0--0.5 second range but now uses 1/64-second steps.
+The `tools/ColourPickerComparison` project compares the current Cyotek editor,
+preset swatches, RGBA sliders, and the standard Windows colour dialog without
+changing the main application's picker.
 
 ## v42
 

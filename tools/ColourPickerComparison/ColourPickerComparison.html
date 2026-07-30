@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Highlight Colour Picker Comparison</title>
+<style>
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", sans-serif;
+  background: #202020;
+  color: #f0f0f0;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px; }
+h1 { margin: 0 0 8px; font-size: 24px; }
+p { max-width: 900px; color: #cfcfcf; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+.card {
+  border: 1px solid #555;
+  border-radius: 8px;
+  background: #2d2d30;
+  padding: 16px;
+  min-height: 230px;
+}
+.card h2 { margin: 0 0 12px; font-size: 18px; }
+.row {
+  display: grid;
+  grid-template-columns: 72px 1fr 64px;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+input[type="range"] { width: 100%; }
+input[type="number"], input[type="text"] {
+  width: 100%;
+  background: #1e1e1e;
+  color: #fff;
+  border: 1px solid #666;
+  border-radius: 4px;
+  padding: 6px;
+}
+.native-picker {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.native-picker input[type="color"] {
+  width: 120px;
+  height: 90px;
+  border: 0;
+  background: transparent;
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 38px);
+  gap: 8px;
+}
+.swatch {
+  width: 38px;
+  height: 38px;
+  border: 1px solid #aaa;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.swatch:focus { outline: 3px solid #fff; outline-offset: 2px; }
+.footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 20px;
+  padding: 12px;
+  border: 1px solid #666;
+  background: #252526;
+}
+.preview {
+  width: 100px;
+  height: 38px;
+  border: 1px solid #aaa;
+}
+.output { font-family: Consolas, monospace; }
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: #ddd;
+}
+.compact {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+button {
+  padding: 7px 12px;
+  background: #3a3d41;
+  color: #fff;
+  border: 1px solid #777;
+  border-radius: 4px;
+}
+</style>
+</head>
+<body>
+<h1>Highlight Colour Picker Comparison</h1>
+<p>
+  All five interfaces edit the same colour. Select the radio button on the
+  interface you prefer, then send the picker name and the displayed ARGB value.
+</p>
+<div class="grid">
+  <section class="card">
+    <h2>1. Native colour square</h2>
+    <div class="native-picker">
+      <input id="nativeColour" type="color" value="#3d5384">
+      <div style="flex:1">
+        <div class="row"><label for="nativeAlpha">Alpha</label><input id="nativeAlpha" type="range" min="0" max="255" value="255"><output id="nativeAlphaOut">255</output></div>
+      </div>
+    </div>
+    <label class="choice"><input type="radio" name="choice" value="Native colour square">Choose this interface</label>
+  </section>
+
+  <section class="card">
+    <h2>2. Preset swatches</h2>
+    <div id="swatches" class="swatches"></div>
+    <label class="choice"><input type="radio" name="choice" value="Preset swatches">Choose this interface</label>
+  </section>
+
+  <section class="card">
+    <h2>3. RGB + alpha sliders</h2>
+    <div id="rgbaRows"></div>
+    <label class="choice"><input type="radio" name="choice" value="RGB + alpha sliders">Choose this interface</label>
+  </section>
+
+  <section class="card">
+    <h2>4. HSL + alpha sliders</h2>
+    <div id="hslaRows"></div>
+    <label class="choice"><input type="radio" name="choice" value="HSL + alpha sliders">Choose this interface</label>
+  </section>
+
+  <section class="card">
+    <h2>5. Compact numeric editor</h2>
+    <div class="compact">
+      <label>Hex RGB<input id="hexText" type="text" value="#3D5384"></label>
+      <label>Alpha 0–255<input id="alphaNumber" type="number" min="0" max="255" value="255"></label>
+      <label>Red<input id="redNumber" type="number" min="0" max="255" value="61"></label>
+      <label>Green<input id="greenNumber" type="number" min="0" max="255" value="83"></label>
+      <label>Blue<input id="blueNumber" type="number" min="0" max="255" value="132"></label>
+    </div>
+    <label class="choice"><input type="radio" name="choice" value="Compact numeric editor">Choose this interface</label>
+  </section>
+</div>
+
+<div class="footer">
+  <div id="preview" class="preview"></div>
+  <div id="output" class="output"></div>
+  <button id="copy" type="button">Copy result</button>
+</div>
+<script>
+'use strict';
+const state = {r: 61, g: 83, b: 132, a: 255};
+const palette = [
+  '#ffde95','#7a531a','#3d5384','#2962ff','#007acc','#0099bc','#008080',
+  '#107c10','#4e9a06','#b5cea8','#ffc400','#ff8c00','#ca5010','#d13438',
+  '#e81123','#c239b3','#881798','#68217a','#767676','#a0a0a0','#d2d2d2'
+];
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const hex2 = value => Math.round(value).toString(16).padStart(2, '0').toUpperCase();
+const rgbHex = () => `#${hex2(state.r)}${hex2(state.g)}${hex2(state.b)}`;
+const argbHex = () => `#${hex2(state.a)}${hex2(state.r)}${hex2(state.g)}${hex2(state.b)}`;
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  return [Math.round(h), Math.round(s * 100), Math.round(l * 100)];
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360 / 360;
+  s /= 100; l /= 100;
+  if (s === 0) {
+    const value = Math.round(l * 255);
+    return [value, value, value];
+  }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1 / 3) * 255)
+  ];
+}
+
+function makeRows(hostId, specs, prefix, onChange) {
+  const host = document.getElementById(hostId);
+  for (const spec of specs) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label for="${prefix}${spec.key}">${spec.label}</label>` +
+      `<input id="${prefix}${spec.key}" type="range" min="${spec.min}" max="${spec.max}" value="${spec.value}">` +
+      `<output id="${prefix}${spec.key}Out">${spec.value}</output>`;
+    host.append(row);
+    row.querySelector('input').addEventListener('input', onChange);
+  }
+}
+
+makeRows('rgbaRows', [
+  {key:'R',label:'Red',min:0,max:255,value:state.r},
+  {key:'G',label:'Green',min:0,max:255,value:state.g},
+  {key:'B',label:'Blue',min:0,max:255,value:state.b},
+  {key:'A',label:'Alpha',min:0,max:255,value:state.a}
+], 'rgba', event => {
+  const key = event.target.id.at(-1).toLowerCase();
+  state[key] = Number(event.target.value);
+  render();
+});
+
+const initialHsl = rgbToHsl(state.r, state.g, state.b);
+makeRows('hslaRows', [
+  {key:'H',label:'Hue',min:0,max:359,value:initialHsl[0]},
+  {key:'S',label:'Saturation',min:0,max:100,value:initialHsl[1]},
+  {key:'L',label:'Lightness',min:0,max:100,value:initialHsl[2]},
+  {key:'A',label:'Alpha',min:0,max:255,value:state.a}
+], 'hsla', event => {
+  const values = ['H','S','L'].map(key => Number(document.getElementById(`hsla${key}`).value));
+  [state.r, state.g, state.b] = hslToRgb(...values);
+  state.a = Number(document.getElementById('hslaA').value);
+  render({preserveHsl: true});
+});
+
+for (const colour of palette) {
+  const button = document.createElement('button');
+  button.className = 'swatch';
+  button.type = 'button';
+  button.title = colour.toUpperCase();
+  button.style.background = colour;
+  button.addEventListener('click', () => {
+    state.r = parseInt(colour.slice(1, 3), 16);
+    state.g = parseInt(colour.slice(3, 5), 16);
+    state.b = parseInt(colour.slice(5, 7), 16);
+    render();
+  });
+  document.getElementById('swatches').append(button);
+}
+
+document.getElementById('nativeColour').addEventListener('input', event => {
+  const value = event.target.value;
+  state.r = parseInt(value.slice(1, 3), 16);
+  state.g = parseInt(value.slice(3, 5), 16);
+  state.b = parseInt(value.slice(5, 7), 16);
+  render();
+});
+document.getElementById('nativeAlpha').addEventListener('input', event => {
+  state.a = Number(event.target.value);
+  render();
+});
+
+for (const id of ['alphaNumber','redNumber','greenNumber','blueNumber']) {
+  document.getElementById(id).addEventListener('input', () => {
+    state.a = clamp(Number(document.getElementById('alphaNumber').value), 0, 255);
+    state.r = clamp(Number(document.getElementById('redNumber').value), 0, 255);
+    state.g = clamp(Number(document.getElementById('greenNumber').value), 0, 255);
+    state.b = clamp(Number(document.getElementById('blueNumber').value), 0, 255);
+    render();
+  });
+}
+document.getElementById('hexText').addEventListener('change', event => {
+  const match = /^#?([0-9a-f]{6})$/i.exec(event.target.value.trim());
+  if (!match) return render();
+  state.r = parseInt(match[1].slice(0, 2), 16);
+  state.g = parseInt(match[1].slice(2, 4), 16);
+  state.b = parseInt(match[1].slice(4, 6), 16);
+  render();
+});
+
+function render(options = {}) {
+  state.r = clamp(Math.round(state.r), 0, 255);
+  state.g = clamp(Math.round(state.g), 0, 255);
+  state.b = clamp(Math.round(state.b), 0, 255);
+  state.a = clamp(Math.round(state.a), 0, 255);
+  const rgba = `rgba(${state.r}, ${state.g}, ${state.b}, ${(state.a / 255).toFixed(3)})`;
+  document.getElementById('preview').style.background = rgba;
+  const choice = document.querySelector('input[name="choice"]:checked')?.value || 'No interface selected';
+  document.getElementById('output').textContent = `${choice} — ARGB(${state.a}, ${state.r}, ${state.g}, ${state.b}) — ${argbHex()}`;
+  document.getElementById('nativeColour').value = rgbHex();
+  document.getElementById('nativeAlpha').value = state.a;
+  document.getElementById('nativeAlphaOut').value = state.a;
+  for (const [key, value] of Object.entries({R:state.r,G:state.g,B:state.b,A:state.a})) {
+    document.getElementById(`rgba${key}`).value = value;
+    document.getElementById(`rgba${key}Out`).value = value;
+  }
+  if (!options.preserveHsl) {
+    const [h,s,l] = rgbToHsl(state.r, state.g, state.b);
+    for (const [key, value] of Object.entries({H:h,S:s,L:l,A:state.a})) {
+      document.getElementById(`hsla${key}`).value = value;
+      document.getElementById(`hsla${key}Out`).value = value;
+    }
+  } else {
+    for (const key of ['H','S','L','A']) {
+      document.getElementById(`hsla${key}Out`).value = document.getElementById(`hsla${key}`).value;
+    }
+  }
+  document.getElementById('hexText').value = rgbHex();
+  document.getElementById('alphaNumber').value = state.a;
+  document.getElementById('redNumber').value = state.r;
+  document.getElementById('greenNumber').value = state.g;
+  document.getElementById('blueNumber').value = state.b;
+}
+
+document.querySelectorAll('input[name="choice"]').forEach(input => input.addEventListener('change', render));
+document.getElementById('copy').addEventListener('click', async () => {
+  const text = document.getElementById('output').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const helper = document.createElement('textarea');
+    helper.value = text;
+    helper.style.position = 'fixed';
+    helper.style.opacity = '0';
+    document.body.append(helper);
+    helper.select();
+    document.execCommand('copy');
+    helper.remove();
+  }
+});
+render();
+</script>
+</body>
+</html>

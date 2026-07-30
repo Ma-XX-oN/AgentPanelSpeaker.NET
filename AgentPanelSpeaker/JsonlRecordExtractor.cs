@@ -228,22 +228,85 @@ internal static partial class JsonlRecordExtractor
       }
     }
 
-    ExtractedNode? node = CreateNode(
+    string combined = string.Join(Environment.NewLine, textParts);
+    SplitClaudeQueuedCommandText(
+      combined,
+      out string generatedContext,
+      out string userText);
+    string? timestamp = GetOptionalString(root, "timestamp");
+    var nodes = new List<ExtractedNode>();
+    AddNode(
+      nodes,
+      "claude.queued_command.context",
+      ContentCategory.UserContext,
+      generatedContext,
+      timestamp);
+    AddNode(
+      nodes,
       "claude.queued_command",
       ContentCategory.User,
-      string.Join(Environment.NewLine, textParts),
-      GetOptionalString(root, "timestamp"),
+      userText,
+      timestamp,
       startsUserTurn: true);
-    return node is null
+
+    return nodes.Count == 0
       ? Empty(
         "claude queued User command is empty",
         recordType,
         string.Empty)
       : new ExtractionResult(
-        new[] { node },
-        "accepted claude queued User command",
+        nodes,
+        $"accepted {nodes.Count} claude queued-command block(s)",
         recordType,
         string.Empty);
+  }
+
+  /// <summary>
+  /// Separates Claude Code's generated quoted card from the queued User text.
+  /// </summary>
+  private static void SplitClaudeQueuedCommandText(
+    string text,
+    out string generatedContext,
+    out string userText)
+  {
+    string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    string[] lines = normalized.Split('\n');
+    bool sawQuotedLine = false;
+    bool leftQuotedBlock = false;
+    int userStart = -1;
+
+    for (int index = 0; index < lines.Length; ++index)
+    {
+      string trimmed = lines[index].TrimStart();
+      bool quoted = trimmed.StartsWith('>');
+      if (!sawQuotedLine)
+      {
+        sawQuotedLine = quoted;
+        continue;
+      }
+
+      if (string.IsNullOrWhiteSpace(lines[index]))
+      {
+        leftQuotedBlock = true;
+        continue;
+      }
+      if (leftQuotedBlock || !quoted)
+      {
+        userStart = index;
+        break;
+      }
+    }
+
+    if (userStart < 0)
+    {
+      generatedContext = string.Empty;
+      userText = normalized.Trim();
+      return;
+    }
+
+    generatedContext = string.Join("\n", lines[..userStart]).Trim();
+    userText = string.Join("\n", lines[userStart..]).Trim();
   }
 
   /// <summary>

@@ -317,12 +317,29 @@ internal sealed class TranscriptView : UserControl
       using JsonDocument document = JsonDocument.Parse(
         eventArgs.WebMessageAsJson);
       JsonElement root = document.RootElement;
-      if (!root.TryGetProperty("type", out JsonElement typeElement) ||
-          typeElement.GetString() != "transport" ||
+      if (!root.TryGetProperty("type", out JsonElement typeElement))
+      {
+        return;
+      }
+
+      string type = typeElement.GetString() ?? string.Empty;
+      if (type == "mapping-failure" || type == "playback-unmatched")
+      {
+        DiagnosticLog.Write($"transcript.{type}", new
+        {
+          nodeId = ReadOptionalInt64(root, "nodeId"),
+          recordNumber = ReadOptionalInt32(root, "recordNumber"),
+          sourceId = ReadOptionalString(root, "sourceId"),
+          text = ReadOptionalString(root, "text")
+        });
+        return;
+      }
+      if (type != "transport" ||
           !root.TryGetProperty("key", out JsonElement keyElement))
       {
         return;
       }
+
       string key = keyElement.GetString() ?? string.Empty;
       bool alt = root.TryGetProperty("alt", out JsonElement altElement) &&
         altElement.ValueKind == JsonValueKind.True;
@@ -346,6 +363,36 @@ internal sealed class TranscriptView : UserControl
         exception = exception.ToString()
       });
     }
+  }
+
+  private static string ReadOptionalString(
+    JsonElement root,
+    string propertyName)
+  {
+    return root.TryGetProperty(propertyName, out JsonElement value) &&
+      value.ValueKind == JsonValueKind.String
+        ? value.GetString() ?? string.Empty
+        : string.Empty;
+  }
+
+  private static long? ReadOptionalInt64(
+    JsonElement root,
+    string propertyName)
+  {
+    return root.TryGetProperty(propertyName, out JsonElement value) &&
+      value.TryGetInt64(out long result)
+        ? result
+        : null;
+  }
+
+  private static int? ReadOptionalInt32(
+    JsonElement root,
+    string propertyName)
+  {
+    return root.TryGetProperty(propertyName, out JsonElement value) &&
+      value.TryGetInt32(out int result)
+        ? result
+        : null;
   }
 
   private static Keys KeyNameToKeys(string key)
@@ -502,6 +549,8 @@ let currentFragmentStart = -1;
 let fadeMs = 250;
 let followSpeech = true;
 let knownNodeIds = new Set();
+const reportedMappingFailures = new Set();
+const reportedPlaybackFailures = new Set();
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu) || [];
@@ -552,6 +601,7 @@ function replaceTranscript(html, preserve, nodeMap) {
     if (index < openDetails.length) item.open = openDetails[index];
   });
   wrapWords();
+  assignRecordScopes();
   assignNodeScopes(nodeMap || []);
   currentIndex = -1;
   currentNode = -1;
@@ -572,7 +622,30 @@ function applySettings(highlight, duration, follow, dark) {
   followSpeech = follow;
 }
 
-function findSequence(target, startAt, requiredNodeId) {
+function assignRecordScopes() {
+  let recordNumber = '';
+  let sourceId = '';
+  const walker = document.createTreeWalker(
+    transcript,
+    NodeFilter.SHOW_ELEMENT);
+  while (walker.nextNode()) {
+    const element = walker.currentNode;
+    if (element.classList.contains('record-anchor')) {
+      recordNumber = element.dataset.jsonlRecord || '';
+      sourceId = element.dataset.sourceId || '';
+    } else if (element.classList.contains('word')) {
+      element.dataset.recordNumber = recordNumber;
+      element.dataset.sourceId = sourceId;
+    }
+  }
+}
+
+function findSequence(
+  target,
+  startAt,
+  requiredNodeId,
+  requiredRecordNumber,
+  requiredSourceId) {
   if (!target.length || !words.length) return -1;
   const lastStart = words.length - target.length;
   for (let i = Math.max(0, startAt); i <= lastStart; ++i) {
@@ -581,7 +654,11 @@ function findSequence(target, startAt, requiredNodeId) {
       const candidate = words[i + j];
       if (candidate.dataset.normalized !== target[j] ||
           (requiredNodeId !== null &&
-           candidate.dataset.nodeId !== requiredNodeId)) {
+           candidate.dataset.nodeId !== requiredNodeId) ||
+          (requiredRecordNumber !== null &&
+           candidate.dataset.recordNumber !== requiredRecordNumber) ||
+          (requiredSourceId !== null &&
+           candidate.dataset.sourceId !== requiredSourceId)) {
         equal = false;
         break;
       }
@@ -593,21 +670,54 @@ function findSequence(target, startAt, requiredNodeId) {
 
 function assignNodeScopes(nodeMap) {
   knownNodeIds = new Set();
-  let cursor = 0;
+  const recordCursors = new Map();
   for (const item of nodeMap || []) {
     const nodeId = String(item.NodeId ?? item.nodeId ?? '');
     knownNodeIds.add(nodeId);
+    const recordNumber = String(
+      item.RecordNumber ?? item.recordNumber ?? '');
+    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
     const segments = item.Segments ?? item.segments ?? [];
+    const recordKey = sourceId + '\u0000' + recordNumber;
+    let recordCursor = recordCursors.get(recordKey) || 0;
     let mappedAny = false;
     for (const segment of segments) {
       const target = tokenize(segment);
       if (!target.length) continue;
-      const start = findSequence(target, cursor, null);
-      if (start < 0) continue;
+      let start = findSequence(
+        target,
+        recordCursor,
+        null,
+        recordNumber || null,
+        sourceId || null);
+      if (start < 0 && recordCursor > 0) {
+        start = findSequence(
+          target,
+          0,
+          null,
+          recordNumber || null,
+          sourceId || null);
+      }
+      if (start < 0) {
+        const failureKey = nodeId + ':' + recordNumber + ':' +
+          sourceId + ':' + segment;
+        if (!reportedMappingFailures.has(failureKey)) {
+          reportedMappingFailures.add(failureKey);
+          chrome.webview.postMessage({
+            type: 'mapping-failure',
+            nodeId: Number(nodeId),
+            recordNumber: Number(recordNumber),
+            sourceId,
+            text: segment.slice(0, 240)
+          });
+        }
+        continue;
+      }
       for (let offset = 0; offset < target.length; ++offset) {
         words[start + offset].dataset.nodeId = nodeId;
       }
-      cursor = start + target.length;
+      recordCursor = start + target.length;
+      recordCursors.set(recordKey, recordCursor);
       mappedAny = true;
     }
     if (!mappedAny) {
@@ -715,7 +825,18 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   if (currentFragmentText !== fragmentText || currentNode !== nodeId ||
       start < 0) {
     start = findFragmentStart(fragmentText, nodeId);
-    if (start < 0) return;
+    if (start < 0) {
+      const failureKey = String(nodeId) + ':' + (fragmentText || '');
+      if (!reportedPlaybackFailures.has(failureKey)) {
+        reportedPlaybackFailures.add(failureKey);
+        chrome.webview.postMessage({
+          type: 'playback-unmatched',
+          nodeId,
+          text: (fragmentText || '').slice(0, 240)
+        });
+      }
+      return;
+    }
     currentFragmentText = fragmentText;
     currentFragmentStart = start;
   }
