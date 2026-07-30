@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Edits transcript-follow, highlight-colour, fade, and tracking settings.
+/// Edits transcript follow, colour, fade, tracking, and queue settings.
 /// </summary>
 internal sealed class TranscriptSettingsPopup : UserControl
 {
@@ -14,6 +14,8 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private readonly Label _fadeValue = new();
   private readonly TrackBar _trackingSlider = new();
   private readonly Label _trackingValue = new();
+  private readonly NumericUpDown _queueCapacityNumeric = new();
+  private readonly Label _queueCapacityValue = new();
   private readonly System.Windows.Forms.Timer _colourOpenTimer = new();
   private readonly System.Windows.Forms.Timer _colourNotificationTimer = new();
   private readonly System.Windows.Forms.Timer _parentCloseSuppressionTimer = new();
@@ -30,7 +32,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public TranscriptSettingsPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(430, 190);
+    Size = new Size(430, 226);
     TabStop = false;
     Visible = false;
 
@@ -64,6 +66,15 @@ internal sealed class TranscriptSettingsPopup : UserControl
     _trackingSlider.TabIndex = 4;
     ConfigureValueLabel(_trackingValue);
 
+    _queueCapacityNumeric.Minimum = 1;
+    _queueCapacityNumeric.Maximum = 16;
+    _queueCapacityNumeric.Value = 1;
+    _queueCapacityNumeric.Dock = DockStyle.Fill;
+    _queueCapacityNumeric.TextAlign = HorizontalAlignment.Right;
+    _queueCapacityNumeric.TabIndex = 5;
+    ConfigureValueLabel(_queueCapacityValue);
+    _queueCapacityValue.Text = "positions";
+
     var swatchLayout = new FlowLayoutPanel
     {
       AutoSize = true,
@@ -81,7 +92,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     var layout = new TableLayoutPanel
     {
       ColumnCount = 3,
-      RowCount = 5,
+      RowCount = 6,
       Dock = DockStyle.Fill,
       Padding = new Padding(10)
     };
@@ -93,6 +104,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
     layout.Controls.Add(title, 0, 0);
     layout.SetColumnSpan(title, 3);
     layout.Controls.Add(_followCheckBox, 0, 1);
@@ -101,6 +113,12 @@ internal sealed class TranscriptSettingsPopup : UserControl
     layout.SetColumnSpan(swatchLayout, 3);
     AddSliderRow(layout, 3, "Fade Duration", _fadeSlider, _fadeValue);
     AddSliderRow(layout, 4, "Tracking Update", _trackingSlider, _trackingValue);
+    AddSliderRow(
+      layout,
+      5,
+      "Highlight Queue",
+      _queueCapacityNumeric,
+      _queueCapacityValue);
     Controls.Add(layout);
 
     _followCheckBox.CheckedChanged += ValueChanged;
@@ -110,6 +128,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     _currentSwatch.MouseLeave += CurrentSwatchMouseLeave;
     _fadeSlider.ValueChanged += ValueChanged;
     _trackingSlider.ValueChanged += ValueChanged;
+    _queueCapacityNumeric.ValueChanged += ValueChanged;
 
     _colourOpenTimer.Interval = 250;
     _colourOpenTimer.Tick += (_, _) =>
@@ -175,6 +194,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
         Settings.HighlightUpdateMilliseconds / 5,
         1,
         8);
+      _queueCapacityNumeric.Value = Math.Clamp(
+        Settings.HighlightQueueCapacity,
+        1,
+        16);
       UpdateDisplays();
     }
     finally
@@ -268,7 +291,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       DismissRequested?.Invoke(this, EventArgs.Empty);
       return true;
     }
-    if (keyData == Keys.Tab && _trackingSlider.ContainsFocus)
+    if (keyData == Keys.Tab && _queueCapacityNumeric.ContainsFocus)
     {
       FocusTraversalRequested?.Invoke(
         this,
@@ -429,7 +452,8 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       FollowSpeech = _followCheckBox.Checked,
       FadeMilliseconds = FadeMillisecondsFromStep(_fadeSlider.Value),
-      HighlightUpdateMilliseconds = _trackingSlider.Value * 5
+      HighlightUpdateMilliseconds = _trackingSlider.Value * 5,
+      HighlightQueueCapacity = Decimal.ToInt32(_queueCapacityNumeric.Value)
     }).Normalize();
     UpdateDisplays();
     if (_colourPopup is { IsDisposed: false, Visible: true } popup)

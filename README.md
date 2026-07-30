@@ -1,4 +1,24 @@
-# Agent Panel Speaker v50
+# Agent Panel Speaker v51
+
+## v51
+
+Version 51 replaces the per-boundary `BeginInvoke` path with a bounded
+`TranscriptPlaybackMailbox`.  Publishing a speech boundary overwrites the
+oldest retained position when the mailbox is full and schedules at most one
+UI-thread wake-up.  Positions that arrive while one wake-up is being processed
+remain for one subsequent wake-up rather than adding unbounded WinForms queue
+entries.
+
+The **Highlight Queue** setting controls the circular mailbox capacity from
+1--16 positions.  The default is 1, which retains only the newest visual
+position and discards obsolete intermediate word markers.  Capacities above 1
+are available for comparison without changing the speech engine or WebView
+message format.
+
+This version intentionally implements only the first playback-path experiment.
+Control-command separation, hidden-view suppression, numeric fragment IDs,
+performance/GC instrumentation, and shared memory remain unchanged so the
+mailbox result can be measured independently.
 
 ## v50
 

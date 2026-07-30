@@ -67,6 +67,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly TabPage _activityTab = new("Activity");
   private readonly TabPage _acceptedTextTab = new("Accepted Text");
   private readonly TranscriptView _transcriptView = new();
+  private readonly TranscriptPlaybackMailbox _playbackMailbox = new(1);
   private readonly GlyphButton _transcriptSettingsButton = new();
   private readonly GlyphButton _maximizeTranscriptButton = new();
   private readonly TranscriptSettingsPopup _transcriptSettingsPopup = new();
@@ -133,7 +134,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v50";
+    Text = "Agent Panel Speaker v51";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -528,8 +529,74 @@ internal sealed class MainForm : Form, IMessageFilter
     });
     _speech.ProcessingTimeAnnouncementStateChanged += _ => PostToUi(
       UpdateControlState);
-    _speech.PlaybackPositionChanged += position => PostToUi(() =>
-      _transcriptView.ShowPlaybackPosition(position));
+    _speech.PlaybackPositionChanged += QueuePlaybackPosition;
+  }
+
+  /// <summary>
+  /// Publishes one playback position to the bounded latest-position mailbox.
+  /// Only the first pending value schedules a UI-thread wake-up.
+  /// </summary>
+  private void QueuePlaybackPosition(TranscriptPlaybackPosition position)
+  {
+    if (_closing || IsDisposed)
+    {
+      return;
+    }
+
+    if (_playbackMailbox.Publish(position))
+    {
+      SchedulePlaybackMailboxDrain();
+    }
+  }
+
+  /// <summary>
+  /// Requests one asynchronous UI-thread mailbox drain.
+  /// </summary>
+  private void SchedulePlaybackMailboxDrain()
+  {
+    if (_closing || IsDisposed || !IsHandleCreated)
+    {
+      _playbackMailbox.Clear();
+      return;
+    }
+
+    try
+    {
+      BeginInvoke((Action)DrainPlaybackMailbox);
+    }
+    catch (InvalidOperationException)
+    {
+      _playbackMailbox.Clear();
+    }
+  }
+
+  /// <summary>
+  /// Applies the bounded retained positions and requests one more wake-up only
+  /// when a producer published while this drain was running.
+  /// </summary>
+  private void DrainPlaybackMailbox()
+  {
+    if (_closing || IsDisposed)
+    {
+      _playbackMailbox.Clear();
+      return;
+    }
+
+    int batchCount = _playbackMailbox.GetWakeBatchCount();
+    for (int index = 0; index < batchCount; ++index)
+    {
+      if (!_playbackMailbox.TryTake(
+            out TranscriptPlaybackPosition position))
+      {
+        break;
+      }
+      _transcriptView.ShowPlaybackPosition(position);
+    }
+
+    if (_playbackMailbox.CompleteWake())
+    {
+      SchedulePlaybackMailboxDrain();
+    }
   }
 
   /// <summary>
@@ -810,6 +877,8 @@ internal sealed class MainForm : Form, IMessageFilter
         settings.Transcript.HighlightUpdateMilliseconds);
       _appliedTranscriptTrackingMilliseconds =
         settings.Transcript.HighlightUpdateMilliseconds;
+      _playbackMailbox.SetCapacity(
+        settings.Transcript.HighlightQueueCapacity);
       _diagnosticsMaximized = settings.Transcript.Maximized;
       LoadVoiceRow(
         SpeechRole.Agent,
@@ -1627,6 +1696,7 @@ internal sealed class MainForm : Form, IMessageFilter
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
     _transcriptView.ApplySettings(settings, dark);
+    _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
         settings.HighlightUpdateMilliseconds)
     {
@@ -2588,6 +2658,7 @@ internal sealed class MainForm : Form, IMessageFilter
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
     _closing = true;
+    _playbackMailbox.Clear();
     Interlocked.Increment(ref _monitorSession);
     _monitor.Dispose();
     _displayAwake.Dispose();

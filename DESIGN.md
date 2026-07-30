@@ -1,5 +1,23 @@
 # Agent Panel Speaker internal design
 
+## v51 bounded playback mailbox
+
+`SpeechService.PlaybackPositionChanged` publishes into
+`TranscriptPlaybackMailbox` instead of calling `MainForm.PostToUi()` for every
+word boundary.  The mailbox is a lock-protected circular buffer whose capacity
+is `TranscriptSettings.HighlightQueueCapacity` (1--16, default 1).
+
+`TranscriptPlaybackMailbox.Publish()` returns true only when it changes from no
+pending UI wake-up to one pending wake-up.  `MainForm` then posts exactly one
+`BeginInvoke`.  The UI callback captures the retained batch count, applies at
+most that many positions, and posts one further callback only when a producer
+published during the current drain.  A full mailbox discards its oldest value,
+so capacity 1 is a latest-value mailbox rather than an event queue.
+
+This change is isolated to the speech-boundary-to-UI handoff.  WebView messages,
+control commands, visibility policy, fragment identity, diagnostics, and the
+shared-buffer proposal are intentionally unchanged for v51.
+
 ## v50 low-latency marker channel and bounded colour updates
 
 `TranscriptView` sends `playback` and `settings` messages with
