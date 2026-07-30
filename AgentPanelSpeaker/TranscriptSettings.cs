@@ -20,8 +20,11 @@ internal sealed record TranscriptSettings(
 
   public TranscriptSettings Normalize()
   {
-    int boundedFade = Math.Clamp(FadeMilliseconds, 0, 2000);
-    boundedFade = (int)Math.Round(boundedFade / 250.0) * 250;
+    int fadeStep = Math.Clamp(
+      (int)Math.Round(FadeMilliseconds / 62.5),
+      0,
+      8);
+    int boundedFade = (int)Math.Round(fadeStep * 62.5);
     return this with
     {
       FadeMilliseconds = boundedFade,

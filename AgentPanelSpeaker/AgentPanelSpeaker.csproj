@@ -18,4 +18,12 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
   </ItemGroup>
 
+  <Target Name="RemoveUnusedWebView2WpfReference"
+          BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)"
+                 Condition="'%(Reference.Filename)%(Reference.Extension)' == 'Microsoft.Web.WebView2.Wpf.dll'" />
+    </ItemGroup>
+  </Target>
+
 </Project>

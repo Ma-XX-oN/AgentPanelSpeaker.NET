@@ -1,4 +1,11 @@
-# Agent Panel Speaker v40
+# Agent Panel Speaker v41
+
+## v41
+
+Version 41 fixes the WebView2 WinForms reference warning, transcript-toolbar
+clipping, transcript-settings dismissal, dark-theme colour editing, word-marker
+tracking, and transport-glyph sizing.  Transcript fade duration now ranges from
+0 to 0.5 seconds in 1/16-second increments.
 
 ## v40
 
@@ -16,8 +23,8 @@ only rendered transcript display; speech and diagnostics remain available.
 
 The transcript toolbar contains a settings gear and maximize/restore button.
 The in-window settings overlay immediately applies **Follow Speech**, separate
-light/dark highlight colours, and a fade duration from 0 to 2 seconds in
-0.25-second increments.  Maximizing keeps the tabs and toolbar visible while
+light/dark highlight colours, and a fade duration from 0 to 0.5 seconds in
+1/16-second increments.  Maximizing keeps the tabs and toolbar visible while
 collapsing the rest of the window, and the state is persisted.
 
 System.Speech voices provide exact synthesis word boundaries.  Native SAPI and
@@ -438,7 +445,7 @@ The gear at the right of the tab strip opens an in-window settings overlay:
 
 - **Follow Speech** scrolls the active word into a comfortable viewport region.
 - **Highlight Colour** stores a separate colour for light and dark themes.
-- **Fade Duration** ranges from 0 to 2 seconds in 0.25-second increments.
+- **Fade Duration** ranges from 0 to 0.5 seconds in 1/16-second increments.
 
 Changes apply immediately.  The filled active-word background moves with
 playback.  Previous words fade to the normal background.  Pause replaces the

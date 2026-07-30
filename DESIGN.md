@@ -1,5 +1,12 @@
 # Agent Panel Speaker internal design
 
+## v41 transcript integration corrections
+
+Version 41 removes the unused WebView2 WPF assembly reference, uses an in-app
+themed RGB colour editor, fixes popup hover dismissal and fragment word mapping,
+and reduces transcript/transport glyph sizes.  Fade is 0--500 ms in 1/16-second
+increments.
+
 ## v40 rendered transcript and synchronized speech markers
 
 `MainForm` places **Transcript** before Activity and Accepted Text in the bottom
@@ -20,7 +27,7 @@ part of any `SpeechFragment`.
 The transcript toolbar is overlaid on the right of the tab strip.  The gear
 opens `TranscriptSettingsPopup`, another child overlay rather than a top-level
 window.  Follow state, separate light/dark ARGB highlight colours, and a
-0--2000 ms fade rounded to 250 ms are persisted in settings version 10.  The
+0--500 ms fade rounded to 1/16 second are persisted in settings version 10.  The
 maximize button collapses rows 0--6 of `MainForm._mainLayout`; the tab strip,
 gear, and restore button remain visible.
 

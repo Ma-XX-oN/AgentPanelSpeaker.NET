@@ -463,6 +463,8 @@ const liveEndMarker = document.getElementById('live-end-marker');
 let words = [];
 let currentIndex = -1;
 let currentNode = -1;
+let currentFragmentText = null;
+let currentFragmentStart = -1;
 let fadeMs = 250;
 let followSpeech = true;
 
@@ -516,6 +518,8 @@ function replaceTranscript(html, preserve) {
   });
   wrapWords();
   currentIndex = -1;
+  currentFragmentText = null;
+  currentFragmentStart = -1;
   liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
@@ -535,24 +539,25 @@ function findFragmentStart(text, nodeId) {
   const target = tokenize(text);
   if (!target.length || !words.length) return -1;
   const normalized = words.map(x => x.dataset.normalized);
-  let from = 0;
-  let to = normalized.length - target.length;
-  let step = 1;
-  if (currentIndex >= 0 && nodeId < currentNode) {
-    from = Math.min(currentIndex, to);
-    to = 0;
-    step = -1;
-  } else if (currentIndex >= 0) {
-    from = Math.max(0, currentIndex - 2);
-  }
-  for (let i = from; step > 0 ? i <= to : i >= to; i += step) {
+  const lastStart = normalized.length - target.length;
+  const matches = [];
+  for (let i = 0; i <= lastStart; ++i) {
     let equal = true;
     for (let j = 0; j < target.length; ++j) {
       if (normalized[i + j] !== target[j]) { equal = false; break; }
     }
-    if (equal) return i;
+    if (equal) matches.push(i);
   }
-  return -1;
+  if (!matches.length) return -1;
+  if (currentIndex < 0) return matches[0];
+  if (nodeId < currentNode) {
+    const before = matches.filter(index => index <= currentIndex);
+    return before.length ? before[before.length - 1] : matches[0];
+  }
+  return matches.reduce((best, candidate) =>
+    Math.abs(candidate - currentIndex) < Math.abs(best - currentIndex)
+      ? candidate
+      : best);
 }
 
 function openAncestors(element) {
@@ -569,7 +574,7 @@ function reveal(element) {
   const topComfort = window.innerHeight * .22;
   const bottomComfort = window.innerHeight * .78;
   if (rect.top < topComfort || rect.bottom > bottomComfort) {
-    element.scrollIntoView({block: 'center', behavior: 'smooth'});
+    element.scrollIntoView({block: 'center', behavior: 'auto'});
   }
 }
 
@@ -608,8 +613,14 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
     reveal(liveEndMarker);
     return;
   }
-  const start = findFragmentStart(fragmentText, nodeId);
-  if (start < 0) return;
+  let start = currentFragmentStart;
+  if (currentFragmentText !== fragmentText || currentNode !== nodeId ||
+      start < 0) {
+    start = findFragmentStart(fragmentText, nodeId);
+    if (start < 0) return;
+    currentFragmentText = fragmentText;
+    currentFragmentStart = start;
+  }
   const targetIndex = Math.min(words.length - 1, start + Math.max(0, wordIndex));
   const target = words[targetIndex];
   openAncestors(target);

@@ -123,7 +123,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v40";
+    Text = "Agent Panel Speaker v41";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -212,14 +212,16 @@ internal sealed class MainForm : Form
     _diagnosticTabs.SelectedTab = _transcriptTab;
     ConfigureButton(_transcriptSettingsButton, "⚙");
     _transcriptSettingsButton.AutoSize = false;
-    _transcriptSettingsButton.Size = new Size(34, 25);
+    _transcriptSettingsButton.Size = new Size(28, 23);
+    _transcriptSettingsButton.Font = new Font("Segoe UI Symbol", 9.0f);
     _transcriptSettingsButton.AccessibleName = "Transcript Settings";
     _toolTip.SetToolTip(
       _transcriptSettingsButton,
       "Transcript follow, highlight colour, and fade settings");
     ConfigureButton(_maximizeTranscriptButton, "^");
     _maximizeTranscriptButton.AutoSize = false;
-    _maximizeTranscriptButton.Size = new Size(34, 25);
+    _maximizeTranscriptButton.Size = new Size(28, 23);
+    _maximizeTranscriptButton.Font = new Font("Segoe UI", 9.0f);
     _maximizeTranscriptButton.AccessibleName = "Maximize transcript tabs";
     _toolTip.SetToolTip(
       _maximizeTranscriptButton,
@@ -368,7 +370,12 @@ internal sealed class MainForm : Form
     _browseButton.Click += BrowseButtonClicked;
     _playPauseButton.Click += PlayPauseButtonClicked;
     _diagnosticTabs.SelectedIndexChanged += (_, _) =>
+    {
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
+        suppressHoverUntilLeave: true);
       UpdateDiagnosticTabTitles();
+    };
     _transcriptSettingsButton.Click += (_, _) =>
     {
       _suppressTranscriptSettingsHoverUntilLeave = false;
@@ -392,7 +399,12 @@ internal sealed class MainForm : Form
       }));
     };
     _maximizeTranscriptButton.Click += (_, _) =>
+    {
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
+        suppressHoverUntilLeave: true);
       SetDiagnosticsMaximized(!_diagnosticsMaximized);
+    };
     _transcriptSettingsPopup.SettingsChanged += (_, _) =>
       TranscriptSettingsChanged();
     _transcriptSettingsPopup.TransportKeyPressed +=
@@ -414,9 +426,7 @@ internal sealed class MainForm : Form
       _transcriptSettingsCloseTimer.Stop();
       if (!_transcriptSettingsButton.ClientRectangle.Contains(
             _transcriptSettingsButton.PointToClient(Cursor.Position)) &&
-          !_transcriptSettingsPopup.ClientRectangle.Contains(
-            _transcriptSettingsPopup.PointToClient(Cursor.Position)) &&
-          !_transcriptSettingsPopup.ContainsFocus)
+          !_transcriptSettingsPopup.IsPointerInside())
       {
         _transcriptSettingsPopup.Visible = false;
       }
@@ -434,9 +444,9 @@ internal sealed class MainForm : Form
       _suppressTranscriptSettingsHoverUntilLeave = false;
       _transcriptSettingsCloseTimer.Start();
     };
-    _transcriptSettingsPopup.MouseEnter += (_, _) =>
+    _transcriptSettingsPopup.PointerEntered += (_, _) =>
       _transcriptSettingsCloseTimer.Stop();
-    _transcriptSettingsPopup.MouseLeave += (_, _) =>
+    _transcriptSettingsPopup.PointerLeft += (_, _) =>
       _transcriptSettingsCloseTimer.Start();
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
@@ -1459,14 +1469,14 @@ internal sealed class MainForm : Form
 
   private void PositionTranscriptControls()
   {
-    int right = _diagnosticHost.ClientSize.Width - 5;
+    int right = _diagnosticHost.ClientSize.Width - 10;
     _maximizeTranscriptButton.Location = new Point(
       Math.Max(0, right - _maximizeTranscriptButton.Width),
-      2);
+      3);
     _transcriptSettingsButton.Location = new Point(
       Math.Max(0,
         _maximizeTranscriptButton.Left - _transcriptSettingsButton.Width - 3),
-      2);
+      3);
     _transcriptSettingsPopup.Location = new Point(
       Math.Max(0, right - _transcriptSettingsPopup.Width),
       _transcriptSettingsButton.Bottom + 2);
@@ -1479,7 +1489,9 @@ internal sealed class MainForm : Form
   {
     if (_transcriptSettingsPopup.Visible)
     {
-      _transcriptSettingsPopup.Visible = false;
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
+        suppressHoverUntilLeave: true);
       return;
     }
     ShowTranscriptSettingsPopup(focusPopup);
@@ -1968,7 +1980,9 @@ internal sealed class MainForm : Form
     if (sender is not TranscriptSettingsPopup &&
         !ReferenceEquals(sender, _transcriptSettingsButton))
     {
-      _transcriptSettingsPopup.Visible = false;
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
+        suppressHoverUntilLeave: true);
     }
   }
 
@@ -2437,7 +2451,7 @@ internal sealed class MainForm : Form
   {
     button.AutoSize = false;
     button.Size = new Size(TransportButtonWidth, TransportButtonHeight);
-    button.Font = new Font("Segoe UI Symbol", 14.0f);
+    button.Font = new Font("Segoe UI Symbol", 11.0f);
     button.Drawing = GlyphButtonDrawing.Text;
     button.Glyph = symbol;
     button.UseInkBounds = true;
