@@ -217,8 +217,9 @@ internal sealed class UserSettingsStore
     return settings with
     {
       Version = UserSettings.CurrentVersion,
-      FollowNewestSession = settings.Version >= 5 &&
-        settings.FollowNewestSession,
+      FollowNewestSession = string.IsNullOrWhiteSpace(
+          settings.ManualSessionPath) ||
+        (settings.Version >= 5 && settings.FollowNewestSession),
       KeepDisplayOnWhileSpeaking = settings.Version >= 7 &&
         settings.KeepDisplayOnWhileSpeaking,
       Transcript = settings.Version >= 10

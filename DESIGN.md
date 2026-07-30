@@ -1,5 +1,45 @@
 # Agent Panel Speaker internal design
 
+## v48 nullable loading-label fallback
+
+`TranscriptView.GetLoadingText()` accepts the absence of `_sessionPath` while
+the WebView is being prepared or a selection is being cleared.  The nullable
+result from `Path.GetFileName(_sessionPath)` is normalized to `string.Empty`
+before it is assigned to the non-nullable loading-label value.
+
+## v47 cancellable rendering and maximized transport dispatch
+
+`TranscriptView` assigns every render generation its own
+`CancellationTokenSource`.  `SelectSession()`, `ClearSession()`, and disposal
+cancel the previous generation; an obsolete task cannot hold the next selected
+file behind `_refreshInProgress` or enqueue another refresh during shutdown.
+`TranscriptMarkdownFormatter.Format()` and `TranscriptNodeIdentityMap.Build()`
+check that token between JSONL records.
+
+The WebView builds `displayWordsByRecord` and `lexicalWordsByRecord` once after
+`wrapWords()`.  `assignNodeScopes()` searches those record-local arrays and
+stores the resulting ranges in `segmentRangesByNode`.  `findFragmentRange()`
+therefore performs an exact node-local segment lookup during speech instead of
+repeating whole-document scans.  `transcript.render_completed` records
+preparation, DOM, and total milliseconds.
+
+`MainForm.ActivateTransportShortcut()` no longer calls
+`Button.PerformClick()`.  `SetDiagnosticsMaximized()` hides the transport row,
+and a hidden WinForms button is not selectable, so `PerformClick()` does not
+raise its click handler.  The dispatcher now calls the corresponding navigation,
+play/pause, or processing-time command directly after applying the same enabled-
+state and focus rules.  `PreFilterMessage()`, `ProcessCmdKey()`, and the WebView
+JavaScript bridge remain the three keyboard-input paths.
+
+`UserSettings.CreateDefault()` enables `FollowNewestSession`.  Normalization also
+enables it whenever no `ManualSessionPath` exists.  `FollowLatestChanged()`
+releases or establishes `_pathIsManual`, and the checkbox remains available
+while configuration is unlocked.
+
+`TranscriptColourPopup` synchronizes a compact Cyotek `ColorWheel` with
+`ColorEditor`, retaining alpha and numeric colour entry while preserving the
+nested-overlay focus and dismissal contract.
+
 ## v46 WebView keyboard bridge correction
 
 `TranscriptView` does not subscribe to a native accelerator event.  The

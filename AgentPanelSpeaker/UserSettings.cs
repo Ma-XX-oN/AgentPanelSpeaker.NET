@@ -79,7 +79,7 @@ internal sealed record UserSettings(
     return new UserSettings(
       CurrentVersion,
       AgentSource.Auto,
-      FollowNewestSession: false,
+      FollowNewestSession: true,
       ManualSessionPath: null,
       new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },
       new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },

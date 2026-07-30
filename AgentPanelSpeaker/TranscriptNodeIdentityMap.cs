@@ -17,7 +17,8 @@ internal static class TranscriptNodeIdentityMap
   /// </summary>
   public static IReadOnlyList<TranscriptNodeIdentity> Build(
     string path,
-    AgentSource source)
+    AgentSource source,
+    CancellationToken cancellationToken = default)
   {
     var result = new List<TranscriptNodeIdentity>();
     var recentQueue = new Queue<string>();
@@ -29,6 +30,7 @@ internal static class TranscriptNodeIdentityMap
 
     foreach (string line in File.ReadLines(path))
     {
+      cancellationToken.ThrowIfCancellationRequested();
       if (string.IsNullOrWhiteSpace(line))
       {
         continue;

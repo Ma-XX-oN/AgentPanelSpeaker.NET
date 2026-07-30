@@ -130,7 +130,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v46";
+    Text = "Agent Panel Speaker v48";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -360,7 +360,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private void ConnectEvents()
   {
     _sourceComboBox.SelectedIndexChanged += SourceSelectionChanged;
-    _followLatestCheckBox.CheckedChanged += (_, _) => SaveControlsToSettings();
+    _followLatestCheckBox.CheckedChanged += FollowLatestChanged;
     _pollNumeric.ValueChanged += (_, _) => SaveControlsToSettings();
     _speakExistingCheckBox.CheckedChanged += (_, _) =>
       SaveControlsToSettings();
@@ -917,8 +917,25 @@ internal sealed class MainForm : Form, IMessageFilter
     _sessionPathTextBox.Clear();
     _transcriptView.ClearSession();
     _loadingSettings = true;
-    _followLatestCheckBox.Checked = false;
+    _followLatestCheckBox.Checked = true;
     _loadingSettings = false;
+    SaveControlsToSettings();
+    UpdateControlState();
+  }
+
+  /// <summary>
+  /// Pins the displayed path when auto-follow is off and releases that pin
+  /// when auto-follow is enabled.
+  /// </summary>
+  private void FollowLatestChanged(object? sender, EventArgs eventArgs)
+  {
+    if (_loadingSettings)
+    {
+      return;
+    }
+
+    _pathIsManual = !_followLatestCheckBox.Checked &&
+      !string.IsNullOrWhiteSpace(_sessionPathTextBox.Text);
     SaveControlsToSettings();
     UpdateControlState();
   }
@@ -2143,17 +2160,68 @@ internal sealed class MainForm : Form, IMessageFilter
       return false;
     }
 
-    if (ReferenceEquals(button, _playPauseButton))
-    {
-      _pendingPlayPauseTrigger = $"keyboard:{shortcut}";
-    }
     DiagnosticLog.Write("transport.shortcut_requested", new
     {
       shortcut,
-      action = button.AccessibleName
+      action = button.AccessibleName,
+      buttonVisible = button.Visible,
+      buttonEnabled = button.Enabled
     });
-    button.Focus();
-    button.PerformClick();
+    if (!button.Enabled)
+    {
+      return true;
+    }
+    if (button.CanFocus)
+    {
+      button.Focus();
+    }
+
+    switch (keyCode)
+    {
+      case Keys.U:
+        NavigateSpeech(
+          _speech.TryRewindSpeaker,
+          "Previous speaker turn");
+        break;
+      case Keys.H:
+        NavigateSpeech(
+          _speech.TryRewindNode,
+          "Previous JSONL node");
+        break;
+      case Keys.J:
+        NavigateSpeech(
+          _speech.TryRewindSentence,
+          "Previous sentence/code line");
+        break;
+      case Keys.K:
+        _pendingPlayPauseTrigger = $"keyboard:{shortcut}";
+        PlayPauseButtonClicked(button, EventArgs.Empty);
+        break;
+      case Keys.L:
+        NavigateSpeech(
+          _speech.TryForwardSentence,
+          "Next sentence/code line",
+          "Past end of last sentence/code line.");
+        break;
+      case Keys.OemSemicolon:
+        NavigateSpeech(
+          _speech.TryForwardNode,
+          "Next JSONL node",
+          "Past end of last JSONL node.");
+        break;
+      case Keys.O:
+        NavigateSpeech(
+          _speech.TryForwardSpeaker,
+          "Next speaker turn",
+          "Past end of last speaker turn.");
+        break;
+      case Keys.OemQuotes:
+        ProcessingTimeButtonClicked(button, EventArgs.Empty);
+        break;
+      default:
+        throw new InvalidOperationException(
+          $"Unsupported transport key: {keyCode}.");
+    }
     return true;
   }
 
@@ -2249,8 +2317,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _detectLatestButton.Enabled = !configurationLocked;
     _browseButton.Enabled = !configurationLocked;
     _followLatestCheckBox.AutoCheck = !configurationLocked;
-    _followLatestCheckBox.Enabled =
-      !_pathIsManual && !configurationLocked;
+    _followLatestCheckBox.Enabled = !configurationLocked;
     _pollNumeric.Enabled = !configurationLocked;
     _speakExistingCheckBox.Enabled = !configurationLocked;
     _playPauseButton.Enabled = !_playPauseTransitioning;
@@ -2386,11 +2453,17 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Displays one resolved session.
   /// </summary>
-  private void SetSessionDisplay(LocatedSession session)
+  private void SetSessionDisplay(
+    LocatedSession session,
+    bool restoredFromSettings = false)
   {
     _sessionTitleTextBox.Text = session.DisplayName;
     _sessionPathTextBox.Text = session.Path;
-    _transcriptView.SelectSession(session.Path, session.Source);
+    _transcriptView.SelectSession(
+      session.Path,
+      session.Source,
+      session.DisplayName,
+      restoredFromSettings);
     _sessionTitleTextBox.SelectionStart = 0;
     _sessionPathTextBox.SelectionStart = 0;
   }
@@ -2458,9 +2531,11 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       try
       {
-        SetSessionDisplay(SessionLocator.FromPath(
-          _sessionPathTextBox.Text,
-          GetSelectedSource()));
+        SetSessionDisplay(
+          SessionLocator.FromPath(
+            _sessionPathTextBox.Text,
+            GetSelectedSource()),
+          restoredFromSettings: true);
       }
       catch (Exception exception) when (
         exception is IOException or

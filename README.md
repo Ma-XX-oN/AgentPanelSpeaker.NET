@@ -1,4 +1,41 @@
-# Agent Panel Speaker v46
+# Agent Panel Speaker v48
+
+## v48
+
+Version 48 fixes the nullable-reference build error in
+`TranscriptView.GetLoadingText()`.  `Path.GetFileName()` is nullable when the
+selected session path is absent, so the loading label now converts that result
+to an empty string before assigning it to the non-nullable local value.
+
+## v47
+
+Version 47 fixes transcript loading that could remain blocked behind an older,
+large saved-session render.  Selecting or clearing a session now cancels the
+obsolete formatter and identity-map pass immediately.  The loading surface
+states whether the WebView is being prepared, a saved transcript is being
+restored, or a named selected transcript is being loaded.
+
+Rendered words are indexed by their JSONL record before node mapping.  Node
+segments now search only the words belonging to that record instead of scanning
+the entire transcript for every segment.  Playback uses the segment ranges built
+during that pass rather than rescanning all displayed words.  Render diagnostics
+report preparation, DOM, and total durations.
+
+Transport shortcuts no longer depend on `Button.PerformClick()`.  Maximized
+Transcript mode hides the transport-button row, and WinForms refuses to perform
+a click on a hidden button even after the shortcut itself was received.  The
+shortcut dispatcher now invokes the matching transport command directly while
+retaining the existing WinForms message-filter and WebView keyboard paths.
+
+Auto-follow is now the default when no fixed JSONL path is saved.  A fixed path
+selected with **Browse JSONL** still disables auto-follow, but the checkbox
+remains enabled so it can release the fixed path.  Changing source returns to
+auto-follow.
+
+The nested highlight-colour popup restores the complete compact Cyotek picker:
+a colour wheel, RGB/HSL/alpha editor, and previous/current swatches.  Escape,
+Tab traversal, pointer dismissal, parent-overlay suppression, and dark mode keep
+the v44 overlay semantics.
 
 ## v46
 

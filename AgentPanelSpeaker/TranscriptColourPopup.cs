@@ -9,6 +9,7 @@ namespace AgentPanelSpeaker;
 internal sealed class TranscriptColourPopup : UserControl
 {
   private readonly ColorWheel _wheel = new();
+  private readonly ColorEditor _editor = new();
   private readonly Button _previousSwatch = new();
   private readonly Button _currentSwatch = new();
   private bool _updating;
@@ -17,7 +18,7 @@ internal sealed class TranscriptColourPopup : UserControl
   public TranscriptColourPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(220, 220);
+    Size = new Size(390, 240);
     TabStop = false;
     Visible = false;
 
@@ -33,15 +34,20 @@ internal sealed class TranscriptColourPopup : UserControl
     };
 
     _wheel.Dock = DockStyle.Fill;
-    _wheel.Margin = new Padding(8, 2, 8, 2);
+    _wheel.Margin = new Padding(6, 2, 8, 2);
     _wheel.TabIndex = 0;
+    _editor.Dock = DockStyle.Fill;
+    _editor.Margin = new Padding(8, 2, 2, 2);
+    _editor.Orientation = Orientation.Vertical;
+    _editor.TabIndex = 1;
     ConfigureSwatch(_previousSwatch, "Previous highlight colour");
     ConfigureSwatch(_currentSwatch, "Current highlight colour");
-    _previousSwatch.TabIndex = 1;
+    _previousSwatch.TabIndex = 2;
     _currentSwatch.TabStop = false;
     _previousSwatch.Cursor = Cursors.Hand;
     _previousSwatch.Click += (_, _) => RestorePrevious();
     _wheel.ColorChanged += WheelColorChanged;
+    _editor.ColorChanged += EditorColorChanged;
 
     var swatches = new FlowLayoutPanel
     {
@@ -59,17 +65,22 @@ internal sealed class TranscriptColourPopup : UserControl
 
     var layout = new TableLayoutPanel
     {
-      ColumnCount = 1,
+      ColumnCount = 2,
       RowCount = 3,
       Dock = DockStyle.Fill,
       Padding = new Padding(8)
     };
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
     layout.Controls.Add(title, 0, 0);
+    layout.SetColumnSpan(title, 2);
     layout.Controls.Add(_wheel, 0, 1);
+    layout.Controls.Add(_editor, 1, 1);
     layout.Controls.Add(swatches, 0, 2);
+    layout.SetColumnSpan(swatches, 2);
     Controls.Add(layout);
 
     Paint += PaintBorder;
@@ -82,7 +93,7 @@ internal sealed class TranscriptColourPopup : UserControl
   public event EventHandler? PointerLeft;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-  public Color Colour => _wheel.Color;
+  public Color Colour => _editor.Color;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public Color PreviousColour => _previousSwatch.BackColor;
@@ -93,6 +104,7 @@ internal sealed class TranscriptColourPopup : UserControl
     try
     {
       _wheel.Color = current;
+      _editor.Color = current;
       SetSwatchColour(_currentSwatch, current);
       SetSwatchColour(_previousSwatch, previous);
     }
@@ -147,18 +159,47 @@ internal sealed class TranscriptColourPopup : UserControl
 
   private void WheelColorChanged(object? sender, EventArgs eventArgs)
   {
-    SetSwatchColour(_currentSwatch, _wheel.Color);
-    if (!_updating)
+    SynchronizeColour(_wheel.Color, updateWheel: false);
+  }
+
+  private void EditorColorChanged(object? sender, EventArgs eventArgs)
+  {
+    SynchronizeColour(_editor.Color, updateWheel: true);
+  }
+
+  private void SynchronizeColour(Color colour, bool updateWheel)
+  {
+    if (_updating)
     {
-      ColourChanged?.Invoke(this, EventArgs.Empty);
+      return;
     }
+
+    _updating = true;
+    try
+    {
+      if (updateWheel)
+      {
+        _wheel.Color = colour;
+      }
+      if (_editor.Color != colour)
+      {
+        _editor.Color = colour;
+      }
+      SetSwatchColour(_currentSwatch, colour);
+    }
+    finally
+    {
+      _updating = false;
+    }
+    ColourChanged?.Invoke(this, EventArgs.Empty);
   }
 
   private void RestorePrevious()
   {
     Color previous = _previousSwatch.BackColor;
-    SetSwatchColour(_previousSwatch, _wheel.Color);
-    _wheel.Color = previous;
+    Color current = _editor.Color;
+    SetSwatchColour(_previousSwatch, current);
+    SynchronizeColour(previous, updateWheel: true);
   }
 
   private static void ConfigureSwatch(Button swatch, string name)

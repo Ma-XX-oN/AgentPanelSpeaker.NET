@@ -1,6 +1,7 @@
 using Markdig;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace AgentPanelSpeaker;
@@ -17,6 +18,8 @@ internal sealed class TranscriptView : UserControl
   private readonly System.Windows.Forms.Timer _refreshTimer = new();
   private readonly MarkdownPipeline _pipeline;
   private string? _sessionPath;
+  private string _sessionDisplayName = string.Empty;
+  private bool _restoredFromSettings;
   private AgentSource _source;
   private DateTime _lastWriteUtc;
   private long _lastLength = -1;
@@ -26,6 +29,8 @@ internal sealed class TranscriptView : UserControl
   private bool _refreshPending;
   private bool _refreshPendingForce;
   private int _renderGeneration;
+  private int _activeRenderGeneration = -1;
+  private CancellationTokenSource? _renderCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
 
@@ -42,7 +47,7 @@ internal sealed class TranscriptView : UserControl
     _webView.Dock = DockStyle.Fill;
     _webView.Visible = false;
     _loadingLabel.Dock = DockStyle.Fill;
-    _loadingLabel.Text = "Loading transcript view…";
+    _loadingLabel.Text = "Preparing transcript viewer…";
     _loadingLabel.TextAlign = ContentAlignment.MiddleCenter;
     _loadingLabel.Visible = true;
     _failureLabel.Dock = DockStyle.Fill;
@@ -67,15 +72,24 @@ internal sealed class TranscriptView : UserControl
   /// <summary>
   /// Selects a transcript source and immediately renders its current content.
   /// </summary>
-  public void SelectSession(string path, AgentSource source)
+  public void SelectSession(
+    string path,
+    AgentSource source,
+    string displayName,
+    bool restoredFromSettings = false)
   {
     _pendingPosition = null;
     _sessionPath = path;
+    _sessionDisplayName = string.IsNullOrWhiteSpace(displayName)
+      ? Path.GetFileName(path)
+      : displayName;
+    _restoredFromSettings = restoredFromSettings;
     _source = source;
     _lastWriteUtc = DateTime.MinValue;
     _lastLength = -1;
     _renderGeneration++;
-    ShowLoading("Loading transcript view…");
+    CancelActiveRender();
+    ShowLoading(GetLoadingText());
     _refreshTimer.Start();
     QueueRefresh(force: true);
   }
@@ -87,9 +101,12 @@ internal sealed class TranscriptView : UserControl
   {
     _pendingPosition = null;
     _sessionPath = null;
+    _sessionDisplayName = string.Empty;
+    _restoredFromSettings = false;
     _lastWriteUtc = DateTime.MinValue;
     _lastLength = -1;
     _renderGeneration++;
+    CancelActiveRender();
     _refreshTimer.Stop();
     ShowLoading("Select a session to view its transcript.");
     if (_initialized)
@@ -157,6 +174,8 @@ internal sealed class TranscriptView : UserControl
   {
     if (disposing)
     {
+      _renderGeneration++;
+      CancelActiveRender();
       _refreshTimer.Stop();
       _refreshTimer.Dispose();
       _webView.Dispose();
@@ -239,7 +258,8 @@ internal sealed class TranscriptView : UserControl
     {
       return;
     }
-    if (_refreshInProgress)
+    if (_refreshInProgress &&
+        _activeRenderGeneration == _renderGeneration)
     {
       _refreshPending = true;
       _refreshPendingForce |= force;
@@ -263,11 +283,18 @@ internal sealed class TranscriptView : UserControl
     {
       return;
     }
+    if (generation != _renderGeneration)
+    {
+      return;
+    }
 
+    var cancellation = new CancellationTokenSource();
+    _renderCancellation = cancellation;
+    _activeRenderGeneration = generation;
     _refreshInProgress = true;
     if (force)
     {
-      ShowLoading("Loading transcript view…");
+      ShowLoading(GetLoadingText());
     }
     DiagnosticLog.Write("transcript.render_started", new
     {
@@ -275,19 +302,38 @@ internal sealed class TranscriptView : UserControl
       force,
       info.Length
     });
+    var renderTimer = Stopwatch.StartNew();
 
     try
     {
       AgentSource source = _source;
+      CancellationToken token = cancellation.Token;
       TranscriptRenderPayload payload = await Task.Run(() =>
       {
-        string markdown = TranscriptMarkdownFormatter.Format(path, source);
-        string html = Markdown.ToHtml(markdown, _pipeline);
+        string markdown = string.Empty;
         IReadOnlyList<TranscriptNodeIdentity> identities =
-          TranscriptNodeIdentityMap.Build(path, source);
+          Array.Empty<TranscriptNodeIdentity>();
+        var options = new ParallelOptions
+        {
+          CancellationToken = token
+        };
+        Parallel.Invoke(
+          options,
+          () => identities = TranscriptNodeIdentityMap.Build(
+            path,
+            source,
+            token),
+          () => markdown = TranscriptMarkdownFormatter.Format(
+            path,
+            source,
+            token));
+        token.ThrowIfCancellationRequested();
+        string html = Markdown.ToHtml(markdown, _pipeline);
         return new TranscriptRenderPayload(html, identities);
-      });
+      }, token);
 
+      long preparationMilliseconds = renderTimer.ElapsedMilliseconds;
+      cancellation.Token.ThrowIfCancellationRequested();
       if (generation != _renderGeneration ||
           !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
       {
@@ -302,19 +348,35 @@ internal sealed class TranscriptView : UserControl
       {
         script += BuildPlaybackScript(pending, ToScriptState(pending.State));
       }
+      long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
       {
         ShowLoading("Unable to load transcript view. See diagnostic log.");
         return;
       }
+      long domMilliseconds =
+        renderTimer.ElapsedMilliseconds - domStartMilliseconds;
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
       HideLoading();
+      _restoredFromSettings = false;
       DiagnosticLog.Write("transcript.render_completed", new
       {
         path,
         force,
-        identityCount = payload.Identities.Count
+        identityCount = payload.Identities.Count,
+        preparationMilliseconds,
+        domMilliseconds,
+        totalMilliseconds = renderTimer.ElapsedMilliseconds
+      });
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+      DiagnosticLog.Write("transcript.render_cancelled", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = renderTimer.ElapsedMilliseconds
       });
     }
     catch (Exception exception)
@@ -328,15 +390,48 @@ internal sealed class TranscriptView : UserControl
     }
     finally
     {
-      _refreshInProgress = false;
-      if (_refreshPending)
+      if (ReferenceEquals(_renderCancellation, cancellation))
       {
-        bool pendingForce = _refreshPendingForce;
-        _refreshPending = false;
-        _refreshPendingForce = false;
-        QueueRefresh(pendingForce);
+        _renderCancellation = null;
+      }
+      cancellation.Dispose();
+      if (generation == _renderGeneration &&
+          _activeRenderGeneration == generation)
+      {
+        _refreshInProgress = false;
+        if (_refreshPending)
+        {
+          bool pendingForce = _refreshPendingForce;
+          _refreshPending = false;
+          _refreshPendingForce = false;
+          QueueRefresh(pendingForce);
+        }
       }
     }
+  }
+
+  private void CancelActiveRender()
+  {
+    CancellationTokenSource? cancellation = _renderCancellation;
+    _renderCancellation = null;
+    cancellation?.Cancel();
+    _refreshInProgress = false;
+    _activeRenderGeneration = -1;
+    _refreshPending = false;
+    _refreshPendingForce = false;
+  }
+
+  private string GetLoadingText()
+  {
+    string prefix = _restoredFromSettings
+      ? "Restoring saved transcript"
+      : "Loading transcript";
+    string name = string.IsNullOrWhiteSpace(_sessionDisplayName)
+      ? Path.GetFileName(_sessionPath) ?? string.Empty
+      : _sessionDisplayName;
+    return string.IsNullOrWhiteSpace(name)
+      ? prefix + "…"
+      : prefix + ":" + Environment.NewLine + name + "…";
   }
 
   private void ShowLoading(string text)
@@ -662,6 +757,9 @@ let currentBoundaryWordIndex = -1;
 let fadeMs = 250;
 let followSpeech = true;
 let knownNodeIds = new Set();
+let displayWordsByRecord = new Map();
+let lexicalWordsByRecord = new Map();
+let segmentRangesByNode = new Map();
 const reportedMappingFailures = new Set();
 const reportedPlaybackFailures = new Set();
 
@@ -749,7 +847,23 @@ function applySettings(highlight, duration, follow, dark) {
   followSpeech = follow;
 }
 
+function makeRecordKey(recordNumber, sourceId) {
+  return sourceId + '\u0000' + recordNumber;
+}
+
+function appendRecordWord(map, key, word) {
+  let collection = map.get(key);
+  if (!collection) {
+    collection = [];
+    map.set(key, collection);
+  }
+  collection.push(word);
+  return collection.length - 1;
+}
+
 function assignRecordScopes() {
+  displayWordsByRecord = new Map();
+  lexicalWordsByRecord = new Map();
   let recordNumber = '';
   let sourceId = '';
   const walker = document.createTreeWalker(
@@ -760,9 +874,20 @@ function assignRecordScopes() {
     if (element.classList.contains('record-anchor')) {
       recordNumber = element.dataset.jsonlRecord || '';
       sourceId = element.dataset.sourceId || '';
-    } else if (element.classList.contains('word')) {
-      element.dataset.recordNumber = recordNumber;
-      element.dataset.sourceId = sourceId;
+      continue;
+    }
+    if (!element.classList.contains('word')) continue;
+
+    element.dataset.recordNumber = recordNumber;
+    element.dataset.sourceId = sourceId;
+    if (!recordNumber && !sourceId) continue;
+
+    const key = makeRecordKey(recordNumber, sourceId);
+    element.dataset.recordIndex = String(
+      appendRecordWord(displayWordsByRecord, key, element));
+    if (element.dataset.lexical === '1') {
+      element.dataset.lexicalRecordIndex = String(
+        appendRecordWord(lexicalWordsByRecord, key, element));
     }
   }
 }
@@ -802,8 +927,34 @@ function markNodeRange(start, end, nodeId) {
   }
 }
 
+function markCollectionRange(collection, start, end, nodeId) {
+  for (let index = start; index <= end; ++index) {
+    collection[index].dataset.nodeId = nodeId;
+  }
+}
+
+function rememberSegmentRange(
+  nodeId,
+  start,
+  end,
+  displayTarget,
+  lexicalTarget) {
+  let ranges = segmentRangesByNode.get(nodeId);
+  if (!ranges) {
+    ranges = [];
+    segmentRangesByNode.set(nodeId, ranges);
+  }
+  ranges.push({
+    start,
+    end,
+    displayKey: displayTarget.join('\u0000'),
+    lexicalKey: lexicalTarget.join('\u0000')
+  });
+}
+
 function assignNodeScopes(nodeMap) {
   knownNodeIds = new Set();
+  segmentRangesByNode = new Map();
   const displayCursors = new Map();
   const lexicalCursors = new Map();
   for (const item of nodeMap || []) {
@@ -813,68 +964,90 @@ function assignNodeScopes(nodeMap) {
       item.RecordNumber ?? item.recordNumber ?? '');
     const sourceId = String(item.SourceId ?? item.sourceId ?? '');
     const segments = item.Segments ?? item.segments ?? [];
-    const recordKey = sourceId + '\u0000' + recordNumber;
-    let displayCursor = displayCursors.get(recordKey) || 0;
-    let lexicalCursor = lexicalCursors.get(recordKey) || 0;
+    const key = makeRecordKey(recordNumber, sourceId);
+    const recordWords = displayWordsByRecord.get(key) || [];
+    const recordLexicalWords = lexicalWordsByRecord.get(key) || [];
+    let displayCursor = displayCursors.get(key) || 0;
+    let lexicalCursor = lexicalCursors.get(key) || 0;
     let mappedAny = false;
     for (const segment of segments) {
       const displayTarget = tokenizeDisplay(segment);
+      const lexicalTarget = tokenize(segment);
+      if (!displayTarget.length && !lexicalTarget.length) continue;
+
       let start = findSequence(
-        words,
+        recordWords,
         displayTarget,
         displayCursor,
         null,
-        recordNumber || null,
-        sourceId || null);
+        null,
+        null);
       if (start < 0 && displayCursor > 0) {
         start = findSequence(
-          words,
+          recordWords,
           displayTarget,
           0,
           null,
-          recordNumber || null,
-          sourceId || null);
+          null,
+          null);
       }
       if (start >= 0) {
         const end = start + displayTarget.length - 1;
-        markNodeRange(start, end, nodeId);
+        markCollectionRange(recordWords, start, end, nodeId);
+        const globalStart = Number(recordWords[start].dataset.index);
+        const globalEnd = Number(recordWords[end].dataset.index);
+        rememberSegmentRange(
+          nodeId,
+          globalStart,
+          globalEnd,
+          displayTarget,
+          lexicalTarget);
         displayCursor = end + 1;
-        displayCursors.set(recordKey, displayCursor);
-        while (lexicalCursor < lexicalWords.length &&
-               Number(lexicalWords[lexicalCursor].dataset.index) <= end) {
+        displayCursors.set(key, displayCursor);
+        while (lexicalCursor < recordLexicalWords.length &&
+               Number(recordLexicalWords[lexicalCursor].dataset.index) <=
+                 globalEnd) {
           ++lexicalCursor;
         }
-        lexicalCursors.set(recordKey, lexicalCursor);
+        lexicalCursors.set(key, lexicalCursor);
         mappedAny = true;
         continue;
       }
 
-      const lexicalTarget = tokenize(segment);
       let lexicalStart = findSequence(
-        lexicalWords,
+        recordLexicalWords,
         lexicalTarget,
         lexicalCursor,
         null,
-        recordNumber || null,
-        sourceId || null);
+        null,
+        null);
       if (lexicalStart < 0 && lexicalCursor > 0) {
         lexicalStart = findSequence(
-          lexicalWords,
+          recordLexicalWords,
           lexicalTarget,
           0,
           null,
-          recordNumber || null,
-          sourceId || null);
+          null,
+          null);
       }
       if (lexicalStart >= 0) {
         const lexicalEnd = lexicalStart + lexicalTarget.length - 1;
-        const tokenStart = Number(lexicalWords[lexicalStart].dataset.index);
-        const tokenEnd = Number(lexicalWords[lexicalEnd].dataset.index);
+        const tokenStart = Number(
+          recordLexicalWords[lexicalStart].dataset.index);
+        const tokenEnd = Number(
+          recordLexicalWords[lexicalEnd].dataset.index);
         markNodeRange(tokenStart, tokenEnd, nodeId);
+        rememberSegmentRange(
+          nodeId,
+          tokenStart,
+          tokenEnd,
+          displayTarget,
+          lexicalTarget);
         lexicalCursor = lexicalEnd + 1;
-        lexicalCursors.set(recordKey, lexicalCursor);
-        displayCursor = tokenEnd + 1;
-        displayCursors.set(recordKey, displayCursor);
+        lexicalCursors.set(key, lexicalCursor);
+        displayCursor = Number(
+          recordLexicalWords[lexicalEnd].dataset.recordIndex) + 1;
+        displayCursors.set(key, displayCursor);
         mappedAny = true;
         continue;
       }
@@ -940,16 +1113,15 @@ function collectRanges(collection, target, nodeKey, lexical) {
 function findFragmentRange(text, nodeId) {
   const nodeKey = String(nodeId);
   const displayTarget = tokenizeDisplay(text);
-  let range = chooseNearestRange(
-    collectRanges(words, displayTarget, nodeKey, false),
-    nodeId);
-  if (range) return range;
-
   const lexicalTarget = tokenize(text);
-  range = chooseNearestRange(
-    collectRanges(lexicalWords, lexicalTarget, nodeKey, true),
-    nodeId);
-  if (range) return range;
+  const displayKey = displayTarget.join('\u0000');
+  const lexicalKey = lexicalTarget.join('\u0000');
+  const mapped = segmentRangesByNode.get(nodeKey) || [];
+  const matches = mapped.filter(range =>
+    (displayKey && range.displayKey === displayKey) ||
+    (lexicalKey && range.lexicalKey === lexicalKey));
+  const mappedRange = chooseNearestRange(matches, nodeId);
+  if (mappedRange) return mappedRange;
   if (knownNodeIds.has(nodeKey)) return null;
 
   const globalStart = findSequence(

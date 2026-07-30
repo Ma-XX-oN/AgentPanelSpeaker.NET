@@ -16,13 +16,17 @@ internal static partial class TranscriptMarkdownFormatter
   /// <summary>
   /// Formats one complete selected session.
   /// </summary>
-  public static string Format(string path, AgentSource source)
+  public static string Format(
+    string path,
+    AgentSource source,
+    CancellationToken cancellationToken = default)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
     var records = new List<TranscriptRecord>();
     int recordNumber = 0;
     foreach (string line in File.ReadLines(path))
     {
+      cancellationToken.ThrowIfCancellationRequested();
       if (string.IsNullOrWhiteSpace(line))
       {
         continue;
