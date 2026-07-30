@@ -9,6 +9,7 @@ internal sealed record TranscriptSettings(
   int LightHighlightArgb,
   int DarkHighlightArgb,
   int FadeMilliseconds,
+  int HighlightUpdateMilliseconds,
   bool Maximized)
 {
   public static TranscriptSettings Default { get; } = new(
@@ -16,6 +17,7 @@ internal sealed record TranscriptSettings(
     LightHighlightArgb: Color.FromArgb(255, 222, 149).ToArgb(),
     DarkHighlightArgb: Color.FromArgb(122, 83, 26).ToArgb(),
     FadeMilliseconds: 250,
+    HighlightUpdateMilliseconds: 10,
     Maximized: false);
 
   public TranscriptSettings Normalize()
@@ -28,6 +30,12 @@ internal sealed record TranscriptSettings(
     return this with
     {
       FadeMilliseconds = boundedFade,
+      HighlightUpdateMilliseconds = HighlightUpdateMilliseconds <= 0
+        ? Default.HighlightUpdateMilliseconds
+        : Math.Clamp(
+            (int)Math.Round(HighlightUpdateMilliseconds / 5.0) * 5,
+            5,
+            40),
       LightHighlightArgb = NormalizeColour(
         LightHighlightArgb,
         Default.LightHighlightArgb),

@@ -80,7 +80,7 @@ internal sealed class TranscriptView : UserControl
     _refreshTimer.Stop();
     if (_initialized)
     {
-      _ = ExecuteAsync("replaceTranscript('', false);");
+      _ = ExecuteAsync("replaceTranscript('', false, []);");
     }
   }
 
@@ -117,8 +117,7 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
-    string state = ToScriptState(position.State);
-    _ = ExecuteAsync(BuildPlaybackScript(position, state));
+    PostPlaybackPosition(position);
   }
 
   /// <summary>
@@ -227,9 +226,12 @@ internal sealed class TranscriptView : UserControl
       _lastLength = info.Length;
       string markdown = TranscriptMarkdownFormatter.Format(path, _source);
       string html = Markdown.ToHtml(markdown, _pipeline);
+      IReadOnlyList<TranscriptNodeIdentity> identities =
+        TranscriptNodeIdentityMap.Build(path, _source);
       string script = "replaceTranscript(" +
         JsonSerializer.Serialize(html) + "," +
-        JsonSerializer.Serialize(!force) + ");";
+        JsonSerializer.Serialize(!force) + "," +
+        JsonSerializer.Serialize(identities) + ");";
       if (_pendingPosition is TranscriptPlaybackPosition pending)
       {
         script += BuildPlaybackScript(pending, ToScriptState(pending.State));
@@ -243,6 +245,38 @@ internal sealed class TranscriptView : UserControl
       DiagnosticLog.Write("transcript.render_failed", new
       {
         path,
+        exception = exception.ToString()
+      });
+    }
+  }
+
+
+  private void PostPlaybackPosition(TranscriptPlaybackPosition position)
+  {
+    CoreWebView2? core = _webView.CoreWebView2;
+    if (!_initialized || _webView.IsDisposed || core is null)
+    {
+      return;
+    }
+
+    try
+    {
+      core.PostWebMessageAsJson(JsonSerializer.Serialize(new
+      {
+        type = "playback",
+        state = ToScriptState(position.State),
+        fragmentText = position.FragmentText,
+        wordIndex = position.WordIndex,
+        wordText = position.Word,
+        nodeId = position.NodeId,
+        follow = _settings.FollowSpeech
+      }));
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or ObjectDisposedException)
+    {
+      DiagnosticLog.Write("transcript.playback_message_failed", new
+      {
         exception = exception.ToString()
       });
     }
@@ -467,6 +501,7 @@ let currentFragmentText = null;
 let currentFragmentStart = -1;
 let fadeMs = 250;
 let followSpeech = true;
+let knownNodeIds = new Set();
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu) || [];
@@ -505,7 +540,7 @@ function wrapWords() {
   }
 }
 
-function replaceTranscript(html, preserve) {
+function replaceTranscript(html, preserve, nodeMap) {
   const nearBottom = document.documentElement.scrollHeight -
     (window.scrollY + window.innerHeight) < 80;
   const previousY = window.scrollY;
@@ -517,7 +552,9 @@ function replaceTranscript(html, preserve) {
     if (index < openDetails.length) item.open = openDetails[index];
   });
   wrapWords();
+  assignNodeScopes(nodeMap || []);
   currentIndex = -1;
+  currentNode = -1;
   currentFragmentText = null;
   currentFragmentStart = -1;
   liveEndMarker.style.display = 'none';
@@ -535,19 +572,51 @@ function applySettings(highlight, duration, follow, dark) {
   followSpeech = follow;
 }
 
-function findFragmentStart(text, nodeId) {
-  const target = tokenize(text);
+function findSequence(target, startAt, requiredNodeId) {
   if (!target.length || !words.length) return -1;
-  const normalized = words.map(x => x.dataset.normalized);
-  const lastStart = normalized.length - target.length;
-  const matches = [];
-  for (let i = 0; i <= lastStart; ++i) {
+  const lastStart = words.length - target.length;
+  for (let i = Math.max(0, startAt); i <= lastStart; ++i) {
     let equal = true;
     for (let j = 0; j < target.length; ++j) {
-      if (normalized[i + j] !== target[j]) { equal = false; break; }
+      const candidate = words[i + j];
+      if (candidate.dataset.normalized !== target[j] ||
+          (requiredNodeId !== null &&
+           candidate.dataset.nodeId !== requiredNodeId)) {
+        equal = false;
+        break;
+      }
     }
-    if (equal) matches.push(i);
+    if (equal) return i;
   }
+  return -1;
+}
+
+function assignNodeScopes(nodeMap) {
+  knownNodeIds = new Set();
+  let cursor = 0;
+  for (const item of nodeMap || []) {
+    const nodeId = String(item.NodeId ?? item.nodeId ?? '');
+    knownNodeIds.add(nodeId);
+    const segments = item.Segments ?? item.segments ?? [];
+    let mappedAny = false;
+    for (const segment of segments) {
+      const target = tokenize(segment);
+      if (!target.length) continue;
+      const start = findSequence(target, cursor, null);
+      if (start < 0) continue;
+      for (let offset = 0; offset < target.length; ++offset) {
+        words[start + offset].dataset.nodeId = nodeId;
+      }
+      cursor = start + target.length;
+      mappedAny = true;
+    }
+    if (!mappedAny) {
+      continue;
+    }
+  }
+}
+
+function chooseNearestMatch(matches, nodeId) {
   if (!matches.length) return -1;
   if (currentIndex < 0) return matches[0];
   if (nodeId < currentNode) {
@@ -558,6 +627,35 @@ function findFragmentStart(text, nodeId) {
     Math.abs(candidate - currentIndex) < Math.abs(best - currentIndex)
       ? candidate
       : best);
+}
+
+function findFragmentStart(text, nodeId) {
+  const target = tokenize(text);
+  if (!target.length || !words.length) return -1;
+  const nodeKey = String(nodeId);
+  const scopedMatches = [];
+  const globalMatches = [];
+  const lastStart = words.length - target.length;
+  for (let i = 0; i <= lastStart; ++i) {
+    let equal = true;
+    let scoped = true;
+    for (let j = 0; j < target.length; ++j) {
+      const candidate = words[i + j];
+      if (candidate.dataset.normalized !== target[j]) {
+        equal = false;
+        break;
+      }
+      if (candidate.dataset.nodeId !== nodeKey) scoped = false;
+    }
+    if (equal) {
+      globalMatches.push(i);
+      if (scoped) scopedMatches.push(i);
+    }
+  }
+  const scoped = chooseNearestMatch(scopedMatches, nodeId);
+  if (scoped >= 0) return scoped;
+  if (knownNodeIds.has(nodeKey)) return -1;
+  return chooseNearestMatch(globalMatches, nodeId);
 }
 
 function openAncestors(element) {
@@ -637,6 +735,18 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   currentNode = nodeId;
   reveal(target);
 }
+
+chrome.webview.addEventListener('message', event => {
+  const data = event.data;
+  if (!data || data.type !== 'playback') return;
+  setPlayback(
+    data.state,
+    data.fragmentText,
+    data.wordIndex,
+    data.wordText,
+    data.nodeId,
+    data.follow);
+});
 
 window.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.shiftKey) return;

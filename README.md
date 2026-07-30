@@ -1,4 +1,26 @@
-# Agent Panel Speaker v41
+# Agent Panel Speaker v42
+
+## v42
+
+Version 42 replaces the transcript RGB sliders with the MIT-licensed Cyotek
+WinForms colour controls.  The themed editor combines a colour wheel, RGB/HSL
+and hexadecimal entry, immediate light/dark highlight updates, and previous
+and current colour swatches.  Clicking the transcript gear or a compact speech
+profile opens its editor and moves focus to the first enabled control.  Clicking
+unused space inside either editor does the same.
+
+Transcript words are now associated with the monitor's exact accepted-node ID
+before playback matching.  This prevents repeated or incrementally rewritten
+Claude text from moving the marker to a later copy of the same phrase.  Live
+word updates use WebView2 host messages rather than queued script evaluations.
+The speech worker's word-boundary polling interval is configurable from 5 to
+40 ms in the Transcript gear; 10 ms is the default, and the worker uses elevated
+priority at the two fastest settings.
+
+Transport, gear, and maximize/restore symbols are drawn as compact vector
+icons rather than relying on font glyphs.  The Transcript settings layout also
+provides enough width for **Follow Speech** and retains the corrected hover,
+outside-click, Escape, tab-switch, and maximize dismissal rules.
 
 ## v41
 
@@ -659,7 +681,8 @@ Settings automatically persist at:
 
 Saved values include session choices, all voice profiles, fenced-code types,
 spelled words, pronunciation rules, Bluetooth wake settings, theme,
-transcript follow/highlight/fade/maximize settings, polling interval, startup
+transcript follow/highlight/fade/tracking/maximize settings, polling interval,
+startup
 playback, and window placement.
 
 **Save settings** flushes pending fenced-code edits and saves immediately.
@@ -669,7 +692,9 @@ playback, and window placement.
 
 Requirements: Windows 10 version 2004 or later, the .NET 10 SDK, and at
 least one enabled Windows speech voice.  The rendered Transcript tab also uses
-the Microsoft Edge WebView2 Runtime; its absence does not disable speech.
+the Microsoft Edge WebView2 Runtime; its absence does not disable speech.  The
+transcript colour editor uses the MIT-licensed Cyotek WinForms ColorPicker; see
+`THIRD-PARTY-NOTICES.md`.
 
 ```text
 .\build.cmd
@@ -704,7 +729,7 @@ Conversation text is included in diagnostics.  Review logs before sharing.
 
 ## Possible future features
 
-These directions are documented but are not implemented in version 40:
+These directions are documented but are not implemented in version 42:
 
 - an optional WebView2/Edge speech backend that first probes available local
   and online voices, boundary events, pause/resume behaviour, Windows-version

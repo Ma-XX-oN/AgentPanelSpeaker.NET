@@ -1,29 +1,30 @@
+using Cyotek.Windows.Forms;
 using System.ComponentModel;
 
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Edits transcript-follow, highlight-colour, and fade settings immediately.
+/// Edits transcript-follow, highlight-colour, fade, and tracking settings.
 /// </summary>
 internal sealed class TranscriptSettingsPopup : UserControl
 {
   private readonly CheckBox _followCheckBox = new();
-  private readonly Panel _colourSwatch = new();
-  private readonly TrackBar _redSlider = new();
-  private readonly TrackBar _greenSlider = new();
-  private readonly TrackBar _blueSlider = new();
-  private readonly Label _redValue = new();
-  private readonly Label _greenValue = new();
-  private readonly Label _blueValue = new();
+  private readonly ColorWheel _colourWheel = new();
+  private readonly ColorEditor _colourEditor = new();
+  private readonly Panel _previousSwatch = new();
+  private readonly Panel _currentSwatch = new();
   private readonly TrackBar _fadeSlider = new();
   private readonly Label _fadeValue = new();
+  private readonly TrackBar _trackingSlider = new();
+  private readonly Label _trackingValue = new();
+  private Color _previousColour;
   private bool _dark;
   private bool _updating;
 
   public TranscriptSettingsPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(390, 254);
+    Size = new Size(590, 330);
     TabStop = false;
     Visible = false;
 
@@ -37,64 +38,106 @@ internal sealed class TranscriptSettingsPopup : UserControl
         SystemFonts.MessageBoxFont ?? Control.DefaultFont,
         FontStyle.Bold)
     };
+
     _followCheckBox.AutoSize = true;
     _followCheckBox.Text = "Follow Speech";
-    _colourSwatch.Size = new Size(74, 22);
-    _colourSwatch.Tag = "colour-swatch";
-    _colourSwatch.BorderStyle = BorderStyle.FixedSingle;
-    _colourSwatch.Margin = new Padding(3, 3, 3, 3);
-    ConfigureColourSlider(_redSlider);
-    ConfigureColourSlider(_greenSlider);
-    ConfigureColourSlider(_blueSlider);
-    ConfigureValueLabel(_redValue);
-    ConfigureValueLabel(_greenValue);
-    ConfigureValueLabel(_blueValue);
-    _fadeSlider.AutoSize = false;
-    _fadeSlider.Minimum = 0;
-    _fadeSlider.Maximum = 8;
-    _fadeSlider.TickFrequency = 1;
-    _fadeSlider.SmallChange = 1;
-    _fadeSlider.LargeChange = 1;
-    _fadeSlider.Dock = DockStyle.Fill;
+    _followCheckBox.TabIndex = 0;
+
+    _colourWheel.Dock = DockStyle.Fill;
+    _colourWheel.Margin = new Padding(0, 3, 8, 3);
+    _colourWheel.TabIndex = 1;
+
+    _colourEditor.Dock = DockStyle.Fill;
+    _colourEditor.Margin = new Padding(0, 3, 0, 3);
+    _colourEditor.Orientation = Orientation.Horizontal;
+    _colourEditor.TabIndex = 2;
+
+    ConfigureSwatch(_previousSwatch, "Previous highlight colour");
+    ConfigureSwatch(_currentSwatch, "Current highlight colour");
+    _previousSwatch.Cursor = Cursors.Hand;
+    _previousSwatch.TabStop = true;
+    _previousSwatch.TabIndex = 3;
+    _currentSwatch.TabStop = false;
+
+    ConfigureSlider(_fadeSlider, 0, 8, 1);
+    _fadeSlider.TabIndex = 4;
     ConfigureValueLabel(_fadeValue);
+
+    ConfigureSlider(_trackingSlider, 1, 8, 1);
+    _trackingSlider.TabIndex = 5;
+    ConfigureValueLabel(_trackingValue);
+
+    var colourLayout = new TableLayoutPanel
+    {
+      ColumnCount = 2,
+      RowCount = 1,
+      Dock = DockStyle.Fill,
+      Margin = Padding.Empty
+    };
+    colourLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+    colourLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    colourLayout.Controls.Add(_colourWheel, 0, 0);
+    colourLayout.Controls.Add(_colourEditor, 1, 0);
+
+    var swatchLayout = new FlowLayoutPanel
+    {
+      AutoSize = true,
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      Dock = DockStyle.Fill,
+      FlowDirection = FlowDirection.LeftToRight,
+      WrapContents = false,
+      Margin = Padding.Empty
+    };
+    swatchLayout.Controls.Add(CreateInlineLabel("Previous"));
+    swatchLayout.Controls.Add(_previousSwatch);
+    swatchLayout.Controls.Add(CreateInlineLabel("Current"));
+    swatchLayout.Controls.Add(_currentSwatch);
 
     var layout = new TableLayoutPanel
     {
       ColumnCount = 3,
-      RowCount = 8,
+      RowCount = 7,
       Dock = DockStyle.Fill,
-      Padding = new Padding(8)
+      Padding = new Padding(10)
     };
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 2));
+
     layout.Controls.Add(title, 0, 0);
     layout.SetColumnSpan(title, 3);
     layout.Controls.Add(_followCheckBox, 0, 1);
     layout.SetColumnSpan(_followCheckBox, 3);
-    layout.Controls.Add(CreateLabel("Highlight Colour"), 0, 2);
-    layout.Controls.Add(_colourSwatch, 1, 2);
-    AddSliderRow(layout, 3, "Red", _redSlider, _redValue);
-    AddSliderRow(layout, 4, "Green", _greenSlider, _greenValue);
-    AddSliderRow(layout, 5, "Blue", _blueSlider, _blueValue);
-    AddSliderRow(layout, 6, "Fade Duration", _fadeSlider, _fadeValue);
+    layout.Controls.Add(colourLayout, 0, 2);
+    layout.SetColumnSpan(colourLayout, 3);
+    layout.Controls.Add(swatchLayout, 0, 3);
+    layout.SetColumnSpan(swatchLayout, 3);
+    AddSliderRow(layout, 4, "Fade Duration", _fadeSlider, _fadeValue);
+    AddSliderRow(
+      layout,
+      5,
+      "Tracking Update",
+      _trackingSlider,
+      _trackingValue);
     Controls.Add(layout);
 
     _followCheckBox.CheckedChanged += ValueChanged;
-    _redSlider.ValueChanged += ValueChanged;
-    _greenSlider.ValueChanged += ValueChanged;
-    _blueSlider.ValueChanged += ValueChanged;
+    _colourWheel.ColorChanged += ColourWheelChanged;
+    _colourEditor.ColorChanged += ColourEditorChanged;
+    _previousSwatch.Click += PreviousSwatchClicked;
+    _previousSwatch.KeyDown += PreviousSwatchKeyDown;
     _fadeSlider.ValueChanged += ValueChanged;
+    _trackingSlider.ValueChanged += ValueChanged;
     Paint += PaintBorder;
     WireHoverEvents(this);
+    WireBackgroundFocus(this);
   }
 
   public event EventHandler? SettingsChanged;
@@ -123,11 +166,14 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       _followCheckBox.Checked = Settings.FollowSpeech;
       Color colour = Settings.GetHighlightColour(dark);
-      _redSlider.Value = colour.R;
-      _greenSlider.Value = colour.G;
-      _blueSlider.Value = colour.B;
+      SetPickerColour(colour);
+      _previousColour = colour;
       _fadeSlider.Value = FadeStepFromMilliseconds(
         Settings.FadeMilliseconds);
+      _trackingSlider.Value = Math.Clamp(
+        Settings.HighlightUpdateMilliseconds / 5,
+        1,
+        8);
       UpdateDisplays();
     }
     finally
@@ -135,6 +181,12 @@ internal sealed class TranscriptSettingsPopup : UserControl
       _updating = false;
     }
     ApplyTheme(dark);
+  }
+
+  public void PrepareForDisplay()
+  {
+    _previousColour = CurrentColour;
+    UpdateDisplays();
   }
 
   public void ApplyTheme(bool dark)
@@ -147,13 +199,13 @@ internal sealed class TranscriptSettingsPopup : UserControl
       ? Color.FromArgb(240, 240, 240)
       : Color.FromArgb(24, 24, 24);
     ApplyThemeRecursive(this);
+
     Color colour = Settings.GetHighlightColour(dark);
     _updating = true;
     try
     {
-      _redSlider.Value = colour.R;
-      _greenSlider.Value = colour.G;
-      _blueSlider.Value = colour.B;
+      SetPickerColour(colour);
+      _previousColour = colour;
     }
     finally
     {
@@ -171,6 +223,15 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public bool IsPointerInside()
   {
     return ClientRectangle.Contains(PointToClient(Cursor.Position));
+  }
+
+  protected override void OnMouseDown(MouseEventArgs eventArgs)
+  {
+    base.OnMouseDown(eventArgs);
+    if (eventArgs.Button == MouseButtons.Left && !ContainsFocus)
+    {
+      FocusInitialControl();
+    }
   }
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
@@ -192,28 +253,47 @@ internal sealed class TranscriptSettingsPopup : UserControl
       DismissRequested?.Invoke(this, EventArgs.Empty);
       return true;
     }
-    if (keyData == Keys.Tab)
+    if (keyData == Keys.Tab && _trackingSlider.ContainsFocus)
     {
-      MoveFocus(forward: true);
+      FocusTraversalRequested?.Invoke(
+        this,
+        new FocusTraversalRequestedEventArgs(forward: true));
       return true;
     }
-    if (keyData == (Keys.Shift | Keys.Tab))
+    if (keyData == (Keys.Shift | Keys.Tab) &&
+        _followCheckBox.ContainsFocus)
     {
-      MoveFocus(forward: false);
+      FocusTraversalRequested?.Invoke(
+        this,
+        new FocusTraversalRequestedEventArgs(forward: false));
       return true;
     }
     return base.ProcessCmdKey(ref message, keyData);
   }
 
-  private static void ConfigureColourSlider(TrackBar slider)
+  private Color CurrentColour => _colourEditor.Color;
+
+  private static void ConfigureSlider(
+    TrackBar slider,
+    int minimum,
+    int maximum,
+    int tickFrequency)
   {
     slider.AutoSize = false;
-    slider.Minimum = 0;
-    slider.Maximum = 255;
-    slider.TickStyle = TickStyle.None;
+    slider.Minimum = minimum;
+    slider.Maximum = maximum;
+    slider.TickFrequency = tickFrequency;
     slider.SmallChange = 1;
-    slider.LargeChange = 16;
+    slider.LargeChange = 1;
     slider.Dock = DockStyle.Fill;
+  }
+
+  private static void ConfigureSwatch(Panel swatch, string accessibleName)
+  {
+    swatch.Size = new Size(58, 22);
+    swatch.Margin = new Padding(4, 3, 12, 3);
+    swatch.BorderStyle = BorderStyle.FixedSingle;
+    swatch.AccessibleName = accessibleName;
   }
 
   private static void ConfigureValueLabel(Label label)
@@ -246,60 +326,117 @@ internal sealed class TranscriptSettingsPopup : UserControl
     };
   }
 
+  private static Label CreateInlineLabel(string text)
+  {
+    return new Label
+    {
+      AutoSize = true,
+      Margin = new Padding(0, 6, 0, 0),
+      Text = text
+    };
+  }
+
+  private void ColourWheelChanged(object? sender, EventArgs eventArgs)
+  {
+    if (_updating)
+    {
+      return;
+    }
+    _updating = true;
+    try
+    {
+      _colourEditor.Color = _colourWheel.Color;
+    }
+    finally
+    {
+      _updating = false;
+    }
+    ValueChanged(sender, eventArgs);
+  }
+
+  private void ColourEditorChanged(object? sender, EventArgs eventArgs)
+  {
+    if (_updating)
+    {
+      return;
+    }
+    _updating = true;
+    try
+    {
+      _colourWheel.Color = _colourEditor.Color;
+    }
+    finally
+    {
+      _updating = false;
+    }
+    ValueChanged(sender, eventArgs);
+  }
+
+  private void PreviousSwatchClicked(object? sender, EventArgs eventArgs)
+  {
+    RestorePreviousColour();
+  }
+
+  private void PreviousSwatchKeyDown(object? sender, KeyEventArgs eventArgs)
+  {
+    if (eventArgs.KeyCode is Keys.Enter or Keys.Space)
+    {
+      RestorePreviousColour();
+      eventArgs.Handled = true;
+      eventArgs.SuppressKeyPress = true;
+    }
+  }
+
+  private void RestorePreviousColour()
+  {
+    Color current = CurrentColour;
+    _updating = true;
+    try
+    {
+      SetPickerColour(_previousColour);
+      _previousColour = current;
+    }
+    finally
+    {
+      _updating = false;
+    }
+    ValueChanged(this, EventArgs.Empty);
+  }
+
   private void ValueChanged(object? sender, EventArgs eventArgs)
   {
     if (_updating)
     {
       return;
     }
-    Color colour = Color.FromArgb(
-      _redSlider.Value,
-      _greenSlider.Value,
-      _blueSlider.Value);
-    Settings = (_dark
+
+    Color colour = CurrentColour;
+    Settings = ((_dark
       ? Settings with { DarkHighlightArgb = colour.ToArgb() }
       : Settings with { LightHighlightArgb = colour.ToArgb() }) with
     {
       FollowSpeech = _followCheckBox.Checked,
-      FadeMilliseconds = FadeMillisecondsFromStep(_fadeSlider.Value)
-    };
+      FadeMilliseconds = FadeMillisecondsFromStep(_fadeSlider.Value),
+      HighlightUpdateMilliseconds = _trackingSlider.Value * 5
+    }).Normalize();
     UpdateDisplays();
     SettingsChanged?.Invoke(this, EventArgs.Empty);
   }
 
-  private void UpdateDisplays()
+  private void SetPickerColour(Color colour)
   {
-    _redValue.Text = _redSlider.Value.ToString();
-    _greenValue.Text = _greenSlider.Value.ToString();
-    _blueValue.Text = _blueSlider.Value.ToString();
-    _fadeValue.Text = $"{_fadeSlider.Value / 16.0:0.####}s";
-    _colourSwatch.BackColor = Color.FromArgb(
-      _redSlider.Value,
-      _greenSlider.Value,
-      _blueSlider.Value);
-    _colourSwatch.Invalidate();
+    _colourWheel.Color = colour;
+    _colourEditor.Color = colour;
   }
 
-  private void MoveFocus(bool forward)
+  private void UpdateDisplays()
   {
-    Control[] order =
-    {
-      _followCheckBox,
-      _redSlider,
-      _greenSlider,
-      _blueSlider,
-      _fadeSlider
-    };
-    int index = Array.FindIndex(order, control => control.ContainsFocus);
-    int next = index + (forward ? 1 : -1);
-    if (index >= 0 && next >= 0 && next < order.Length)
-    {
-      order[next].Focus();
-      return;
-    }
-    FocusTraversalRequested?.Invoke(
-      this,
-      new FocusTraversalRequestedEventArgs(forward));
+    _fadeValue.Text = $"{_fadeSlider.Value / 16.0:0.####}s";
+    _trackingValue.Text = $"{_trackingSlider.Value * 5} ms";
+    _currentSwatch.BackColor = CurrentColour;
+    _previousSwatch.BackColor = _previousColour;
+    _currentSwatch.Invalidate();
+    _previousSwatch.Invalidate();
   }
 
   private static int FadeMillisecondsFromStep(int step)
@@ -344,19 +481,50 @@ internal sealed class TranscriptSettingsPopup : UserControl
       if (child is not null)
       {
         WireHoverEvents(child);
+        WireBackgroundFocus(child);
       }
     };
   }
 
-  private static void ApplyThemeRecursive(Control control)
+  private void WireBackgroundFocus(Control control)
   {
+    if (control is Label or Panel or TableLayoutPanel or FlowLayoutPanel)
+    {
+      control.MouseDown += (_, eventArgs) =>
+      {
+        if (eventArgs.Button == MouseButtons.Left)
+        {
+          FocusInitialControl();
+        }
+      };
+    }
     foreach (Control child in control.Controls)
     {
-      if (child is not Panel panel || panel.Tag is not "colour-swatch")
-      {
-        child.BackColor = control.BackColor;
-        child.ForeColor = control.ForeColor;
-      }
+      WireBackgroundFocus(child);
+    }
+  }
+
+  private void ApplyThemeRecursive(Control control)
+  {
+    Color background = _dark
+      ? Color.FromArgb(47, 47, 50)
+      : Color.FromArgb(250, 250, 250);
+    Color foreground = _dark
+      ? Color.FromArgb(240, 240, 240)
+      : Color.FromArgb(24, 24, 24);
+
+    control.BackColor = background;
+    control.ForeColor = foreground;
+
+    if (control is TextBoxBase or ComboBox or NumericUpDown)
+    {
+      control.BackColor = _dark
+        ? Color.FromArgb(35, 35, 38)
+        : Color.White;
+    }
+
+    foreach (Control child in control.Controls)
+    {
       ApplyThemeRecursive(child);
     }
   }

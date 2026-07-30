@@ -157,6 +157,14 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Sets the speech worker's transcript word-boundary polling interval.
+  /// </summary>
+  public void SetWordBoundaryPollMilliseconds(int milliseconds)
+  {
+    _engine.SetWordBoundaryPollMilliseconds(milliseconds);
+  }
+
+  /// <summary>
   /// Gets enabled installed voices and their descriptive labels.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> GetInstalledVoices()

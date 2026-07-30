@@ -19,7 +19,7 @@ internal sealed class SapiSpeechEngine : IDisposable
 {
   private const int IsXml = 8;
   private const int SpFileModeCreateForWrite = 3;
-  private const int WorkerPollMilliseconds = 40;
+  private const int DefaultWorkerPollMilliseconds = 10;
   private const int OutputSampleRate = 48000;
 
   private readonly BlockingCollection<EngineCommand> _commands = new();
@@ -28,6 +28,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private IReadOnlyList<InstalledSpeechVoice> _voices =
     Array.Empty<InstalledSpeechVoice>();
   private Exception? _initializationException;
+  private int _wordBoundaryPollMilliseconds = DefaultWorkerPollMilliseconds;
   private long _lastAudioEndTimestamp;
   private bool _hasAudioEndTimestamp;
   private bool _disposed;
@@ -77,6 +78,34 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// Gets all enabled voices exposed by the available Windows speech providers.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> Voices => _voices;
+
+  /// <summary>
+  /// Sets how frequently the playback worker checks for crossed word
+  /// boundaries.  Smaller values improve transcript-marker responsiveness.
+  /// </summary>
+  public void SetWordBoundaryPollMilliseconds(int milliseconds)
+  {
+    int bounded = Math.Clamp(
+      (int)Math.Round(milliseconds / 5.0) * 5,
+      5,
+      40);
+    Volatile.Write(ref _wordBoundaryPollMilliseconds, bounded);
+    try
+    {
+      _thread.Priority = bounded <= 10
+        ? ThreadPriority.AboveNormal
+        : ThreadPriority.Normal;
+    }
+    catch (Exception exception) when (
+      exception is ThreadStateException or SecurityException)
+    {
+      DiagnosticLog.Write("speech.word_tracking_priority_failed", new
+      {
+        milliseconds = bounded,
+        exception = exception.Message
+      });
+    }
+  }
 
   /// <summary>
   /// Starts one marked-up utterance with the configured wake prefix.
@@ -584,9 +613,11 @@ internal sealed class SapiSpeechEngine : IDisposable
       EngineCommand? command = null;
       try
       {
+        int pollMilliseconds = Volatile.Read(
+          ref _wordBoundaryPollMilliseconds);
         if (_commands.TryTake(
               out command,
-              WorkerPollMilliseconds) &&
+              pollMilliseconds) &&
             command is not null)
         {
           ProcessCommand(

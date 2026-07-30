@@ -1,5 +1,28 @@
 # Agent Panel Speaker internal design
 
+## v42 transcript identity, colour, and timing corrections
+
+`TranscriptNodeIdentityMap` reconstructs the same accepted-node numbering and
+recent-fingerprint suppression used by `JsonlSessionMonitor`.  Each node's
+ordered cleaned speech segments are passed with the rendered HTML.  JavaScript
+assigns those segments to word spans in document order and first resolves a
+playback fragment inside spans carrying the exact node ID.  Text-only nearest
+matching remains a fallback for source records that are intentionally not part
+of the rendered transcript.
+
+Live markers use `CoreWebView2.PostWebMessageAsJson`, avoiding a backlog of
+`ExecuteScriptAsync` calls.  `TranscriptSettings.HighlightUpdateMilliseconds`
+is persisted in settings version 11 and controls the `SapiSpeechEngine` polling
+interval from 5--40 ms.  Intervals at or below 10 ms also request
+`ThreadPriority.AboveNormal`; failure to change priority is non-fatal and
+diagnostic-only.
+
+`TranscriptSettingsPopup` uses the MIT-licensed Cyotek `ColorWheel` and
+`ColorEditor` controls with previous/current swatches.  All changes are live.
+Popup background clicks and anchor clicks move focus to the first enabled
+control.  `GlyphButton` draws transport and transcript-toolbar symbols with
+GDI+ vector paths so their size does not depend on Unicode font metrics.
+
 ## v41 transcript integration corrections
 
 Version 41 removes the unused WebView2 WPF assembly reference, uses an in-app

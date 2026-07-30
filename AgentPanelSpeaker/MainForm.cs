@@ -61,8 +61,8 @@ internal sealed class MainForm : Form
   private readonly TabPage _activityTab = new("Activity");
   private readonly TabPage _acceptedTextTab = new("Accepted Text");
   private readonly TranscriptView _transcriptView = new();
-  private readonly Button _transcriptSettingsButton = new();
-  private readonly Button _maximizeTranscriptButton = new();
+  private readonly GlyphButton _transcriptSettingsButton = new();
+  private readonly GlyphButton _maximizeTranscriptButton = new();
   private readonly TranscriptSettingsPopup _transcriptSettingsPopup = new();
   private readonly System.Windows.Forms.Timer _transcriptSettingsOpenTimer =
     new();
@@ -123,7 +123,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v41";
+    Text = "Agent Panel Speaker v42";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -146,25 +146,25 @@ internal sealed class MainForm : Form
       _rewindSpeakerButton,
       GlyphButtonDrawing.PreviousSpeakerTurn,
       "Previous speaker turn (U or Alt+U)");
-    ConfigureTransportButton(
+    ConfigureCustomTransportButton(
       _rewindNodeButton,
-      "⏮",
+      GlyphButtonDrawing.PreviousNode,
       "Previous JSONL node (H or Alt+H)");
-    ConfigureTransportButton(
+    ConfigureCustomTransportButton(
       _rewindSentenceButton,
-      "⏪",
+      GlyphButtonDrawing.PreviousSentence,
       "Previous sentence/code line (J or Alt+J)");
-    ConfigureTransportButton(
+    ConfigureCustomTransportButton(
       _playPauseButton,
-      "▶",
+      GlyphButtonDrawing.Play,
       "Start monitoring (K or Alt+K)");
-    ConfigureTransportButton(
+    ConfigureCustomTransportButton(
       _forwardSentenceButton,
-      "⏩",
+      GlyphButtonDrawing.NextSentence,
       "Next sentence/code line (L or Alt+L)");
-    ConfigureTransportButton(
+    ConfigureCustomTransportButton(
       _forwardNodeButton,
-      "⏭",
+      GlyphButtonDrawing.NextNode,
       "Next JSONL node (; or Alt+;)");
     ConfigureCustomTransportButton(
       _forwardSpeakerButton,
@@ -210,19 +210,17 @@ internal sealed class MainForm : Form
     _activityTab.Controls.Add(_logTextBox);
     _acceptedTextTab.Controls.Add(_previewTextBox);
     _diagnosticTabs.SelectedTab = _transcriptTab;
-    ConfigureButton(_transcriptSettingsButton, "⚙");
-    _transcriptSettingsButton.AutoSize = false;
-    _transcriptSettingsButton.Size = new Size(28, 23);
-    _transcriptSettingsButton.Font = new Font("Segoe UI Symbol", 9.0f);
-    _transcriptSettingsButton.AccessibleName = "Transcript Settings";
+    ConfigureCompactGlyphButton(
+      _transcriptSettingsButton,
+      GlyphButtonDrawing.SettingsGear,
+      "Transcript Settings");
     _toolTip.SetToolTip(
       _transcriptSettingsButton,
       "Transcript follow, highlight colour, and fade settings");
-    ConfigureButton(_maximizeTranscriptButton, "^");
-    _maximizeTranscriptButton.AutoSize = false;
-    _maximizeTranscriptButton.Size = new Size(28, 23);
-    _maximizeTranscriptButton.Font = new Font("Segoe UI", 9.0f);
-    _maximizeTranscriptButton.AccessibleName = "Maximize transcript tabs";
+    ConfigureCompactGlyphButton(
+      _maximizeTranscriptButton,
+      GlyphButtonDrawing.Expand,
+      "Maximize transcript tabs");
     _toolTip.SetToolTip(
       _maximizeTranscriptButton,
       "Maximize or restore the bottom tab area");
@@ -379,7 +377,7 @@ internal sealed class MainForm : Form
     _transcriptSettingsButton.Click += (_, _) =>
     {
       _suppressTranscriptSettingsHoverUntilLeave = false;
-      ToggleTranscriptSettingsPopup(focusPopup: true);
+      ShowTranscriptSettingsPopup(focusPopup: true);
     };
     _transcriptSettingsButton.Enter += (_, _) =>
     {
@@ -780,6 +778,8 @@ internal sealed class MainForm : Form
       _transcriptSettingsPopup.SetSettings(
         settings.Transcript,
         ThemeManager.IsDark(settings.Theme));
+      _speech.SetWordBoundaryPollMilliseconds(
+        settings.Transcript.HighlightUpdateMilliseconds);
       _diagnosticsMaximized = settings.Transcript.Maximized;
       LoadVoiceRow(
         SpeechRole.Agent,
@@ -1469,7 +1469,7 @@ internal sealed class MainForm : Form
 
   private void PositionTranscriptControls()
   {
-    int right = _diagnosticHost.ClientSize.Width - 10;
+    int right = _diagnosticHost.ClientSize.Width - 14;
     _maximizeTranscriptButton.Location = new Point(
       Math.Max(0, right - _maximizeTranscriptButton.Width),
       3);
@@ -1501,6 +1501,7 @@ internal sealed class MainForm : Form
   {
     _transcriptSettingsOpenTimer.Stop();
     PositionTranscriptControls();
+    _transcriptSettingsPopup.PrepareForDisplay();
     _transcriptSettingsPopup.Visible = true;
     _transcriptSettingsPopup.BringToFront();
     if (focusPopup)
@@ -1548,9 +1549,10 @@ internal sealed class MainForm : Form
   private void TranscriptSettingsChanged()
   {
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
-    _transcriptView.ApplySettings(
-      _transcriptSettingsPopup.Settings,
-      dark);
+    TranscriptSettings settings = _transcriptSettingsPopup.Settings;
+    _transcriptView.ApplySettings(settings, dark);
+    _speech.SetWordBoundaryPollMilliseconds(
+      settings.HighlightUpdateMilliseconds);
     SaveControlsToSettings();
   }
 
@@ -1577,7 +1579,9 @@ internal sealed class MainForm : Form
       }
     }
     _mainLayout.Padding = maximized ? Padding.Empty : new Padding(10);
-    _maximizeTranscriptButton.Text = maximized ? "v" : "^";
+    _maximizeTranscriptButton.Drawing = maximized
+      ? GlyphButtonDrawing.Restore
+      : GlyphButtonDrawing.Expand;
     _maximizeTranscriptButton.AccessibleName = maximized
       ? "Restore transcript tabs"
       : "Maximize transcript tabs";
@@ -2193,13 +2197,14 @@ internal sealed class MainForm : Form
   private void UpdatePlayPauseButton(bool running)
   {
     bool showPause = running && !_speech.IsPaused;
-    string text = showPause ? "⏸" : "▶";
+    _playPauseButton.Drawing = showPause
+      ? GlyphButtonDrawing.Pause
+      : GlyphButtonDrawing.Play;
     string description = showPause
       ? "Pause monitored playback (K or Alt+K)"
       : running
         ? "Resume monitored playback (K or Alt+K)"
         : "Start monitoring (K or Alt+K)";
-    _playPauseButton.Glyph = text;
     _playPauseButton.AccessibleName = description;
     _toolTip.SetToolTip(_playPauseButton, description);
   }
@@ -2476,6 +2481,23 @@ internal sealed class MainForm : Form
     button.Text = string.Empty;
     button.AccessibleName = accessibleName;
     _toolTip.SetToolTip(button, accessibleName);
+  }
+
+  /// <summary>
+  /// Configures one compact vector button used beside the transcript tabs.
+  /// </summary>
+  private void ConfigureCompactGlyphButton(
+    GlyphButton button,
+    GlyphButtonDrawing drawing,
+    string accessibleName)
+  {
+    button.AutoSize = false;
+    button.Size = new Size(24, 21);
+    button.Drawing = drawing;
+    button.Glyph = string.Empty;
+    button.UseInkBounds = false;
+    button.Text = string.Empty;
+    button.AccessibleName = accessibleName;
   }
 
   /// <summary>
