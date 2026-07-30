@@ -1,5 +1,78 @@
 # Agent Panel Speaker internal design
 
+## v40 rendered transcript and synchronized speech markers
+
+`MainForm` places **Transcript** before Activity and Accepted Text in the bottom
+`TabControl` and selects it initially.  `TranscriptView` owns one WebView2
+control and a 250 ms file-refresh timer.  No selected session produces an empty
+page.  A WebView2 initialization failure is isolated to that view and is
+reported without changing monitor or speech ownership.
+
+`TranscriptMarkdownFormatter` reads the selected Claude or Codex JSONL and
+produces Markdown independently of the cleaned speech history.  Markdig converts
+that Markdown to HTML.  The fixed WebView2 shell applies a content-security
+policy, restrained light/dark CSS, word spans, `<details>` state restoration,
+and scroll preservation.  Claude `Agent` tool calls and completed child-agent
+queue notifications become top-level `## Claude Sub-agent <id>` sections with
+descriptions and matching results.  The opaque ID remains visible but is not
+part of any `SpeechFragment`.
+
+The transcript toolbar is overlaid on the right of the tab strip.  The gear
+opens `TranscriptSettingsPopup`, another child overlay rather than a top-level
+window.  Follow state, separate light/dark ARGB highlight colours, and a
+0--2000 ms fade rounded to 250 ms are persisted in settings version 10.  The
+maximize button collapses rows 0--6 of `MainForm._mainLayout`; the tab strip,
+gear, and restore button remain visible.
+
+`SapiSpeechEngine` now associates each rendered PCM buffer with ordered
+`SpeechWordBoundary` records.  System.Speech collects exact `SpeakProgress`
+audio positions.  Native SAPI and Windows.Media construct duration-weighted
+word estimates.  `WaveOutPlayer.Position` queries `waveOutGetPosition`, and the
+engine raises each boundary as the device cursor reaches it.
+
+`SpeechService` maps those boundaries to the active history fragment and raises
+`TranscriptPlaybackPosition`.  Speaking uses a filled background marker;
+completed words fade in JavaScript.  Pause uses a blinking hollow outline.
+When a pause exceeds one second, `SpeechService` cancels the remainder and
+resynthesizes from the current word.  Pausing at the live end uses a separate
+one-em marker after the document.  Navigation starts the selected fragment and
+therefore moves the transcript marker through the same event path.
+
+`I` and `Alt+I` are removed from the form, compact profile editor, transcript
+settings overlay, WebView2 keyboard bridge, and current documentation.  `K` and
+`Alt+K` remain the sole Play/Pause shortcuts.
+
+The bundled `tools/AI-transcript.py` is the reference formatter updated to
+render parent and child Claude sub-agents.  Its fixture verifies opaque IDs,
+visible results, and removal of `agentId`, worktree, and usage metadata.
+
+## v39 unified playback and diagnostic tabs
+
+`MainForm` owns one Play/Pause button.  When monitoring is stopped, activating
+it starts the selected JSONL session.  While monitoring, it calls
+`SpeechService.TogglePause(allowIdlePause: true)`.  `SpeechService` therefore
+permits a paused state even when no utterance is active at the current live
+end.  `StartPendingOrNextLocked()` does no work while paused; live fragments
+remain in history and begin when playback resumes.  Reaching the live end does
+not stop monitoring or change the button to Play.
+
+Both `I` and `K`, including their Alt forms, route to the same Play/Pause
+button.  The separate Pause and visible Stop controls no longer exist.
+Cancellation remains available internally for application disposal, session
+replacement, navigation restart, and other ownership transitions.
+
+`MainForm` places Activity and accepted-text diagnostics in one bottom
+`TabControl`.  The accepted page uses the short **Accepted Text** title while
+inactive and **Recent Accepted JSONL** while selected.  Accepted-text updates
+capture whether the view was following the final display line and its first
+visible line.  They either continue following the end or restore the previous
+scroll position instead of resetting to the top.
+
+Speech-profile popup names use title case.  User Context is presented as
+**User Quoted Text Speech Profile** because its structural source is Markdown
+blockquote text.  All four speech-table headers use the default bold UI font at
+the same size and top alignment.
+
 ## v38 designer serialization metadata
 
 `SpeechProfileCompactControl.Rate`, `Pitch`, and `Volume` are runtime-owned
@@ -144,6 +217,13 @@ SessionLocator
   -> Windows.Media, native SAPI, or System.Speech rendered PCM
   -> PcmWaveData tone/silence/speech composition
   -> WaveOutPlayer single contiguous output stream
+  -> SpeechWordBoundary playback events
+  -> TranscriptView WebView2 marker
+
+Selected JSONL
+  -> TranscriptMarkdownFormatter
+  -> Markdig HTML
+  -> TranscriptView WebView2 document
 ```
 
 The monitor indexes all conversational roles and fenced-code blocks.  Current
@@ -168,6 +248,10 @@ the JSONL.
 | `GlyphButton` | Draws centred transport, speaker-turn, and clock icons. |
 | `SpeechProfileCompactControl` | Draws and owns one Main/Context profile. |
 | `SpeechProfilePopup` | Edits one compact profile in a child overlay. |
+| `TranscriptMarkdownFormatter` | Produces rendered-session Markdown. |
+| `TranscriptView` | Hosts WebView2 and synchronized transcript markers. |
+| `TranscriptSettingsPopup` | Edits follow, colour, and fade settings. |
+| `SpeechWordBoundary` | Maps PCM time to one source word. |
 | `PcmWaveData` | Parses, converts, joins, and generates PCM audio. |
 | `WaveOutPlayer` | Plays one PCM buffer through one WinMM output stream. |
 | `PronunciationRuleSet` | Parses exact and `/i` whole-token IPA rules. |
@@ -515,8 +599,10 @@ fence types.  The cursor tracks the active, pending, or next fragment.
   run cancels replay and moves the cursor to the live end;
 - the clock control queues one User-voice processing-time announcement after
   the current JSONL node finishes speaking;
-- the play/stop toggle stops both speech and JSONL monitoring when active;
-- pause/resume affects only the active utterance and does not stop monitoring.
+- the Play/Pause control starts monitoring when stopped;
+- while monitoring, Play/Pause suspends or resumes both the active utterance
+  and automatic speech of future live fragments;
+- reaching the current live end remains an active waiting state.
 
 Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 
@@ -525,8 +611,7 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 | `U` / `Alt+U` | Previous opposite-speaker run |
 | `H` / `Alt+H` | Previous node |
 | `J` / `Alt+J` | Previous sentence/code line |
-| `I` / `Alt+I` | Toggle pause/resume |
-| `K` / `Alt+K` | Toggle start/stop |
+| `K` / `Alt+K` | Start, pause, or resume monitored playback |
 | `L` / `Alt+L` | Next sentence/code line |
 | `;` / `Alt+;` | Next node |
 | `O` / `Alt+O` | Next opposite-speaker run |
@@ -535,8 +620,8 @@ Application-local hotkeys are processed by `MainForm.ProcessCmdKey`:
 They operate only while the Agent Panel Speaker window has focus.  The invoked
 button receives focus before `PerformClick` runs.  Bare keys remain active in
 numeric spin controls and compact speech-profile sliders.  Editable text and
-editable drop-down controls retain
-bare keys; Alt variants remain available there.
+editable drop-down controls retain bare keys; Alt variants remain available
+there.
 
 ## Processing-time announcements
 
@@ -556,12 +641,13 @@ request through completion.
 
 ## Session identity and startup position
 
-A path displayed after Browse or Detect latest is passed as `ExplicitPath` when
-Auto-follow is off.  Stop and Play therefore reopen the same JSONL.  Only an
-explicit Auto-follow session may periodically call `FindLatest` and switch to a
-newer file.  `SessionChanged` advances a generation counter and clears active,
-pending, and indexed speech before history or live events from the new file are
-accepted, preventing queued output from the previous conversation.
+A path displayed after Browse or Detect latest is passed as `ExplicitPath`
+when Auto-follow is off.  Pausing and resuming therefore retain the same JSONL.
+Only an explicit Auto-follow session may periodically call `FindLatest` and
+switch to a newer file.  `SessionChanged` advances a generation counter and
+clears active, pending, and indexed speech before history or live events from
+the new file are accepted, preventing queued output from the previous
+conversation.
 
 Existing history is always indexed.  `PlaybackStartMode.LatestTurn` scans
 backward for the final User node, starts at its first currently eligible
@@ -580,9 +666,10 @@ Settings are stored at:
 
 Saved values include source, follow-newest state, pinned session path, every
 role's voice/rate/pitch/volume, fenced-code CSV, spelling rules, IPA rules,
-Bluetooth wake settings, theme, startup playback, polling interval, and normal
-window bounds.
+Bluetooth wake settings, theme, transcript follow/highlight/fade/maximize
+state, startup playback, polling interval, and normal window bounds.
 
+Settings version 10 adds normalized `TranscriptSettings`.
 Settings version 4 added `Pronunciations`, `AudioWake`, and `Theme`.
 Settings version 5 changes follow-newest migration so existing installations
 start pinned rather than inheriting automatic session switching.  Creating or
@@ -603,17 +690,37 @@ replacement.  Missing saved voices become `Not Spoken` and are logged.
 - Only the speech worker thread accesses SAPI COM, System.Speech, or WinRT
   synthesizer instances.
 - Every sound-producing path uses the serialized worker and PCM composer.
+- Rendered transcript content is derived from JSONL, not speech eligibility.
+- WebView2 failure cannot disable monitoring or audio playback.
+- Visible sub-agent IDs are never added to spoken fragments.
 - A wake tone, settling silence, and its speech use one `waveOut` buffer.
-- The play/stop toggle cancels speech before stopping monitoring.
+- Play/Pause never treats the current live end as stopped; it remains armed
+  for future accepted text until paused or internally cancelled.
 - The IPA toolbar never inserts into a token or into its `ipa:` prefix.
 - Settings writes never overwrite the live file partially.
+
+## Deferred transcript directions
+
+Version 40 deliberately excludes an Edge/WebView2 speech backend.  A future
+implementation must first probe local/online voice catalogues, word boundaries,
+pause/resume, Windows 10 behaviour, Edge policy, network/privacy implications,
+and possible service cost.  Windows speech remains the offline default.
+
+Code blocks remain ordinary fenced-code HTML.  Future syntax highlighting or
+prettification should use a maintained JavaScript renderer such as Prism.js,
+highlight.js, or Shiki rather than a custom parser.
+
+Future gear options may read heading timestamps and record numbers.  Opaque
+sub-agent IDs remain silent unless a separate explicit setting is added.
 
 ## Diagnostics
 
 Logs record session selection/switching, JSONL classification, accepted nodes,
 duplicate suppression, emitted fragments, playback/navigation, fence outcomes,
 settings saves, missing voices, wake-tone output/failures, SAPI failures, and
-form/screen geometry.  Accepted conversation text is present in logs and should
+form/screen geometry.  The bottom Activity tab shows operational events.  The
+accepted-text tab shows a bounded monitor preview and does not represent the
+active speech cursor.  Accepted conversation text is present in logs and should
 be reviewed before sharing.
 
 ## IPA toolbar examples

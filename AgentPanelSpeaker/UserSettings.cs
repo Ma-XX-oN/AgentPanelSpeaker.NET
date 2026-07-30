@@ -20,7 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 9;
+  public const int CurrentVersion = 10;
 
   /// <summary>
   /// Gets the main speech profile used for background-agent results.
@@ -106,9 +106,17 @@ internal sealed record UserSettings(
         Volume = 100
       },
       UserContext = userProfile,
-      KeepDisplayOnWhileSpeaking = false
+      KeepDisplayOnWhileSpeaking = false,
+      Transcript = TranscriptSettings.Default
     };
   }
+
+
+  /// <summary>
+  /// Gets rendered-transcript presentation and follow settings.
+  /// </summary>
+  public TranscriptSettings Transcript { get; init; } =
+    TranscriptSettings.Default;
 
   /// <summary>
   /// Gets whether active speech should keep the Windows display awake.

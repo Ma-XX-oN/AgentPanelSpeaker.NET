@@ -221,6 +221,9 @@ internal sealed class UserSettingsStore
         settings.FollowNewestSession,
       KeepDisplayOnWhileSpeaking = settings.Version >= 7 &&
         settings.KeepDisplayOnWhileSpeaking,
+      Transcript = settings.Version >= 10
+        ? (settings.Transcript ?? TranscriptSettings.Default).Normalize()
+        : TranscriptSettings.Default,
       Assistant = NormalizeProfile(settings.Assistant),
       Reasoning = NormalizeProfile(settings.Reasoning),
       SubagentAssistant = NormalizeProfile(

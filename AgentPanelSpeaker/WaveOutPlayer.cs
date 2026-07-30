@@ -12,10 +12,12 @@ internal sealed class WaveOutPlayer : IDisposable
   private const uint WaveHeaderDone = 0x00000001;
   private const int NoError = 0;
   private const int WaveStillPlaying = 33;
+  private const uint TimeBytes = 4;
 
   private IntPtr _waveOut;
   private IntPtr _sampleBuffer;
   private IntPtr _headerBuffer;
+  private readonly int _averageBytesPerSecond;
   private bool _prepared;
   private bool _disposed;
 
@@ -32,6 +34,7 @@ internal sealed class WaveOutPlayer : IDisposable
         nameof(wave));
     }
 
+    _averageBytesPerSecond = wave.AverageBytesPerSecond;
     var format = new WaveFormatEx
     {
       FormatTag = 1,
@@ -95,6 +98,26 @@ internal sealed class WaveOutPlayer : IDisposable
       ThrowIfDisposed();
       WaveHeader header = Marshal.PtrToStructure<WaveHeader>(_headerBuffer);
       return (header.Flags & WaveHeaderDone) != 0;
+    }
+  }
+
+  /// <summary>
+  /// Gets the current output-device position in the active PCM buffer.
+  /// </summary>
+  public TimeSpan Position
+  {
+    get
+    {
+      ThrowIfDisposed();
+      var time = new MmTime { Type = TimeBytes };
+      CheckResult(
+        waveOutGetPosition(
+          _waveOut,
+          ref time,
+          checked((uint)Marshal.SizeOf<MmTime>())),
+        "query the audio playback position");
+      return TimeSpan.FromSeconds(
+        time.Value / (double)_averageBytesPerSecond);
     }
   }
 
@@ -208,6 +231,14 @@ internal sealed class WaveOutPlayer : IDisposable
   }
 
   [StructLayout(LayoutKind.Sequential)]
+  private struct MmTime
+  {
+    public uint Type;
+    public uint Value;
+    public uint Reserved;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
   private struct WaveHeader
   {
     public IntPtr Data;
@@ -240,6 +271,12 @@ internal sealed class WaveOutPlayer : IDisposable
     IntPtr waveOut,
     IntPtr header,
     uint headerSize);
+
+  [DllImport("winmm.dll")]
+  private static extern int waveOutGetPosition(
+    IntPtr waveOut,
+    ref MmTime time,
+    uint timeSize);
 
   [DllImport("winmm.dll")]
   private static extern int waveOutPause(IntPtr waveOut);

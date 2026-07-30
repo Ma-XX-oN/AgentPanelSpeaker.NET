@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Text.RegularExpressions;
 using Windows.Media.SpeechSynthesis;
 using Windows.Storage.Streams;
 using InstalledVoice = System.Speech.Synthesis.InstalledVoice;
@@ -66,6 +67,11 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// Raised when the worker recovers from unsupported preview markup.
   /// </summary>
   public event Action<string>? Notice;
+
+  /// <summary>
+  /// Raised as playback reaches one synthesized word boundary.
+  /// </summary>
+  public event Action<SpeechWordBoundary>? WordBoundary;
 
   /// <summary>
   /// Gets all enabled voices exposed by the available Windows speech providers.
@@ -568,6 +574,9 @@ internal sealed class SapiSpeechEngine : IDisposable
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends)
   {
     WaveOutPlayer? player = null;
+    IReadOnlyList<SpeechWordBoundary> wordBoundaries =
+      Array.Empty<SpeechWordBoundary>();
+    int nextWordBoundary = 0;
     bool exiting = false;
 
     while (!exiting)
@@ -588,15 +597,29 @@ internal sealed class SapiSpeechEngine : IDisposable
             windowsMediaSynthesizer,
             voiceBackends,
             ref player,
+            ref wordBoundaries,
+            ref nextWordBoundary,
             ref exiting);
         }
 
-        if (player is not null && player.IsComplete)
+        if (player is not null)
         {
-          player.Dispose();
-          player = null;
-          MarkAudioEnd();
-          RaiseCompleted();
+          TimeSpan position = player.Position;
+          while (nextWordBoundary < wordBoundaries.Count &&
+                 wordBoundaries[nextWordBoundary].AudioPosition <= position)
+          {
+            RaiseWordBoundary(wordBoundaries[nextWordBoundary]);
+            nextWordBoundary++;
+          }
+          if (player.IsComplete)
+          {
+            player.Dispose();
+            player = null;
+            wordBoundaries = Array.Empty<SpeechWordBoundary>();
+            nextWordBoundary = 0;
+            MarkAudioEnd();
+            RaiseCompleted();
+          }
         }
       }
       catch (Exception exception)
@@ -626,41 +649,53 @@ internal sealed class SapiSpeechEngine : IDisposable
     WinRtSpeechSynthesizer? windowsMediaSynthesizer,
     IReadOnlyDictionary<string, VoiceBackend> voiceBackends,
     ref WaveOutPlayer? player,
+    ref IReadOnlyList<SpeechWordBoundary> wordBoundaries,
+    ref int nextWordBoundary,
     ref bool exiting)
   {
     switch (command)
     {
       case SpeakCommand speak:
         CancelPlayer(ref player);
-        player = StartSpeechPlayback(
+        SpeechPlaybackBuffer speechBuffer = StartSpeechPlayback(
           PlaybackRequest.ForSpeech(speak),
           voiceObject,
           voicesObject,
           synthesizer,
           windowsMediaSynthesizer,
           voiceBackends);
+        player = new WaveOutPlayer(speechBuffer.Wave);
+        wordBoundaries = speechBuffer.WordBoundaries;
+        nextWordBoundary = 0;
         break;
 
       case IpaPreviewCommand preview:
         CancelPlayer(ref player);
-        player = StartSpeechPlayback(
+        SpeechPlaybackBuffer previewBuffer = StartSpeechPlayback(
           PlaybackRequest.ForIpaPreview(preview),
           voiceObject,
           voicesObject,
           synthesizer,
           windowsMediaSynthesizer,
           voiceBackends);
+        player = new WaveOutPlayer(previewBuffer.Wave);
+        wordBoundaries = Array.Empty<SpeechWordBoundary>();
+        nextWordBoundary = 0;
         break;
 
       case WakeTestCommand wakeTest:
         CancelPlayer(ref player);
         player = StartWakeToneTest(wakeTest.WakeSettings);
+        wordBoundaries = Array.Empty<SpeechWordBoundary>();
+        nextWordBoundary = 0;
         break;
 
       case CancelCommand:
       {
         bool wasActive = player is not null;
         CancelPlayer(ref player);
+        wordBoundaries = Array.Empty<SpeechWordBoundary>();
+        nextWordBoundary = 0;
         if (wasActive)
         {
           RaiseCompleted();
@@ -686,7 +721,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// <summary>
   /// Renders every segment, prefixes wake audio, and starts one PCM buffer.
   /// </summary>
-  private WaveOutPlayer StartSpeechPlayback(
+  private SpeechPlaybackBuffer StartSpeechPlayback(
     PlaybackRequest request,
     object? voiceObject,
     object? voicesObject,
@@ -703,10 +738,12 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
 
     var parts = new List<PcmWaveData>();
+    var boundaries = new List<SpeechWordBoundary>();
     PcmWaveData? outputFormat = null;
+    TimeSpan speechOffset = TimeSpan.Zero;
     foreach (SpeechSegment segment in request.Segments)
     {
-      PcmWaveData? rendered = RenderSpeechSegment(
+      RenderedSpeechSegment? rendered = RenderSpeechSegment(
         segment,
         request.Profile,
         backend,
@@ -722,13 +759,23 @@ internal sealed class SapiSpeechEngine : IDisposable
       if (outputFormat is not null &&
           segment.DelayAfterPreviousMilliseconds > 0)
       {
-        parts.Add(outputFormat.CreateSilence(
-          segment.DelayAfterPreviousMilliseconds));
+        PcmWaveData delay = outputFormat.CreateSilence(
+          segment.DelayAfterPreviousMilliseconds);
+        parts.Add(delay);
+        speechOffset += delay.Duration;
       }
 
-      PcmWaveData converted = rendered.ConvertToMono16(OutputSampleRate);
+      PcmWaveData converted = rendered.Wave.ConvertToMono16(OutputSampleRate);
       outputFormat ??= converted;
+      foreach (SpeechWordBoundary boundary in rendered.WordBoundaries)
+      {
+        boundaries.Add(boundary with
+        {
+          AudioPosition = speechOffset + boundary.AudioPosition
+        });
+      }
       parts.Add(converted);
+      speechOffset += converted.Duration;
     }
 
     if (outputFormat is null)
@@ -762,7 +809,17 @@ internal sealed class SapiSpeechEngine : IDisposable
       sampleRate = playback.SampleRate,
       sampleBytes = playback.Samples.Length
     });
-    return new WaveOutPlayer(playback);
+    TimeSpan wakeOffset = wakeApplied
+      ? TimeSpan.FromMilliseconds(
+          request.WakeSettings.PlayDurationMilliseconds +
+          request.WakeSettings.SettleDurationMilliseconds)
+      : TimeSpan.Zero;
+    return new SpeechPlaybackBuffer(
+      playback,
+      boundaries.Select(boundary => boundary with
+      {
+        AudioPosition = wakeOffset + boundary.AudioPosition
+      }).ToArray());
   }
 
   private WaveOutPlayer StartWakeToneTest(AudioWakeSettings settings)
@@ -818,7 +875,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     return quietMilliseconds > settings.QuietDurationMilliseconds;
   }
 
-  private static PcmWaveData RenderSpeech(
+  private static RenderedSpeechSegment RenderSpeech(
     SpeechMarkup markup,
     SpeechProfileSettings profile,
     VoiceBackend backend,
@@ -827,35 +884,51 @@ internal sealed class SapiSpeechEngine : IDisposable
     SystemSpeechSynthesizer synthesizer,
     WinRtSpeechSynthesizer? windowsMediaSynthesizer)
   {
-    return backend.Backend switch
+    IReadOnlyList<SpeechWordBoundary> boundaries;
+    PcmWaveData wave;
+    switch (backend.Backend)
     {
-      SpeechBackend.Sapi => RenderSapiSpeech(
-        markup,
-        profile,
-        backend.SapiIndex,
-        voiceObject,
-        voicesObject),
-      SpeechBackend.SystemSpeech => RenderSystemSpeech(
-        markup,
-        profile,
-        backend.ProviderVoiceId,
-        synthesizer),
-      SpeechBackend.WindowsMedia => RenderWindowsMediaSpeech(
-        markup,
-        profile,
-        backend.ProviderVoiceId,
-        windowsMediaSynthesizer ?? throw new InvalidOperationException(
-          "The Windows.Media speech backend is unavailable.")),
-      _ => throw new InvalidOperationException(
-        "The selected voice has no speech backend.")
-    };
+      case SpeechBackend.Sapi:
+        wave = RenderSapiSpeech(
+          markup,
+          profile,
+          backend.SapiIndex,
+          voiceObject,
+          voicesObject);
+        boundaries = CreateApproximateBoundaries(markup.PlainText, wave.Duration);
+        break;
+
+      case SpeechBackend.SystemSpeech:
+        wave = RenderSystemSpeech(
+          markup,
+          profile,
+          backend.ProviderVoiceId,
+          synthesizer,
+          out boundaries);
+        break;
+
+      case SpeechBackend.WindowsMedia:
+        wave = RenderWindowsMediaSpeech(
+          markup,
+          profile,
+          backend.ProviderVoiceId,
+          windowsMediaSynthesizer ?? throw new InvalidOperationException(
+            "The Windows.Media speech backend is unavailable."));
+        boundaries = CreateApproximateBoundaries(markup.PlainText, wave.Duration);
+        break;
+
+      default:
+        throw new InvalidOperationException(
+          "The selected voice has no speech backend.");
+    }
+    return new RenderedSpeechSegment(wave, boundaries);
   }
 
   /// <summary>
   /// Renders one preview segment and applies its explicit unsupported-IPA
   /// recovery policy.
   /// </summary>
-  private PcmWaveData? RenderSpeechSegment(
+  private RenderedSpeechSegment? RenderSpeechSegment(
     SpeechSegment segment,
     SpeechProfileSettings profile,
     VoiceBackend backend,
@@ -901,7 +974,7 @@ internal sealed class SapiSpeechEngine : IDisposable
 
       try
       {
-        PcmWaveData fallback = RenderSpeech(
+        RenderedSpeechSegment fallback = RenderSpeech(
           fallbackMarkup,
           profile,
           backend,
@@ -996,15 +1069,27 @@ internal sealed class SapiSpeechEngine : IDisposable
     SpeechMarkup markup,
     SpeechProfileSettings profile,
     string providerVoiceId,
-    SystemSpeechSynthesizer synthesizer)
+    SystemSpeechSynthesizer synthesizer,
+    out IReadOnlyList<SpeechWordBoundary> boundaries)
   {
     using var stream = new MemoryStream();
+    var collected = new List<SpeechWordBoundary>();
+    int wordIndex = 0;
+    EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
+      (_, eventArgs) => collected.Add(new SpeechWordBoundary(
+        eventArgs.AudioPosition,
+        wordIndex++,
+        eventArgs.CharacterPosition,
+        eventArgs.CharacterCount,
+        eventArgs.Text,
+        Exact: true));
     synthesizer.SelectVoice(providerVoiceId);
     synthesizer.Rate = profile.Rate;
     synthesizer.Volume = profile.Volume;
     string ssml = BuildSsmlDocument(
       markup.SsmlContent,
       synthesizer.Voice.Culture.Name);
+    synthesizer.SpeakProgress += handler;
     try
     {
       synthesizer.SetOutputToWaveStream(stream);
@@ -1012,9 +1097,14 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
     finally
     {
+      synthesizer.SpeakProgress -= handler;
       synthesizer.SetOutputToNull();
     }
-    return PcmWaveData.Parse(stream.ToArray());
+    PcmWaveData wave = PcmWaveData.Parse(stream.ToArray());
+    boundaries = collected.Count == 0
+      ? CreateApproximateBoundaries(markup.PlainText, wave.Duration)
+      : collected;
+    return wave;
   }
 
   /// <summary>
@@ -1063,6 +1153,36 @@ internal sealed class SapiSpeechEngine : IDisposable
     var bytes = new byte[byteCount];
     reader.ReadBytes(bytes);
     return PcmWaveData.Parse(bytes);
+  }
+
+  private static IReadOnlyList<SpeechWordBoundary>
+    CreateApproximateBoundaries(string text, TimeSpan duration)
+  {
+    MatchCollection matches = Regex.Matches(
+      text,
+      @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*");
+    if (matches.Count == 0)
+    {
+      return Array.Empty<SpeechWordBoundary>();
+    }
+    double totalWeight = matches.Cast<Match>()
+      .Sum(match => Math.Max(1, match.Length));
+    double elapsedWeight = 0.0;
+    var result = new List<SpeechWordBoundary>(matches.Count);
+    for (int index = 0; index < matches.Count; index++)
+    {
+      Match match = matches[index];
+      result.Add(new SpeechWordBoundary(
+        TimeSpan.FromTicks(checked((long)Math.Round(
+          duration.Ticks * elapsedWeight / totalWeight))),
+        index,
+        match.Index,
+        match.Length,
+        match.Value,
+        Exact: false));
+      elapsedWeight += Math.Max(1, match.Length);
+    }
+    return result;
   }
 
   private static void ConfigureSapiVoice(
@@ -1136,6 +1256,21 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
   }
 
+  private void RaiseWordBoundary(SpeechWordBoundary boundary)
+  {
+    try
+    {
+      WordBoundary?.Invoke(boundary);
+    }
+    catch (Exception exception)
+    {
+      DiagnosticLog.Write("speech.word_boundary_handler_failed", new
+      {
+        exception = exception.ToString()
+      });
+    }
+  }
+
   private void RaiseCompleted()
   {
     try
@@ -1191,6 +1326,10 @@ internal sealed class SapiSpeechEngine : IDisposable
       Marshal.FinalReleaseComObject(value);
     }
   }
+
+  private sealed record RenderedSpeechSegment(
+    PcmWaveData Wave,
+    IReadOnlyList<SpeechWordBoundary> WordBoundaries);
 
   private abstract record EngineCommand;
 

@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.Runtime.InteropServices;
 
 namespace AgentPanelSpeaker;
 
@@ -11,6 +12,16 @@ internal sealed class MainForm : Form
   private const int TransportButtonWidth = 50;
   private const int TransportButtonHeight = 34;
   private const int SpeechProfileWidth = 88;
+  private const int EmGetFirstVisibleLine = 0x00CE;
+  private const int EmGetLineCount = 0x00BA;
+  private const int EmLineScroll = 0x00B6;
+
+  [DllImport("user32.dll", CharSet = CharSet.Auto)]
+  private static extern IntPtr SendMessage(
+    IntPtr window,
+    int message,
+    IntPtr wordParameter,
+    IntPtr longParameter);
 
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
@@ -28,8 +39,7 @@ internal sealed class MainForm : Form
   private readonly TextBox _fenceTypesTextBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
   private readonly CheckBox _keepDisplayOnCheckBox = new();
-  private readonly GlyphButton _playStopButton = new();
-  private readonly GlyphButton _pauseButton = new();
+  private readonly GlyphButton _playPauseButton = new();
   private readonly GlyphButton _processingTimeButton = new();
   private readonly GlyphButton _rewindSpeakerButton = new();
   private readonly GlyphButton _rewindSentenceButton = new();
@@ -45,6 +55,20 @@ internal sealed class MainForm : Form
   private readonly ComboBox _themeComboBox = new();
   private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
+  private readonly Panel _diagnosticHost = new();
+  private readonly TabControl _diagnosticTabs = new();
+  private readonly TabPage _transcriptTab = new("Transcript");
+  private readonly TabPage _activityTab = new("Activity");
+  private readonly TabPage _acceptedTextTab = new("Accepted Text");
+  private readonly TranscriptView _transcriptView = new();
+  private readonly Button _transcriptSettingsButton = new();
+  private readonly Button _maximizeTranscriptButton = new();
+  private readonly TranscriptSettingsPopup _transcriptSettingsPopup = new();
+  private readonly System.Windows.Forms.Timer _transcriptSettingsOpenTimer =
+    new();
+  private readonly System.Windows.Forms.Timer _transcriptSettingsCloseTimer =
+    new();
+  private readonly TableLayoutPanel _mainLayout = new();
   private readonly Dictionary<SpeechRole, VoiceRowControls> _voiceRows = new();
   private readonly VoiceDisplayField[] _voiceDisplayOrder =
   {
@@ -61,9 +85,11 @@ internal sealed class MainForm : Form
   private bool _pathIsManual;
   private bool _loadingSettings;
   private bool _closing;
-  private bool _playStopTransitioning;
+  private bool _playPauseTransitioning;
   private bool _voiceSettingPreviewActive;
-  private string? _pendingPlayStopTrigger;
+  private bool _diagnosticsMaximized;
+  private bool _suppressTranscriptSettingsHoverUntilLeave;
+  private string? _pendingPlayPauseTrigger;
   private int _monitorSession;
 
   /// <summary>
@@ -97,7 +123,7 @@ internal sealed class MainForm : Form
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v38";
+    Text = "Agent Panel Speaker v40";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -129,11 +155,7 @@ internal sealed class MainForm : Form
       "⏪",
       "Previous sentence/code line (J or Alt+J)");
     ConfigureTransportButton(
-      _pauseButton,
-      "⏸",
-      "Pause speech (I or Alt+I)");
-    ConfigureTransportButton(
-      _playStopButton,
+      _playPauseButton,
       "▶",
       "Start monitoring (K or Alt+K)");
     ConfigureTransportButton(
@@ -178,6 +200,41 @@ internal sealed class MainForm : Form
     _logTextBox.ScrollBars = ScrollBars.Vertical;
     _logTextBox.Dock = DockStyle.Fill;
     _logTextBox.Font = new Font(FontFamily.GenericMonospace, 9.0f);
+    _diagnosticHost.Dock = DockStyle.Fill;
+    _diagnosticHost.MinimumSize = new Size(0, 180);
+    _diagnosticTabs.Dock = DockStyle.Fill;
+    _diagnosticTabs.TabPages.Add(_transcriptTab);
+    _diagnosticTabs.TabPages.Add(_activityTab);
+    _diagnosticTabs.TabPages.Add(_acceptedTextTab);
+    _transcriptTab.Controls.Add(_transcriptView);
+    _activityTab.Controls.Add(_logTextBox);
+    _acceptedTextTab.Controls.Add(_previewTextBox);
+    _diagnosticTabs.SelectedTab = _transcriptTab;
+    ConfigureButton(_transcriptSettingsButton, "⚙");
+    _transcriptSettingsButton.AutoSize = false;
+    _transcriptSettingsButton.Size = new Size(34, 25);
+    _transcriptSettingsButton.AccessibleName = "Transcript Settings";
+    _toolTip.SetToolTip(
+      _transcriptSettingsButton,
+      "Transcript follow, highlight colour, and fade settings");
+    ConfigureButton(_maximizeTranscriptButton, "^");
+    _maximizeTranscriptButton.AutoSize = false;
+    _maximizeTranscriptButton.Size = new Size(34, 25);
+    _maximizeTranscriptButton.AccessibleName = "Maximize transcript tabs";
+    _toolTip.SetToolTip(
+      _maximizeTranscriptButton,
+      "Maximize or restore the bottom tab area");
+    _diagnosticHost.Controls.Add(_diagnosticTabs);
+    _diagnosticHost.Controls.Add(_transcriptSettingsPopup);
+    _diagnosticHost.Controls.Add(_maximizeTranscriptButton);
+    _diagnosticHost.Controls.Add(_transcriptSettingsButton);
+    _transcriptSettingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+    _maximizeTranscriptButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+    _transcriptSettingsPopup.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+    _transcriptSettingsOpenTimer.Interval = 250;
+    _transcriptSettingsCloseTimer.Interval = 200;
+    _diagnosticHost.Resize += (_, _) => PositionTranscriptControls();
+    UpdateDiagnosticTabTitles();
     ConfigureNumeric(_pollNumeric, 50, 2000, 150, 80);
     _fenceTypesTextBox.Width = 430;
     _speakExistingCheckBox.AutoSize = true;
@@ -241,7 +298,7 @@ internal sealed class MainForm : Form
     transport.Controls.AddRange(new Control[]
     {
       _rewindSpeakerButton, _rewindNodeButton, _rewindSentenceButton,
-      _pauseButton, _playStopButton, _forwardSentenceButton,
+      _playPauseButton, _forwardSentenceButton,
       _forwardNodeButton, _forwardSpeakerButton, _processingTimeButton
     });
     var utility = new FlowLayoutPanel
@@ -267,38 +324,26 @@ internal sealed class MainForm : Form
     controls.Controls.Add(transport, 0, 0);
     controls.Controls.Add(utility, 1, 0);
 
-    var layout = new TableLayoutPanel
+    _mainLayout.ColumnCount = 1;
+    _mainLayout.RowCount = 8;
+    _mainLayout.Dock = DockStyle.Fill;
+    _mainLayout.Padding = new Padding(10);
+    _mainLayout.ColumnStyles.Add(
+      new ColumnStyle(SizeType.Percent, 100.0f));
+    for (int row = 0; row < 7; row++)
     {
-      ColumnCount = 1,
-      RowCount = 12,
-      Dock = DockStyle.Fill,
-      Padding = new Padding(10)
-    };
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 42.0f));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 58.0f));
-    layout.Controls.Add(_instructionsLabel, 0, 0);
-    layout.Controls.Add(sessionControls, 0, 1);
-    layout.Controls.Add(CreateSessionDetailsLayout(), 0, 2);
-    layout.Controls.Add(MakeSectionLabel("Recent accepted conversation text:"), 0, 3);
-    layout.Controls.Add(_previewTextBox, 0, 4);
-    layout.Controls.Add(MakeSectionLabel("Speech by content:"), 0, 5);
-    layout.Controls.Add(speechTable, 0, 6);
-    layout.Controls.Add(options, 0, 7);
-    layout.Controls.Add(controls, 0, 8);
-    layout.Controls.Add(MakeSectionLabel("Activity:"), 0, 10);
-    layout.Controls.Add(_logTextBox, 0, 11);
-    Controls.Add(layout);
+      _mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    }
+    _mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100.0f));
+    _mainLayout.Controls.Add(_instructionsLabel, 0, 0);
+    _mainLayout.Controls.Add(sessionControls, 0, 1);
+    _mainLayout.Controls.Add(CreateSessionDetailsLayout(), 0, 2);
+    _mainLayout.Controls.Add(MakeSectionLabel("Speech by content:"), 0, 3);
+    _mainLayout.Controls.Add(speechTable, 0, 4);
+    _mainLayout.Controls.Add(options, 0, 5);
+    _mainLayout.Controls.Add(controls, 0, 6);
+    _mainLayout.Controls.Add(_diagnosticHost, 0, 7);
+    Controls.Add(_mainLayout);
     WireProfileEditorOutsideClicks(this);
   }
 
@@ -321,8 +366,78 @@ internal sealed class MainForm : Form
     _fenceDebounceTimer.Tick += FenceDebounceTimerTick;
     _detectLatestButton.Click += async (_, _) => await DetectLatestAsync();
     _browseButton.Click += BrowseButtonClicked;
-    _pauseButton.Click += PauseButtonClicked;
-    _playStopButton.Click += PlayStopButtonClicked;
+    _playPauseButton.Click += PlayPauseButtonClicked;
+    _diagnosticTabs.SelectedIndexChanged += (_, _) =>
+      UpdateDiagnosticTabTitles();
+    _transcriptSettingsButton.Click += (_, _) =>
+    {
+      _suppressTranscriptSettingsHoverUntilLeave = false;
+      ToggleTranscriptSettingsPopup(focusPopup: true);
+    };
+    _transcriptSettingsButton.Enter += (_, _) =>
+    {
+      if (_suppressTranscriptSettingsHoverUntilLeave ||
+          MouseButtons != MouseButtons.None)
+      {
+        return;
+      }
+      BeginInvoke(new Action(() =>
+      {
+        if (_transcriptSettingsButton.ContainsFocus &&
+            !_transcriptSettingsPopup.Visible &&
+            !_suppressTranscriptSettingsHoverUntilLeave)
+        {
+          ShowTranscriptSettingsPopup(focusPopup: true);
+        }
+      }));
+    };
+    _maximizeTranscriptButton.Click += (_, _) =>
+      SetDiagnosticsMaximized(!_diagnosticsMaximized);
+    _transcriptSettingsPopup.SettingsChanged += (_, _) =>
+      TranscriptSettingsChanged();
+    _transcriptSettingsPopup.TransportKeyPressed +=
+      TranscriptTransportKeyPressed;
+    _transcriptSettingsPopup.FocusTraversalRequested +=
+      TranscriptSettingsFocusTraversalRequested;
+    _transcriptSettingsPopup.DismissRequested += (_, _) =>
+      HideTranscriptSettingsPopup(
+        returnFocus: true,
+        suppressHoverUntilLeave: true);
+    _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
+    _transcriptSettingsOpenTimer.Tick += (_, _) =>
+    {
+      _transcriptSettingsOpenTimer.Stop();
+      ShowTranscriptSettingsPopup(focusPopup: false);
+    };
+    _transcriptSettingsCloseTimer.Tick += (_, _) =>
+    {
+      _transcriptSettingsCloseTimer.Stop();
+      if (!_transcriptSettingsButton.ClientRectangle.Contains(
+            _transcriptSettingsButton.PointToClient(Cursor.Position)) &&
+          !_transcriptSettingsPopup.ClientRectangle.Contains(
+            _transcriptSettingsPopup.PointToClient(Cursor.Position)) &&
+          !_transcriptSettingsPopup.ContainsFocus)
+      {
+        _transcriptSettingsPopup.Visible = false;
+      }
+    };
+    _transcriptSettingsButton.MouseEnter += (_, _) =>
+    {
+      _transcriptSettingsCloseTimer.Stop();
+      if (!_suppressTranscriptSettingsHoverUntilLeave)
+      {
+        _transcriptSettingsOpenTimer.Start();
+      }
+    };
+    _transcriptSettingsButton.MouseLeave += (_, _) =>
+    {
+      _suppressTranscriptSettingsHoverUntilLeave = false;
+      _transcriptSettingsCloseTimer.Start();
+    };
+    _transcriptSettingsPopup.MouseEnter += (_, _) =>
+      _transcriptSettingsCloseTimer.Stop();
+    _transcriptSettingsPopup.MouseLeave += (_, _) =>
+      _transcriptSettingsCloseTimer.Start();
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
@@ -377,6 +492,8 @@ internal sealed class MainForm : Form
     });
     _speech.ProcessingTimeAnnouncementStateChanged += _ => PostToUi(
       UpdateControlState);
+    _speech.PlaybackPositionChanged += position => PostToUi(() =>
+      _transcriptView.ShowPlaybackPosition(position));
   }
 
   /// <summary>
@@ -427,14 +544,23 @@ internal sealed class MainForm : Form
     int firstTabIndex = (row - 1) * 3;
     voice.TabIndex = firstTabIndex;
 
+    string roleTitle = role switch
+    {
+      SpeechRole.Agent => "AI Agent",
+      SpeechRole.Subagent => "AI Subagent",
+      SpeechRole.User => "User",
+      _ => throw new ArgumentOutOfRangeException(nameof(role), role, null)
+    };
+    string contextTitle = role == SpeechRole.User
+      ? "User Quoted Text Speech Profile"
+      : $"{roleTitle} Context Speech Profile";
     var mainProfile = new SpeechProfileCompactControl(
-      $"{label} Main speech profile")
+      $"{roleTitle} Main Speech Profile")
     {
       Width = SpeechProfileWidth
     };
     mainProfile.TabIndex = firstTabIndex + 1;
-    var contextProfile = new SpeechProfileCompactControl(
-      $"{label} Context speech profile")
+    var contextProfile = new SpeechProfileCompactControl(contextTitle)
     {
       Width = SpeechProfileWidth,
       TabIndex = firstTabIndex + 2
@@ -476,7 +602,9 @@ internal sealed class MainForm : Form
       $"{label} Main rate, pitch, and volume. Volume 0 mutes Main.");
     _toolTip.SetToolTip(
       contextProfile,
-      $"{label} Context rate, pitch, and volume. Volume 0 mutes Context.");
+      role == SpeechRole.User
+        ? "User quoted-text rate, pitch, and volume. Volume 0 mutes quoted text."
+        : $"{label} Context rate, pitch, and volume. Volume 0 mutes Context.");
   }
 
   /// <summary>
@@ -639,6 +767,10 @@ internal sealed class MainForm : Form
         settings.KeepDisplayOnWhileSpeaking;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
       _themeComboBox.SelectedItem = settings.Theme;
+      _transcriptSettingsPopup.SetSettings(
+        settings.Transcript,
+        ThemeManager.IsDark(settings.Theme));
+      _diagnosticsMaximized = settings.Transcript.Maximized;
       LoadVoiceRow(
         SpeechRole.Agent,
         settings.Assistant,
@@ -663,6 +795,7 @@ internal sealed class MainForm : Form
       _loadingSettings = false;
     }
     ApplyCurrentTheme();
+    SetDiagnosticsMaximized(_diagnosticsMaximized, save: false);
   }
 
   /// <summary>
@@ -733,6 +866,7 @@ internal sealed class MainForm : Form
     _pathIsManual = false;
     _sessionTitleTextBox.Clear();
     _sessionPathTextBox.Clear();
+    _transcriptView.ClearSession();
     _loadingSettings = true;
     _followLatestCheckBox.Checked = false;
     _loadingSettings = false;
@@ -826,7 +960,7 @@ internal sealed class MainForm : Form
     VoiceRowControls row = _voiceRows[role];
     row.PreviewTimer.Stop();
     row.PreviewContext = context;
-    if (_monitor.IsRunning || _playStopTransitioning)
+    if (_monitor.IsRunning || _playPauseTransitioning)
     {
       return;
     }
@@ -845,7 +979,7 @@ internal sealed class MainForm : Form
   {
     VoiceRowControls row = _voiceRows[role];
     row.PreviewTimer.Stop();
-    if (_monitor.IsRunning || _playStopTransitioning ||
+    if (_monitor.IsRunning || _playPauseTransitioning ||
         (_speech.IsSpeaking && !_voiceSettingPreviewActive))
     {
       return;
@@ -881,51 +1015,49 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Toggles the active utterance between paused and resumed.
+  /// Starts monitoring, or toggles monitored playback between active and
+  /// paused.  Reaching the current live end remains active and waits for more
+  /// text until the user pauses it.
   /// </summary>
-  private void PauseButtonClicked(object? sender, EventArgs eventArgs)
+  private async void PlayPauseButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
   {
-    PauseToggleResult result = _speech.TogglePause();
-    AppendLog(result switch
-    {
-      PauseToggleResult.Paused => "Speech paused.",
-      PauseToggleResult.Resumed => "Speech resumed.",
-      _ => "Pause unavailable: no speech is active."
-    });
-    UpdateControlState();
-  }
-
-  /// <summary>
-  /// Toggles monitoring and speech between running and stopped.
-  /// </summary>
-  private async void PlayStopButtonClicked(object? sender, EventArgs eventArgs)
-  {
-    string trigger = _pendingPlayStopTrigger ?? "button";
-    _pendingPlayStopTrigger = null;
-    DiagnosticLog.Write("transport.play_stop_requested", new
+    string trigger = _pendingPlayPauseTrigger ?? "button";
+    _pendingPlayPauseTrigger = null;
+    DiagnosticLog.Write("transport.play_pause_requested", new
     {
       trigger,
       monitoring = _monitor.IsRunning,
-      speaking = _speech.IsSpeaking
+      speaking = _speech.IsSpeaking,
+      paused = _speech.IsPaused
     });
-    if (_playStopTransitioning)
+    if (_playPauseTransitioning)
     {
       return;
     }
 
-    if (_voiceSettingPreviewActive && !_monitor.IsRunning)
+    if (_monitor.IsRunning)
+    {
+      PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
+      AppendLog(result switch
+      {
+        PauseToggleResult.Paused => "Playback paused.",
+        PauseToggleResult.Resumed => "Playback resumed.",
+        _ => "Playback pause unavailable."
+      });
+      UpdateControlState();
+      return;
+    }
+
+    if (_voiceSettingPreviewActive)
     {
       StopVoicePreviewTimers();
       _voiceSettingPreviewActive = false;
       _speech.CancelAll();
     }
-    else if (_monitor.IsRunning || _speech.IsSpeaking)
-    {
-      StopMonitoringAndSpeech(trigger);
-      return;
-    }
 
-    _playStopTransitioning = true;
+    _playPauseTransitioning = true;
     UpdateControlState();
     try
     {
@@ -933,7 +1065,7 @@ internal sealed class MainForm : Form
     }
     finally
     {
-      _playStopTransitioning = false;
+      _playPauseTransitioning = false;
       UpdateControlState();
     }
   }
@@ -970,18 +1102,6 @@ internal sealed class MainForm : Form
     {
       AppendLog($"Unable to start: {exception.Message}");
     }
-  }
-
-  /// <summary>
-  /// Stops monitoring and speech immediately.
-  /// </summary>
-  private void StopMonitoringAndSpeech(string trigger)
-  {
-    Interlocked.Increment(ref _monitorSession);
-    _speech.CancelAll();
-    _monitor.Stop(trigger);
-    AppendLog("Monitoring and speech stopped.");
-    UpdateControlState();
   }
 
   /// <summary>
@@ -1122,7 +1242,7 @@ internal sealed class MainForm : Form
         "User main",
         ReadVoiceProfile(ContentCategory.User)),
       new AudioWakeTestProfile(
-        "User context",
+        "User quoted text",
         ReadVoiceProfile(ContentCategory.UserContext))
     };
   }
@@ -1332,9 +1452,230 @@ internal sealed class MainForm : Form
     {
       if (_monitor.IsRunning && session == Volatile.Read(ref _monitorSession))
       {
-        _previewTextBox.Text = preview;
+        UpdateAcceptedTextPreview(preview);
       }
     });
+  }
+
+  private void PositionTranscriptControls()
+  {
+    int right = _diagnosticHost.ClientSize.Width - 5;
+    _maximizeTranscriptButton.Location = new Point(
+      Math.Max(0, right - _maximizeTranscriptButton.Width),
+      2);
+    _transcriptSettingsButton.Location = new Point(
+      Math.Max(0,
+        _maximizeTranscriptButton.Left - _transcriptSettingsButton.Width - 3),
+      2);
+    _transcriptSettingsPopup.Location = new Point(
+      Math.Max(0, right - _transcriptSettingsPopup.Width),
+      _transcriptSettingsButton.Bottom + 2);
+    _transcriptSettingsButton.BringToFront();
+    _maximizeTranscriptButton.BringToFront();
+    _transcriptSettingsPopup.BringToFront();
+  }
+
+  private void ToggleTranscriptSettingsPopup(bool focusPopup)
+  {
+    if (_transcriptSettingsPopup.Visible)
+    {
+      _transcriptSettingsPopup.Visible = false;
+      return;
+    }
+    ShowTranscriptSettingsPopup(focusPopup);
+  }
+
+  private void ShowTranscriptSettingsPopup(bool focusPopup)
+  {
+    _transcriptSettingsOpenTimer.Stop();
+    PositionTranscriptControls();
+    _transcriptSettingsPopup.Visible = true;
+    _transcriptSettingsPopup.BringToFront();
+    if (focusPopup)
+    {
+      _transcriptSettingsPopup.FocusInitialControl();
+    }
+  }
+
+  private void HideTranscriptSettingsPopup(
+    bool returnFocus,
+    bool suppressHoverUntilLeave)
+  {
+    _transcriptSettingsOpenTimer.Stop();
+    _transcriptSettingsCloseTimer.Stop();
+    _transcriptSettingsPopup.Visible = false;
+    bool pointerInsideButton =
+      _transcriptSettingsButton.ClientRectangle.Contains(
+        _transcriptSettingsButton.PointToClient(Cursor.Position));
+    _suppressTranscriptSettingsHoverUntilLeave =
+      suppressHoverUntilLeave && (returnFocus || pointerInsideButton);
+    if (returnFocus)
+    {
+      _transcriptSettingsButton.Focus();
+      if (!pointerInsideButton)
+      {
+        BeginInvoke(new Action(() =>
+          _suppressTranscriptSettingsHoverUntilLeave = false));
+      }
+    }
+  }
+
+  private void TranscriptSettingsFocusTraversalRequested(
+    object? sender,
+    FocusTraversalRequestedEventArgs eventArgs)
+  {
+    HideTranscriptSettingsPopup(
+      returnFocus: false,
+      suppressHoverUntilLeave: true);
+    Control target = eventArgs.Forward
+      ? _maximizeTranscriptButton
+      : _diagnosticTabs;
+    target.Focus();
+  }
+
+  private void TranscriptSettingsChanged()
+  {
+    bool dark = ThemeManager.IsDark(GetSelectedTheme());
+    _transcriptView.ApplySettings(
+      _transcriptSettingsPopup.Settings,
+      dark);
+    SaveControlsToSettings();
+  }
+
+  private void TranscriptTransportKeyPressed(
+    object? sender,
+    TransportKeyPressedEventArgs eventArgs)
+  {
+    Keys keyCode = eventArgs.KeyCode & Keys.KeyCode;
+    string shortcut = (eventArgs.KeyCode & Keys.Modifiers) == Keys.Alt
+      ? $"Alt+{FormatTransportKey(keyCode)}"
+      : FormatTransportKey(keyCode);
+    _ = ActivateTransportShortcut(keyCode, shortcut);
+  }
+
+  private void SetDiagnosticsMaximized(bool maximized, bool save = true)
+  {
+    _diagnosticsMaximized = maximized;
+    for (int row = 0; row < 7; row++)
+    {
+      foreach (Control control in _mainLayout.Controls.Cast<Control>()
+                 .Where(control => _mainLayout.GetRow(control) == row))
+      {
+        control.Visible = !maximized;
+      }
+    }
+    _mainLayout.Padding = maximized ? Padding.Empty : new Padding(10);
+    _maximizeTranscriptButton.Text = maximized ? "v" : "^";
+    _maximizeTranscriptButton.AccessibleName = maximized
+      ? "Restore transcript tabs"
+      : "Maximize transcript tabs";
+    PositionTranscriptControls();
+    if (save && !_loadingSettings)
+    {
+      SaveControlsToSettings();
+    }
+  }
+
+  /// <summary>
+  /// Uses the longer accepted-text title only while that tab is selected.
+  /// </summary>
+  private void UpdateDiagnosticTabTitles()
+  {
+    _transcriptTab.Text = "Transcript";
+    _activityTab.Text = "Activity";
+    _acceptedTextTab.Text = ReferenceEquals(
+      _diagnosticTabs.SelectedTab,
+      _acceptedTextTab)
+        ? "Recent Accepted JSONL"
+        : "Accepted Text";
+  }
+
+  /// <summary>
+  /// Replaces the accepted-text preview without forcing a manually scrolled
+  /// view back to the top.  A view already following the end stays at the end.
+  /// </summary>
+  private void UpdateAcceptedTextPreview(string preview)
+  {
+    bool followNewest = IsFollowingTextEnd(_previewTextBox);
+    int firstVisibleLine = GetFirstVisibleLine(_previewTextBox);
+    int selectionStart = _previewTextBox.SelectionStart;
+    int selectionLength = _previewTextBox.SelectionLength;
+
+    _previewTextBox.Text = preview;
+    if (followNewest)
+    {
+      _previewTextBox.SelectionStart = _previewTextBox.TextLength;
+      _previewTextBox.SelectionLength = 0;
+      _previewTextBox.ScrollToCaret();
+      return;
+    }
+
+    _previewTextBox.SelectionStart = Math.Min(
+      selectionStart,
+      _previewTextBox.TextLength);
+    _previewTextBox.SelectionLength = Math.Min(
+      selectionLength,
+      _previewTextBox.TextLength - _previewTextBox.SelectionStart);
+    ScrollTextBoxToLine(_previewTextBox, firstVisibleLine);
+  }
+
+  /// <summary>
+  /// Returns whether a multiline edit control is currently showing its final
+  /// display line.
+  /// </summary>
+  private static bool IsFollowingTextEnd(TextBox textBox)
+  {
+    if (!textBox.IsHandleCreated || textBox.TextLength == 0)
+    {
+      return true;
+    }
+
+    int firstVisible = GetFirstVisibleLine(textBox);
+    int displayLines = Math.Max(
+      1,
+      textBox.ClientSize.Height / Math.Max(1, textBox.Font.Height));
+    int lineCount = SendMessage(
+      textBox.Handle,
+      EmGetLineCount,
+      IntPtr.Zero,
+      IntPtr.Zero).ToInt32();
+    return firstVisible + displayLines >= Math.Max(0, lineCount - 1);
+  }
+
+  /// <summary>
+  /// Gets the first visible display line of a multiline edit control.
+  /// </summary>
+  private static int GetFirstVisibleLine(TextBox textBox)
+  {
+    return !textBox.IsHandleCreated
+      ? 0
+      : SendMessage(
+          textBox.Handle,
+          EmGetFirstVisibleLine,
+          IntPtr.Zero,
+          IntPtr.Zero).ToInt32();
+  }
+
+  /// <summary>
+  /// Restores one multiline edit control to a requested visible line.
+  /// </summary>
+  private static void ScrollTextBoxToLine(TextBox textBox, int line)
+  {
+    if (!textBox.IsHandleCreated)
+    {
+      return;
+    }
+
+    int current = GetFirstVisibleLine(textBox);
+    int delta = Math.Max(0, line) - current;
+    if (delta != 0)
+    {
+      _ = SendMessage(
+        textBox.Handle,
+        EmLineScroll,
+        IntPtr.Zero,
+        new IntPtr(delta));
+    }
   }
 
   /// <summary>
@@ -1370,6 +1711,10 @@ internal sealed class MainForm : Form
       KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
       Theme = GetSelectedTheme(),
+      Transcript = _transcriptSettingsPopup.Settings with
+      {
+        Maximized = _diagnosticsMaximized
+      },
       WindowX = includeWindowPlacement ? bounds.X : current.WindowX,
       WindowY = includeWindowPlacement ? bounds.Y : current.WindowY,
       WindowWidth = includeWindowPlacement ? bounds.Width : current.WindowWidth,
@@ -1587,7 +1932,8 @@ internal sealed class MainForm : Form
   /// </summary>
   private void WireProfileEditorOutsideClicks(Control control)
   {
-    if (control is SpeechProfilePopup or SpeechProfileCompactControl)
+    if (control is SpeechProfilePopup or SpeechProfileCompactControl or
+        TranscriptSettingsPopup)
     {
       return;
     }
@@ -1619,6 +1965,11 @@ internal sealed class MainForm : Form
         profile.CloseEditor(returnFocus: false);
       }
     }
+    if (sender is not TranscriptSettingsPopup &&
+        !ReferenceEquals(sender, _transcriptSettingsButton))
+    {
+      _transcriptSettingsPopup.Visible = false;
+    }
   }
 
   private SpeechProfileCompactControl? GetOpenProfileControl()
@@ -1643,6 +1994,13 @@ internal sealed class MainForm : Form
   {
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
+      if (_transcriptSettingsPopup.Visible)
+      {
+        HideTranscriptSettingsPopup(
+          returnFocus: true,
+          suppressHoverUntilLeave: true);
+        return true;
+      }
       SpeechProfileCompactControl? openProfile = GetOpenProfileControl();
       if (openProfile is not null)
       {
@@ -1681,8 +2039,7 @@ internal sealed class MainForm : Form
       Keys.U => _rewindSpeakerButton,
       Keys.H => _rewindNodeButton,
       Keys.J => _rewindSentenceButton,
-      Keys.I => _pauseButton,
-      Keys.K => _playStopButton,
+      Keys.K => _playPauseButton,
       Keys.L => _forwardSentenceButton,
       Keys.O => _forwardSpeakerButton,
       Keys.OemSemicolon => _forwardNodeButton,
@@ -1694,9 +2051,9 @@ internal sealed class MainForm : Form
       return false;
     }
 
-    if (ReferenceEquals(button, _playStopButton))
+    if (ReferenceEquals(button, _playPauseButton))
     {
-      _pendingPlayStopTrigger = $"keyboard:{shortcut}";
+      _pendingPlayPauseTrigger = $"keyboard:{shortcut}";
     }
     DiagnosticLog.Write("transport.shortcut_requested", new
     {
@@ -1788,9 +2145,9 @@ internal sealed class MainForm : Form
   private void UpdateControlState()
   {
     bool running = _monitor.IsRunning;
-    bool playbackActive = running || _speech.IsSpeaking;
+    bool playbackOwned = running || _speech.IsSpeaking;
     bool hasHistory = _speech.HasHistory;
-    if (playbackActive && !_voiceSettingPreviewActive)
+    if (playbackOwned && !_voiceSettingPreviewActive)
     {
       StopVoicePreviewTimers();
     }
@@ -1801,11 +2158,9 @@ internal sealed class MainForm : Form
     _followLatestCheckBox.Enabled = !_pathIsManual;
     _pollNumeric.Enabled = !running;
     _speakExistingCheckBox.Enabled = !running;
-    _playStopButton.Enabled = !_playStopTransitioning;
+    _playPauseButton.Enabled = !_playPauseTransitioning;
     _pronunciationsButton.Enabled = true;
-    _pauseButton.Enabled = _speech.IsSpeaking;
-    UpdatePauseButton();
-    UpdatePlayStopButton(playbackActive);
+    UpdatePlayPauseButton(running);
     _processingTimeButton.Enabled =
       _speech.CanRequestProcessingTimeAnnouncement &&
       !_speech.IsProcessingTimeAnnouncementPending;
@@ -1818,32 +2173,21 @@ internal sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Shows whether the pause button will pause or resume speech.
+  /// Shows Play while stopped or paused, and Pause while monitored playback is
+  /// active or waiting at the current live end.
   /// </summary>
-  private void UpdatePauseButton()
+  private void UpdatePlayPauseButton(bool running)
   {
-    bool paused = _speech.IsPaused;
-    string text = paused ? "▶" : "⏸";
-    string description = paused
-      ? "Resume speech (I or Alt+I)"
-      : "Pause speech (I or Alt+I)";
-    _pauseButton.Glyph = text;
-    _pauseButton.AccessibleName = description;
-    _toolTip.SetToolTip(_pauseButton, description);
-  }
-
-  /// <summary>
-  /// Shows the action that the play/stop toggle will perform next.
-  /// </summary>
-  private void UpdatePlayStopButton(bool active)
-  {
-    string text = active ? "⏹" : "▶";
-    string description = active
-      ? "Stop monitoring and speech (K or Alt+K)"
-      : "Start monitoring (K or Alt+K)";
-    _playStopButton.Glyph = text;
-    _playStopButton.AccessibleName = description;
-    _toolTip.SetToolTip(_playStopButton, description);
+    bool showPause = running && !_speech.IsPaused;
+    string text = showPause ? "⏸" : "▶";
+    string description = showPause
+      ? "Pause monitored playback (K or Alt+K)"
+      : running
+        ? "Resume monitored playback (K or Alt+K)"
+        : "Start monitoring (K or Alt+K)";
+    _playPauseButton.Glyph = text;
+    _playPauseButton.AccessibleName = description;
+    _toolTip.SetToolTip(_playPauseButton, description);
   }
 
   /// <summary>
@@ -1897,7 +2241,10 @@ internal sealed class MainForm : Form
     {
       profile.ApplyTheme(dark);
     }
+    _transcriptSettingsPopup.ApplyTheme(dark);
+    _transcriptView.ApplyTheme(dark);
     SynchronizeTransportButtonHeights();
+    PositionTranscriptControls();
   }
 
   /// <summary>
@@ -1911,8 +2258,7 @@ internal sealed class MainForm : Form
       _rewindSpeakerButton,
       _rewindNodeButton,
       _rewindSentenceButton,
-      _pauseButton,
-      _playStopButton,
+      _playPauseButton,
       _forwardSentenceButton,
       _forwardNodeButton,
       _forwardSpeakerButton,
@@ -1948,6 +2294,7 @@ internal sealed class MainForm : Form
   {
     _sessionTitleTextBox.Text = session.DisplayName;
     _sessionPathTextBox.Text = session.Path;
+    _transcriptView.SelectSession(session.Path, session.Source);
     _sessionTitleTextBox.SelectionStart = 0;
     _sessionPathTextBox.SelectionStart = 0;
   }
@@ -2050,6 +2397,8 @@ internal sealed class MainForm : Form
     _displayAwake.Dispose();
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
+    _transcriptSettingsOpenTimer.Dispose();
+    _transcriptSettingsCloseTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
     {
       row.PreviewTimer.Dispose();
@@ -2183,14 +2532,10 @@ internal sealed class MainForm : Form
   /// </summary>
   private static Label MakeSpeechColumnHeader(string text, int width)
   {
-    float headerSize = Math.Max(7.0f, SystemFonts.DefaultFont.Size - 1.0f);
     return new Label
     {
       AutoSize = false,
-      Font = new Font(
-        SystemFonts.DefaultFont.FontFamily,
-        headerSize,
-        FontStyle.Bold),
+      Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
       Height = 38,
       Margin = new Padding(3),
       Text = text,

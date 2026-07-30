@@ -67,6 +67,12 @@ internal sealed class PcmWaveData
   public byte[] Samples { get; }
 
   /// <summary>
+  /// Gets the exact PCM duration represented by the sample buffer.
+  /// </summary>
+  public TimeSpan Duration => TimeSpan.FromSeconds(
+    Samples.Length / (double)AverageBytesPerSecond);
+
+  /// <summary>
   /// Parses a RIFF WAVE file containing integer PCM samples.
   /// </summary>
   public static PcmWaveData Parse(byte[] waveFile)

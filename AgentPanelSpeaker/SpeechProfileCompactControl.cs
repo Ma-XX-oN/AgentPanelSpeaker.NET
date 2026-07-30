@@ -841,7 +841,7 @@ internal sealed class SpeechProfileCompactControl : Control
   private static bool IsTransportKey(Keys keyCode)
   {
     return keyCode is
-      Keys.U or Keys.H or Keys.J or Keys.I or Keys.K or Keys.L or Keys.O or
+      Keys.U or Keys.H or Keys.J or Keys.K or Keys.L or Keys.O or
       Keys.OemSemicolon or Keys.OemQuotes;
   }
 

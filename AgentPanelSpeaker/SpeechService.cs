@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
@@ -36,6 +38,13 @@ internal sealed class SpeechService : IDisposable
   private FenceActivityKey? _lastFenceActivity;
   private bool _reportedSpeaking;
   private bool _isPaused;
+  private string _activeTranscriptText = string.Empty;
+  private int _activeWordIndex;
+  private int _activeWordBaseIndex;
+  private string _activeWord = string.Empty;
+  private DateTimeOffset? _pauseStartedUtc;
+  private SpeechProfileSettings? _activeProfile;
+  private bool _activePauseAfter;
   private bool _disposed;
 
   /// <summary>
@@ -46,6 +55,7 @@ internal sealed class SpeechService : IDisposable
     _engine.Completed += EngineCompleted;
     _engine.Faulted += EngineFaulted;
     _engine.Notice += EngineNotice;
+    _engine.WordBoundary += EngineWordBoundary;
   }
 
   /// <summary>
@@ -54,7 +64,8 @@ internal sealed class SpeechService : IDisposable
   public event Action<string>? Activity;
 
   /// <summary>
-  /// Raised when speech starts or fully stops.
+  /// Raised when active-utterance or playback-pause state changes.  The event
+  /// value reports whether an utterance is currently active.
   /// </summary>
   public event Action<bool>? SpeakingStateChanged;
 
@@ -62,6 +73,11 @@ internal sealed class SpeechService : IDisposable
   /// Raised when a processing-time announcement becomes pending or completes.
   /// </summary>
   public event Action<bool>? ProcessingTimeAnnouncementStateChanged;
+
+  /// <summary>
+  /// Raised when the rendered transcript marker should move or change state.
+  /// </summary>
+  public event Action<TranscriptPlaybackPosition>? PlaybackPositionChanged;
 
   /// <summary>
   /// Gets whether the synthesizer is currently speaking.
@@ -78,7 +94,8 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Gets whether the active utterance is paused.
+  /// Gets whether monitored playback is paused, including while waiting at
+  /// the current live end.
   /// </summary>
   public bool IsPaused
   {
@@ -193,6 +210,7 @@ internal sealed class SpeechService : IDisposable
       _activeHistoryIndex = -1;
       _nextHistoryIndex = 0;
       _lastFenceActivity = null;
+      SetPausedLocked(false);
       if (_activeKind != ActiveSpeechKind.None)
       {
         CancelEngineLocked();
@@ -254,6 +272,7 @@ internal sealed class SpeechService : IDisposable
         _nextHistoryIndex = _history.Count;
       }
 
+      SetPausedLocked(false);
       if (_activeKind != ActiveSpeechKind.None)
       {
         CancelEngineLocked();
@@ -785,27 +804,58 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Pauses or resumes the active utterance.
+  /// Pauses or resumes playback.  An idle pause is allowed while monitoring is
+  /// waiting at the current live end.
   /// </summary>
-  public PauseToggleResult TogglePause()
+  public PauseToggleResult TogglePause(bool allowIdlePause = false)
   {
     lock (_sync)
     {
       ThrowIfDisposed();
-      if (_activeKind == ActiveSpeechKind.None)
+      if (_isPaused)
+      {
+        bool hasActiveUtterance = _activeKind != ActiveSpeechKind.None;
+        bool restartWord = hasActiveUtterance &&
+          _activeKind == ActiveSpeechKind.History &&
+          _pauseStartedUtc is DateTimeOffset pauseStart &&
+          DateTimeOffset.UtcNow - pauseStart > TimeSpan.FromSeconds(1);
+        SetPausedLocked(false);
+        _pauseStartedUtc = null;
+        if (restartWord)
+        {
+          RestartCurrentWordLocked();
+        }
+        else if (hasActiveUtterance)
+        {
+          _engine.Resume();
+          ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
+        }
+        else
+        {
+          StartPendingOrNextLocked();
+        }
+        return PauseToggleResult.Resumed;
+      }
+
+      if (_activeKind == ActiveSpeechKind.None && !allowIdlePause)
       {
         return PauseToggleResult.Unavailable;
       }
 
-      if (_isPaused)
+      if (_activeKind != ActiveSpeechKind.None)
       {
-        _engine.Resume();
-        SetPausedLocked(false);
-        return PauseToggleResult.Resumed;
+        _engine.Pause();
+        _pauseStartedUtc = DateTimeOffset.UtcNow;
+        SetPausedLocked(true);
+        ReportPlaybackPositionLocked(TranscriptPlaybackState.Paused);
       }
-
-      _engine.Pause();
-      SetPausedLocked(true);
+      else
+      {
+        SetPausedLocked(true);
+        _pauseStartedUtc = DateTimeOffset.UtcNow;
+        ReportPlaybackPositionLocked(
+          TranscriptPlaybackState.PausedAtLiveEnd);
+      }
       return PauseToggleResult.Paused;
     }
   }
@@ -825,8 +875,29 @@ internal sealed class SpeechService : IDisposable
       _engine.Completed -= EngineCompleted;
       _engine.Faulted -= EngineFaulted;
       _engine.Notice -= EngineNotice;
+      _engine.WordBoundary -= EngineWordBoundary;
       _engine.Cancel();
       _engine.Dispose();
+    }
+  }
+
+  /// <summary>
+  /// Advances the rendered transcript marker at one audio word boundary.
+  /// </summary>
+  private void EngineWordBoundary(SpeechWordBoundary boundary)
+  {
+    lock (_sync)
+    {
+      if (_disposed || _activeKind != ActiveSpeechKind.History)
+      {
+        return;
+      }
+      _activeWordIndex = _activeWordBaseIndex + boundary.WordIndex;
+      _activeWord = boundary.Text;
+      ReportPlaybackPositionLocked(
+        _isPaused
+          ? TranscriptPlaybackState.Paused
+          : TranscriptPlaybackState.Speaking);
     }
   }
 
@@ -1302,7 +1373,7 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void StartPendingOrNextLocked()
   {
-    if (_activeKind != ActiveSpeechKind.None)
+    if (_isPaused || _activeKind != ActiveSpeechKind.None)
     {
       return;
     }
@@ -1359,6 +1430,15 @@ internal sealed class SpeechService : IDisposable
       ReportFenceActivityLocked(fragment, spoken: true, string.Empty);
       return;
     }
+
+    _activeTranscriptText = string.Empty;
+    _activeWord = string.Empty;
+    _activeWordIndex = 0;
+    _activeWordBaseIndex = 0;
+    ReportPlaybackPositionLocked(
+      _isPaused
+        ? TranscriptPlaybackState.PausedAtLiveEnd
+        : TranscriptPlaybackState.WaitingAtLiveEnd);
   }
 
   /// <summary>
@@ -1370,7 +1450,18 @@ internal sealed class SpeechService : IDisposable
     SpeechProfileSettings profile,
     bool pauseAfter)
   {
+    _activeTranscriptText = text;
+    _activeWordIndex = 0;
+    _activeWordBaseIndex = 0;
+    _activeWord = FirstWord(text);
+    _activeProfile = profile.Normalize();
+    _activePauseAfter = pauseAfter;
+    _pauseStartedUtc = null;
     SetActiveKindLocked(kind);
+    ReportPlaybackPositionLocked(
+      kind == ActiveSpeechKind.History
+        ? TranscriptPlaybackState.Speaking
+        : TranscriptPlaybackState.None);
     try
     {
       SpeakConfiguredLocked(text, profile, pauseAfter);
@@ -1416,6 +1507,69 @@ internal sealed class SpeechService : IDisposable
       wakeEnabled = wakeSettings.Enabled
     });
     _engine.Speak(markup, normalized, wakeSettings);
+  }
+
+  /// <summary>
+  /// Restarts a long-paused history utterance at the current word boundary.
+  /// </summary>
+  private void RestartCurrentWordLocked()
+  {
+    if (_activeProfile is null || _activeTranscriptText.Length == 0)
+    {
+      _engine.Resume();
+      return;
+    }
+    int start = GetWordCharacterPosition(
+      _activeTranscriptText,
+      _activeWordIndex);
+    string remaining = _activeTranscriptText[start..];
+    _activeWordBaseIndex = _activeWordIndex;
+    _activeWord = FirstWord(remaining);
+    SpeakConfiguredLocked(
+      remaining,
+      _activeProfile,
+      _activePauseAfter);
+    ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
+  }
+
+  private void ReportPlaybackPositionLocked(TranscriptPlaybackState state)
+  {
+    if (state is TranscriptPlaybackState.None)
+    {
+      return;
+    }
+    long nodeId = _activeHistoryIndex >= 0 &&
+      _activeHistoryIndex < _history.Count
+        ? _history[_activeHistoryIndex].NodeId
+        : -1;
+    PlaybackPositionChanged?.Invoke(new TranscriptPlaybackPosition(
+      state,
+      _activeTranscriptText,
+      _activeWordIndex,
+      _activeWord,
+      nodeId));
+  }
+
+  private static int GetWordCharacterPosition(string text, int wordIndex)
+  {
+    MatchCollection matches = System.Text.RegularExpressions.Regex.Matches(
+      text,
+      @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*");
+    if (matches.Count == 0)
+    {
+      return 0;
+    }
+    int bounded = Math.Clamp(wordIndex, 0, matches.Count - 1);
+    return matches[bounded].Index;
+  }
+
+  private static string FirstWord(string text)
+  {
+    System.Text.RegularExpressions.Match match =
+      System.Text.RegularExpressions.Regex.Match(
+        text,
+        @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*");
+    return match.Success ? match.Value : string.Empty;
   }
 
   /// <summary>
@@ -1529,6 +1683,7 @@ internal sealed class SpeechService : IDisposable
     ClearProcessingTimeAnnouncementLocked();
     _nextHistoryIndex = _history.Count;
     _lastFenceActivity = null;
+    SetPausedLocked(false);
     if (_activeKind != ActiveSpeechKind.None)
     {
       CancelEngineLocked();
@@ -1545,6 +1700,7 @@ internal sealed class SpeechService : IDisposable
     _pendingHistoryIndex = index;
     _nextHistoryIndex = index;
     _lastFenceActivity = null;
+    SetPausedLocked(false);
     RestartPendingLocked();
   }
 

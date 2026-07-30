@@ -1,4 +1,60 @@
-# Agent Panel Speaker v38
+# Agent Panel Speaker v40
+
+## v40
+
+Version 40 adds a rendered **Transcript** tab as the left-most and initially
+selected bottom tab.  Claude and Codex JSONL are formatted as Markdown,
+converted with Markdig, and displayed by the WinForms WebView2 control.  The
+view is blank until a session is selected.  Claude `Agent` calls and completed
+child-agent task notifications are included as top-level
+`## Claude Sub-agent <id>` sections; the visible opaque ID is not spoken.
+
+The transcript follows live file changes and preserves manual scroll and
+`<details>` state while updating.  Its restrained light and dark palettes avoid
+pure white and pure black reading surfaces.  A missing WebView2 Runtime disables
+only rendered transcript display; speech and diagnostics remain available.
+
+The transcript toolbar contains a settings gear and maximize/restore button.
+The in-window settings overlay immediately applies **Follow Speech**, separate
+light/dark highlight colours, and a fade duration from 0 to 2 seconds in
+0.25-second increments.  Maximizing keeps the tabs and toolbar visible while
+collapsing the rest of the window, and the state is persisted.
+
+System.Speech voices provide exact synthesis word boundaries.  Native SAPI and
+Windows.Media voices use duration-weighted word estimates, with the same
+fragment-level starting marker as a final fallback.  Spoken words receive a
+filled background highlight; completed words fade for the configured duration.
+Pause shows a blinking hollow outline around the word that will resume.  A
+pause longer than one second restarts that word.  At the live end, Pause shows a
+one-em hollow marker on the next line.  Existing seek hotkeys move the marker
+and optionally scroll it into view.
+
+`I` and `Alt+I` are removed.  `K` and `Alt+K` remain the sole Play/Pause
+hotkeys.  The included `tools/AI-transcript.py` reference script now renders
+parent and child Claude sub-agents.  `tools/test-subagents.py` verifies opaque
+IDs from both result formats.
+
+## v39
+
+Version 39 replaces the separate Pause and Play/Stop buttons with one
+Play/Pause control.  Play starts JSONL monitoring.  While monitoring, the same
+control pauses or resumes playback.  Reaching the current live end remains an
+active waiting state: the button continues to show Pause and newly accepted
+text is spoken automatically until the user pauses.  `I` and `K`, with or
+without Alt, are aliases for the same Play/Pause action.  There is no visible
+Stop control; application shutdown and session changes retain their internal
+cancellation paths.
+
+The Activity and accepted-text diagnostics now share one bottom tab control.
+The accepted-text tab is labelled **Accepted Text** while inactive and
+**Recent Accepted JSONL** while selected.  Replacing its bounded preview now
+keeps a manually chosen scroll position, while a view already following the
+end continues to follow new accepted nodes.
+
+Speech-profile editor titles now use consistent title case.  The User Context
+profile is named **User Quoted Text Speech Profile**.  The Content, Voice,
+Main, and Context table headings now use the same font family, size, weight,
+and top alignment.
 
 ## v38
 
@@ -195,9 +251,10 @@ behaviour is otherwise unchanged from version 30.
   block and consume the remainder of the message.
 - **Speak complete latest turn on start** begins at the final User node and
   continues through every following AI reasoning/assistant node.
-- Session selection is pinned by default.  Stop and Play retain the selected
-  JSONL, and switching to another session clears queued speech from the old
-  one.  Only **Auto-follow newest session** may switch files automatically.
+- Session selection is pinned by default.  Playback pause/resume retains the
+  selected JSONL, and switching to another session clears queued speech from
+  the old one.  Only **Auto-follow newest session** may switch files
+  automatically.
 - Added previous/next speaker-turn controls.  Their custom icons combine two
   speech bubbles with a directional arrow.  `U` rewinds to the preceding
   opposite-speaker run and `O` advances to the following one.  Consecutive AI
@@ -357,6 +414,52 @@ Bluetooth wake audio, IPA previews, spelling, and pronunciation aliases retain
 the existing serialized playback behaviour.  Date and time patterns are
 expanded into natural spoken forms before synthesis.
 
+## Rendered transcript
+
+The bottom tab area contains **Transcript**, **Activity**, and
+**Accepted Text**.  Transcript is selected by default and remains blank until a
+Claude or Codex JSONL is selected.  Activity and Accepted Text are diagnostic
+views.  Accepted Text changes to **Recent Accepted JSONL** while selected.
+
+The transcript is formatted from the source JSONL rather than from cleaned
+speech fragments.  Markdig converts the generated Markdown to HTML, and
+WebView2 renders headings, blockquotes, tables, links, fenced code, and
+`<details>` sections.  Claude sub-agents appear as visible top-level headings:
+
+```markdown
+## Claude Sub-agent <opaque-id> [timestamp]: <record-number>:
+```
+
+The sub-agent ID, timestamp, and record number are not read.  The first remains
+visible for correlation; optional speech of timestamps and record numbers is a
+future setting.
+
+The gear at the right of the tab strip opens an in-window settings overlay:
+
+- **Follow Speech** scrolls the active word into a comfortable viewport region.
+- **Highlight Colour** stores a separate colour for light and dark themes.
+- **Fade Duration** ranges from 0 to 2 seconds in 0.25-second increments.
+
+Changes apply immediately.  The filled active-word background moves with
+playback.  Previous words fade to the normal background.  Pause replaces the
+fill with a blinking hollow outline around the word that will resume.  Pausing
+for more than one second causes resume to restart that word.  A pause at the
+current live end shows a blinking one-em marker on the next transcript line.
+
+The `^` button maximizes the selected bottom tab while leaving the tab strip,
+gear, and a `v` restore button visible.  The selected tab and maximized state
+are preserved.  Transport hotkeys continue working while WebView2 or the
+transcript settings controls have focus.
+
+System.Speech supplies exact word-boundary times.  Native SAPI and
+Windows.Media use duration-weighted word estimates.  If a provider returns no
+usable boundaries, the active fragment remains highlighted as a defensive
+fallback.
+
+The Microsoft Edge WebView2 Runtime is required only for this tab.  When it is
+missing or fails to initialize, a message is shown in Transcript while the rest
+of Agent Panel Speaker remains usable.
+
 ## Pronunciations and spelling
 
 **Pronunciations...** opens two editors.
@@ -492,8 +595,7 @@ Activity logs both spoken and skipped blocks with the normalized fence type.
 | bubbles + `←` | `U` or `Alt+U` | Previous opposite-speaker run |
 | `⏮` | `H` or `Alt+H` | Previous JSONL node |
 | `⏪` | `J` or `Alt+J` | Previous sentence/code line |
-| `⏸` / `▶` | `I` or `Alt+I` | Pause or resume speech |
-| `▶` / `⏹` | `K` or `Alt+K` | Start or stop monitoring |
+| `▶` / `⏸` | `K` or `Alt+K` | Play/pause monitored playback |
 | `⏩` | `L` or `Alt+L` | Next sentence/code line |
 | `⏭` | `;` or `Alt+;` | Next JSONL node |
 | bubbles + `→` | `O` or `Alt+O` | Next opposite-speaker run |
@@ -501,9 +603,10 @@ Activity logs both spoken and skipped blocks with the normalized fence type.
 
 Hotkeys work only while Agent Panel Speaker is active.  A hotkey focuses its
 corresponding button before invoking it.  Bare hotkeys remain active while a
-spin control has focus because the shortcuts are not numeric.  Editable text
-and editable drop-down fields retain bare keys; Alt variants remain available
-from those controls.
+numeric or compact profile control has focus because the shortcuts are not
+numeric.  Editable
+text and editable drop-down fields retain bare keys; Alt variants remain
+available from those controls.
 
 Speaker navigation treats consecutive User fragments as one User run and
 consecutive Reasoning/Assistant fragments as one AI run.  From AI it jumps to
@@ -512,6 +615,7 @@ adjacent AI run.  It never stops at later AI nodes belonging to the same run.
 
 Forwarding past the final eligible entry cancels replay, returns to the live
 end, and reports the corresponding sentence, node, or speaker-turn end message.
+When monitoring is active, the live end remains armed for newly accepted text.
 
 ## Session selection
 
@@ -522,7 +626,7 @@ end, and reports the corresponding sentence, node, or speaker-turn end message.
 
 **Detect latest** selects the newest matching session.  **Browse JSONL** opens
 at the selected source's session directory.  The full session title and path
-are displayed separately.  The displayed path is pinned across Stop and Play.
+are displayed separately.  Pausing and resuming do not change the pinned path.
 Selecting a different source, detecting another latest session, or browsing to
 another file changes that pin and clears queued speech from the previous
 conversation.
@@ -548,15 +652,17 @@ Settings automatically persist at:
 
 Saved values include session choices, all voice profiles, fenced-code types,
 spelled words, pronunciation rules, Bluetooth wake settings, theme,
-polling interval, startup playback, and window placement.
+transcript follow/highlight/fade/maximize settings, polling interval, startup
+playback, and window placement.
 
 **Save settings** flushes pending fenced-code edits and saves immediately.
 **Reset defaults** restores defaults.
 
 ## Build and run
 
-Requirements: Windows 11, .NET 10 SDK, and at least one enabled Windows
-speech voice.
+Requirements: Windows 10 version 2004 or later, the .NET 10 SDK, and at
+least one enabled Windows speech voice.  The rendered Transcript tab also uses
+the Microsoft Edge WebView2 Runtime; its absence does not disable speech.
 
 ```text
 .\build.cmd
@@ -579,7 +685,29 @@ Logs are written under:
 %LOCALAPPDATA%\AgentPanelSpeaker\Logs
 ```
 
+The bottom area contains the human-facing **Transcript** tab plus two diagnostic
+tabs.  **Activity** is the timestamped operational log.  The other diagnostic
+tab is labelled **Accepted Text** while inactive and **Recent Accepted JSONL**
+while selected; it shows the monitor's bounded preview of recently accepted
+nodes, not the utterance currently being spoken.  A manually scrolled
+accepted-text view keeps its position across updates; a view at the end
+continues following new nodes.
+
 Conversation text is included in diagnostics.  Review logs before sharing.
+
+## Possible future features
+
+These directions are documented but are not implemented in version 40:
+
+- an optional WebView2/Edge speech backend that first probes available local
+  and online voices, boundary events, pause/resume behaviour, Windows-version
+  behaviour, Edge policy, network use, privacy implications, and possible
+  service cost;
+- optional fenced-code syntax highlighting or prettification through an
+  established JavaScript renderer such as Prism.js, highlight.js, or Shiki;
+- Transcript gear options to read visible heading timestamps and record
+  numbers.  Opaque sub-agent IDs remain unspoken unless a separate explicit
+  option is added later.
 
 ## Heading transitions
 

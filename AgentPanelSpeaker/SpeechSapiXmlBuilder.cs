@@ -36,6 +36,7 @@ internal static partial class SpeechSapiXmlBuilder
     }
     string ssmlContent = ConvertContentToSsml(sapiContent);
     return new SpeechMarkup(
+      text,
       WrapSapiPitch(sapiContent, pitchSetting),
       WrapSsmlPitch(ssmlContent, pitchSetting));
   }
@@ -54,6 +55,7 @@ internal static partial class SpeechSapiXmlBuilder
     AppendIpa(content, displayedText, ipa);
     string sapiContent = content.ToString();
     return new SpeechMarkup(
+      displayedText,
       WrapSapiPitch(sapiContent, pitchSetting),
       WrapSsmlPitch(sapiContent, pitchSetting));
   }
