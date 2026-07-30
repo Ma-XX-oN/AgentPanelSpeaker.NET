@@ -74,6 +74,8 @@ internal sealed class MainForm : Form, IMessageFilter
     new();
   private readonly System.Windows.Forms.Timer _transcriptSettingsCloseTimer =
     new();
+  private readonly System.Windows.Forms.Timer _transcriptSettingsSaveTimer =
+    new();
   private readonly TableLayoutPanel _mainLayout = new();
   private readonly Dictionary<SpeechRole, VoiceRowControls> _voiceRows = new();
   private readonly VoiceDisplayField[] _voiceDisplayOrder =
@@ -130,7 +132,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v48";
+    Text = "Agent Panel Speaker v49";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -240,6 +242,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsPopup.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _transcriptSettingsOpenTimer.Interval = 250;
     _transcriptSettingsCloseTimer.Interval = 200;
+    _transcriptSettingsSaveTimer.Interval = 250;
     _diagnosticHost.Resize += (_, _) => PositionTranscriptControls();
     UpdateDiagnosticTabTitles();
     ConfigureNumeric(_pollNumeric, 50, 2000, 150, 80);
@@ -412,6 +415,11 @@ internal sealed class MainForm : Form, IMessageFilter
     };
     _transcriptSettingsPopup.SettingsChanged += (_, _) =>
       TranscriptSettingsChanged();
+    _transcriptSettingsSaveTimer.Tick += (_, _) =>
+    {
+      _transcriptSettingsSaveTimer.Stop();
+      SaveControlsToSettings();
+    };
     _transcriptSettingsPopup.TransportKeyPressed +=
       TranscriptTransportKeyPressed;
     _transcriptSettingsPopup.FocusTraversalRequested +=
@@ -1614,7 +1622,8 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.ApplySettings(settings, dark);
     _speech.SetWordBoundaryPollMilliseconds(
       settings.HighlightUpdateMilliseconds);
-    SaveControlsToSettings();
+    _transcriptSettingsSaveTimer.Stop();
+    _transcriptSettingsSaveTimer.Start();
   }
 
   private void TranscriptTransportKeyPressed(
@@ -1814,6 +1823,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void SaveSettingsExplicitly()
   {
+    _transcriptSettingsSaveTimer.Stop();
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
@@ -2560,6 +2570,7 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     Application.RemoveMessageFilter(this);
     SystemEvents.UserPreferenceChanged -= WindowsUserPreferenceChanged;
+    _transcriptSettingsSaveTimer.Stop();
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
@@ -2571,6 +2582,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceDebounceTimer.Dispose();
     _transcriptSettingsOpenTimer.Dispose();
     _transcriptSettingsCloseTimer.Dispose();
+    _transcriptSettingsSaveTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
     {
       row.PreviewTimer.Dispose();

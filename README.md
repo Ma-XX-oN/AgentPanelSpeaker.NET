@@ -1,11 +1,21 @@
-# Agent Panel Speaker v48
+# Agent Panel Speaker v49
 
-## v48
+## v49
 
-Version 48 fixes the nullable-reference build error in
-`TranscriptView.GetLoadingText()`.  `Path.GetFileName()` is nullable when the
-selected session path is absent, so the loading label now converts that result
-to an empty string before assigning it to the non-nullable local value.
+Version 49 keeps an already rendered session in place when monitoring starts.
+The monitor's initial `SessionChanged` notification no longer forces the same
+JSONL file through a second complete Markdown and DOM render.
+
+Transcript identity mapping now uses the same sentence and code-line segments
+as speech history.  Prose such as `Excellent:` and the sentences preceding a
+code block therefore map before playback begins instead of remaining
+unhighlighted until the first `//` line.
+
+WebView updates use coalescing, acknowledged `ExecuteScriptAsync` calls.  Only
+the latest pending playback position and transcript colour settings are
+applied after an in-flight update completes.  Colour-wheel movement also
+uses a 250 ms settings-save debounce instead of writing the settings file for
+every pointer event.
 
 ## v47
 

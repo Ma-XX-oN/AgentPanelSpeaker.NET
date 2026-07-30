@@ -33,6 +33,10 @@ internal sealed class TranscriptView : UserControl
   private CancellationTokenSource? _renderCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
+  private bool _settingsApplyInProgress;
+  private bool _settingsApplyPending;
+  private bool _playbackApplyInProgress;
+  private bool _playbackApplyPending;
 
   /// <summary>
   /// Initializes the embedded renderer and live-file refresh timer.
@@ -78,19 +82,29 @@ internal sealed class TranscriptView : UserControl
     string displayName,
     bool restoredFromSettings = false)
   {
-    _pendingPosition = null;
+    bool sameSession = string.Equals(
+      _sessionPath,
+      path,
+      StringComparison.OrdinalIgnoreCase) && _source == source;
     _sessionPath = path;
     _sessionDisplayName = string.IsNullOrWhiteSpace(displayName)
       ? Path.GetFileName(path)
       : displayName;
     _restoredFromSettings = restoredFromSettings;
     _source = source;
+    _refreshTimer.Start();
+    if (sameSession)
+    {
+      QueueRefresh(force: false);
+      return;
+    }
+
+    _pendingPosition = null;
     _lastWriteUtc = DateTime.MinValue;
     _lastLength = -1;
     _renderGeneration++;
     CancelActiveRender();
     ShowLoading(GetLoadingText());
-    _refreshTimer.Start();
     QueueRefresh(force: true);
   }
 
@@ -134,16 +148,7 @@ internal sealed class TranscriptView : UserControl
     _failureLabel.ForeColor = text;
     if (_initialized)
     {
-      Color colour = _settings.GetHighlightColour(_dark);
-      _ = ExecuteAsync(
-        $"applySettings({JsonSerializer.Serialize(ToCss(colour))}," +
-        $"{_settings.FadeMilliseconds}," +
-        $"{JsonSerializer.Serialize(_settings.FollowSpeech)}," +
-        $"{JsonSerializer.Serialize(_dark)});");
-      if (_pendingPosition is not null)
-      {
-        ShowPlaybackPosition(_pendingPosition);
-      }
+      QueueSettingsApply();
     }
   }
 
@@ -158,7 +163,92 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
-    PostPlaybackPosition(position);
+    QueuePlaybackApply();
+  }
+
+  private void QueueSettingsApply()
+  {
+    if (!_initialized)
+    {
+      return;
+    }
+    if (_settingsApplyInProgress)
+    {
+      _settingsApplyPending = true;
+      return;
+    }
+    _ = ApplyLatestSettingsAsync();
+  }
+
+  private async Task ApplyLatestSettingsAsync()
+  {
+    _settingsApplyInProgress = true;
+    try
+    {
+      do
+      {
+        _settingsApplyPending = false;
+        TranscriptSettings settings = _settings;
+        bool dark = _dark;
+        Color colour = settings.GetHighlightColour(dark);
+        await ExecuteAsync(
+          $"applySettings({JsonSerializer.Serialize(ToCss(colour))}," +
+          $"{settings.FadeMilliseconds}," +
+          $"{JsonSerializer.Serialize(settings.FollowSpeech)}," +
+          $"{JsonSerializer.Serialize(dark)});");
+      }
+      while (_settingsApplyPending && !_webView.IsDisposed);
+    }
+    finally
+    {
+      _settingsApplyInProgress = false;
+    }
+  }
+
+  private void QueuePlaybackApply()
+  {
+    if (!_initialized)
+    {
+      return;
+    }
+    if (_playbackApplyInProgress || _refreshInProgress)
+    {
+      _playbackApplyPending = true;
+      return;
+    }
+    _ = ApplyLatestPlaybackPositionAsync();
+  }
+
+  private async Task ApplyLatestPlaybackPositionAsync()
+  {
+    _playbackApplyInProgress = true;
+    try
+    {
+      do
+      {
+        _playbackApplyPending = false;
+        TranscriptPlaybackPosition? position = _pendingPosition;
+        if (position is not null)
+        {
+          await ExecuteAsync(BuildPlaybackScript(
+            position,
+            ToScriptState(position.State)));
+        }
+      }
+      while (_playbackApplyPending &&
+             !_refreshInProgress &&
+             !_webView.IsDisposed);
+    }
+    finally
+    {
+      _playbackApplyInProgress = false;
+      if (_playbackApplyPending &&
+          !_refreshInProgress &&
+          !_webView.IsDisposed)
+      {
+        QueuePlaybackApply();
+      }
+    }
   }
 
   /// <summary>
@@ -360,6 +450,8 @@ internal sealed class TranscriptView : UserControl
       _lastLength = info.Length;
       HideLoading();
       _restoredFromSettings = false;
+      QueueSettingsApply();
+      QueuePlaybackApply();
       DiagnosticLog.Write("transcript.render_completed", new
       {
         path,
@@ -406,6 +498,10 @@ internal sealed class TranscriptView : UserControl
           _refreshPendingForce = false;
           QueueRefresh(pendingForce);
         }
+        else if (_playbackApplyPending)
+        {
+          QueuePlaybackApply();
+        }
       }
     }
   }
@@ -445,38 +541,6 @@ internal sealed class TranscriptView : UserControl
   {
     _loadingLabel.Visible = false;
   }
-
-  private void PostPlaybackPosition(TranscriptPlaybackPosition position)
-  {
-    CoreWebView2? core = _webView.CoreWebView2;
-    if (!_initialized || _webView.IsDisposed || core is null)
-    {
-      return;
-    }
-
-    try
-    {
-      core.PostWebMessageAsJson(JsonSerializer.Serialize(new
-      {
-        type = "playback",
-        state = ToScriptState(position.State),
-        fragmentText = position.FragmentText,
-        wordIndex = position.WordIndex,
-        wordText = position.Word,
-        nodeId = position.NodeId,
-        follow = _settings.FollowSpeech
-      }));
-    }
-    catch (Exception exception) when (
-      exception is InvalidOperationException or ObjectDisposedException)
-    {
-      DiagnosticLog.Write("transcript.playback_message_failed", new
-      {
-        exception = exception.ToString()
-      });
-    }
-  }
-
 
   private string BuildPlaybackScript(
     TranscriptPlaybackPosition position,

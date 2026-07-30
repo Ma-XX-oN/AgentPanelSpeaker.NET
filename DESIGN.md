@@ -1,11 +1,21 @@
 # Agent Panel Speaker internal design
 
-## v48 nullable loading-label fallback
+## v49 render reuse and coalesced WebView updates
 
-`TranscriptView.GetLoadingText()` accepts the absence of `_sessionPath` while
-the WebView is being prepared or a selection is being cleared.  The nullable
-result from `Path.GetFileName(_sessionPath)` is normalized to `string.Empty`
-before it is assigned to the non-nullable loading-label value.
+`TranscriptView.SelectSession()` treats a matching source and path as an
+idempotent selection.  It checks for an actual file change but preserves the
+existing DOM and identity map when `JsonlSessionMonitor` announces the session
+that was already selected before monitoring started.
+
+`TranscriptNodeIdentityMap.BuildSegments()` mirrors
+`JsonlSessionMonitor.ProcessNode()`: prose passes through
+`SentenceSegmenter.Split()`, while code lines remain individual segments.
+Rendered segment keys therefore match `SpeechFragment.Text` exactly.
+
+Transcript settings and playback markers each use a one-slot asynchronous
+mailbox.  While `CoreWebView2.ExecuteScriptAsync()` is in flight, later changes
+replace the pending value rather than appending more JavaScript work.  Seek,
+pause, and colour changes consequently converge on the latest state.
 
 ## v47 cancellable rendering and maximized transport dispatch
 

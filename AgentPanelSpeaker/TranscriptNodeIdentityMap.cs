@@ -87,12 +87,32 @@ internal static class TranscriptNodeIdentityMap
           recordNumber,
           sourceId,
           IsRenderedKind(source, node.Kind)
-            ? parts.Select(part => part.Text).ToArray()
+            ? BuildSegments(parts)
             : Array.Empty<string>()));
       }
     }
 
     return result;
+  }
+
+  private static IReadOnlyList<string> BuildSegments(
+    IReadOnlyList<SpeechTextPart> parts)
+  {
+    var segments = new List<string>();
+    foreach (SpeechTextPart part in parts)
+    {
+      if (part.Kind == SpeechFragmentKind.Prose)
+      {
+        segments.AddRange(SentenceSegmenter
+          .Split(part.Text, part.PauseAfter)
+          .Select(sentence => sentence.Text));
+      }
+      else
+      {
+        segments.Add(part.Text);
+      }
+    }
+    return segments;
   }
 
   private static bool IsRenderedKind(AgentSource source, string kind)
