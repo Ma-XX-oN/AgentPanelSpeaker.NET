@@ -1597,6 +1597,11 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// attached period remains the same display token but is rendered as the
   /// spoken word "dot" so that token-level marks do not make it silent.
   /// </summary>
+  private static bool IsWordCharacter(char value)
+  {
+    return char.IsLetterOrDigit(value) || value == '_';
+  }
+
   private static bool TryBuildBookmarkedSsml(
     SpeechMarkup markup,
     string cultureName,
@@ -1649,7 +1654,8 @@ internal sealed class SapiSpeechEngine : IDisposable
 
         bool attachedPeriod = token.Value == "." &&
           index + 1 < tokens.Count &&
-          token.Index + token.Length == tokens[index + 1].Index;
+          token.Index + token.Length == tokens[index + 1].Index &&
+          IsWordCharacter(tokens[index + 1].Value[0]);
         placements.Add((
           position,
           token.Length,

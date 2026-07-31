@@ -1045,9 +1045,11 @@ first token starts at time zero, so a three-token sequence has two bookmarks.  B
 boundaries are ordered by audio time and then by token index before equal-time
 compaction.  This guarantees that a silent punctuation token and the following
 spoken token remain in source order, so compaction retains the spoken token.
-When a period is directly attached to the following token, such as the period
-in `filename.hpp`, the displayed token remains `.` but its synthesis text is
-`dot`.  The sequence is therefore passed to Windows.Media as
+When a period is directly attached to a following token that begins with a
+word character, such as the period in `filename.hpp`, the displayed token
+remains `.` but its synthesis text is `dot`.  A sentence-ending period followed
+by punctuation, whitespace, or the end of the fragment remains silent
+punctuation.  The filename sequence is therefore passed to Windows.Media as
 `filename | dot | hpp`, with the same three token identities and two
 bookmarks.  This keeps the period audible and avoids a separate token-index
 array merely to omit it.
