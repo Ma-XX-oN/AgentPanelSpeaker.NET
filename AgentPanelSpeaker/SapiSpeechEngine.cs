@@ -1107,15 +1107,36 @@ internal sealed class SapiSpeechEngine : IDisposable
   {
     using var stream = new MemoryStream();
     var collected = new List<SpeechWordBoundary>();
-    int wordIndex = 0;
+    MatchCollection sourceTokens = SpeechTokenization.Matches(markup.PlainText);
+    int? synthesisCharacterOffset = null;
     EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
-      (_, eventArgs) => collected.Add(new SpeechWordBoundary(
-        eventArgs.AudioPosition,
-        wordIndex++,
-        eventArgs.CharacterPosition,
-        eventArgs.CharacterCount,
-        eventArgs.Text,
-        Exact: true));
+      (_, eventArgs) =>
+      {
+        int firstSourceTokenStart = sourceTokens.Count == 0
+          ? 0
+          : sourceTokens[0].Index;
+        synthesisCharacterOffset ??=
+          eventArgs.CharacterPosition - firstSourceTokenStart;
+        int sourcePosition = Math.Clamp(
+          eventArgs.CharacterPosition - synthesisCharacterOffset.Value,
+          0,
+          markup.PlainText.Length);
+        int sourceCount = Math.Clamp(
+          eventArgs.CharacterCount,
+          0,
+          markup.PlainText.Length - sourcePosition);
+        int tokenIndex = FindTokenIndexForSourceRange(
+          sourceTokens,
+          sourcePosition,
+          sourceCount);
+        collected.Add(new SpeechWordBoundary(
+          eventArgs.AudioPosition,
+          tokenIndex,
+          sourcePosition,
+          sourceCount,
+          eventArgs.Text,
+          Exact: true));
+      };
     synthesizer.SelectVoice(providerVoiceId);
     synthesizer.Rate = profile.Rate;
     synthesizer.Volume = profile.Volume;
@@ -1146,6 +1167,43 @@ internal sealed class SapiSpeechEngine : IDisposable
       ? CreateApproximateBoundaries(markup.PlainText, wave.Duration)
       : collected;
     return wave;
+  }
+
+
+  /// <summary>
+  /// Maps a System.Speech source range to the intersecting display token.
+  /// </summary>
+  private static int FindTokenIndexForSourceRange(
+    MatchCollection tokens,
+    int characterPosition,
+    int characterCount)
+  {
+    if (tokens.Count == 0)
+    {
+      return 0;
+    }
+
+    int rangeEnd = checked(
+      characterPosition + Math.Max(1, characterCount));
+    for (int index = 0; index < tokens.Count; ++index)
+    {
+      Match token = tokens[index];
+      int tokenEnd = token.Index + token.Length;
+      if (token.Index < rangeEnd && tokenEnd > characterPosition)
+      {
+        return index;
+      }
+    }
+
+    for (int index = 0; index < tokens.Count; ++index)
+    {
+      if (tokens[index].Index >= characterPosition)
+      {
+        return index;
+      }
+    }
+
+    return tokens.Count - 1;
   }
 
   /// <summary>

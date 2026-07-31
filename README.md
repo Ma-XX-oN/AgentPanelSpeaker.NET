@@ -1,4 +1,21 @@
-# Agent Panel Speaker v58
+# Agent Panel Speaker v60
+
+## v60: source-range System.Speech highlighting
+
+The System.Speech path maps every `SpeakProgress` callback through its
+`CharacterPosition` and `CharacterCount` source range.  It no longer assigns a
+new transcript token merely because another callback arrived.
+
+System.Speech reports character positions relative to the generated SSML
+document.  The renderer normalizes that constant SSML offset against the first
+token in the original fragment before storing a boundary.  Repeated callbacks
+for a number such as `957` consequently retain the same source range and the
+same displayed token throughout the number's spoken components.
+
+Punctuation that receives its own progress range remains highlightable.
+Punctuation that receives no progress event is skipped naturally.  This path
+does not insert bookmarks and does not compact timestamp arrays.
+
 
 
 ## v58: synchronized System.Speech WAV timing
