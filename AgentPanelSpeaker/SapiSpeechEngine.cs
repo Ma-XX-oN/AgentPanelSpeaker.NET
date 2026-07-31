@@ -1593,8 +1593,9 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
-  /// Inserts one named SSML mark before every display token while preserving
-  /// existing pronunciation and prosody markup.
+  /// Inserts one named SSML mark before each token after the first.  An
+  /// attached period remains the same display token but is rendered as the
+  /// spoken word "dot" so that token-level marks do not make it silent.
   /// </summary>
   private static bool TryBuildBookmarkedSsml(
     SpeechMarkup markup,
@@ -1614,7 +1615,11 @@ internal sealed class SapiSpeechEngine : IDisposable
         .ToList();
       string visibleText = string.Concat(textNodes.Select(node => node.Value));
       MatchCollection tokens = SpeechTokenization.Matches(markup.PlainText);
-      var placements = new List<(int Position, int TokenIndex)>();
+      var placements = new List<(
+        int Position,
+        int Length,
+        int TokenIndex,
+        string SynthesisText)>();
       int searchPosition = 0;
       for (int index = 0; index < tokens.Count; ++index)
       {
@@ -1641,7 +1646,15 @@ internal sealed class SapiSpeechEngine : IDisposable
           ssml = string.Empty;
           return false;
         }
-        placements.Add((position, index));
+
+        bool attachedPeriod = token.Value == "." &&
+          index + 1 < tokens.Count &&
+          token.Index + token.Length == tokens[index + 1].Index;
+        placements.Add((
+          position,
+          token.Length,
+          index,
+          attachedPeriod ? "dot" : token.Value));
         searchPosition = position + token.Length;
       }
 
@@ -1653,14 +1666,22 @@ internal sealed class SapiSpeechEngine : IDisposable
         running += textNodes[index].Value.Length;
       }
 
-      var nodePlacements = new Dictionary<int, List<(int Local, int TokenIndex)>>();
-      foreach ((int position, int tokenIndex) in placements)
+      var nodePlacements = new Dictionary<int, List<(
+        int Local,
+        int Length,
+        int TokenIndex,
+        string SynthesisText)>>();
+      foreach ((
+          int position,
+          int length,
+          int tokenIndex,
+          string synthesisText) in placements)
       {
         int nodeIndex = -1;
         for (int candidate = textNodes.Count - 1; candidate >= 0; --candidate)
         {
           int nodeEnd = nodeStarts[candidate] + textNodes[candidate].Value.Length;
-          if (nodeStarts[candidate] <= position && position <= nodeEnd)
+          if (nodeStarts[candidate] <= position && position + length <= nodeEnd)
           {
             nodeIndex = candidate;
             break;
@@ -1673,26 +1694,47 @@ internal sealed class SapiSpeechEngine : IDisposable
         }
         if (!nodePlacements.TryGetValue(nodeIndex, out var list))
         {
-          list = new List<(int Local, int TokenIndex)>();
+          list = new List<(
+            int Local,
+            int Length,
+            int TokenIndex,
+            string SynthesisText)>();
           nodePlacements.Add(nodeIndex, list);
         }
-        list.Add((position - nodeStarts[nodeIndex], tokenIndex));
+        list.Add((
+          position - nodeStarts[nodeIndex],
+          length,
+          tokenIndex,
+          synthesisText));
       }
 
-      foreach ((int nodeIndex, List<(int Local, int TokenIndex)> list) in
+      foreach ((
+          int nodeIndex,
+          List<(
+            int Local,
+            int Length,
+            int TokenIndex,
+            string SynthesisText)> list) in
           nodePlacements.OrderByDescending(pair => pair.Key))
       {
         XText node = textNodes[nodeIndex];
         var replacement = new List<object>();
         int consumed = 0;
-        foreach ((int local, int tokenIndex) in
-            list.OrderBy(value => value.Local))
+        foreach ((
+            int local,
+            int length,
+            int tokenIndex,
+            string synthesisText) in list.OrderBy(value => value.Local))
         {
           replacement.Add(new XText(node.Value[consumed..local]));
-          replacement.Add(new XElement(
-            ns + "mark",
-            new XAttribute("name", $"aps_{tokenIndex}")));
-          consumed = local;
+          if (tokenIndex != 0)
+          {
+            replacement.Add(new XElement(
+              ns + "mark",
+              new XAttribute("name", $"aps_{tokenIndex}")));
+          }
+          replacement.Add(new XText(synthesisText));
+          consumed = local + length;
         }
         replacement.Add(new XText(node.Value[consumed..]));
         node.ReplaceWith(replacement);
@@ -1735,6 +1777,14 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
 
     var raw = new List<SpeechWordBoundary>();
+    Match firstToken = tokens[0];
+    raw.Add(new SpeechWordBoundary(
+      TimeSpan.Zero,
+      0,
+      firstToken.Index,
+      firstToken.Length,
+      firstToken.Value,
+      Exact: true));
     foreach (SpeechCue cue in track.Cues.OfType<SpeechCue>())
     {
       string identity = string.IsNullOrWhiteSpace(cue.Text)
