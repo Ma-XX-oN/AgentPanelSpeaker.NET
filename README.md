@@ -923,3 +923,12 @@ These directions are documented but are not implemented in version 42:
 Markdown headings remain in the spoken text.  A 250 ms synthesis pause is
 inserted between a heading and the following prose without splitting the two
 parts into separate audio streams.
+
+## v55
+
+- Maps `System.Speech` progress events by their next sequential spoken-text
+  occurrence instead of trusting SSML text-node character ranges.
+- Keeps repeated progress events for one number on the same displayed token.
+- Restores the original forced wake-preview behaviour; disabling wake in the UI
+  still disables normal playback wake audio, but does not change explicit test
+  playback semantics.

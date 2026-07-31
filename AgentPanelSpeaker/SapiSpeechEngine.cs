@@ -891,13 +891,13 @@ internal sealed class SapiSpeechEngine : IDisposable
 
   private bool ShouldApplyWake(AudioWakeSettings settings, bool force)
   {
-    if (!settings.Enabled)
-    {
-      return false;
-    }
     if (force)
     {
       return true;
+    }
+    if (!settings.Enabled)
+    {
+      return false;
     }
 
     double quietMilliseconds = _hasAudioEndTimestamp
@@ -1094,6 +1094,48 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
+  /// Finds the next spoken-text occurrence represented by a progress event.
+  /// </summary>
+  private static int FindSpokenBoundaryStart(
+    string spokenText,
+    string boundaryText,
+    int searchStart)
+  {
+    if (boundaryText.Length == 0)
+    {
+      return Math.Clamp(searchStart, 0, spokenText.Length);
+    }
+
+    int candidate = Math.Clamp(searchStart, 0, spokenText.Length);
+    while (candidate <= spokenText.Length - boundaryText.Length)
+    {
+      candidate = spokenText.IndexOf(
+        boundaryText,
+        candidate,
+        StringComparison.OrdinalIgnoreCase);
+      if (candidate < 0)
+      {
+        return -1;
+      }
+
+      bool requiresBoundary = boundaryText.Any(char.IsLetterOrDigit);
+      bool startsAtBoundary = !requiresBoundary ||
+        candidate == 0 ||
+        !char.IsLetterOrDigit(spokenText[candidate - 1]);
+      int candidateEnd = candidate + boundaryText.Length;
+      bool endsAtBoundary = !requiresBoundary ||
+        candidateEnd == spokenText.Length ||
+        !char.IsLetterOrDigit(spokenText[candidateEnd]);
+      if (startsAtBoundary && endsAtBoundary)
+      {
+        return candidate;
+      }
+      candidate++;
+    }
+    return -1;
+  }
+
+  /// <summary>
   /// Renders System.Speech SSML into an in-memory WAVE file.
   /// </summary>
   private static PcmWaveData RenderSystemSpeech(
@@ -1106,18 +1148,59 @@ internal sealed class SapiSpeechEngine : IDisposable
     using var stream = new MemoryStream();
     var collected = new List<SpeechWordBoundary>();
     int wordIndex = 0;
+    int spokenCursor = 0;
+    int previousSpokenStart = -1;
+    string previousBoundaryText = string.Empty;
     EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
       (_, eventArgs) =>
       {
+        string boundaryText = eventArgs.Text ?? string.Empty;
+        int spokenStart;
+        if (previousSpokenStart >= 0 &&
+            boundaryText.Length != 0 &&
+            boundaryText.All(char.IsDigit) &&
+            string.Equals(
+              boundaryText,
+              previousBoundaryText,
+              StringComparison.OrdinalIgnoreCase))
+        {
+          // System.Speech can emit several progress events while speaking one
+          // displayed token, most notably the component words of a number.
+          // Keep those events on the same source token.
+          spokenStart = previousSpokenStart;
+        }
+        else
+        {
+          spokenStart = FindSpokenBoundaryStart(
+            markup.SpokenText,
+            boundaryText,
+            spokenCursor);
+          if (spokenStart < 0)
+          {
+            // CharacterPosition can refer to the containing SSML text node
+            // rather than the individual word.  Use it only as a fallback.
+            spokenStart = Math.Clamp(
+              eventArgs.CharacterPosition,
+              0,
+              markup.SpokenText.Length);
+          }
+          spokenCursor = Math.Clamp(
+            spokenStart + Math.Max(1, boundaryText.Length),
+            0,
+            markup.SpokenText.Length);
+          previousSpokenStart = spokenStart;
+          previousBoundaryText = boundaryText;
+        }
+
         (int position, int count) = markup.MapBoundary(
-          eventArgs.CharacterPosition,
-          eventArgs.CharacterCount);
+          spokenStart,
+          Math.Max(1, boundaryText.Length));
         collected.Add(new SpeechWordBoundary(
           eventArgs.AudioPosition,
           wordIndex++,
           position,
           count,
-          eventArgs.Text,
+          boundaryText,
           Exact: true));
       };
     synthesizer.SelectVoice(providerVoiceId);
