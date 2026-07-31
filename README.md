@@ -1,4 +1,20 @@
-# Agent Panel Speaker v56
+# Agent Panel Speaker v57
+
+
+## v57: isolated System.Speech progress harness
+
+`tools/SpeechProgressHarness` reproduces the known failing transcript without
+WinForms, WebView2, playback, Bluetooth wake audio, JSONL monitoring, fading,
+or the playback mailbox.
+
+The harness inserts one unique SSML bookmark immediately before every visible
+transcript token, synthesizes each block to a WAV file, and records both
+`BookmarkReached.AudioPosition` and `SpeakProgress`.  It asserts that every
+rendered token receives exactly one ordered bookmark.  This directly tests a
+numeric token-identity approach that does not depend on repeated text, ordinal
+progress-event counts, or SSML character offsets.
+
+Run it from `tools\SpeechProgressHarness` with `build.cmd` and `run.cmd`.
 
 
 ## v56: controlled rollback of v54/v55 mapping changes

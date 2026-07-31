@@ -1,3 +1,14 @@
+## v57 speech-progress isolation harness
+
+The standalone `tools/SpeechProgressHarness` project evaluates transcript-token
+identity separately from the application runtime.  It uses SSML bookmarks as
+stable numeric token identities and records their WAV-relative audio positions.
+The harness also records raw `SpeakProgress` events only for comparison.
+
+This keeps the experiment independent of WebView2, UI dispatch, playback, wake
+audio, transcript rendering, and text-search fallbacks.  The production
+application is unchanged in v57 apart from its displayed version.
+
 # Agent Panel Speaker internal design
 
 ## v51 bounded playback mailbox
