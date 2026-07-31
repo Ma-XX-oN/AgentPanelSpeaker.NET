@@ -246,9 +246,9 @@ maximize button collapses rows 0--6 of `MainForm._mainLayout`; the tab strip,
 gear, and restore button remain visible.
 
 `SapiSpeechEngine` now associates each rendered PCM buffer with ordered
-`SpeechWordBoundary` records.  System.Speech collects exact `SpeakProgress`
-audio positions.  Native SAPI and Windows.Media construct duration-weighted
-word estimates.  `WaveOutPlayer.Position` queries `waveOutGetPosition`, and the
+`SpeechWordBoundary` records.  System.Speech collects exact source-range `SpeakProgress` audio positions.
+Windows.Media requests and consumes exact `SpeechWord` timed metadata.  Native
+SAPI constructs duration-weighted word estimates.  `WaveOutPlayer.Position` queries `waveOutGetPosition`, and the
 engine raises each boundary as the device cursor reaches it.
 
 `SpeechService` maps those boundaries to the active history fragment and raises

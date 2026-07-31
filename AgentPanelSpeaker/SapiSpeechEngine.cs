@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text.RegularExpressions;
+using Windows.Media.Core;
 using Windows.Media.SpeechSynthesis;
 using Windows.Storage.Streams;
 using InstalledVoice = System.Speech.Synthesis.InstalledVoice;
@@ -946,8 +947,8 @@ internal sealed class SapiSpeechEngine : IDisposable
           profile,
           backend.ProviderVoiceId,
           windowsMediaSynthesizer ?? throw new InvalidOperationException(
-            "The Windows.Media speech backend is unavailable."));
-        boundaries = CreateApproximateBoundaries(markup.PlainText, wave.Duration);
+            "The Windows.Media speech backend is unavailable."),
+          out boundaries);
         break;
 
       default:
@@ -1213,7 +1214,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     SpeechMarkup markup,
     SpeechProfileSettings profile,
     string providerVoiceId,
-    WinRtSpeechSynthesizer synthesizer)
+    WinRtSpeechSynthesizer synthesizer,
+    out IReadOnlyList<SpeechWordBoundary> boundaries)
   {
     VoiceInformation voice = WinRtSpeechSynthesizer.AllVoices
       .FirstOrDefault(candidate => string.Equals(
@@ -1224,6 +1226,8 @@ internal sealed class SapiSpeechEngine : IDisposable
         "The selected Windows.Media voice is unavailable.");
 
     synthesizer.Voice = voice;
+    synthesizer.Options.IncludeWordBoundaryMetadata = true;
+    synthesizer.Options.IncludeSentenceBoundaryMetadata = true;
     synthesizer.Options.SpeakingRate = Math.Pow(2.0, profile.Rate / 10.0);
     synthesizer.Options.AudioPitch = 1.0;
     synthesizer.Options.AudioVolume = profile.Volume / 100.0;
@@ -1251,7 +1255,107 @@ internal sealed class SapiSpeechEngine : IDisposable
 
     var bytes = new byte[byteCount];
     reader.ReadBytes(bytes);
-    return PcmWaveData.Parse(bytes);
+    PcmWaveData wave = PcmWaveData.Parse(bytes);
+    boundaries = CreateWindowsMediaBoundaries(
+      markup.PlainText,
+      stream,
+      wave.Duration,
+      voice.DisplayName);
+    return wave;
+  }
+
+  /// <summary>
+  /// Converts Windows.Media SpeechWord cues into exact display-token ranges.
+  /// Falls back to proportional estimates only when a voice returns no usable
+  /// word metadata.
+  /// </summary>
+  private static IReadOnlyList<SpeechWordBoundary>
+    CreateWindowsMediaBoundaries(
+      string text,
+      SpeechSynthesisStream stream,
+      TimeSpan duration,
+      string voiceName)
+  {
+    MatchCollection tokens = SpeechTokenization.Matches(text);
+    TimedMetadataTrack? wordTrack = stream.TimedMetadataTracks
+      .FirstOrDefault(track => string.Equals(
+        track.Label,
+        "SpeechWord",
+        StringComparison.OrdinalIgnoreCase));
+    if (wordTrack is null)
+    {
+      DiagnosticLog.Write("speech.windows_media_boundaries_unavailable", new
+      {
+        voiceName,
+        reason = "No SpeechWord timed-metadata track was returned."
+      });
+      return CreateApproximateBoundaries(text, duration);
+    }
+
+    var result = new List<SpeechWordBoundary>();
+    foreach (SpeechCue cue in wordTrack.Cues
+      .OfType<SpeechCue>()
+      .OrderBy(cue => cue.StartTime))
+    {
+      int start = cue.StartPositionInInput ?? -1;
+      int endInclusive = cue.EndPositionInInput ?? start;
+      int tokenIndex = FindTokenForInputRange(tokens, start, endInclusive);
+      if (tokenIndex < 0)
+      {
+        continue;
+      }
+
+      Match token = tokens[tokenIndex];
+      result.Add(new SpeechWordBoundary(
+        cue.StartTime,
+        tokenIndex,
+        token.Index,
+        token.Length,
+        token.Value,
+        Exact: true));
+    }
+
+    if (result.Count == 0)
+    {
+      DiagnosticLog.Write("speech.windows_media_boundaries_unavailable", new
+      {
+        voiceName,
+        reason = "The SpeechWord track contained no cues mappable to input text.",
+        cueCount = wordTrack.Cues.Count
+      });
+      return CreateApproximateBoundaries(text, duration);
+    }
+
+    DiagnosticLog.Write("speech.windows_media_boundaries", new
+    {
+      voiceName,
+      exactCueCount = result.Count,
+      tokenCount = tokens.Count
+    });
+    return result;
+  }
+
+  private static int FindTokenForInputRange(
+    MatchCollection tokens,
+    int start,
+    int endInclusive)
+  {
+    if (start < 0)
+    {
+      return -1;
+    }
+
+    int endExclusive = Math.Max(start + 1, endInclusive + 1);
+    for (int index = 0; index < tokens.Count; ++index)
+    {
+      Match token = tokens[index];
+      int tokenEnd = token.Index + token.Length;
+      if (token.Index < endExclusive && tokenEnd > start)
+      {
+        return index;
+      }
+    }
+    return -1;
   }
 
   private static IReadOnlyList<SpeechWordBoundary>

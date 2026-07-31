@@ -1,4 +1,19 @@
-# Agent Panel Speaker v60
+# Agent Panel Speaker v61
+
+## v61: exact Windows.Media timed word metadata
+
+Windows.Media voices now request `IncludeWordBoundaryMetadata` and consume the
+returned `SpeechWord` timed-metadata track.  Each `SpeechCue` supplies its exact
+`StartTime` plus `StartPositionInInput` and `EndPositionInInput`, which are
+mapped to the corresponding transcript token.  Richard, Heera, Ravi, David,
+and other modern Windows voices therefore use the synthesis engine's own word
+timeline rather than duration-weighted estimates.
+
+If a particular voice returns no usable `SpeechWord` track, the renderer logs
+`speech.windows_media_boundaries_unavailable` and falls back to the previous
+duration-weighted estimates.  System.Speech continues to use source-range
+`SpeakProgress` events, while native SAPI continues to use estimates.
+
 
 ## v60: source-range System.Speech highlighting
 
@@ -288,8 +303,8 @@ light/dark highlight colours, and a fade duration from 0 to 0.5 seconds in
 1/16-second increments.  Maximizing keeps the tabs and toolbar visible while
 collapsing the rest of the window, and the state is persisted.
 
-System.Speech voices provide exact synthesis word boundaries.  Native SAPI and
-Windows.Media voices use duration-weighted word estimates, with the same
+System.Speech and Windows.Media voices provide exact synthesis word boundaries.
+Native SAPI voices use duration-weighted word estimates, with the same
 fragment-level starting marker as a final fallback.  Spoken words receive a
 filled background highlight; completed words fade for the configured duration.
 Pause shows a blinking hollow outline around the word that will resume.  A
@@ -719,8 +734,8 @@ gear, and a `v` restore button visible.  The selected tab and maximized state
 are preserved.  Transport hotkeys continue working while WebView2 or the
 transcript settings controls have focus.
 
-System.Speech supplies exact word-boundary times.  Native SAPI and
-Windows.Media use duration-weighted word estimates.  If a provider returns no
+System.Speech and Windows.Media supply exact word-boundary times.  Native SAPI
+uses duration-weighted word estimates.  If a provider returns no
 usable boundaries, the active fragment remains highlighted as a defensive
 fallback.
 
