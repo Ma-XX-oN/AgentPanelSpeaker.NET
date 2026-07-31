@@ -170,6 +170,14 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Sets when Windows.Media voices use bookmark/compaction timing.
+  /// </summary>
+  public void SetWindowsMediaBookmarkMode(WindowsMediaBookmarkMode mode)
+  {
+    _engine.SetWindowsMediaBookmarkMode(mode);
+  }
+
+  /// <summary>
   /// Gets enabled installed voices and their descriptive labels.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> GetInstalledVoices()

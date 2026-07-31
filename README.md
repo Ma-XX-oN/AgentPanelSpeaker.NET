@@ -1,4 +1,4 @@
-# Agent Panel Speaker v62
+# Agent Panel Speaker v63
 
 ## v62: Windows.Media SSML cue-coordinate correction
 
@@ -1023,3 +1023,26 @@ These directions are documented but are not implemented in version 42:
 Markdown headings remain in the spoken text.  A 250 ms synthesis pause is
 inserted between a heading and the following prose without splitting the two
 parts into separate audio streams.
+
+
+## Voice backend display and Windows.Media bookmark timing
+
+Voice dropdown labels now include the provider type (`System.Speech`,
+`Windows.Media`, or `SAPI`).  Clicking the Voice heading rotates through the
+provider type as an available primary sort field.
+
+The **Windows.Media bookmarks** setting has three values:
+
+- `Off`: use the `SpeechWord` timed metadata track and its source ranges.
+- `Fallback`: use `SpeechWord` metadata when it produces a reliable complete
+  schedule; otherwise use explicit SSML bookmark cues and equal-time
+  compaction.
+- `Always`: use explicit SSML bookmark cues and equal-time compaction for every
+  Windows.Media fragment.
+
+The app reads all current cues, including bookmark cues, from
+`SpeechSynthesisStream.TimedMetadataTracks`.  The older
+`SpeechSynthesisStream.Markers` property is a separate legacy collection and is
+deprecated by Microsoft.  Deprecation of `Markers` does not mean SSML
+bookmarks are deprecated: a `SpeechBookmark` timed-metadata track is the modern
+representation of SSML bookmark timing.

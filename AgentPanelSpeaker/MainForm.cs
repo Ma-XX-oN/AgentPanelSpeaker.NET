@@ -60,6 +60,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly Button _pronunciationsButton = new();
   private readonly Button _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
+  private readonly ComboBox _windowsMediaBookmarksComboBox = new();
   private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
   private readonly Panel _diagnosticHost = new();
@@ -86,7 +87,8 @@ internal sealed class MainForm : Form, IMessageFilter
     VoiceDisplayField.Language,
     VoiceDisplayField.VoiceName,
     VoiceDisplayField.Natural,
-    VoiceDisplayField.Maker
+    VoiceDisplayField.Maker,
+    VoiceDisplayField.Provider
   };
   private readonly IReadOnlyList<InstalledSpeechVoice> _installedVoices;
   private readonly UserSettingsStore _settingsStore;
@@ -135,7 +137,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v60";
+    Text = "Agent Panel Speaker v63";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -199,6 +201,19 @@ internal sealed class MainForm : Form, IMessageFilter
       AppTheme.Light,
       AppTheme.Dark
     });
+    _windowsMediaBookmarksComboBox.DropDownStyle =
+      ComboBoxStyle.DropDownList;
+    _windowsMediaBookmarksComboBox.Width = 90;
+    _windowsMediaBookmarksComboBox.Items.AddRange(new object[]
+    {
+      WindowsMediaBookmarkMode.Off,
+      WindowsMediaBookmarkMode.Fallback,
+      WindowsMediaBookmarkMode.Always
+    });
+    _toolTip.SetToolTip(
+      _windowsMediaBookmarksComboBox,
+      "Windows.Media highlight timing: Off uses word cues; Fallback uses " +
+      "bookmarks when word cues are unreliable; Always uses bookmarks.");
 
     _followLatestCheckBox.AutoSize = true;
     _followLatestCheckBox.Text = "Auto-follow newest session";
@@ -279,6 +294,7 @@ internal sealed class MainForm : Form, IMessageFilter
       Dock = DockStyle.Fill,
       CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
     };
+    speechTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -298,6 +314,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
       _pronunciationsButton, _audioWakeButton,
+      MakeInlineLabel("Windows.Media bookmarks:"),
+      _windowsMediaBookmarksComboBox,
       MakeInlineLabel("Poll ms:"), _pollNumeric,
       _speakExistingCheckBox, _keepDisplayOnCheckBox
     });
@@ -368,6 +386,12 @@ internal sealed class MainForm : Form, IMessageFilter
     _sourceComboBox.SelectedIndexChanged += SourceSelectionChanged;
     _followLatestCheckBox.CheckedChanged += FollowLatestChanged;
     _pollNumeric.ValueChanged += (_, _) => SaveControlsToSettings();
+    _windowsMediaBookmarksComboBox.SelectedIndexChanged += (_, _) =>
+    {
+      WindowsMediaBookmarkMode mode = GetWindowsMediaBookmarkMode();
+      _speech.SetWindowsMediaBookmarkMode(mode);
+      SaveControlsToSettings();
+    };
     _speakExistingCheckBox.CheckedChanged += (_, _) =>
       SaveControlsToSettings();
     _keepDisplayOnCheckBox.CheckedChanged += (_, _) =>
@@ -820,6 +844,9 @@ internal sealed class MainForm : Form, IMessageFilter
         voice => voice.GetDisplayField(_voiceDisplayOrder[4]),
         StringComparer.CurrentCultureIgnoreCase)
       .ThenBy(
+        voice => voice.GetDisplayField(_voiceDisplayOrder[5]),
+        StringComparer.CurrentCultureIgnoreCase)
+      .ThenBy(
         voice => voice.Name,
         StringComparer.CurrentCultureIgnoreCase)
       .ToArray();
@@ -864,6 +891,7 @@ internal sealed class MainForm : Form, IMessageFilter
       VoiceDisplayField.VoiceName => "Name",
       VoiceDisplayField.Natural => "Natural",
       VoiceDisplayField.Maker => "Maker",
+      VoiceDisplayField.Provider => "Type",
       _ => throw new ArgumentOutOfRangeException(nameof(field), field, null)
     };
   }
@@ -886,6 +914,9 @@ internal sealed class MainForm : Form, IMessageFilter
         settings.KeepDisplayOnWhileSpeaking;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
       _themeComboBox.SelectedItem = settings.Theme;
+      _windowsMediaBookmarksComboBox.SelectedItem =
+        settings.WindowsMediaBookmarks;
+      _speech.SetWindowsMediaBookmarkMode(settings.WindowsMediaBookmarks);
       _transcriptSettingsPopup.SetSettings(
         settings.Transcript,
         ThemeManager.IsDark(settings.Theme));
@@ -1896,6 +1927,7 @@ internal sealed class MainForm : Form, IMessageFilter
       KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
       Theme = GetSelectedTheme(),
+      WindowsMediaBookmarks = GetWindowsMediaBookmarkMode(),
       Transcript = _transcriptSettingsPopup.Settings with
       {
         Maximized = _diagnosticsMaximized
@@ -2492,6 +2524,17 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Gets the selected Windows.Media bookmark policy.
+  /// </summary>
+  private WindowsMediaBookmarkMode GetWindowsMediaBookmarkMode()
+  {
+    return _windowsMediaBookmarksComboBox.SelectedItem is
+        WindowsMediaBookmarkMode mode
+      ? mode
+      : WindowsMediaBookmarkMode.Fallback;
+  }
+
+  /// <summary>
   /// Gets the selected theme with System as a safe default.
   /// </summary>
   private AppTheme GetSelectedTheme()
@@ -2837,10 +2880,10 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       AutoSize = false,
       Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
-      Height = 38,
-      Margin = new Padding(3),
+      Height = 24,
+      Margin = new Padding(3, 2, 3, 2),
       Text = text,
-      TextAlign = ContentAlignment.TopCenter,
+      TextAlign = ContentAlignment.MiddleCenter,
       Width = width
     };
   }

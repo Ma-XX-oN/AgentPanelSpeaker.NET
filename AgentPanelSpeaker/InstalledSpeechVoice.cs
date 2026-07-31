@@ -21,7 +21,8 @@ internal enum VoiceDisplayField
   Language,
   VoiceName,
   Natural,
-  Maker
+  Maker,
+  Provider
 }
 
 /// <summary>
@@ -55,7 +56,8 @@ internal sealed record InstalledSpeechVoice(
     VoiceDisplayField.Language,
     VoiceDisplayField.VoiceName,
     VoiceDisplayField.Natural,
-    VoiceDisplayField.Maker
+    VoiceDisplayField.Maker,
+    VoiceDisplayField.Provider
   };
 
   /// <summary>
@@ -179,7 +181,22 @@ internal sealed record InstalledSpeechVoice(
       VoiceDisplayField.VoiceName => VoiceName,
       VoiceDisplayField.Natural => Natural,
       VoiceDisplayField.Maker => Maker,
+      VoiceDisplayField.Provider => GetProviderDisplayName(),
       _ => throw new ArgumentOutOfRangeException(nameof(field), field, null)
+    };
+  }
+
+  /// <summary>
+  /// Returns the user-facing backend name.
+  /// </summary>
+  public string GetProviderDisplayName()
+  {
+    return Provider switch
+    {
+      SpeechVoiceProvider.SystemSpeech => "System.Speech",
+      SpeechVoiceProvider.WindowsMedia => "Windows.Media",
+      SpeechVoiceProvider.Sapi => "SAPI",
+      _ => Provider.ToString()
     };
   }
 

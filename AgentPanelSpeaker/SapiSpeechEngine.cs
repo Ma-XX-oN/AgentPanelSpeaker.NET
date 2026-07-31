@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Windows.Media.Core;
 using Windows.Media.SpeechSynthesis;
 using Windows.Storage.Streams;
@@ -32,6 +33,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     Array.Empty<InstalledSpeechVoice>();
   private Exception? _initializationException;
   private int _wordBoundaryPollMilliseconds = DefaultWorkerPollMilliseconds;
+  private int _windowsMediaBookmarkMode =
+    (int)WindowsMediaBookmarkMode.Fallback;
   private long _lastAudioEndTimestamp;
   private bool _hasAudioEndTimestamp;
   private bool _disposed;
@@ -108,6 +111,18 @@ internal sealed class SapiSpeechEngine : IDisposable
         exception = exception.Message
       });
     }
+  }
+
+  /// <summary>
+  /// Sets when Windows.Media voices use explicit bookmark timing.
+  /// </summary>
+  public void SetWindowsMediaBookmarkMode(WindowsMediaBookmarkMode mode)
+  {
+    if (!Enum.IsDefined(typeof(WindowsMediaBookmarkMode), mode))
+    {
+      throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
+    }
+    Volatile.Write(ref _windowsMediaBookmarkMode, (int)mode);
   }
 
   /// <summary>
@@ -909,7 +924,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     return quietMilliseconds > settings.QuietDurationMilliseconds;
   }
 
-  private static RenderedSpeechSegment RenderSpeech(
+  private RenderedSpeechSegment RenderSpeech(
     SpeechMarkup markup,
     SpeechProfileSettings profile,
     VoiceBackend backend,
@@ -948,6 +963,8 @@ internal sealed class SapiSpeechEngine : IDisposable
           backend.ProviderVoiceId,
           windowsMediaSynthesizer ?? throw new InvalidOperationException(
             "The Windows.Media speech backend is unavailable."),
+          (WindowsMediaBookmarkMode)Volatile.Read(
+            ref _windowsMediaBookmarkMode),
           out boundaries);
         break;
 
@@ -1215,6 +1232,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     SpeechProfileSettings profile,
     string providerVoiceId,
     WinRtSpeechSynthesizer synthesizer,
+    WindowsMediaBookmarkMode bookmarkMode,
     out IReadOnlyList<SpeechWordBoundary> boundaries)
   {
     VoiceInformation voice = WinRtSpeechSynthesizer.AllVoices
@@ -1231,7 +1249,13 @@ internal sealed class SapiSpeechEngine : IDisposable
     synthesizer.Options.SpeakingRate = Math.Pow(2.0, profile.Rate / 10.0);
     synthesizer.Options.AudioPitch = 1.0;
     synthesizer.Options.AudioVolume = profile.Volume / 100.0;
-    string ssml = BuildSsmlDocument(markup.SsmlContent, voice.Language);
+    bool requestBookmarks = bookmarkMode != WindowsMediaBookmarkMode.Off;
+    string ssml = requestBookmarks && TryBuildBookmarkedSsml(
+        markup,
+        voice.Language,
+        out string bookmarkedSsml)
+      ? bookmarkedSsml
+      : BuildSsmlDocument(markup.SsmlContent, voice.Language);
 
     using SpeechSynthesisStream stream = synthesizer
       .SynthesizeSsmlToStreamAsync(ssml)
@@ -1256,11 +1280,43 @@ internal sealed class SapiSpeechEngine : IDisposable
     var bytes = new byte[byteCount];
     reader.ReadBytes(bytes);
     PcmWaveData wave = PcmWaveData.Parse(bytes);
-    boundaries = CreateWindowsMediaBoundaries(
-      markup.PlainText,
-      stream,
-      wave.Duration,
-      voice.DisplayName);
+    IReadOnlyList<SpeechWordBoundary> wordBoundaries =
+      CreateWindowsMediaBoundaries(
+        markup.PlainText,
+        stream,
+        wave.Duration,
+        voice.DisplayName);
+    int speakableTokenCount = SpeechTokenization.Matches(markup.PlainText)
+      .Cast<Match>()
+      .Count(token => token.Value.Any(char.IsLetterOrDigit));
+    int exactSpeakableBoundaryCount = wordBoundaries
+      .Where(boundary => boundary.Exact &&
+        boundary.Text.Any(char.IsLetterOrDigit))
+      .Select(boundary => boundary.WordIndex)
+      .Distinct()
+      .Count();
+    bool wordTimingReliable = speakableTokenCount != 0 &&
+      exactSpeakableBoundaryCount >= Math.Ceiling(speakableTokenCount * 0.8);
+    if (requestBookmarks &&
+        (bookmarkMode == WindowsMediaBookmarkMode.Always ||
+         !wordTimingReliable) &&
+        TryCreateWindowsMediaBookmarkBoundaries(
+          markup.PlainText,
+          stream,
+          out IReadOnlyList<SpeechWordBoundary> bookmarkBoundaries))
+    {
+      boundaries = bookmarkBoundaries;
+      DiagnosticLog.Write("speech.windows_media_bookmarks_used", new
+      {
+        voice = voice.DisplayName,
+        mode = bookmarkMode.ToString(),
+        boundaryCount = boundaries.Count
+      });
+    }
+    else
+    {
+      boundaries = wordBoundaries;
+    }
     return wave;
   }
 
@@ -1534,6 +1590,192 @@ internal sealed class SapiSpeechEngine : IDisposable
     }
     voice.Rate = profile.Rate;
     voice.Volume = profile.Volume;
+  }
+
+  /// <summary>
+  /// Inserts one named SSML mark before every display token while preserving
+  /// existing pronunciation and prosody markup.
+  /// </summary>
+  private static bool TryBuildBookmarkedSsml(
+    SpeechMarkup markup,
+    string cultureName,
+    out string ssml)
+  {
+    try
+    {
+      XDocument document = XDocument.Parse(
+        BuildSsmlDocument(markup.SsmlContent, cultureName),
+        LoadOptions.PreserveWhitespace);
+      XNamespace ns = document.Root?.Name.Namespace ??
+        "http://www.w3.org/2001/10/synthesis";
+      List<XText> textNodes = document
+        .DescendantNodes()
+        .OfType<XText>()
+        .ToList();
+      string visibleText = string.Concat(textNodes.Select(node => node.Value));
+      MatchCollection tokens = SpeechTokenization.Matches(markup.PlainText);
+      var placements = new List<(int Position, int TokenIndex)>();
+      int searchPosition = 0;
+      for (int index = 0; index < tokens.Count; ++index)
+      {
+        Match token = tokens[index];
+        int position = visibleText.IndexOf(
+          token.Value,
+          searchPosition,
+          StringComparison.Ordinal);
+        if (position < 0)
+        {
+          position = visibleText.IndexOf(
+            token.Value,
+            searchPosition,
+            StringComparison.OrdinalIgnoreCase);
+        }
+        if (position < 0)
+        {
+          DiagnosticLog.Write("speech.windows_media_bookmark_build_failed", new
+          {
+            reason = "A display token was not found in the generated SSML text.",
+            tokenIndex = index,
+            token = token.Value
+          });
+          ssml = string.Empty;
+          return false;
+        }
+        placements.Add((position, index));
+        searchPosition = position + token.Length;
+      }
+
+      int[] nodeStarts = new int[textNodes.Count];
+      int running = 0;
+      for (int index = 0; index < textNodes.Count; ++index)
+      {
+        nodeStarts[index] = running;
+        running += textNodes[index].Value.Length;
+      }
+
+      var nodePlacements = new Dictionary<int, List<(int Local, int TokenIndex)>>();
+      foreach ((int position, int tokenIndex) in placements)
+      {
+        int nodeIndex = -1;
+        for (int candidate = textNodes.Count - 1; candidate >= 0; --candidate)
+        {
+          int nodeEnd = nodeStarts[candidate] + textNodes[candidate].Value.Length;
+          if (nodeStarts[candidate] <= position && position <= nodeEnd)
+          {
+            nodeIndex = candidate;
+            break;
+          }
+        }
+        if (nodeIndex < 0)
+        {
+          ssml = string.Empty;
+          return false;
+        }
+        if (!nodePlacements.TryGetValue(nodeIndex, out var list))
+        {
+          list = new List<(int Local, int TokenIndex)>();
+          nodePlacements.Add(nodeIndex, list);
+        }
+        list.Add((position - nodeStarts[nodeIndex], tokenIndex));
+      }
+
+      foreach ((int nodeIndex, List<(int Local, int TokenIndex)> list) in
+          nodePlacements.OrderByDescending(pair => pair.Key))
+      {
+        XText node = textNodes[nodeIndex];
+        var replacement = new List<object>();
+        int consumed = 0;
+        foreach ((int local, int tokenIndex) in
+            list.OrderBy(value => value.Local))
+        {
+          replacement.Add(new XText(node.Value[consumed..local]));
+          replacement.Add(new XElement(
+            ns + "mark",
+            new XAttribute("name", $"aps_{tokenIndex}")));
+          consumed = local;
+        }
+        replacement.Add(new XText(node.Value[consumed..]));
+        node.ReplaceWith(replacement);
+      }
+
+      ssml = document.ToString(SaveOptions.DisableFormatting);
+      return true;
+    }
+    catch (Exception exception) when (
+      exception is System.Xml.XmlException or InvalidOperationException)
+    {
+      DiagnosticLog.Write("speech.windows_media_bookmark_build_failed", new
+      {
+        exception = exception.ToString()
+      });
+      ssml = string.Empty;
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Converts SpeechBookmark cues to display-token boundaries and removes
+  /// earlier tokens that share the next token's exact timestamp.
+  /// </summary>
+  private static bool TryCreateWindowsMediaBookmarkBoundaries(
+    string text,
+    SpeechSynthesisStream stream,
+    out IReadOnlyList<SpeechWordBoundary> boundaries)
+  {
+    MatchCollection tokens = SpeechTokenization.Matches(text);
+    TimedMetadataTrack? track = stream.TimedMetadataTracks
+      .FirstOrDefault(candidate => string.Equals(
+        candidate.Label,
+        "SpeechBookmark",
+        StringComparison.OrdinalIgnoreCase));
+    if (track is null || tokens.Count == 0)
+    {
+      boundaries = Array.Empty<SpeechWordBoundary>();
+      return false;
+    }
+
+    var raw = new List<SpeechWordBoundary>();
+    foreach (SpeechCue cue in track.Cues.OfType<SpeechCue>())
+    {
+      string identity = string.IsNullOrWhiteSpace(cue.Text)
+        ? cue.Id ?? string.Empty
+        : cue.Text;
+      Match match = Regex.Match(identity, @"aps_(\d+)$");
+      if (!match.Success ||
+          !int.TryParse(match.Groups[1].Value, out int tokenIndex) ||
+          tokenIndex < 0 || tokenIndex >= tokens.Count)
+      {
+        continue;
+      }
+      Match token = tokens[tokenIndex];
+      raw.Add(new SpeechWordBoundary(
+        cue.StartTime,
+        tokenIndex,
+        token.Index,
+        token.Length,
+        token.Value,
+        Exact: true));
+    }
+    raw.Sort(static (left, right) =>
+      left.AudioPosition.CompareTo(right.AudioPosition));
+    if (raw.Count == 0)
+    {
+      boundaries = Array.Empty<SpeechWordBoundary>();
+      return false;
+    }
+
+    var compacted = new List<SpeechWordBoundary>(raw.Count);
+    for (int index = 0; index < raw.Count; ++index)
+    {
+      bool collapsed = index + 1 < raw.Count &&
+        raw[index].AudioPosition == raw[index + 1].AudioPosition;
+      if (!collapsed)
+      {
+        compacted.Add(raw[index]);
+      }
+    }
+    boundaries = compacted;
+    return true;
   }
 
   private static string BuildSsmlDocument(
