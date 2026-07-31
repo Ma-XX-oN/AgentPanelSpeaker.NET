@@ -553,8 +553,8 @@ internal sealed class SapiSpeechEngine : IDisposable
     return provider switch
     {
       SpeechVoiceProvider.WindowsMedia => 3,
-      SpeechVoiceProvider.Sapi => 2,
-      SpeechVoiceProvider.SystemSpeech => 1,
+      SpeechVoiceProvider.SystemSpeech => 2,
+      SpeechVoiceProvider.Sapi => 1,
       _ => 0
     };
   }

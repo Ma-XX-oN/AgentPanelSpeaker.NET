@@ -1,6 +1,14 @@
-# Agent Panel Speaker v52
+# Agent Panel Speaker v53
 
-## v52
+## v53: exact timings for Desktop voices
+
+When a voice is exposed by both native SAPI and `System.Speech`, the
+`System.Speech` registration is now preferred.  This keeps WAV rendering and
+the Bluetooth wake-tone path, while collecting exact `SpeakProgress`
+`AudioPosition` boundaries during synthesis.  Native SAPI remains a fallback
+for voices that are not available through `System.Speech`.
+
+## v51
 
 Version 51 replaces the per-boundary `BeginInvoke` path with a bounded
 `TranscriptPlaybackMailbox`.  Publishing a speech boundary overwrites the
