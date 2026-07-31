@@ -1,15 +1,13 @@
-## v57 speech-progress isolation harness
-
-The standalone `tools/SpeechProgressHarness` project evaluates transcript-token
-identity separately from the application runtime.  It uses SSML bookmarks as
-stable numeric token identities and records their WAV-relative audio positions.
-The harness also records raw `SpeakProgress` events only for comparison.
-
-This keeps the experiment independent of WebView2, UI dispatch, playback, wake
-audio, transcript rendering, and text-search fallbacks.  The production
-application is unchanged in v57 apart from its displayed version.
-
 # Agent Panel Speaker internal design
+
+
+## System.Speech timing format
+
+Desktop voices rendered through `System.Speech` use an explicit 16,000 Hz,
+16-bit, mono PCM WAVE format.  `SpeakProgress.AudioPosition` must be measured
+on the same sample-rate timeline as the generated WAVE data; relying on the
+default 22.05 kHz WAVE format can produce proportional transcript-highlight
+lag for voices whose event timeline is 16 kHz.
 
 ## v51 bounded playback mailbox
 

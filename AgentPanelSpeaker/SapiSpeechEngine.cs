@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Speech.AudioFormat;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -21,6 +22,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private const int SpFileModeCreateForWrite = 3;
   private const int DefaultWorkerPollMilliseconds = 10;
   private const int OutputSampleRate = 48000;
+  private const int SystemSpeechSampleRate = 16000;
 
   private readonly BlockingCollection<EngineCommand> _commands = new();
   private readonly ManualResetEventSlim _initialized = new();
@@ -1123,7 +1125,11 @@ internal sealed class SapiSpeechEngine : IDisposable
     synthesizer.SpeakProgress += handler;
     try
     {
-      synthesizer.SetOutputToWaveStream(stream);
+      var outputFormat = new SpeechAudioFormatInfo(
+        SystemSpeechSampleRate,
+        AudioBitsPerSample.Sixteen,
+        AudioChannel.Mono);
+      synthesizer.SetOutputToAudioStream(stream, outputFormat);
       synthesizer.SpeakSsml(ssml);
     }
     finally
@@ -1131,7 +1137,11 @@ internal sealed class SapiSpeechEngine : IDisposable
       synthesizer.SpeakProgress -= handler;
       synthesizer.SetOutputToNull();
     }
-    PcmWaveData wave = PcmWaveData.Parse(stream.ToArray());
+    PcmWaveData wave = PcmWaveData.FromPcmSamples(
+      channels: 1,
+      sampleRate: SystemSpeechSampleRate,
+      bitsPerSample: 16,
+      samples: stream.ToArray());
     boundaries = collected.Count == 0
       ? CreateApproximateBoundaries(markup.PlainText, wave.Duration)
       : collected;

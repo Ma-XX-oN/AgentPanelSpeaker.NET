@@ -73,6 +73,22 @@ internal sealed class PcmWaveData
     Samples.Length / (double)AverageBytesPerSecond);
 
   /// <summary>
+  /// Creates a waveform from raw interleaved integer PCM samples.
+  /// </summary>
+  public static PcmWaveData FromPcmSamples(
+    ushort channels,
+    int sampleRate,
+    ushort bitsPerSample,
+    byte[] samples)
+  {
+    return new PcmWaveData(
+      channels,
+      sampleRate,
+      bitsPerSample,
+      samples);
+  }
+
+  /// <summary>
   /// Parses a RIFF WAVE file containing integer PCM samples.
   /// </summary>
   public static PcmWaveData Parse(byte[] waveFile)

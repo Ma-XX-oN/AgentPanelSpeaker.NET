@@ -1,20 +1,31 @@
-# Agent Panel Speaker v57
+# Agent Panel Speaker v58
 
 
-## v57: isolated System.Speech progress harness
+## v58: synchronized System.Speech WAV timing
 
-`tools/SpeechProgressHarness` reproduces the known failing transcript without
-WinForms, WebView2, playback, Bluetooth wake audio, JSONL monitoring, fading,
-or the playback mailbox.
+System.Speech Desktop voices are now rendered explicitly as 16,000 Hz,
+16-bit, mono PCM.  Some Desktop voices, including Microsoft Hazel Desktop,
+report `SpeakProgress.AudioPosition` and bookmark positions on a 16 kHz voice
+timeline even when the default WAVE writer produces a 22.05 kHz file.  Using
+those 16 kHz positions against the longer 22.05 kHz playback timeline causes a
+proportional highlighting delay that grows throughout an utterance.  Keeping
+the generated WAVE file on the same 16 kHz timeline removes that drift before
+the existing playback path resamples the PCM for output.
 
-The harness inserts one unique SSML bookmark immediately before every visible
-transcript token, synthesizes each block to a WAV file, and records both
-`BookmarkReached.AudioPosition` and `SpeakProgress`.  It asserts that every
-rendered token receives exactly one ordered bookmark.  This directly tests a
-numeric token-identity approach that does not depend on repeated text, ordinal
-progress-event counts, or SSML character offsets.
+A separate plausible source of local punctuation misalignment is that timing
+markers and speech normalization need not interpret an attached period in the
+same way.  A marker API may expose `.` as its own input token or possible
+sentence boundary, while the selected voice can normalize an attached form
+such as `.hpp` as part of a filename or abbreviation and assign the period no
+independent audible duration.  This can make a marker placed around the period
+appear associated with the following spoken letters.  Agent Panel Speaker
+should therefore preserve attached punctuation in displayed text but must not
+assume that every punctuation token has an independent audible interval.
 
-Run it from `tools\SpeechProgressHarness` with `build.cmd` and `run.cmd`.
+The 16 kHz mismatch and attached-period interpretation are distinct possible
+causes: the former produces global proportional drift; the latter can produce
+a local token-boundary discrepancy even when the overall audio timeline is
+correct.
 
 
 ## v56: controlled rollback of v54/v55 mapping changes
