@@ -1266,8 +1266,9 @@ internal sealed class SapiSpeechEngine : IDisposable
 
   /// <summary>
   /// Converts Windows.Media SpeechWord cues into exact display-token ranges.
-  /// Falls back to proportional estimates only when a voice returns no usable
-  /// word metadata.
+  /// Windows.Media reports cue positions in the complete SSML input coordinate
+  /// space, so the first cue is used to remove the document/tag prefix before
+  /// ranges are compared with <paramref name="text"/>.
   /// </summary>
   private static IReadOnlyList<SpeechWordBoundary>
     CreateWindowsMediaBoundaries(
@@ -1292,36 +1293,105 @@ internal sealed class SapiSpeechEngine : IDisposable
       return CreateApproximateBoundaries(text, duration);
     }
 
-    var result = new List<SpeechWordBoundary>();
-    foreach (SpeechCue cue in wordTrack.Cues
+    SpeechCue[] cues = wordTrack.Cues
       .OfType<SpeechCue>()
-      .OrderBy(cue => cue.StartTime))
-    {
-      int start = cue.StartPositionInInput ?? -1;
-      int endInclusive = cue.EndPositionInInput ?? start;
-      int tokenIndex = FindTokenForInputRange(tokens, start, endInclusive);
-      if (tokenIndex < 0)
-      {
-        continue;
-      }
-
-      Match token = tokens[tokenIndex];
-      result.Add(new SpeechWordBoundary(
-        cue.StartTime,
-        tokenIndex,
-        token.Index,
-        token.Length,
-        token.Value,
-        Exact: true));
-    }
-
-    if (result.Count == 0)
+      .OrderBy(cue => cue.StartTime)
+      .ToArray();
+    if (cues.Length == 0 || tokens.Count == 0)
     {
       DiagnosticLog.Write("speech.windows_media_boundaries_unavailable", new
       {
         voiceName,
-        reason = "The SpeechWord track contained no cues mappable to input text.",
-        cueCount = wordTrack.Cues.Count
+        reason = "The SpeechWord track or source token list was empty.",
+        cueCount = cues.Length,
+        tokenCount = tokens.Count
+      });
+      return CreateApproximateBoundaries(text, duration);
+    }
+
+    int firstCueTokenIndex = FindMatchingTokenByText(
+      tokens,
+      cues[0].Text,
+      0);
+    if (firstCueTokenIndex < 0)
+    {
+      firstCueTokenIndex = 0;
+    }
+    int firstCueStart = cues[0].StartPositionInInput ?? 0;
+    int inputPositionOffset =
+      firstCueStart - tokens[firstCueTokenIndex].Index;
+
+    var result = new List<SpeechWordBoundary>(cues.Length);
+    var usedTokenIndexes = new HashSet<int>();
+    int nextSearchTokenIndex = 0;
+    int rejectedCueCount = 0;
+    foreach (SpeechCue cue in cues)
+    {
+      int rawStart = cue.StartPositionInInput ?? -1;
+      int rawEndInclusive = cue.EndPositionInInput ?? rawStart;
+      int adjustedStart = rawStart < 0
+        ? -1
+        : rawStart - inputPositionOffset;
+      int adjustedEndInclusive = rawEndInclusive < 0
+        ? adjustedStart
+        : rawEndInclusive - inputPositionOffset;
+      int tokenIndex = FindTokenForInputRange(
+        tokens,
+        adjustedStart,
+        adjustedEndInclusive);
+
+      string cueText = cue.Text ?? string.Empty;
+      if (tokenIndex < nextSearchTokenIndex ||
+          tokenIndex < 0 ||
+          !CueTextMatchesToken(cueText, tokens[tokenIndex].Value))
+      {
+        int textMatchedIndex = FindMatchingTokenByText(
+          tokens,
+          cueText,
+          nextSearchTokenIndex);
+        if (textMatchedIndex >= 0)
+        {
+          tokenIndex = textMatchedIndex;
+        }
+      }
+
+      if (tokenIndex < 0 || tokenIndex >= tokens.Count)
+      {
+        ++rejectedCueCount;
+        continue;
+      }
+
+      Match token = tokens[tokenIndex];
+      if (usedTokenIndexes.Add(tokenIndex))
+      {
+        result.Add(new SpeechWordBoundary(
+          cue.StartTime,
+          tokenIndex,
+          token.Index,
+          token.Length,
+          token.Value,
+          Exact: true));
+      }
+      nextSearchTokenIndex = Math.Max(nextSearchTokenIndex, tokenIndex + 1);
+    }
+
+    int usableCueCount = cues.Count(cue =>
+      !string.IsNullOrWhiteSpace(cue.Text));
+    double coverage = usableCueCount == 0
+      ? 0.0
+      : (double)result.Count / usableCueCount;
+    if (result.Count == 0 || coverage < 0.80)
+    {
+      DiagnosticLog.Write("speech.windows_media_boundaries_unavailable", new
+      {
+        voiceName,
+        reason = "Too few SpeechWord cues mapped safely to source tokens.",
+        cueCount = cues.Length,
+        exactCueCount = result.Count,
+        rejectedCueCount,
+        tokenCount = tokens.Count,
+        inputPositionOffset,
+        coverage
       });
       return CreateApproximateBoundaries(text, duration);
     }
@@ -1330,9 +1400,68 @@ internal sealed class SapiSpeechEngine : IDisposable
     {
       voiceName,
       exactCueCount = result.Count,
-      tokenCount = tokens.Count
+      cueCount = cues.Length,
+      rejectedCueCount,
+      tokenCount = tokens.Count,
+      inputPositionOffset,
+      coverage
     });
     return result;
+  }
+
+  /// <summary>
+  /// Finds a monotonically following token whose visible text matches a cue.
+  /// </summary>
+  private static int FindMatchingTokenByText(
+    MatchCollection tokens,
+    string? cueText,
+    int startIndex)
+  {
+    string normalizedCue = NormalizeCueText(cueText);
+    if (normalizedCue.Length == 0)
+    {
+      return -1;
+    }
+
+    for (int index = Math.Max(0, startIndex); index < tokens.Count; ++index)
+    {
+      if (string.Equals(
+        normalizedCue,
+        NormalizeCueText(tokens[index].Value),
+        StringComparison.OrdinalIgnoreCase))
+      {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  /// <summary>
+  /// Returns whether a word cue and display token describe the same text.
+  /// </summary>
+  private static bool CueTextMatchesToken(string? cueText, string tokenText)
+  {
+    string normalizedCue = NormalizeCueText(cueText);
+    return normalizedCue.Length != 0 && string.Equals(
+      normalizedCue,
+      NormalizeCueText(tokenText),
+      StringComparison.OrdinalIgnoreCase);
+  }
+
+  /// <summary>
+  /// Removes punctuation differences that do not affect spoken word identity.
+  /// </summary>
+  private static string NormalizeCueText(string? text)
+  {
+    if (string.IsNullOrWhiteSpace(text))
+    {
+      return string.Empty;
+    }
+
+    return new string(text
+      .Where(character => char.IsLetterOrDigit(character) ||
+        character is '_' or '\'' or '’' or '-')
+      .ToArray());
   }
 
   private static int FindTokenForInputRange(

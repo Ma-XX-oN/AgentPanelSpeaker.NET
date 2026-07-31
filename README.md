@@ -1,4 +1,27 @@
-# Agent Panel Speaker v61
+# Agent Panel Speaker v62
+
+## v62: Windows.Media SSML cue-coordinate correction
+
+Windows.Media `SpeechCue.StartPositionInInput` and `EndPositionInInput` are
+reported in the coordinate space of the complete SSML document supplied to the
+synthesizer.  The transcript tokens are indexed in the original plain-text
+fragment.  v61 compared those positions directly, so the SSML document prefix
+and inline tags caused most valid cues to miss their tokens.  It also accepted
+any non-empty partial mapping as a complete schedule, which made highlighting
+skip every rejected word.
+
+The Windows.Media mapper now derives the SSML input-position offset from the
+first timed word cue and its matching source token, then translates every cue
+range before token lookup.  Cue text is used as a monotonic fallback when an
+inline SSML element changes the local character offset.  Repeated cues for one
+token retain the earliest boundary.
+
+A partial exact schedule is no longer accepted merely because it contains one
+or two mappings.  If fewer than 80 percent of usable word cues can be mapped
+safely, the complete fragment uses the duration-weighted fallback instead of
+silently omitting the unmatched words.  Diagnostics now record the cue count,
+rejected-cue count, inferred input offset, and mapping coverage.
+
 
 ## v61: exact Windows.Media timed word metadata
 
