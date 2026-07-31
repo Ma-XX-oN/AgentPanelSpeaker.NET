@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace AgentPanelSpeaker;
@@ -41,6 +42,10 @@ internal sealed class SpeechService : IDisposable
   private string _activeTranscriptText = string.Empty;
   private int _activeWordIndex;
   private int _activeWordBaseIndex;
+  private int _activeCharacterBaseOffset;
+  private int _activeCharacterPosition;
+  private int _activeCharacterCount;
+  private long _activeBoundaryTimestamp;
   private string _activeWord = string.Empty;
   private DateTimeOffset? _pauseStartedUtc;
   private SpeechProfileSettings? _activeProfile;
@@ -900,8 +905,40 @@ internal sealed class SpeechService : IDisposable
       {
         return;
       }
-      _activeWordIndex = _activeWordBaseIndex + boundary.WordIndex;
-      _activeWord = boundary.Text;
+      int absoluteCharacterPosition = checked(
+        _activeCharacterBaseOffset + Math.Max(0, boundary.CharacterPosition));
+      _activeWordIndex = GetTokenIndexForBoundary(
+        _activeTranscriptText,
+        absoluteCharacterPosition,
+        boundary.CharacterCount,
+        _activeWordBaseIndex + boundary.WordIndex);
+      _activeCharacterPosition = absoluteCharacterPosition;
+      _activeCharacterCount = Math.Max(0, boundary.CharacterCount);
+      _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+      _activeWord = GetTokenAtIndex(
+        _activeTranscriptText,
+        _activeWordIndex,
+        boundary.Text);
+      if (ShouldTracePlayback(_activeTranscriptText))
+      {
+        DiagnosticLog.Write("speech.word_boundary", new
+        {
+          nodeId = _activeHistoryIndex >= 0 &&
+            _activeHistoryIndex < _history.Count
+              ? _history[_activeHistoryIndex].NodeId
+              : -1,
+          boundary.WordIndex,
+          boundary.CharacterPosition,
+          boundary.CharacterCount,
+          boundary.Text,
+          boundary.AudioPosition,
+          boundary.Exact,
+          absoluteCharacterPosition,
+          mappedWordIndex = _activeWordIndex,
+          mappedWord = _activeWord,
+          timestamp = _activeBoundaryTimestamp
+        });
+      }
       ReportPlaybackPositionLocked(
         _isPaused
           ? TranscriptPlaybackState.Paused
@@ -1461,6 +1498,10 @@ internal sealed class SpeechService : IDisposable
     _activeTranscriptText = text;
     _activeWordIndex = 0;
     _activeWordBaseIndex = 0;
+    _activeCharacterBaseOffset = 0;
+    _activeCharacterPosition = 0;
+    _activeCharacterCount = FirstWord(text).Length;
+    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
     _activeWord = FirstWord(text);
     _activeProfile = profile.Normalize();
     _activePauseAfter = pauseAfter;
@@ -1532,6 +1573,10 @@ internal sealed class SpeechService : IDisposable
       _activeWordIndex);
     string remaining = _activeTranscriptText[start..];
     _activeWordBaseIndex = _activeWordIndex;
+    _activeCharacterBaseOffset = start;
+    _activeCharacterPosition = start;
+    _activeCharacterCount = FirstWord(remaining).Length;
+    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
     _activeWord = FirstWord(remaining);
     SpeakConfiguredLocked(
       remaining,
@@ -1555,7 +1600,67 @@ internal sealed class SpeechService : IDisposable
       _activeTranscriptText,
       _activeWordIndex,
       _activeWord,
-      nodeId));
+      nodeId,
+      _activeCharacterPosition,
+      _activeCharacterCount,
+      _activeBoundaryTimestamp));
+  }
+
+
+  private static int GetTokenIndexForBoundary(
+    string text,
+    int characterPosition,
+    int characterCount,
+    int fallbackWordIndex)
+  {
+    MatchCollection matches = SpeechTokenization.Matches(text);
+    if (matches.Count == 0)
+    {
+      return 0;
+    }
+
+    int boundedPosition = Math.Clamp(characterPosition, 0, text.Length);
+    int boundaryEnd = Math.Clamp(
+      checked(boundedPosition + Math.Max(1, characterCount)),
+      boundedPosition,
+      text.Length);
+    for (int index = 0; index < matches.Count; ++index)
+    {
+      Match match = matches[index];
+      int matchEnd = match.Index + match.Length;
+      if (match.Index < boundaryEnd && matchEnd > boundedPosition)
+      {
+        return index;
+      }
+    }
+
+    for (int index = 0; index < matches.Count; ++index)
+    {
+      if (matches[index].Index >= boundedPosition)
+      {
+        return index;
+      }
+    }
+
+    return Math.Clamp(fallbackWordIndex, 0, matches.Count - 1);
+  }
+
+  private static string GetTokenAtIndex(
+    string text,
+    int wordIndex,
+    string fallback)
+  {
+    MatchCollection matches = SpeechTokenization.Matches(text);
+    return wordIndex >= 0 && wordIndex < matches.Count
+      ? matches[wordIndex].Value
+      : fallback;
+  }
+
+  private static bool ShouldTracePlayback(string text)
+  {
+    return text.Contains(
+      "PolicyMachinery.hpp already has sections",
+      StringComparison.OrdinalIgnoreCase);
   }
 
   private static int GetWordCharacterPosition(string text, int wordIndex)

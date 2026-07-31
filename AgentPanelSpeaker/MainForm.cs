@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
 
@@ -134,7 +135,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v51";
+    Text = "Agent Panel Speaker v52";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -589,6 +590,21 @@ internal sealed class MainForm : Form, IMessageFilter
             out TranscriptPlaybackPosition position))
       {
         break;
+      }
+      if (position.FragmentText.Contains(
+            "PolicyMachinery.hpp already has sections",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        DiagnosticLog.Write("transcript.mailbox_consumed", new
+        {
+          position.NodeId,
+          position.WordIndex,
+          position.Word,
+          position.CharacterPosition,
+          position.CharacterCount,
+          position.BoundaryTimestamp,
+          consumedTimestamp = Stopwatch.GetTimestamp()
+        });
       }
       _transcriptView.ShowPlaybackPosition(position);
     }

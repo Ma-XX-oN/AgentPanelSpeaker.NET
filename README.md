@@ -1,6 +1,6 @@
-# Agent Panel Speaker v51
+# Agent Panel Speaker v52
 
-## v51
+## v52
 
 Version 51 replaces the per-boundary `BeginInvoke` path with a bounded
 `TranscriptPlaybackMailbox`.  Publishing a speech boundary overwrites the

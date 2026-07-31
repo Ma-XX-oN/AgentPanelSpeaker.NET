@@ -217,6 +217,21 @@ internal sealed class TranscriptView : UserControl
 
   private void PostPlaybackPosition(TranscriptPlaybackPosition position)
   {
+    if (position.FragmentText.Contains(
+          "PolicyMachinery.hpp already has sections",
+          StringComparison.OrdinalIgnoreCase))
+    {
+      DiagnosticLog.Write("transcript.marker_posted", new
+      {
+        position.NodeId,
+        position.WordIndex,
+        position.Word,
+        position.CharacterPosition,
+        position.CharacterCount,
+        position.BoundaryTimestamp,
+        postedTimestamp = Stopwatch.GetTimestamp()
+      });
+    }
     PostMessage(new
     {
       type = "playback",
@@ -226,6 +241,9 @@ internal sealed class TranscriptView : UserControl
       wordIndex = position.WordIndex,
       wordText = position.Word,
       nodeId = position.NodeId,
+      characterPosition = position.CharacterPosition,
+      characterCount = position.CharacterCount,
+      boundaryTimestamp = position.BoundaryTimestamp,
       follow = _settings.FollowSpeech
     });
   }
@@ -567,6 +585,19 @@ internal sealed class TranscriptView : UserControl
       }
 
       string type = typeElement.GetString() ?? string.Empty;
+      if (type == "playback-applied")
+      {
+        DiagnosticLog.Write("transcript.marker_applied", new
+        {
+          sequence = ReadOptionalInt64(root, "sequence"),
+          nodeId = ReadOptionalInt64(root, "nodeId"),
+          wordIndex = ReadOptionalInt32(root, "wordIndex"),
+          boundaryTimestamp = ReadOptionalInt64(root, "boundaryTimestamp"),
+          javascriptTimestamp = ReadOptionalString(root, "javascriptTimestamp"),
+          receivedTimestamp = Stopwatch.GetTimestamp()
+        });
+        return;
+      }
       if (type == "mapping-failure" || type == "playback-unmatched")
       {
         DiagnosticLog.Write($"transcript.{type}", new
@@ -1402,6 +1433,17 @@ chrome.webview.addEventListener('message', event => {
     data.wordText,
     data.nodeId,
     data.follow);
+  if ((data.fragmentText || '').toLocaleLowerCase().includes(
+        'policymachinery.hpp already has sections')) {
+    chrome.webview.postMessage({
+      type: 'playback-applied',
+      sequence: data.sequence,
+      nodeId: data.nodeId,
+      wordIndex: data.wordIndex,
+      boundaryTimestamp: data.boundaryTimestamp,
+      javascriptTimestamp: String(performance.now())
+    });
+  }
 });
 
 window.addEventListener('keydown', event => {

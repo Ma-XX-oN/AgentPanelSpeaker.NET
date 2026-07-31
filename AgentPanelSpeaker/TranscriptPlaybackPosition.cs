@@ -8,7 +8,10 @@ internal sealed record TranscriptPlaybackPosition(
   string FragmentText,
   int WordIndex,
   string Word,
-  long NodeId);
+  long NodeId,
+  int CharacterPosition,
+  int CharacterCount,
+  long BoundaryTimestamp);
 
 internal enum TranscriptPlaybackState
 {
