@@ -1,4 +1,22 @@
-# Agent Panel Speaker v53
+# Agent Panel Speaker v56
+
+
+## v56: controlled rollback of v54/v55 mapping changes
+
+Version 56 restores the v53 transcript-rendering and playback-mapping path.
+The transformed-text source mapping, segment-local identity, and sequential
+`SpeakProgress.Text` lookup introduced in v54 and v55 have been removed.
+
+The confirmed v51-v53 improvements remain:
+
+- bounded configurable playback mailbox;
+- exact `System.Speech` `SpeakProgress.AudioPosition` timings for compatible
+  Desktop voices;
+- v52 timing diagnostics;
+- the original wake-audio and forced-preview behaviour.
+
+This rollback intentionally does not add another mapping strategy.  It returns
+the display path to the last known baseline before the v54/v55 regressions.
 
 ## v53: exact timings for Desktop voices
 
@@ -923,12 +941,3 @@ These directions are documented but are not implemented in version 42:
 Markdown headings remain in the spoken text.  A 250 ms synthesis pause is
 inserted between a heading and the following prose without splitting the two
 parts into separate audio streams.
-
-## v55
-
-- Maps `System.Speech` progress events by their next sequential spoken-text
-  occurrence instead of trusting SSML text-node character ranges.
-- Keeps repeated progress events for one number on the same displayed token.
-- Restores the original forced wake-preview behaviour; disabling wake in the UI
-  still disables normal playback wake audio, but does not change explicit test
-  playback semantics.

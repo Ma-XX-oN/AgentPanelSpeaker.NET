@@ -9,7 +9,6 @@ internal sealed record TranscriptPlaybackPosition(
   int WordIndex,
   string Word,
   long NodeId,
-  int SegmentIndex,
   int CharacterPosition,
   int CharacterCount,
   long BoundaryTimestamp);

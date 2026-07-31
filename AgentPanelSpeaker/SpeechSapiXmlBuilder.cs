@@ -29,11 +29,7 @@ internal static partial class SpeechSapiXmlBuilder
     ArgumentNullException.ThrowIfNull(text);
     ArgumentNullException.ThrowIfNull(spelledWords);
     ArgumentNullException.ThrowIfNull(pronunciations);
-    BuiltSpeechContent built = BuildContent(
-      text,
-      spelledWords,
-      pronunciations);
-    string sapiContent = built.Markup;
+    string sapiContent = BuildContent(text, spelledWords, pronunciations);
     if (pauseAfter)
     {
       sapiContent += SapiBlockPause;
@@ -41,8 +37,6 @@ internal static partial class SpeechSapiXmlBuilder
     string ssmlContent = ConvertContentToSsml(sapiContent);
     return new SpeechMarkup(
       text,
-      built.SpokenText,
-      built.SourceMap,
       WrapSapiPitch(sapiContent, pitchSetting),
       WrapSsmlPitch(ssmlContent, pitchSetting));
   }
@@ -62,15 +56,6 @@ internal static partial class SpeechSapiXmlBuilder
     string sapiContent = content.ToString();
     return new SpeechMarkup(
       displayedText,
-      displayedText,
-      new[]
-      {
-        new SpeechSourceMapEntry(
-          0,
-          displayedText.Length,
-          0,
-          displayedText.Length)
-      },
       WrapSapiPitch(sapiContent, pitchSetting),
       WrapSsmlPitch(sapiContent, pitchSetting));
   }
@@ -78,15 +63,13 @@ internal static partial class SpeechSapiXmlBuilder
   /// <summary>
   /// Inserts pronunciation/spelling tags and expands recognizable dates/times.
   /// </summary>
-  private static BuiltSpeechContent BuildContent(
+  private static string BuildContent(
     string text,
     IReadOnlyList<string> spelledWords,
     PronunciationRuleSet pronunciations)
   {
     Regex? spelledWordRegex = CreateSpelledWordRegex(spelledWords);
     var output = new StringBuilder();
-    var spoken = new StringBuilder();
-    var sourceMap = new List<SpeechSourceMapEntry>();
     int position = 0;
     while (position < text.Length)
     {
@@ -125,23 +108,11 @@ internal static partial class SpeechSapiXmlBuilder
 
       if (next is null || !next.Match.Success)
       {
-        AppendMappedText(
-          output,
-          spoken,
-          sourceMap,
-          text[position..],
-          position,
-          text.Length - position);
+        AppendEscaped(output, text[position..]);
         break;
       }
 
-      AppendMappedText(
-        output,
-        spoken,
-        sourceMap,
-        text[position..next.Match.Index],
-        position,
-        next.Match.Index - position);
+      AppendEscaped(output, text[position..next.Match.Index]);
       switch (next.Kind)
       {
         case SpecialMatchKind.Pronunciation:
@@ -152,22 +123,10 @@ internal static partial class SpeechSapiXmlBuilder
               output,
               next.Match.Value,
               pronunciation.Value);
-            AppendSourceMap(
-              spoken,
-              sourceMap,
-              next.Match.Value,
-              next.Match.Index,
-              next.Match.Length);
           }
           else
           {
-            AppendMappedReplacement(
-              output,
-              spoken,
-              sourceMap,
-              pronunciation.Value,
-              next.Match.Index,
-              next.Match.Length);
+            AppendEscaped(output, pronunciation.Value);
           }
           break;
 
@@ -175,102 +134,28 @@ internal static partial class SpeechSapiXmlBuilder
           output.Append("<spell>");
           AppendEscaped(output, next.Match.Value);
           output.Append("</spell>");
-          AppendSourceMap(
-            spoken,
-            sourceMap,
-            next.Match.Value,
-            next.Match.Index,
-            next.Match.Length);
           break;
 
         case SpecialMatchKind.IsoDateTime:
-          AppendMappedReplacement(
-            output, spoken, sourceMap,
-            FormatIsoDateTime(next.Match.Value),
-            next.Match.Index, next.Match.Length);
+          AppendEscaped(output, FormatIsoDateTime(next.Match.Value));
           break;
 
         case SpecialMatchKind.IsoDate:
-          AppendMappedReplacement(
-            output, spoken, sourceMap,
-            FormatIsoDate(next.Match.Value),
-            next.Match.Index, next.Match.Length);
+          AppendEscaped(output, FormatIsoDate(next.Match.Value));
           break;
 
         case SpecialMatchKind.NumericDate:
-          AppendMappedReplacement(
-            output, spoken, sourceMap,
-            FormatNumericDate(next.Match.Value),
-            next.Match.Index, next.Match.Length);
+          AppendEscaped(output, FormatNumericDate(next.Match.Value));
           break;
 
         case SpecialMatchKind.Time:
-          AppendMappedReplacement(
-            output, spoken, sourceMap,
-            FormatTime(next.Match.Value),
-            next.Match.Index, next.Match.Length);
+          AppendEscaped(output, FormatTime(next.Match.Value));
           break;
       }
       position = next.Match.Index + next.Match.Length;
     }
 
-    return new BuiltSpeechContent(
-      output.ToString(),
-      spoken.ToString(),
-      sourceMap);
-  }
-
-  private static void AppendMappedText(
-    StringBuilder output,
-    StringBuilder spoken,
-    ICollection<SpeechSourceMapEntry> sourceMap,
-    string value,
-    int displayStart,
-    int displayLength)
-  {
-    AppendEscaped(output, value);
-    AppendSourceMap(
-      spoken,
-      sourceMap,
-      value,
-      displayStart,
-      displayLength);
-  }
-
-  private static void AppendMappedReplacement(
-    StringBuilder output,
-    StringBuilder spoken,
-    ICollection<SpeechSourceMapEntry> sourceMap,
-    string replacement,
-    int displayStart,
-    int displayLength)
-  {
-    AppendEscaped(output, replacement);
-    AppendSourceMap(
-      spoken,
-      sourceMap,
-      replacement,
-      displayStart,
-      displayLength);
-  }
-
-  private static void AppendSourceMap(
-    StringBuilder spoken,
-    ICollection<SpeechSourceMapEntry> sourceMap,
-    string value,
-    int displayStart,
-    int displayLength)
-  {
-    int spokenStart = spoken.Length;
-    spoken.Append(value);
-    if (value.Length != 0)
-    {
-      sourceMap.Add(new SpeechSourceMapEntry(
-        spokenStart,
-        value.Length,
-        displayStart,
-        displayLength));
-    }
+    return output.ToString();
   }
 
   /// <summary>
@@ -518,9 +403,4 @@ internal static partial class SpeechSapiXmlBuilder
     Match Match,
     SpecialMatchKind Kind,
     PronunciationRule? Pronunciation);
-  private sealed record BuiltSpeechContent(
-    string Markup,
-    string SpokenText,
-    IReadOnlyList<SpeechSourceMapEntry> SourceMap);
-
 }

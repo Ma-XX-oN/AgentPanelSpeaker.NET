@@ -31,8 +31,7 @@ internal sealed record SpeechFragment(
   int FenceLineCount = 0,
   bool PauseAfter = false,
   DateTimeOffset? NodeTimestampUtc = null,
-  bool StartsUserTurn = false,
-  int SegmentIndex = -1);
+  bool StartsUserTurn = false);
 
 /// <summary>
 /// Identifies how existing history should begin playback.
