@@ -485,7 +485,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
             part.FenceLineCount,
             PauseAfter: sentence.PauseAfter,
             NodeTimestampUtc: nodeTimestampUtc,
-            StartsUserTurn: startsUserTurn && sentenceIndex == 0));
+            StartsUserTurn: startsUserTurn && sentenceIndex == 0,
+            SegmentIndex: fragments.Count));
         }
       }
       else
@@ -501,7 +502,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceLineCount,
           PauseAfter: part.PauseAfter,
           NodeTimestampUtc: nodeTimestampUtc,
-          StartsUserTurn: startsUserTurn));
+          StartsUserTurn: startsUserTurn,
+          SegmentIndex: fragments.Count));
       }
     }
     DiagnosticLog.Write("jsonl.node_accepted", new

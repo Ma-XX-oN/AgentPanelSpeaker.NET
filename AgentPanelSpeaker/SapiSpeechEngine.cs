@@ -891,13 +891,13 @@ internal sealed class SapiSpeechEngine : IDisposable
 
   private bool ShouldApplyWake(AudioWakeSettings settings, bool force)
   {
-    if (force)
-    {
-      return true;
-    }
     if (!settings.Enabled)
     {
       return false;
+    }
+    if (force)
+    {
+      return true;
     }
 
     double quietMilliseconds = _hasAudioEndTimestamp
@@ -1107,13 +1107,19 @@ internal sealed class SapiSpeechEngine : IDisposable
     var collected = new List<SpeechWordBoundary>();
     int wordIndex = 0;
     EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
-      (_, eventArgs) => collected.Add(new SpeechWordBoundary(
-        eventArgs.AudioPosition,
-        wordIndex++,
-        eventArgs.CharacterPosition,
-        eventArgs.CharacterCount,
-        eventArgs.Text,
-        Exact: true));
+      (_, eventArgs) =>
+      {
+        (int position, int count) = markup.MapBoundary(
+          eventArgs.CharacterPosition,
+          eventArgs.CharacterCount);
+        collected.Add(new SpeechWordBoundary(
+          eventArgs.AudioPosition,
+          wordIndex++,
+          position,
+          count,
+          eventArgs.Text,
+          Exact: true));
+      };
     synthesizer.SelectVoice(providerVoiceId);
     synthesizer.Rate = profile.Rate;
     synthesizer.Volume = profile.Volume;

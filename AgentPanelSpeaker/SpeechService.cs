@@ -1601,6 +1601,9 @@ internal sealed class SpeechService : IDisposable
       _activeWordIndex,
       _activeWord,
       nodeId,
+      _activeHistoryIndex >= 0 && _activeHistoryIndex < _history.Count
+        ? _history[_activeHistoryIndex].SegmentIndex
+        : -1,
       _activeCharacterPosition,
       _activeCharacterCount,
       _activeBoundaryTimestamp));

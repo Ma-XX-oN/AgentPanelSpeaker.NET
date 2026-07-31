@@ -224,6 +224,7 @@ internal sealed class TranscriptView : UserControl
       DiagnosticLog.Write("transcript.marker_posted", new
       {
         position.NodeId,
+        position.SegmentIndex,
         position.WordIndex,
         position.Word,
         position.CharacterPosition,
@@ -241,6 +242,7 @@ internal sealed class TranscriptView : UserControl
       wordIndex = position.WordIndex,
       wordText = position.Word,
       nodeId = position.NodeId,
+      segmentIndex = position.SegmentIndex,
       characterPosition = position.CharacterPosition,
       characterCount = position.CharacterCount,
       boundaryTimestamp = position.BoundaryTimestamp,
@@ -829,6 +831,7 @@ let lexicalWords = [];
 let currentIndex = -1;
 let currentEndIndex = -1;
 let currentNode = -1;
+let currentSegmentIndex = -1;
 let currentFragmentText = null;
 let currentFragmentStart = -1;
 let currentFragmentEnd = -1;
@@ -910,6 +913,7 @@ function replaceTranscript(html, preserve, nodeMap) {
   currentIndex = -1;
   currentEndIndex = -1;
   currentNode = -1;
+  currentSegmentIndex = -1;
   currentFragmentText = null;
   currentFragmentStart = -1;
   currentFragmentEnd = -1;
@@ -1017,6 +1021,7 @@ function markCollectionRange(collection, start, end, nodeId) {
 
 function rememberSegmentRange(
   nodeId,
+  segmentIndex,
   start,
   end,
   displayTarget,
@@ -1027,6 +1032,7 @@ function rememberSegmentRange(
     segmentRangesByNode.set(nodeId, ranges);
   }
   ranges.push({
+    segmentIndex,
     start,
     end,
     displayKey: displayTarget.join('\u0000'),
@@ -1052,7 +1058,9 @@ function assignNodeScopes(nodeMap) {
     let displayCursor = displayCursors.get(key) || 0;
     let lexicalCursor = lexicalCursors.get(key) || 0;
     let mappedAny = false;
-    for (const segment of segments) {
+    for (let segmentIndex = 0; segmentIndex < segments.length;
+         ++segmentIndex) {
+      const segment = segments[segmentIndex];
       const displayTarget = tokenizeDisplay(segment);
       const lexicalTarget = tokenize(segment);
       if (!displayTarget.length && !lexicalTarget.length) continue;
@@ -1080,6 +1088,7 @@ function assignNodeScopes(nodeMap) {
         const globalEnd = Number(recordWords[end].dataset.index);
         rememberSegmentRange(
           nodeId,
+          segmentIndex,
           globalStart,
           globalEnd,
           displayTarget,
@@ -1121,6 +1130,7 @@ function assignNodeScopes(nodeMap) {
         markNodeRange(tokenStart, tokenEnd, nodeId);
         rememberSegmentRange(
           nodeId,
+          segmentIndex,
           tokenStart,
           tokenEnd,
           displayTarget,
@@ -1192,14 +1202,18 @@ function collectRanges(collection, target, nodeKey, lexical) {
   return matches;
 }
 
-function findFragmentRange(text, nodeId) {
+function findFragmentRange(text, nodeId, segmentIndex) {
   const nodeKey = String(nodeId);
   const displayTarget = tokenizeDisplay(text);
   const lexicalTarget = tokenize(text);
   const displayKey = displayTarget.join('\u0000');
   const lexicalKey = lexicalTarget.join('\u0000');
   const mapped = segmentRangesByNode.get(nodeKey) || [];
-  const matches = mapped.filter(range =>
+  const indexed = Number.isInteger(segmentIndex) && segmentIndex >= 0
+    ? mapped.filter(range => range.segmentIndex === segmentIndex)
+    : mapped;
+  if (indexed.length === 1) return indexed[0];
+  const matches = indexed.filter(range =>
     (displayKey && range.displayKey === displayKey) ||
     (lexicalKey && range.lexicalKey === lexicalKey));
   const mappedRange = chooseNearestRange(matches, nodeId);
@@ -1348,7 +1362,8 @@ function applyRangeClass(range, className) {
   }
 }
 
-function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
+function setPlayback(
+  state, fragmentText, wordIndex, wordText, nodeId, segmentIndex, follow) {
   followSpeech = follow;
   clearMarkers();
   if (state === 'none' || state === 'waiting-end') {
@@ -1363,9 +1378,11 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   }
 
   const fragmentChanged = currentFragmentText !== fragmentText ||
-    currentNode !== nodeId || currentFragmentStart < 0;
+    currentNode !== nodeId || currentSegmentIndex !== segmentIndex ||
+    currentFragmentStart < 0;
   if (fragmentChanged) {
-    const fragmentRange = findFragmentRange(fragmentText, nodeId);
+    const fragmentRange = findFragmentRange(
+      fragmentText, nodeId, segmentIndex);
     if (!fragmentRange) {
       const failureKey = String(nodeId) + ':' + (fragmentText || '');
       if (!reportedPlaybackFailures.has(failureKey)) {
@@ -1405,6 +1422,7 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   currentEndIndex = range.end;
   currentBoundaryWordIndex = wordIndex;
   currentNode = nodeId;
+  currentSegmentIndex = segmentIndex;
   reveal(target);
 }
 
@@ -1432,6 +1450,7 @@ chrome.webview.addEventListener('message', event => {
     data.wordIndex,
     data.wordText,
     data.nodeId,
+    data.segmentIndex,
     data.follow);
   if ((data.fragmentText || '').toLocaleLowerCase().includes(
         'policymachinery.hpp already has sections')) {
