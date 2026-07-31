@@ -1807,7 +1807,13 @@ internal sealed class SapiSpeechEngine : IDisposable
         Exact: true));
     }
     raw.Sort(static (left, right) =>
-      left.AudioPosition.CompareTo(right.AudioPosition));
+    {
+      int timeComparison =
+        left.AudioPosition.CompareTo(right.AudioPosition);
+      return timeComparison != 0
+        ? timeComparison
+        : left.WordIndex.CompareTo(right.WordIndex);
+    });
     if (raw.Count == 0)
     {
       boundaries = Array.Empty<SpeechWordBoundary>();

@@ -1041,7 +1041,10 @@ The **Windows.Media bookmarks** setting has three values:
   Windows.Media fragment.
 
 Bookmark timing uses one bookmark between each pair of display tokens.  The
-first token starts at time zero, so a three-token sequence has two bookmarks.
+first token starts at time zero, so a three-token sequence has two bookmarks.  Bookmark
+boundaries are ordered by audio time and then by token index before equal-time
+compaction.  This guarantees that a silent punctuation token and the following
+spoken token remain in source order, so compaction retains the spoken token.
 When a period is directly attached to the following token, such as the period
 in `filename.hpp`, the displayed token remains `.` but its synthesis text is
 `dot`.  The sequence is therefore passed to Windows.Media as
