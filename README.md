@@ -1,4 +1,4 @@
-# Agent Panel Speaker v75
+# Agent Panel Speaker v76
 
 
 
@@ -8,6 +8,17 @@ Version 74 caches the voiced and all-text search corpora until the transcript is
 replaced. Find highlighting now clears only words touched by the previous search
 instead of scanning every rendered token. Input is also debounced for 150 ms,
 and each new search still terminates the previous worker before it starts.
+
+
+## v76 staged find diagnostics
+
+Version 76 instruments the browser work performed after a find worker returns.
+The diagnostic log now records separate elapsed times for result mapping, clearing
+old result classes, applying match classes, changing the current-match class,
+opening collapsed `details` ancestors, requesting the scroll, and the animation
+frame after each stage.  It also records the number of highlighted words and the
+number of collapsed `details` elements opened.  The stages yield to one animation
+frame between operations so the log can identify which browser operation stalls.
 
 
 ## v73 find reliability and keyboard corrections

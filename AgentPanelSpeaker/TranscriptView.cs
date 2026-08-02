@@ -1403,11 +1403,20 @@ function findFragmentRange(text, nodeId) {
 }
 
 function openAncestors(element) {
+  let opened = 0;
   let parent = element?.parentElement;
   while (parent) {
-    if (parent.tagName === 'DETAILS') parent.open = true;
+    if (parent.tagName === 'DETAILS' && !parent.open) {
+      parent.open = true;
+      ++opened;
+    }
     parent = parent.parentElement;
   }
+  return opened;
+}
+
+function nextAnimationFrame() {
+  return new Promise(resolve => requestAnimationFrame(resolve));
 }
 
 function reveal(element) {
@@ -1727,20 +1736,40 @@ function mapFindMatches(rawMatches, corpus) {
   return mapped;
 }
 
-function applyFindMatches(matches) {
+async function applyFindMatches(matches, mapElapsedMilliseconds) {
+  let stageStarted = performance.now();
   clearFindHighlights();
+  reportFind('results-cleared', {
+    elapsedMilliseconds: Math.round(performance.now() - stageStarted)
+  });
+  await nextAnimationFrame();
+  reportFind('after-clear-frame');
+
   findMatches = matches;
+  stageStarted = performance.now();
+  let highlightedWordCount = 0;
   for (const match of findMatches) {
     for (const word of match.words) {
       word.classList.add('find-match');
       findHighlightedWords.add(word);
+      ++highlightedWordCount;
     }
   }
+  reportFind('match-classes-applied', {
+    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
+    highlightedWordCount
+  });
+  await nextAnimationFrame();
+  reportFind('after-match-classes-frame');
+
   if (!findMatches.length) {
     currentFindMatch = -1;
     findCount.textContent = 'No results';
     updateFindNavigationState();
-    reportFind('completed', {matchCount: 0});
+    reportFind('completed', {
+      matchCount: 0,
+      mapElapsedMilliseconds
+    });
     return;
   }
   const marker = voiceMarkerIndex;
@@ -1748,25 +1777,64 @@ function applyFindMatches(matches) {
     match.startWordIndex > marker);
   if (currentFindMatch < 0) currentFindMatch = 0;
   updateFindNavigationState();
-  showFindMatch(currentFindMatch, 'search-completed');
-  reportFind('completed', {matchCount: findMatches.length});
+  await showFindMatch(currentFindMatch, 'search-completed');
+  reportFind('completed', {
+    matchCount: findMatches.length,
+    mapElapsedMilliseconds
+  });
 }
 
-function showFindMatch(index, trigger = 'unknown') {
+async function showFindMatch(index, trigger = 'unknown') {
   if (!findMatches.length || findWorker) {
     reportFind('navigation-ignored', {trigger});
     return;
   }
+
+  let stageStarted = performance.now();
   for (const word of findCurrentWords) {
     word.classList.remove('find-current');
   }
+  reportFind('current-class-cleared', {
+    trigger,
+    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
+    wordCount: findCurrentWords.length
+  });
+  await nextAnimationFrame();
+  reportFind('after-current-clear-frame', {trigger});
+
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
   findCurrentWords = match.words;
+  stageStarted = performance.now();
   for (const word of findCurrentWords) word.classList.add('find-current');
+  reportFind('current-class-applied', {
+    trigger,
+    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
+    wordCount: findCurrentWords.length
+  });
+  await nextAnimationFrame();
+  reportFind('after-current-class-frame', {trigger});
+
   const target = match.words[0];
-  openAncestors(target);
+  stageStarted = performance.now();
+  const openedDetailsCount = openAncestors(target);
+  reportFind('ancestors-opened', {
+    trigger,
+    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
+    openedDetailsCount
+  });
+  await nextAnimationFrame();
+  reportFind('after-ancestors-frame', {trigger, openedDetailsCount});
+
+  stageStarted = performance.now();
   target?.scrollIntoView({block:'center', behavior:'auto'});
+  reportFind('scroll-requested', {
+    trigger,
+    elapsedMilliseconds: Math.round(performance.now() - stageStarted)
+  });
+  await nextAnimationFrame();
+  reportFind('after-scroll-frame', {trigger});
+
   findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
   reportFind('navigated', {trigger, targetIndex: currentFindMatch});
 }
@@ -1811,7 +1879,15 @@ async function runFind() {
       reportFind('invalid-regex', {error: event.data.error});
       return;
     }
-    applyFindMatches(mapFindMatches(event.data.matches || [], corpus));
+    const mapStarted = performance.now();
+    const mappedMatches = mapFindMatches(event.data.matches || [], corpus);
+    const mapElapsedMilliseconds = Math.round(performance.now() - mapStarted);
+    reportFind('results-mapped', {
+      rawMatchCount: (event.data.matches || []).length,
+      mappedMatchCount: mappedMatches.length,
+      elapsedMilliseconds: mapElapsedMilliseconds
+    });
+    void applyFindMatches(mappedMatches, mapElapsedMilliseconds);
   };
   findWorker.postMessage({
     text: corpus.text,
