@@ -1,4 +1,4 @@
-# Agent Panel Speaker v76
+# Agent Panel Speaker v77
 
 
 
@@ -10,9 +10,9 @@ instead of scanning every rendered token. Input is also debounced for 150 ms,
 and each new search still terminates the previous worker before it starts.
 
 
-## v76 staged find diagnostics
+## v77 staged find diagnostics
 
-Version 76 instruments the browser work performed after a find worker returns.
+Version 77 instruments the browser work performed after a find worker returns.
 The diagnostic log now records separate elapsed times for result mapping, clearing
 old result classes, applying match classes, changing the current-match class,
 opening collapsed `details` ancestors, requesting the scroll, and the animation

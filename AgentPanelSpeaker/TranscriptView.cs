@@ -652,7 +652,18 @@ internal sealed class TranscriptView : UserControl
           currentMatch = ReadOptionalInt32(root, "currentMatch"),
           targetIndex = ReadOptionalInt32(root, "targetIndex"),
           trigger = ReadOptionalString(root, "trigger"),
-          error = ReadOptionalString(root, "error")
+          error = ReadOptionalString(root, "error"),
+          elapsedMilliseconds = ReadOptionalInt32(root, "elapsedMilliseconds"),
+          mapElapsedMilliseconds = ReadOptionalInt32(root, "mapElapsedMilliseconds"),
+          rawMatchCount = ReadOptionalInt32(root, "rawMatchCount"),
+          mappedMatchCount = ReadOptionalInt32(root, "mappedMatchCount"),
+          highlightedWordCount = ReadOptionalInt32(root, "highlightedWordCount"),
+          wordCount = ReadOptionalInt32(root, "wordCount"),
+          openedDetailsCount = ReadOptionalInt32(root, "openedDetailsCount"),
+          detailsAncestorCount = ReadOptionalInt32(root, "detailsAncestorCount"),
+          detailsAncestors = ReadOptionalString(root, "detailsAncestors"),
+          corpusLength = ReadOptionalInt32(root, "corpusLength"),
+          corpusWords = ReadOptionalInt32(root, "corpusWords")
         });
         return;
       }
@@ -1419,6 +1430,28 @@ function nextAnimationFrame() {
   return new Promise(resolve => requestAnimationFrame(resolve));
 }
 
+async function afterRenderedFrame() {
+  await nextAnimationFrame();
+  await nextAnimationFrame();
+}
+
+function describeDetailsAncestors(element) {
+  const ancestors = [];
+  let parent = element?.parentElement;
+  while (parent) {
+    if (parent.tagName === 'DETAILS') {
+      ancestors.push({
+        open: parent.open,
+        childElementCount: parent.childElementCount,
+        descendantElementCount: parent.querySelectorAll('*').length,
+        className: parent.className || ''
+      });
+    }
+    parent = parent.parentElement;
+  }
+  return ancestors;
+}
+
 function reveal(element) {
   if (!followSpeech || !element) return;
   const rect = element.getBoundingClientRect();
@@ -1742,26 +1775,10 @@ async function applyFindMatches(matches, mapElapsedMilliseconds) {
   reportFind('results-cleared', {
     elapsedMilliseconds: Math.round(performance.now() - stageStarted)
   });
-  await nextAnimationFrame();
-  reportFind('after-clear-frame');
+  await afterRenderedFrame();
+  reportFind('after-clear-render');
 
   findMatches = matches;
-  stageStarted = performance.now();
-  let highlightedWordCount = 0;
-  for (const match of findMatches) {
-    for (const word of match.words) {
-      word.classList.add('find-match');
-      findHighlightedWords.add(word);
-      ++highlightedWordCount;
-    }
-  }
-  reportFind('match-classes-applied', {
-    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
-    highlightedWordCount
-  });
-  await nextAnimationFrame();
-  reportFind('after-match-classes-frame');
-
   if (!findMatches.length) {
     currentFindMatch = -1;
     findCount.textContent = 'No results';
@@ -1772,6 +1789,7 @@ async function applyFindMatches(matches, mapElapsedMilliseconds) {
     });
     return;
   }
+
   const marker = voiceMarkerIndex;
   currentFindMatch = findMatches.findIndex(match =>
     match.startWordIndex > marker);
@@ -1794,17 +1812,21 @@ async function showFindMatch(index, trigger = 'unknown') {
   for (const word of findCurrentWords) {
     word.classList.remove('find-current');
   }
+  const previousWordCount = findCurrentWords.length;
+  findCurrentWords = [];
   reportFind('current-class-cleared', {
     trigger,
     elapsedMilliseconds: Math.round(performance.now() - stageStarted),
-    wordCount: findCurrentWords.length
+    wordCount: previousWordCount
   });
-  await nextAnimationFrame();
-  reportFind('after-current-clear-frame', {trigger});
+  await afterRenderedFrame();
+  reportFind('after-current-clear-render', {trigger});
 
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
   findCurrentWords = match.words;
+  const target = match.words[0];
+
   stageStarted = performance.now();
   for (const word of findCurrentWords) word.classList.add('find-current');
   reportFind('current-class-applied', {
@@ -1812,10 +1834,16 @@ async function showFindMatch(index, trigger = 'unknown') {
     elapsedMilliseconds: Math.round(performance.now() - stageStarted),
     wordCount: findCurrentWords.length
   });
-  await nextAnimationFrame();
-  reportFind('after-current-class-frame', {trigger});
+  await afterRenderedFrame();
+  reportFind('after-current-class-render', {trigger});
 
-  const target = match.words[0];
+  const detailsAncestors = describeDetailsAncestors(target);
+  reportFind('ancestor-chain', {
+    trigger,
+    detailsAncestorCount: detailsAncestors.length,
+    detailsAncestors: JSON.stringify(detailsAncestors)
+  });
+
   stageStarted = performance.now();
   const openedDetailsCount = openAncestors(target);
   reportFind('ancestors-opened', {
@@ -1823,8 +1851,8 @@ async function showFindMatch(index, trigger = 'unknown') {
     elapsedMilliseconds: Math.round(performance.now() - stageStarted),
     openedDetailsCount
   });
-  await nextAnimationFrame();
-  reportFind('after-ancestors-frame', {trigger, openedDetailsCount});
+  await afterRenderedFrame();
+  reportFind('after-ancestors-render', {trigger, openedDetailsCount});
 
   stageStarted = performance.now();
   target?.scrollIntoView({block:'center', behavior:'auto'});
@@ -1832,8 +1860,8 @@ async function showFindMatch(index, trigger = 'unknown') {
     trigger,
     elapsedMilliseconds: Math.round(performance.now() - stageStarted)
   });
-  await nextAnimationFrame();
-  reportFind('after-scroll-frame', {trigger});
+  await afterRenderedFrame();
+  reportFind('after-scroll-render', {trigger});
 
   findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
   reportFind('navigated', {trigger, targetIndex: currentFindMatch});
