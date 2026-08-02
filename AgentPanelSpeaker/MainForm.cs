@@ -923,9 +923,11 @@ internal sealed class MainForm : Form, IMessageFilter
       _windowsMediaBookmarksComboBox.SelectedItem =
         settings.WindowsMediaBookmarks;
       _speech.SetWindowsMediaBookmarkMode(settings.WindowsMediaBookmarks);
+      bool transcriptDark = ThemeManager.IsDark(settings.Theme);
       _transcriptSettingsPopup.SetSettings(
         settings.Transcript,
-        ThemeManager.IsDark(settings.Theme));
+        transcriptDark);
+      _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
       _speech.SetWordBoundaryPollMilliseconds(
         settings.Transcript.HighlightUpdateMilliseconds);
       _appliedTranscriptTrackingMilliseconds =

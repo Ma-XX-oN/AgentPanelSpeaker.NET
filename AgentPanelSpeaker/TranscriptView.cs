@@ -276,10 +276,20 @@ internal sealed class TranscriptView : UserControl
   /// </summary>
   public void OpenFind()
   {
-    if (_initialized)
+    if (!_initialized)
     {
-      _ = ExecuteAsync("openFind();");
+      return;
     }
+
+    _webView.Focus();
+    BeginInvoke(new Action(() =>
+    {
+      if (!_webView.IsDisposed)
+      {
+        _webView.Focus();
+        _ = ExecuteAsync("openFind();");
+      }
+    }));
   }
 
   /// <summary>
@@ -628,6 +638,24 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
+      if (type == "find-diagnostic")
+      {
+        DiagnosticLog.Write("transcript.find", new
+        {
+          action = ReadOptionalString(root, "action"),
+          query = ReadOptionalString(root, "query"),
+          caseEnabled = ReadOptionalBoolean(root, "caseEnabled"),
+          wordEnabled = ReadOptionalBoolean(root, "wordEnabled"),
+          regexEnabled = ReadOptionalBoolean(root, "regexEnabled"),
+          voicedEnabled = ReadOptionalBoolean(root, "voicedEnabled"),
+          matchCount = ReadOptionalInt32(root, "matchCount"),
+          currentMatch = ReadOptionalInt32(root, "currentMatch"),
+          targetIndex = ReadOptionalInt32(root, "targetIndex"),
+          trigger = ReadOptionalString(root, "trigger"),
+          error = ReadOptionalString(root, "error")
+        });
+        return;
+      }
       if (type == "find-seek")
       {
         long? nodeId = ReadOptionalInt64(root, "nodeId");
@@ -701,6 +729,22 @@ internal sealed class TranscriptView : UserControl
       value.TryGetInt32(out int result)
         ? result
         : null;
+  }
+
+  private static bool? ReadOptionalBoolean(
+    JsonElement root,
+    string propertyName)
+  {
+    if (!root.TryGetProperty(propertyName, out JsonElement value))
+    {
+      return null;
+    }
+    return value.ValueKind switch
+    {
+      JsonValueKind.True => true,
+      JsonValueKind.False => false,
+      _ => null
+    };
   }
 
   private static Keys KeyNameToKeys(string key)
@@ -850,8 +894,8 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   z-index: 1000;
   display: none;
   align-items: center;
-  gap: 4px;
-  padding: 5px;
+  gap: 1px;
+  padding: 4px 5px;
   border: 1px solid var(--quote);
   border-radius: 6px;
   background: var(--panel);
@@ -859,24 +903,41 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 }
 #find-popup.open { display: flex; }
 #find-input {
-  width: 260px;
+  width: 300px;
+  height: 28px;
+  box-sizing: border-box;
   border: 1px solid var(--quote);
-  border-radius: 3px;
-  padding: 4px 7px;
+  border-radius: 4px;
+  padding: 3px 7px;
   color: var(--text);
   background: var(--page);
 }
-.find-button, #find-scope {
+.find-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 28px;
+  width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--text);
   background: transparent;
+  cursor: default;
 }
-.find-button:hover, #find-scope:hover { background: var(--code); }
-.find-button.enabled { border-color: var(--link); background: var(--code); }
-#find-count { min-width: 72px; color: var(--muted); text-align: center; }
+.find-button:hover {
+  border-color: color-mix(in srgb, var(--quote) 75%, transparent);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.find-button:active { background: color-mix(in srgb, var(--text) 20%, transparent); }
+.find-button.enabled {
+  border-color: var(--link);
+  background: color-mix(in srgb, var(--link) 18%, transparent);
+}
+.find-button:disabled { opacity: .42; }
+#find-voiced svg { width: 17px; height: 17px; fill: currentColor; }
+#find-count { min-width: 62px; padding: 0 4px; color: var(--muted); text-align: center; white-space: nowrap; }
 .word.find-match { box-shadow: inset 0 -2px 0 #c08a00; }
 .word.find-current { background: #d99b22; color: #111; }
 #live-end-marker {
@@ -896,17 +957,16 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 <body>
 <div id="find-popup" role="search" aria-label="Find in transcript">
   <input id="find-input" type="text" spellcheck="false" aria-label="Find">
-  <button id="find-case" class="find-button" title="Match case">Aa</button>
-  <button id="find-word" class="find-button" title="Match whole word">ab</button>
-  <button id="find-regex" class="find-button" title="Use regular expression">.*</button>
-  <select id="find-scope" title="Search scope">
-    <option value="voiced" selected>Voiced</option>
-    <option value="all">All</option>
-  </select>
+  <button type="button" id="find-case" class="find-button" title="Match case (Alt+C)">Aa</button>
+  <button type="button" id="find-word" class="find-button" title="Match whole word (Alt+W)">ab</button>
+  <button type="button" id="find-regex" class="find-button" title="Use regular expression (Alt+R)">.*</button>
+  <button type="button" id="find-voiced" class="find-button enabled" title="Search voiced text only">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9v6h4l5 4V5L9 9H5zm11.5 3a4.5 4.5 0 0 0-2.1-3.8v7.6a4.5 4.5 0 0 0 2.1-3.8zm0-8.1v2.2a7 7 0 0 1 0 11.8v2.2a9 9 0 0 0 0-16.2z"/></svg>
+  </button>
   <span id="find-count">No results</span>
-  <button id="find-prev" class="find-button" title="Previous match (Shift+Enter)">↑</button>
-  <button id="find-next" class="find-button" title="Next match (Enter)">↓</button>
-  <button id="find-close" class="find-button" title="Close (Escape)">×</button>
+  <button type="button" id="find-prev" class="find-button" title="Previous match (Shift+Enter)">↑</button>
+  <button type="button" id="find-next" class="find-button" title="Next match (Enter)">↓</button>
+  <button type="button" id="find-close" class="find-button" title="Close (Escape)">×</button>
 </div>
 <main id="transcript"></main>
 <div id="live-end-marker" aria-label="Next text position"></div>
@@ -918,7 +978,7 @@ const findInput = document.getElementById('find-input');
 const findCase = document.getElementById('find-case');
 const findWord = document.getElementById('find-word');
 const findRegex = document.getElementById('find-regex');
-const findScope = document.getElementById('find-scope');
+const findVoiced = document.getElementById('find-voiced');
 const findCount = document.getElementById('find-count');
 const findPrev = document.getElementById('find-prev');
 const findNext = document.getElementById('find-next');
@@ -951,6 +1011,7 @@ let findSlowTimer = 0;
 let findCaseEnabled = false;
 let findWordEnabled = false;
 let findRegexEnabled = false;
+let findVoicedEnabled = true;
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu) || [];
@@ -1522,17 +1583,40 @@ function clearFindHighlights() {
   }
 }
 
+function reportFind(action, extra = {}) {
+  chrome.webview.postMessage({
+    type: 'find-diagnostic',
+    action,
+    query: findInput.value,
+    caseEnabled: findCaseEnabled,
+    wordEnabled: findWordEnabled,
+    regexEnabled: findRegexEnabled,
+    voicedEnabled: findVoicedEnabled,
+    matchCount: findMatches.length,
+    currentMatch: currentFindMatch,
+    ...extra
+  });
+}
+
+function updateFindNavigationState() {
+  const available = !findWorker && findMatches.length > 0;
+  findPrev.disabled = !available;
+  findNext.disabled = !available;
+}
+
 function cancelFindSearch(updateStatus) {
   ++findGeneration;
   if (findWorker) {
     findWorker.terminate();
     findWorker = null;
+    reportFind('worker-cancelled');
   }
   if (findSlowTimer) {
     clearTimeout(findSlowTimer);
     findSlowTimer = 0;
   }
   if (updateStatus) findCount.textContent = 'Cancelled';
+  updateFindNavigationState();
 }
 
 function buildFindCorpus(voicedOnly) {
@@ -1561,12 +1645,27 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function firstRangeEndingAfter(ranges, position) {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (ranges[middle].end <= position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 function mapFindMatches(rawMatches, corpus) {
   const mapped = [];
   for (const raw of rawMatches) {
     const end = raw.start + Math.max(1, raw.length);
-    const touched = corpus.ranges.filter(range =>
-      range.start < end && range.end > raw.start);
+    const touched = [];
+    for (let index = firstRangeEndingAfter(corpus.ranges, raw.start);
+         index < corpus.ranges.length && corpus.ranges[index].start < end;
+         ++index) {
+      touched.push(corpus.ranges[index]);
+    }
     if (!touched.length) continue;
     const firstLexical = touched.find(item => item.nodeWordIndex >= 0);
     mapped.push({
@@ -1587,17 +1686,24 @@ function applyFindMatches(matches) {
   if (!findMatches.length) {
     currentFindMatch = -1;
     findCount.textContent = 'No results';
+    updateFindNavigationState();
+    reportFind('completed', {matchCount: 0});
     return;
   }
   const marker = currentIndex >= 0 ? currentIndex : 0;
   currentFindMatch = findMatches.findIndex(match =>
     Number(match.words[0]?.dataset.index || 0) >= marker);
   if (currentFindMatch < 0) currentFindMatch = 0;
-  showFindMatch(currentFindMatch);
+  updateFindNavigationState();
+  showFindMatch(currentFindMatch, 'search-completed');
+  reportFind('completed', {matchCount: findMatches.length});
 }
 
-function showFindMatch(index) {
-  if (!findMatches.length) return;
+function showFindMatch(index, trigger = 'unknown') {
+  if (!findMatches.length || findWorker) {
+    reportFind('navigation-ignored', {trigger});
+    return;
+  }
   for (const match of findMatches) {
     for (const word of match.words) word.classList.remove('find-current');
   }
@@ -1608,6 +1714,7 @@ function showFindMatch(index) {
   openAncestors(target);
   target?.scrollIntoView({block:'center', behavior:'auto'});
   findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
+  reportFind('navigated', {trigger, targetIndex: currentFindMatch});
 }
 
 function runFind() {
@@ -1615,21 +1722,26 @@ function runFind() {
   clearFindHighlights();
   findMatches = [];
   currentFindMatch = -1;
+  updateFindNavigationState();
   const query = findInput.value;
   if (!query) {
     findCount.textContent = 'No results';
     return;
   }
-  const corpus = buildFindCorpus(findScope.value === 'voiced');
+  const corpus = buildFindCorpus(findVoicedEnabled);
   const source = findRegexEnabled ? query : escapeRegex(query);
   const pattern = findWordEnabled
     ? `(?<![\\p{L}\\p{N}_])(?:${source})(?![\\p{L}\\p{N}_])`
     : source;
   const generation = ++findGeneration;
   const workerSource = `onmessage=e=>{try{const r=new RegExp(e.data.pattern,e.data.flags);const a=[];let m;while((m=r.exec(e.data.text))!==null){a.push({start:m.index,length:m[0].length});if(m[0].length===0)r.lastIndex++;}postMessage({matches:a});}catch(error){postMessage({error:String(error.message||error)});}};`;
-  findWorker = new Worker(URL.createObjectURL(
-    new Blob([workerSource], {type:'text/javascript'})));
+  const workerUrl = URL.createObjectURL(
+    new Blob([workerSource], {type:'text/javascript'}));
+  findWorker = new Worker(workerUrl);
+  URL.revokeObjectURL(workerUrl);
   findCount.textContent = 'Searching…';
+  updateFindNavigationState();
+  reportFind('started', {corpusLength: corpus.text.length});
   findWorker.onmessage = event => {
     if (generation !== findGeneration) return;
     if (findSlowTimer) clearTimeout(findSlowTimer);
@@ -1638,6 +1750,8 @@ function runFind() {
     findWorker = null;
     if (event.data.error) {
       findCount.textContent = 'Invalid regex';
+      updateFindNavigationState();
+      reportFind('invalid-regex', {error: event.data.error});
       return;
     }
     applyFindMatches(mapFindMatches(event.data.matches || [], corpus));
@@ -1649,16 +1763,25 @@ function runFind() {
   });
   findSlowTimer = setTimeout(() => {
     if (!findWorker || generation !== findGeneration) return;
+    reportFind('slow-prompt');
     if (!confirm('The regular-expression search is still running. Continue waiting?')) {
       cancelFindSearch(true);
     }
   }, 5000);
 }
 
+function focusFindInput() {
+  findInput.focus({preventScroll:true});
+  findInput.select();
+}
+
 function openFind() {
   findPopup.classList.add('open');
-  findInput.focus();
-  findInput.select();
+  focusFindInput();
+  requestAnimationFrame(focusFindInput);
+  setTimeout(focusFindInput, 0);
+  setTimeout(focusFindInput, 50);
+  reportFind('opened');
 }
 
 function closeFind() {
@@ -1668,6 +1791,7 @@ function closeFind() {
   currentFindMatch = -1;
   findPopup.classList.remove('open');
   transcript.focus();
+  reportFind('closed');
 }
 
 function toggleFindOption(button, setter) {
@@ -1677,15 +1801,27 @@ function toggleFindOption(button, setter) {
 }
 
 findInput.addEventListener('input', runFind);
-findScope.addEventListener('change', runFind);
 findCase.addEventListener('click', () => toggleFindOption(findCase, () => findCaseEnabled = !findCaseEnabled));
 findWord.addEventListener('click', () => toggleFindOption(findWord, () => findWordEnabled = !findWordEnabled));
 findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => findRegexEnabled = !findRegexEnabled));
-findPrev.addEventListener('click', () => showFindMatch(currentFindMatch - 1));
-findNext.addEventListener('click', () => showFindMatch(currentFindMatch + 1));
+findVoiced.addEventListener('click', () => toggleFindOption(findVoiced, () => findVoicedEnabled = !findVoicedEnabled));
+findPrev.addEventListener('click', () => showFindMatch(currentFindMatch - 1, 'button-previous'));
+findNext.addEventListener('click', () => showFindMatch(currentFindMatch + 1, 'button-next'));
 findClose.addEventListener('click', closeFind);
+updateFindNavigationState();
 
 findPopup.addEventListener('keydown', event => {
+  const lower = event.key.toLocaleLowerCase();
+  if (event.altKey && !event.ctrlKey && !event.shiftKey &&
+      (lower === 'c' || lower === 'w' || lower === 'r')) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (lower === 'c') findCase.click();
+    else if (lower === 'w') findWord.click();
+    else findRegex.click();
+    focusFindInput();
+    return;
+  }
   if (event.key === 'Escape') {
     event.preventDefault();
     event.stopPropagation();
@@ -1698,8 +1834,10 @@ findPopup.addEventListener('keydown', event => {
     const match = findMatches[currentFindMatch];
     if (!match || !match.nodeId || match.nodeWordIndex < 0) {
       findCount.textContent = 'Not voiced';
+      reportFind('seek-ignored');
       return;
     }
+    reportFind('seek-requested');
     chrome.webview.postMessage({
       type:'find-seek',
       nodeId:Number(match.nodeId),
@@ -1709,7 +1847,9 @@ findPopup.addEventListener('keydown', event => {
   }
   if (event.key === 'Enter') {
     event.preventDefault();
-    showFindMatch(currentFindMatch + (event.shiftKey ? -1 : 1));
+    showFindMatch(
+      currentFindMatch + (event.shiftKey ? -1 : 1),
+      event.shiftKey ? 'shift-enter' : 'enter');
   }
 });
 
@@ -1762,9 +1902,14 @@ window.addEventListener('keydown', event => {
     openFind();
     return;
   }
-  if (findPopup.classList.contains('open')) return;
+  const lower = event.key.toLocaleLowerCase();
+  const findOptionKey = findPopup.classList.contains('open') &&
+    event.altKey && !event.ctrlKey && !event.shiftKey &&
+    (lower === 'c' || lower === 'w' || lower === 'r');
+  if (findOptionKey) return;
   if (event.ctrlKey || event.metaKey || event.shiftKey) return;
   if (event.key.length !== 1) return;
+  if (findPopup.classList.contains('open') && !event.altKey) return;
   event.preventDefault();
   event.stopPropagation();
   chrome.webview.postMessage({type:'transport', key:event.key, alt:event.altKey});

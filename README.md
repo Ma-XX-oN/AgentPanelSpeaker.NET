@@ -1,5 +1,25 @@
-# Agent Panel Speaker v69
+# Agent Panel Speaker v73
 
+
+
+## v73 find reliability and keyboard corrections
+
+Version 73 focuses the find text box when `Ctrl+F` opens the popup, routes
+Alt-modified transport hotkeys from the WebView, and maps `Alt+C`, `Alt+W`,
+and `Alt+R` to the case, whole-word, and regular-expression toggles.  The
+Voiced/All selector is now a compact mouth-icon toggle that defaults to
+Voiced.
+
+Find navigation now terminates every previous worker before starting a new
+search, disables previous/next while a search is running, and records search,
+cancellation, completion, and navigation events in the diagnostic log.  Match
+mapping uses binary range lookup instead of scanning every transcript token
+for every match.  This removes the UI-thread CPU spike observed when navigating
+a large result set.
+
+The transcript viewer now receives the saved highlight settings while the main
+form loads its settings, rather than initially showing the built-in default
+colour.
 
 ## v72 transcript find popup
 
