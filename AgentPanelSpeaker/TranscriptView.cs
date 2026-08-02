@@ -217,21 +217,18 @@ internal sealed class TranscriptView : UserControl
 
   private void PostPlaybackPosition(TranscriptPlaybackPosition position)
   {
-    if (position.FragmentText.Contains(
-          "PolicyMachinery.hpp already has sections",
-          StringComparison.OrdinalIgnoreCase))
+    DiagnosticLog.Write("transcript.marker_posted", new
     {
-      DiagnosticLog.Write("transcript.marker_posted", new
-      {
-        position.NodeId,
-        position.WordIndex,
-        position.Word,
-        position.CharacterPosition,
-        position.CharacterCount,
-        position.BoundaryTimestamp,
-        postedTimestamp = Stopwatch.GetTimestamp()
-      });
-    }
+      position.State,
+      position.NodeId,
+      position.FragmentText,
+      position.WordIndex,
+      position.Word,
+      position.CharacterPosition,
+      position.CharacterCount,
+      position.BoundaryTimestamp,
+      postedTimestamp = Stopwatch.GetTimestamp()
+    });
     PostMessage(new
     {
       type = "playback",
@@ -592,6 +589,12 @@ internal sealed class TranscriptView : UserControl
           sequence = ReadOptionalInt64(root, "sequence"),
           nodeId = ReadOptionalInt64(root, "nodeId"),
           wordIndex = ReadOptionalInt32(root, "wordIndex"),
+          wordText = ReadOptionalString(root, "wordText"),
+          fragmentText = ReadOptionalString(root, "fragmentText"),
+          state = ReadOptionalString(root, "state"),
+          rangeStart = ReadOptionalInt32(root, "rangeStart"),
+          rangeEnd = ReadOptionalInt32(root, "rangeEnd"),
+          boundaryWordIndex = ReadOptionalInt32(root, "boundaryWordIndex"),
           boundaryTimestamp = ReadOptionalInt64(root, "boundaryTimestamp"),
           javascriptTimestamp = ReadOptionalString(root, "javascriptTimestamp"),
           receivedTimestamp = Stopwatch.GetTimestamp()
@@ -1439,17 +1442,20 @@ chrome.webview.addEventListener('message', event => {
     data.wordText,
     data.nodeId,
     data.follow);
-  if ((data.fragmentText || '').toLocaleLowerCase().includes(
-        'policymachinery.hpp already has sections')) {
-    chrome.webview.postMessage({
-      type: 'playback-applied',
-      sequence: data.sequence,
-      nodeId: data.nodeId,
-      wordIndex: data.wordIndex,
-      boundaryTimestamp: data.boundaryTimestamp,
-      javascriptTimestamp: String(performance.now())
-    });
-  }
+  chrome.webview.postMessage({
+    type: 'playback-applied',
+    sequence: data.sequence,
+    nodeId: data.nodeId,
+    wordIndex: data.wordIndex,
+    wordText: data.wordText || '',
+    fragmentText: data.fragmentText || '',
+    state: data.state || '',
+    rangeStart: currentIndex,
+    rangeEnd: currentEndIndex,
+    boundaryWordIndex: currentBoundaryWordIndex,
+    boundaryTimestamp: data.boundaryTimestamp,
+    javascriptTimestamp: String(performance.now())
+  });
 });
 
 window.addEventListener('keydown', event => {

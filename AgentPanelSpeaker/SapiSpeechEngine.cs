@@ -1147,6 +1147,23 @@ internal sealed class SapiSpeechEngine : IDisposable
           sourceTokens,
           sourcePosition,
           sourceCount);
+        DiagnosticLog.Write("sapi.speak_progress", new
+        {
+          provider = "System.Speech",
+          voice = providerVoiceId,
+          markup.PlainText,
+          eventArgs.Text,
+          eventArgs.CharacterPosition,
+          eventArgs.CharacterCount,
+          eventArgs.AudioPosition,
+          synthesisCharacterOffset,
+          sourcePosition,
+          sourceCount,
+          tokenIndex,
+          sourceToken = tokenIndex >= 0 && tokenIndex < sourceTokens.Count
+            ? sourceTokens[tokenIndex].Value
+            : string.Empty
+        });
         collected.Add(new SpeechWordBoundary(
           eventArgs.AudioPosition,
           tokenIndex,

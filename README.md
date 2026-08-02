@@ -1,6 +1,17 @@
 # Agent Panel Speaker v69
 
 
+## v71 diagnostic and paused-seek corrections
+
+- System.Speech `SpeakProgress` callbacks are logged with provider positions,
+  normalized source ranges, token indices, and source-token text.
+- Every speech boundary, transcript-marker post, and WebView marker application
+  is logged instead of tracing one hard-coded sentence.
+- Sentence, node, and speaker navigation now preserves the paused state.  The
+  transcript marker moves to the selected entry, but audio does not resume until
+  Play/Resume is explicitly requested.
+
+
 ## v69: transport timing, configurable hotkeys, and UI cleanup
 
 - Processing-time announcements speak immediately while playback is paused and

@@ -37,6 +37,7 @@ internal sealed class SpeechService : IDisposable
   private ProcessingTimeAnnouncement? _pendingProcessingTime;
   private bool _processingTimeAnnouncementRequested;
   private bool _processingTimeReturnToPause;
+  private bool _restorePauseAfterCancellation;
   private FenceActivityKey? _lastFenceActivity;
   private bool _reportedSpeaking;
   private bool _isPaused;
@@ -946,26 +947,27 @@ internal sealed class SpeechService : IDisposable
         _activeTranscriptText,
         _activeWordIndex,
         boundary.Text);
-      if (ShouldTracePlayback(_activeTranscriptText))
+      DiagnosticLog.Write("speech.word_boundary", new
       {
-        DiagnosticLog.Write("speech.word_boundary", new
-        {
-          nodeId = _activeHistoryIndex >= 0 &&
-            _activeHistoryIndex < _history.Count
-              ? _history[_activeHistoryIndex].NodeId
-              : -1,
-          boundary.WordIndex,
-          boundary.CharacterPosition,
-          boundary.CharacterCount,
-          boundary.Text,
-          boundary.AudioPosition,
-          boundary.Exact,
-          absoluteCharacterPosition,
-          mappedWordIndex = _activeWordIndex,
-          mappedWord = _activeWord,
-          timestamp = _activeBoundaryTimestamp
-        });
-      }
+        nodeId = _activeHistoryIndex >= 0 &&
+          _activeHistoryIndex < _history.Count
+            ? _history[_activeHistoryIndex].NodeId
+            : -1,
+        activeHistoryIndex = _activeHistoryIndex,
+        activeFragmentText = _activeTranscriptText,
+        boundary.WordIndex,
+        boundary.CharacterPosition,
+        boundary.CharacterCount,
+        boundary.Text,
+        boundary.AudioPosition,
+        boundary.Exact,
+        characterBaseOffset = _activeCharacterBaseOffset,
+        wordBaseIndex = _activeWordBaseIndex,
+        absoluteCharacterPosition,
+        mappedWordIndex = _activeWordIndex,
+        mappedWord = _activeWord,
+        timestamp = _activeBoundaryTimestamp
+      });
       ReportPlaybackPositionLocked(
         _isPaused
           ? TranscriptPlaybackState.Paused
@@ -990,6 +992,8 @@ internal sealed class SpeechService : IDisposable
         completedKind == ActiveSpeechKind.ProcessingTime
           ? _pendingProcessingTime
           : null;
+      bool restorePause = _restorePauseAfterCancellation;
+      _restorePauseAfterCancellation = false;
       SetPausedLocked(false);
       _activeKind = ActiveSpeechKind.None;
       _activeHistoryIndex = -1;
@@ -1013,6 +1017,10 @@ internal sealed class SpeechService : IDisposable
       }
 
       TrimHistoryLocked();
+      if (restorePause)
+      {
+        SetPausedLocked(true);
+      }
       StartPendingOrNextLocked();
       if (_activeKind == ActiveSpeechKind.None)
       {
@@ -1683,13 +1691,6 @@ internal sealed class SpeechService : IDisposable
       : fallback;
   }
 
-  private static bool ShouldTracePlayback(string text)
-  {
-    return text.Contains(
-      "PolicyMachinery.hpp already has sections",
-      StringComparison.OrdinalIgnoreCase);
-  }
-
   private static int GetWordCharacterPosition(string text, int wordIndex)
   {
     MatchCollection matches = SpeechTokenization.Matches(text);
@@ -1812,6 +1813,7 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void MoveToLiveEndLocked()
   {
+    _restorePauseAfterCancellation = false;
     _pendingHistoryIndex = null;
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
@@ -1829,13 +1831,52 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void RestartHistoryLocked(int index)
   {
+    bool preservePause = _isPaused;
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
     _pendingHistoryIndex = index;
     _nextHistoryIndex = index;
     _lastFenceActivity = null;
-    SetPausedLocked(false);
+    if (preservePause)
+    {
+      SetPausedNavigationPositionLocked(index);
+      if (_activeKind != ActiveSpeechKind.None)
+      {
+        _restorePauseAfterCancellation = true;
+        _engine.Cancel();
+      }
+      return;
+    }
     RestartPendingLocked();
+  }
+
+  /// <summary>
+  /// Moves the transcript marker to a selected history fragment without
+  /// starting its audio.
+  /// </summary>
+  private void SetPausedNavigationPositionLocked(int index)
+  {
+    SpeechFragment fragment = _history[index];
+    _activeHistoryIndex = index;
+    _activeTranscriptText = fragment.Text;
+    _activeWordIndex = 0;
+    _activeWordBaseIndex = 0;
+    _activeCharacterBaseOffset = 0;
+    _activeCharacterPosition = GetWordCharacterPosition(fragment.Text, 0);
+    _activeWord = FirstWord(fragment.Text);
+    _activeCharacterCount = _activeWord.Length;
+    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+    ReportPlaybackPositionLocked(TranscriptPlaybackState.Paused);
+    DiagnosticLog.Write("speech.paused_navigation", new
+    {
+      historyIndex = index,
+      fragment.NodeId,
+      fragment.Text,
+      wordIndex = _activeWordIndex,
+      word = _activeWord,
+      characterPosition = _activeCharacterPosition,
+      characterCount = _activeCharacterCount
+    });
   }
 
   /// <summary>
