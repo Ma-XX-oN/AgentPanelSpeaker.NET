@@ -960,8 +960,8 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   <button type="button" id="find-case" class="find-button" title="Match case (Alt+C)">Aa</button>
   <button type="button" id="find-word" class="find-button" title="Match whole word (Alt+W)">ab</button>
   <button type="button" id="find-regex" class="find-button" title="Use regular expression (Alt+R)">.*</button>
-  <button type="button" id="find-voiced" class="find-button enabled" title="Search voiced text only">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9v6h4l5 4V5L9 9H5zm11.5 3a4.5 4.5 0 0 0-2.1-3.8v7.6a4.5 4.5 0 0 0 2.1-3.8zm0-8.1v2.2a7 7 0 0 1 0 11.8v2.2a9 9 0 0 0 0-16.2z"/></svg>
+  <button type="button" id="find-voiced" class="find-button enabled" title="Search voiced text only (Alt+V)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5c-2.2 0-3.3 1.6-4.5 2.4C6.2 8.8 4.8 9.3 3 10c1.7 4.2 5 6.5 9 6.5s7.3-2.3 9-6.5c-1.8-.7-3.2-1.2-4.5-2.1C15.3 7.1 14.2 5.5 12 5.5zm-6.1 5.1c2 .2 4 .4 6.1.4s4.1-.2 6.1-.4c-1.6 2.1-3.6 3.1-6.1 3.1s-4.5-1-6.1-3.1z"/></svg>
   </button>
   <span id="find-count">No results</span>
   <button type="button" id="find-prev" class="find-button" title="Previous match (Shift+Enter)">↑</button>
@@ -987,6 +987,7 @@ let words = [];
 let lexicalWords = [];
 let currentIndex = -1;
 let currentEndIndex = -1;
+let voiceMarkerIndex = -1;
 let currentNode = -1;
 let currentFragmentText = null;
 let currentFragmentStart = -1;
@@ -1087,6 +1088,7 @@ function replaceTranscript(html, preserve, nodeMap) {
   assignNodeScopes(nodeMap || []);
   currentIndex = -1;
   currentEndIndex = -1;
+  voiceMarkerIndex = -1;
   currentNode = -1;
   currentFragmentText = null;
   currentFragmentStart = -1;
@@ -1581,6 +1583,7 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   }
   currentIndex = range.start;
   currentEndIndex = range.end;
+  voiceMarkerIndex = range.start;
   currentBoundaryWordIndex = wordIndex;
   currentNode = nodeId;
   reveal(target);
@@ -1634,28 +1637,48 @@ function cancelFindSearch(updateStatus) {
   updateFindNavigationState();
 }
 
-function buildFindCorpus(voicedOnly) {
+async function buildFindCorpus(voicedOnly, generation) {
   const cached = voicedOnly ? findCorpusVoiced : findCorpusAll;
   if (cached) return cached;
   const started = performance.now();
-  const selected = voicedOnly
-    ? words.filter(word => word.dataset.nodeId)
-    : words;
-  let text = '';
+  const pieces = [];
   const ranges = [];
   const nodeWordCounts = new Map();
-  for (const word of selected) {
-    if (text) text += ' ';
-    const start = text.length;
-    text += word.textContent || '';
+  let textLength = 0;
+  const chunkSize = 1500;
+  for (let index = 0; index < words.length; ++index) {
+    if (generation !== findGeneration) return null;
+    const word = words[index];
+    if (voicedOnly && !word.dataset.nodeId) continue;
+    const value = word.textContent || '';
+    if (pieces.length) {
+      pieces.push(' ');
+      ++textLength;
+    }
+    const start = textLength;
+    pieces.push(value);
+    textLength += value.length;
     const nodeId = word.dataset.nodeId || '';
     let nodeWordIndex = -1;
     if (nodeId && word.dataset.lexical === '1') {
       nodeWordIndex = nodeWordCounts.get(nodeId) || 0;
       nodeWordCounts.set(nodeId, nodeWordIndex + 1);
     }
-    ranges.push({start, end: text.length, word, nodeId, nodeWordIndex});
+    ranges.push({
+      start,
+      end: textLength,
+      word,
+      wordIndex: index,
+      nodeId,
+      nodeWordIndex
+    });
+    if (index > 0 && index % chunkSize === 0) {
+      findCount.textContent = 'Indexing…';
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
   }
+  if (generation !== findGeneration) return null;
+  const text = pieces.join('');
   const corpus = {text, ranges};
   if (voicedOnly) findCorpusVoiced = corpus;
   else findCorpusAll = corpus;
@@ -1697,7 +1720,8 @@ function mapFindMatches(rawMatches, corpus) {
     mapped.push({
       words: touched.map(item => item.word),
       nodeId: firstLexical?.nodeId || '',
-      nodeWordIndex: firstLexical?.nodeWordIndex ?? -1
+      nodeWordIndex: firstLexical?.nodeWordIndex ?? -1,
+      startWordIndex: touched[0].wordIndex
     });
   }
   return mapped;
@@ -1719,9 +1743,9 @@ function applyFindMatches(matches) {
     reportFind('completed', {matchCount: 0});
     return;
   }
-  const marker = currentIndex >= 0 ? currentIndex : 0;
+  const marker = voiceMarkerIndex;
   currentFindMatch = findMatches.findIndex(match =>
-    Number(match.words[0]?.dataset.index || 0) >= marker);
+    match.startWordIndex > marker);
   if (currentFindMatch < 0) currentFindMatch = 0;
   updateFindNavigationState();
   showFindMatch(currentFindMatch, 'search-completed');
@@ -1747,7 +1771,7 @@ function showFindMatch(index, trigger = 'unknown') {
   reportFind('navigated', {trigger, targetIndex: currentFindMatch});
 }
 
-function runFind() {
+async function runFind() {
   cancelFindSearch(false);
   clearFindHighlights();
   findMatches = [];
@@ -1758,12 +1782,15 @@ function runFind() {
     findCount.textContent = 'No results';
     return;
   }
-  const corpus = buildFindCorpus(findVoicedEnabled);
+  const generation = ++findGeneration;
+  findCount.textContent = 'Indexing…';
+  updateFindNavigationState();
+  const corpus = await buildFindCorpus(findVoicedEnabled, generation);
+  if (!corpus || generation !== findGeneration) return;
   const source = findRegexEnabled ? query : escapeRegex(query);
   const pattern = findWordEnabled
     ? `(?<![\\p{L}\\p{N}_])(?:${source})(?![\\p{L}\\p{N}_])`
     : source;
-  const generation = ++findGeneration;
   const workerSource = `onmessage=e=>{try{const r=new RegExp(e.data.pattern,e.data.flags);const a=[];let m;while((m=r.exec(e.data.text))!==null){a.push({start:m.index,length:m[0].length});if(m[0].length===0)r.lastIndex++;}postMessage({matches:a});}catch(error){postMessage({error:String(error.message||error)});}};`;
   const workerUrl = URL.createObjectURL(
     new Blob([workerSource], {type:'text/javascript'}));
@@ -1854,12 +1881,13 @@ updateFindNavigationState();
 findPopup.addEventListener('keydown', event => {
   const lower = event.key.toLocaleLowerCase();
   if (event.altKey && !event.ctrlKey && !event.shiftKey &&
-      (lower === 'c' || lower === 'w' || lower === 'r')) {
+      (lower === 'c' || lower === 'w' || lower === 'r' || lower === 'v')) {
     event.preventDefault();
     event.stopPropagation();
     if (lower === 'c') findCase.click();
     else if (lower === 'w') findWord.click();
-    else findRegex.click();
+    else if (lower === 'r') findRegex.click();
+    else findVoiced.click();
     focusFindInput();
     return;
   }
@@ -1870,7 +1898,7 @@ findPopup.addEventListener('keydown', event => {
     else closeFind();
     return;
   }
-  if (event.key === 'Enter' && event.ctrlKey && event.shiftKey) {
+  if (event.key === 'Enter' && event.ctrlKey) {
     event.preventDefault();
     const match = findMatches[currentFindMatch];
     if (!match || !match.nodeId || match.nodeWordIndex < 0) {
@@ -1878,7 +1906,7 @@ findPopup.addEventListener('keydown', event => {
       reportFind('seek-ignored');
       return;
     }
-    reportFind('seek-requested');
+    reportFind('seek-requested', {trigger: event.shiftKey ? 'ctrl-shift-enter' : 'ctrl-enter'});
     chrome.webview.postMessage({
       type:'find-seek',
       nodeId:Number(match.nodeId),

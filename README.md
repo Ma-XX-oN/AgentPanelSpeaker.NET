@@ -1,8 +1,8 @@
-# Agent Panel Speaker v74
+# Agent Panel Speaker v75
 
 
 
-## v74 find performance correction
+## v75 find performance correction
 
 Version 74 caches the voiced and all-text search corpora until the transcript is
 replaced. Find highlighting now clears only words touched by the previous search
