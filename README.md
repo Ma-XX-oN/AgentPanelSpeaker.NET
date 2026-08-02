@@ -1,4 +1,18 @@
-# Agent Panel Speaker v77
+# Agent Panel Speaker v78
+
+## v78 C# transcript search
+
+Version 78 removes the browser-side transcript search corpus.  Search text,
+rendered-token offsets, voiced-node identities, and result navigation are built
+and retained by C# alongside transcript rendering.  The WebView receives only
+compact match descriptors and touches the DOM only for the selected match.
+
+Literal searches run on a cancellable background task.  Regular-expression
+searches run in a separate instance of the application in worker mode, so Esc
+can terminate catastrophic backtracking.  After five seconds the find popup
+asks whether to continue waiting or cancel; continuing does not impose a hard
+timeout.
+
 
 
 

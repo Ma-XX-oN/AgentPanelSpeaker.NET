@@ -986,3 +986,16 @@ fragment.
 ## v69 interaction rules
 
 Windows.Media bookmark timing is unconditional. Processing-time requests made during active playback wait only for the current speech fragment (sentence/code line), not the entire JSONL node. Requests made while paused interrupt the paused fragment, speak immediately, and return to a paused state with that fragment pending for replay. Hotkeys are persisted as unique single-character bindings.
+
+
+## C#-owned transcript search
+
+The rendered transcript search index is constructed in C# from the same HTML
+and node-identity payload used to create the WebView document.  It stores
+compact character-to-rendered-token mappings without DOM references.  Search
+results remain in C# and the WebView receives only the selected match's token
+range and optional speech node position.
+
+Unrestricted regular expressions execute in a separate worker process.  The
+main process cancels by terminating that worker; managed threads are never
+forcibly aborted.

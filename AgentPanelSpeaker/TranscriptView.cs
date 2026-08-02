@@ -37,6 +37,8 @@ internal sealed class TranscriptView : UserControl
   private bool _settingsApplyPending;
   private long _settingsMessageSequence;
   private long _playbackMessageSequence;
+  private TranscriptSearchIndex? _searchIndex;
+  private CancellationTokenSource? _findCancellation;
 
   /// <summary>
   /// Initializes the embedded renderer and live-file refresh timer.
@@ -107,6 +109,8 @@ internal sealed class TranscriptView : UserControl
     }
 
     _pendingPosition = null;
+    _searchIndex = null;
+    CancelFindSearch();
     _lastWriteUtc = DateTime.MinValue;
     _lastLength = -1;
     _renderGeneration++;
@@ -121,6 +125,8 @@ internal sealed class TranscriptView : UserControl
   public void ClearSession()
   {
     _pendingPosition = null;
+    _searchIndex = null;
+    CancelFindSearch();
     _sessionPath = null;
     _sessionDisplayName = string.Empty;
     _restoredFromSettings = false;
@@ -463,7 +469,11 @@ internal sealed class TranscriptView : UserControl
             token));
         token.ThrowIfCancellationRequested();
         string html = Markdown.ToHtml(markdown, _pipeline);
-        return new TranscriptRenderPayload(html, identities);
+        TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
+          html,
+          identities,
+          token);
+        return new TranscriptRenderPayload(html, identities, searchIndex);
       }, token);
 
       long preparationMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -486,6 +496,7 @@ internal sealed class TranscriptView : UserControl
       }
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
+      _searchIndex = payload.SearchIndex;
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
       HideLoading();
@@ -638,6 +649,16 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
+      if (type == "find-query")
+      {
+        _ = HandleFindQueryAsync(root);
+        return;
+      }
+      if (type == "find-cancel")
+      {
+        CancelFindSearch();
+        return;
+      }
       if (type == "find-diagnostic")
       {
         DiagnosticLog.Write("transcript.find", new
@@ -710,6 +731,89 @@ internal sealed class TranscriptView : UserControl
         exception = exception.ToString()
       });
     }
+  }
+
+  private async Task HandleFindQueryAsync(JsonElement root)
+  {
+    TranscriptSearchIndex? index = _searchIndex;
+    long? requestId = ReadOptionalInt64(root, "requestId");
+    string query = ReadOptionalString(root, "query");
+    if (index is null || requestId is not long validRequestId || query.Length == 0)
+    {
+      return;
+    }
+
+    CancelFindSearch();
+    var cancellation = new CancellationTokenSource();
+    _findCancellation = cancellation;
+    var request = new TranscriptSearchRequest(
+      validRequestId,
+      query,
+      ReadOptionalBoolean(root, "caseEnabled") == true,
+      ReadOptionalBoolean(root, "wordEnabled") == true,
+      ReadOptionalBoolean(root, "regexEnabled") == true,
+      ReadOptionalBoolean(root, "voicedEnabled") != false);
+    var timer = Stopwatch.StartNew();
+    try
+    {
+      IReadOnlyList<TranscriptSearchMatch> matches = await index.SearchAsync(
+        request,
+        cancellation.Token);
+      if (cancellation.IsCancellationRequested ||
+          !ReferenceEquals(_findCancellation, cancellation))
+      {
+        return;
+      }
+      PostMessage(new
+      {
+        type = "find-results",
+        requestId = validRequestId,
+        matches,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+      DiagnosticLog.Write("transcript.find_csharp_completed", new
+      {
+        requestId = validRequestId,
+        query,
+        request.Regex,
+        request.VoicedOnly,
+        matchCount = matches.Count,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+      DiagnosticLog.Write("transcript.find_csharp_cancelled", new
+      {
+        requestId = validRequestId,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+    }
+    catch (Exception exception) when (
+      exception is ArgumentException or InvalidOperationException)
+    {
+      PostMessage(new
+      {
+        type = "find-error",
+        requestId = validRequestId,
+        error = exception.Message
+      });
+    }
+    finally
+    {
+      if (ReferenceEquals(_findCancellation, cancellation))
+      {
+        _findCancellation = null;
+      }
+      cancellation.Dispose();
+    }
+  }
+
+  private void CancelFindSearch()
+  {
+    CancellationTokenSource? cancellation = _findCancellation;
+    _findCancellation = null;
+    cancellation?.Cancel();
   }
 
   private static string ReadOptionalString(
@@ -822,7 +926,8 @@ internal sealed class TranscriptView : UserControl
 
   private sealed record TranscriptRenderPayload(
     string Html,
-    IReadOnlyList<TranscriptNodeIdentity> Identities);
+    IReadOnlyList<TranscriptNodeIdentity> Identities,
+    TranscriptSearchIndex SearchIndex);
 
   private static string ToCss(Color colour)
   {
@@ -1017,16 +1122,13 @@ const reportedMappingFailures = new Set();
 const reportedPlaybackFailures = new Set();
 let findMatches = [];
 let currentFindMatch = -1;
-let findWorker = null;
 let findGeneration = 0;
+let findSearchPending = false;
 let findSlowTimer = 0;
 let findCaseEnabled = false;
 let findWordEnabled = false;
 let findRegexEnabled = false;
 let findVoicedEnabled = true;
-let findCorpusAll = null;
-let findCorpusVoiced = null;
-const findHighlightedWords = new Set();
 let findCurrentWords = [];
 let findInputTimer = 0;
 
@@ -1080,9 +1182,6 @@ function wrapWords() {
 
 function replaceTranscript(html, preserve, nodeMap) {
   cancelFindSearch(false);
-  findCorpusAll = null;
-  findCorpusVoiced = null;
-  findHighlightedWords.clear();
   findCurrentWords = [];
   const nearBottom = document.documentElement.scrollHeight -
     (window.scrollY + window.innerHeight) < 80;
@@ -1426,32 +1525,6 @@ function openAncestors(element) {
   return opened;
 }
 
-function nextAnimationFrame() {
-  return new Promise(resolve => requestAnimationFrame(resolve));
-}
-
-async function afterRenderedFrame() {
-  await nextAnimationFrame();
-  await nextAnimationFrame();
-}
-
-function describeDetailsAncestors(element) {
-  const ancestors = [];
-  let parent = element?.parentElement;
-  while (parent) {
-    if (parent.tagName === 'DETAILS') {
-      ancestors.push({
-        open: parent.open,
-        childElementCount: parent.childElementCount,
-        descendantElementCount: parent.querySelectorAll('*').length,
-        className: parent.className || ''
-      });
-    }
-    parent = parent.parentElement;
-  }
-  return ancestors;
-}
-
 function reveal(element) {
   if (!followSpeech || !element) return;
   const rect = element.getBoundingClientRect();
@@ -1637,10 +1710,6 @@ function clearFindHighlights() {
     word.classList.remove('find-current');
   }
   findCurrentWords = [];
-  for (const word of findHighlightedWords) {
-    word.classList.remove('find-match');
-  }
-  findHighlightedWords.clear();
 }
 
 function reportFind(action, extra = {}) {
@@ -1659,17 +1728,17 @@ function reportFind(action, extra = {}) {
 }
 
 function updateFindNavigationState() {
-  const available = !findWorker && findMatches.length > 0;
+  const available = !findSearchPending && findMatches.length > 0;
   findPrev.disabled = !available;
   findNext.disabled = !available;
 }
 
 function cancelFindSearch(updateStatus) {
   ++findGeneration;
-  if (findWorker) {
-    findWorker.terminate();
-    findWorker = null;
-    reportFind('worker-cancelled');
+  if (findSearchPending) {
+    chrome.webview.postMessage({type:'find-cancel'});
+    findSearchPending = false;
+    reportFind('csharp-search-cancelled');
   }
   if (findSlowTimer) {
     clearTimeout(findSlowTimer);
@@ -1679,253 +1748,109 @@ function cancelFindSearch(updateStatus) {
   updateFindNavigationState();
 }
 
-async function buildFindCorpus(voicedOnly, generation) {
-  const cached = voicedOnly ? findCorpusVoiced : findCorpusAll;
-  if (cached) return cached;
-  const started = performance.now();
-  const pieces = [];
-  const ranges = [];
-  const nodeWordCounts = new Map();
-  let textLength = 0;
-  const chunkSize = 1500;
-  for (let index = 0; index < words.length; ++index) {
-    if (generation !== findGeneration) return null;
-    const word = words[index];
-    if (voicedOnly && !word.dataset.nodeId) continue;
-    const value = word.textContent || '';
-    if (pieces.length) {
-      pieces.push(' ');
-      ++textLength;
-    }
-    const start = textLength;
-    pieces.push(value);
-    textLength += value.length;
-    const nodeId = word.dataset.nodeId || '';
-    let nodeWordIndex = -1;
-    if (nodeId && word.dataset.lexical === '1') {
-      nodeWordIndex = nodeWordCounts.get(nodeId) || 0;
-      nodeWordCounts.set(nodeId, nodeWordIndex + 1);
-    }
-    ranges.push({
-      start,
-      end: textLength,
-      word,
-      wordIndex: index,
-      nodeId,
-      nodeWordIndex
-    });
-    if (index > 0 && index % chunkSize === 0) {
-      findCount.textContent = 'Indexing…';
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
+function normalizeFindMatch(match) {
+  return {
+    startWordIndex: Number(match.StartWordIndex ?? match.startWordIndex ?? -1),
+    endWordIndex: Number(match.EndWordIndex ?? match.endWordIndex ?? -1),
+    nodeId: Number(match.NodeId ?? match.nodeId ?? 0),
+    nodeWordIndex: Number(match.NodeWordIndex ?? match.nodeWordIndex ?? -1)
+  };
+}
+
+async function showFindMatch(index, trigger = 'unknown') {
+  if (!findMatches.length || findSearchPending) {
+    reportFind('navigation-ignored', {trigger});
+    return;
   }
-  if (generation !== findGeneration) return null;
-  const text = pieces.join('');
-  const corpus = {text, ranges};
-  if (voicedOnly) findCorpusVoiced = corpus;
-  else findCorpusAll = corpus;
-  reportFind('corpus-built', {
-    corpusLength: text.length,
-    corpusWords: ranges.length,
-    elapsedMilliseconds: Math.round(performance.now() - started)
-  });
-  return corpus;
-}
 
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function firstRangeEndingAfter(ranges, position) {
-  let low = 0;
-  let high = ranges.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if (ranges[middle].end <= position) low = middle + 1;
-    else high = middle;
-  }
-  return low;
-}
-
-function mapFindMatches(rawMatches, corpus) {
-  const mapped = [];
-  for (const raw of rawMatches) {
-    const end = raw.start + Math.max(1, raw.length);
-    const touched = [];
-    for (let index = firstRangeEndingAfter(corpus.ranges, raw.start);
-         index < corpus.ranges.length && corpus.ranges[index].start < end;
-         ++index) {
-      touched.push(corpus.ranges[index]);
-    }
-    if (!touched.length) continue;
-    const firstLexical = touched.find(item => item.nodeWordIndex >= 0);
-    mapped.push({
-      words: touched.map(item => item.word),
-      nodeId: firstLexical?.nodeId || '',
-      nodeWordIndex: firstLexical?.nodeWordIndex ?? -1,
-      startWordIndex: touched[0].wordIndex
-    });
-  }
-  return mapped;
-}
-
-async function applyFindMatches(matches, mapElapsedMilliseconds) {
-  let stageStarted = performance.now();
   clearFindHighlights();
-  reportFind('results-cleared', {
-    elapsedMilliseconds: Math.round(performance.now() - stageStarted)
+  currentFindMatch = (index + findMatches.length) % findMatches.length;
+  const match = findMatches[currentFindMatch];
+  if (match.startWordIndex < 0 || match.startWordIndex >= words.length) {
+    reportFind('navigation-invalid-index', {
+      trigger,
+      targetIndex: match.startWordIndex,
+      wordCount: words.length
+    });
+    return;
+  }
+  const end = Math.min(match.endWordIndex, words.length - 1);
+  for (let wordIndex = match.startWordIndex; wordIndex <= end; ++wordIndex) {
+    const word = words[wordIndex];
+    if (!word) continue;
+    word.classList.add('find-current');
+    findCurrentWords.push(word);
+  }
+  const target = words[match.startWordIndex];
+  const openedDetailsCount = openAncestors(target);
+  target.scrollIntoView({block:'center', behavior:'auto'});
+  findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
+  reportFind('navigated', {
+    trigger,
+    targetIndex: currentFindMatch,
+    openedDetailsCount
   });
-  await afterRenderedFrame();
-  reportFind('after-clear-render');
+}
 
-  findMatches = matches;
+function applyCSharpFindResults(data) {
+  const requestId = Number(data.requestId ?? data.RequestId ?? 0);
+  if (!findSearchPending || requestId !== findGeneration) return;
+  findSearchPending = false;
+  if (findSlowTimer) clearTimeout(findSlowTimer);
+  findSlowTimer = 0;
+  findMatches = (data.matches ?? data.Matches ?? []).map(normalizeFindMatch);
   if (!findMatches.length) {
     currentFindMatch = -1;
     findCount.textContent = 'No results';
     updateFindNavigationState();
     reportFind('completed', {
       matchCount: 0,
-      mapElapsedMilliseconds
+      elapsedMilliseconds: Number(
+        data.elapsedMilliseconds ?? data.ElapsedMilliseconds ?? 0)
     });
     return;
   }
-
-  const marker = voiceMarkerIndex;
   currentFindMatch = findMatches.findIndex(match =>
-    match.startWordIndex > marker);
+    match.startWordIndex > voiceMarkerIndex);
   if (currentFindMatch < 0) currentFindMatch = 0;
   updateFindNavigationState();
-  await showFindMatch(currentFindMatch, 'search-completed');
+  void showFindMatch(currentFindMatch, 'search-completed');
   reportFind('completed', {
     matchCount: findMatches.length,
-    mapElapsedMilliseconds
+    elapsedMilliseconds: Number(
+      data.elapsedMilliseconds ?? data.ElapsedMilliseconds ?? 0)
   });
 }
 
-async function showFindMatch(index, trigger = 'unknown') {
-  if (!findMatches.length || findWorker) {
-    reportFind('navigation-ignored', {trigger});
-    return;
-  }
-
-  let stageStarted = performance.now();
-  for (const word of findCurrentWords) {
-    word.classList.remove('find-current');
-  }
-  const previousWordCount = findCurrentWords.length;
-  findCurrentWords = [];
-  reportFind('current-class-cleared', {
-    trigger,
-    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
-    wordCount: previousWordCount
-  });
-  await afterRenderedFrame();
-  reportFind('after-current-clear-render', {trigger});
-
-  currentFindMatch = (index + findMatches.length) % findMatches.length;
-  const match = findMatches[currentFindMatch];
-  findCurrentWords = match.words;
-  const target = match.words[0];
-
-  stageStarted = performance.now();
-  for (const word of findCurrentWords) word.classList.add('find-current');
-  reportFind('current-class-applied', {
-    trigger,
-    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
-    wordCount: findCurrentWords.length
-  });
-  await afterRenderedFrame();
-  reportFind('after-current-class-render', {trigger});
-
-  const detailsAncestors = describeDetailsAncestors(target);
-  reportFind('ancestor-chain', {
-    trigger,
-    detailsAncestorCount: detailsAncestors.length,
-    detailsAncestors: JSON.stringify(detailsAncestors)
-  });
-
-  stageStarted = performance.now();
-  const openedDetailsCount = openAncestors(target);
-  reportFind('ancestors-opened', {
-    trigger,
-    elapsedMilliseconds: Math.round(performance.now() - stageStarted),
-    openedDetailsCount
-  });
-  await afterRenderedFrame();
-  reportFind('after-ancestors-render', {trigger, openedDetailsCount});
-
-  stageStarted = performance.now();
-  target?.scrollIntoView({block:'center', behavior:'auto'});
-  reportFind('scroll-requested', {
-    trigger,
-    elapsedMilliseconds: Math.round(performance.now() - stageStarted)
-  });
-  await afterRenderedFrame();
-  reportFind('after-scroll-render', {trigger});
-
-  findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
-  reportFind('navigated', {trigger, targetIndex: currentFindMatch});
-}
-
-async function runFind() {
+function runFind() {
   cancelFindSearch(false);
   clearFindHighlights();
   findMatches = [];
   currentFindMatch = -1;
-  updateFindNavigationState();
   const query = findInput.value;
   if (!query) {
     findCount.textContent = 'No results';
+    updateFindNavigationState();
     return;
   }
-  const generation = ++findGeneration;
-  findCount.textContent = 'Indexing…';
-  updateFindNavigationState();
-  const corpus = await buildFindCorpus(findVoicedEnabled, generation);
-  if (!corpus || generation !== findGeneration) return;
-  const source = findRegexEnabled ? query : escapeRegex(query);
-  const pattern = findWordEnabled
-    ? `(?<![\\p{L}\\p{N}_])(?:${source})(?![\\p{L}\\p{N}_])`
-    : source;
-  const workerSource = `onmessage=e=>{try{const r=new RegExp(e.data.pattern,e.data.flags);const a=[];let m;while((m=r.exec(e.data.text))!==null){a.push({start:m.index,length:m[0].length});if(m[0].length===0)r.lastIndex++;}postMessage({matches:a});}catch(error){postMessage({error:String(error.message||error)});}};`;
-  const workerUrl = URL.createObjectURL(
-    new Blob([workerSource], {type:'text/javascript'}));
-  findWorker = new Worker(workerUrl);
-  URL.revokeObjectURL(workerUrl);
+  const requestId = ++findGeneration;
+  findSearchPending = true;
   findCount.textContent = 'Searching…';
   updateFindNavigationState();
-  reportFind('started', {corpusLength: corpus.text.length});
-  findWorker.onmessage = event => {
-    if (generation !== findGeneration) return;
-    if (findSlowTimer) clearTimeout(findSlowTimer);
-    findSlowTimer = 0;
-    findWorker?.terminate();
-    findWorker = null;
-    if (event.data.error) {
-      findCount.textContent = 'Invalid regex';
-      updateFindNavigationState();
-      reportFind('invalid-regex', {error: event.data.error});
-      return;
-    }
-    const mapStarted = performance.now();
-    const mappedMatches = mapFindMatches(event.data.matches || [], corpus);
-    const mapElapsedMilliseconds = Math.round(performance.now() - mapStarted);
-    reportFind('results-mapped', {
-      rawMatchCount: (event.data.matches || []).length,
-      mappedMatchCount: mappedMatches.length,
-      elapsedMilliseconds: mapElapsedMilliseconds
-    });
-    void applyFindMatches(mappedMatches, mapElapsedMilliseconds);
-  };
-  findWorker.postMessage({
-    text: corpus.text,
-    pattern,
-    flags: findCaseEnabled ? 'gu' : 'giu'
+  reportFind('csharp-search-started');
+  chrome.webview.postMessage({
+    type:'find-query',
+    requestId,
+    query,
+    caseEnabled:findCaseEnabled,
+    wordEnabled:findWordEnabled,
+    regexEnabled:findRegexEnabled,
+    voicedEnabled:findVoicedEnabled
   });
   findSlowTimer = setTimeout(() => {
-    if (!findWorker || generation !== findGeneration) return;
+    if (!findSearchPending || requestId !== findGeneration) return;
     reportFind('slow-prompt');
-    if (!confirm('The regular-expression search is still running. Continue waiting?')) {
+    if (!confirm('The search is still running. Continue waiting?')) {
       cancelFindSearch(true);
     }
   }, 5000);
@@ -1955,7 +1880,6 @@ function closeFind() {
   findMatches = [];
   currentFindMatch = -1;
   findPopup.classList.remove('open');
-  transcript.focus();
   reportFind('closed');
 }
 
@@ -1998,29 +1922,31 @@ findPopup.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     event.preventDefault();
     event.stopPropagation();
-    if (findWorker) cancelFindSearch(true);
+    if (findSearchPending) cancelFindSearch(true);
     else closeFind();
     return;
   }
   if (event.key === 'Enter' && event.ctrlKey) {
     event.preventDefault();
     const match = findMatches[currentFindMatch];
-    if (!match || !match.nodeId || match.nodeWordIndex < 0) {
+    if (!match || match.nodeId <= 0 || match.nodeWordIndex < 0) {
       findCount.textContent = 'Not voiced';
       reportFind('seek-ignored');
       return;
     }
-    reportFind('seek-requested', {trigger: event.shiftKey ? 'ctrl-shift-enter' : 'ctrl-enter'});
+    reportFind('seek-requested', {
+      trigger: event.shiftKey ? 'ctrl-shift-enter' : 'ctrl-enter'
+    });
     chrome.webview.postMessage({
       type:'find-seek',
-      nodeId:Number(match.nodeId),
+      nodeId:match.nodeId,
       nodeWordIndex:match.nodeWordIndex
     });
     return;
   }
   if (event.key === 'Enter') {
     event.preventDefault();
-    showFindMatch(
+    void showFindMatch(
       currentFindMatch + (event.shiftKey ? -1 : 1),
       event.shiftKey ? 'shift-enter' : 'enter');
   }
@@ -2029,6 +1955,21 @@ findPopup.addEventListener('keydown', event => {
 chrome.webview.addEventListener('message', event => {
   const data = event.data;
   if (!data) return;
+  if (data.type === 'find-results') {
+    applyCSharpFindResults(data);
+    return;
+  }
+  if (data.type === 'find-error') {
+    const requestId = Number(data.requestId ?? data.RequestId ?? 0);
+    if (requestId !== findGeneration) return;
+    findSearchPending = false;
+    if (findSlowTimer) clearTimeout(findSlowTimer);
+    findSlowTimer = 0;
+    findCount.textContent = 'Invalid regex';
+    updateFindNavigationState();
+    reportFind('invalid-regex', {error:data.error ?? data.Error ?? ''});
+    return;
+  }
   if (data.type === 'settings') {
     const sequence = Number(data.sequence || 0);
     if (sequence < latestSettingsSequence) return;

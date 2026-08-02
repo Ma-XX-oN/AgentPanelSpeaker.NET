@@ -6,8 +6,14 @@ internal static class Program
   /// Starts the Windows Forms application.
   /// </summary>
   [STAThread]
-  private static void Main()
+  private static void Main(string[] args)
   {
+    if (args.Length == 1 && args[0] == "--regex-search-worker")
+    {
+      Environment.ExitCode = RegexSearchWorker.Run();
+      return;
+    }
+
     DiagnosticLog.Initialize();
     Application.ThreadException += (_, eventArgs) =>
       DiagnosticLog.Write("app.thread_exception", new
