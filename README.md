@@ -1,5 +1,13 @@
-# Agent Panel Speaker v73
+# Agent Panel Speaker v74
 
+
+
+## v74 find performance correction
+
+Version 74 caches the voiced and all-text search corpora until the transcript is
+replaced. Find highlighting now clears only words touched by the previous search
+instead of scanning every rendered token. Input is also debounced for 150 ms,
+and each new search still terminates the previous worker before it starts.
 
 
 ## v73 find reliability and keyboard corrections

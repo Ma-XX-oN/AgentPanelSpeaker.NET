@@ -1012,6 +1012,11 @@ let findCaseEnabled = false;
 let findWordEnabled = false;
 let findRegexEnabled = false;
 let findVoicedEnabled = true;
+let findCorpusAll = null;
+let findCorpusVoiced = null;
+const findHighlightedWords = new Set();
+let findCurrentWords = [];
+let findInputTimer = 0;
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu) || [];
@@ -1062,6 +1067,11 @@ function wrapWords() {
 }
 
 function replaceTranscript(html, preserve, nodeMap) {
+  cancelFindSearch(false);
+  findCorpusAll = null;
+  findCorpusVoiced = null;
+  findHighlightedWords.clear();
+  findCurrentWords = [];
   const nearBottom = document.documentElement.scrollHeight -
     (window.scrollY + window.innerHeight) < 80;
   const previousY = window.scrollY;
@@ -1578,9 +1588,14 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
 
 
 function clearFindHighlights() {
-  for (const word of words) {
-    word.classList.remove('find-match', 'find-current');
+  for (const word of findCurrentWords) {
+    word.classList.remove('find-current');
   }
+  findCurrentWords = [];
+  for (const word of findHighlightedWords) {
+    word.classList.remove('find-match');
+  }
+  findHighlightedWords.clear();
 }
 
 function reportFind(action, extra = {}) {
@@ -1620,6 +1635,9 @@ function cancelFindSearch(updateStatus) {
 }
 
 function buildFindCorpus(voicedOnly) {
+  const cached = voicedOnly ? findCorpusVoiced : findCorpusAll;
+  if (cached) return cached;
+  const started = performance.now();
   const selected = voicedOnly
     ? words.filter(word => word.dataset.nodeId)
     : words;
@@ -1638,7 +1656,15 @@ function buildFindCorpus(voicedOnly) {
     }
     ranges.push({start, end: text.length, word, nodeId, nodeWordIndex});
   }
-  return {text, ranges};
+  const corpus = {text, ranges};
+  if (voicedOnly) findCorpusVoiced = corpus;
+  else findCorpusAll = corpus;
+  reportFind('corpus-built', {
+    corpusLength: text.length,
+    corpusWords: ranges.length,
+    elapsedMilliseconds: Math.round(performance.now() - started)
+  });
+  return corpus;
 }
 
 function escapeRegex(text) {
@@ -1681,7 +1707,10 @@ function applyFindMatches(matches) {
   clearFindHighlights();
   findMatches = matches;
   for (const match of findMatches) {
-    for (const word of match.words) word.classList.add('find-match');
+    for (const word of match.words) {
+      word.classList.add('find-match');
+      findHighlightedWords.add(word);
+    }
   }
   if (!findMatches.length) {
     currentFindMatch = -1;
@@ -1704,12 +1733,13 @@ function showFindMatch(index, trigger = 'unknown') {
     reportFind('navigation-ignored', {trigger});
     return;
   }
-  for (const match of findMatches) {
-    for (const word of match.words) word.classList.remove('find-current');
+  for (const word of findCurrentWords) {
+    word.classList.remove('find-current');
   }
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
-  for (const word of match.words) word.classList.add('find-current');
+  findCurrentWords = match.words;
+  for (const word of findCurrentWords) word.classList.add('find-current');
   const target = match.words[0];
   openAncestors(target);
   target?.scrollIntoView({block:'center', behavior:'auto'});
@@ -1785,6 +1815,10 @@ function openFind() {
 }
 
 function closeFind() {
+  if (findInputTimer) {
+    clearTimeout(findInputTimer);
+    findInputTimer = 0;
+  }
   cancelFindSearch(false);
   clearFindHighlights();
   findMatches = [];
@@ -1800,7 +1834,14 @@ function toggleFindOption(button, setter) {
   runFind();
 }
 
-findInput.addEventListener('input', runFind);
+findInput.addEventListener('input', () => {
+  if (findInputTimer) clearTimeout(findInputTimer);
+  cancelFindSearch(false);
+  findInputTimer = setTimeout(() => {
+    findInputTimer = 0;
+    runFind();
+  }, 150);
+});
 findCase.addEventListener('click', () => toggleFindOption(findCase, () => findCaseEnabled = !findCaseEnabled));
 findWord.addEventListener('click', () => toggleFindOption(findWord, () => findWordEnabled = !findWordEnabled));
 findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => findRegexEnabled = !findRegexEnabled));
