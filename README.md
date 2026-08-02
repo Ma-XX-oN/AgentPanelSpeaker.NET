@@ -1,4 +1,20 @@
-# Agent Panel Speaker v68
+# Agent Panel Speaker v69
+
+
+## v69: transport timing, configurable hotkeys, and UI cleanup
+
+- Processing-time announcements speak immediately while playback is paused and
+  are inserted after the current sentence while playback is active.
+- Bare `M` toggles the transcript area between normal and maximized views.
+- Bare `F` toggles transcript follow mode.
+- The new **Hotkeys...** dialog remaps all transport, processing-time,
+  transcript-size, and follow shortcuts while rejecting duplicate keys.
+- The speech-profile column formerly labelled **Context** is now **Thoughts**
+  for both agents and subagents.
+- Windows.Media bookmark timing is always enabled; the obsolete policy control
+  has been removed.
+- Pronunciations are available while stopped or paused.
+- Option-row checkboxes now use a consistent vertical margin.
 
 ## v62: Windows.Media SSML cue-coordinate correction
 

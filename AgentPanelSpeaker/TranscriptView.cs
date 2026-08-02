@@ -672,16 +672,22 @@ internal sealed class TranscriptView : UserControl
 
   private static Keys KeyNameToKeys(string key)
   {
-    return key.ToLowerInvariant() switch
+    if (key.Length != 1)
     {
-      "u" => Keys.U,
-      "h" => Keys.H,
-      "j" => Keys.J,
-      "k" => Keys.K,
-      "l" => Keys.L,
-      ";" => Keys.OemSemicolon,
-      "o" => Keys.O,
-      "'" => Keys.OemQuotes,
+      return Keys.None;
+    }
+    char value = char.ToUpperInvariant(key[0]);
+    if (value is >= 'A' and <= 'Z')
+    {
+      return (Keys)((int)Keys.A + (value - 'A'));
+    }
+    return value switch
+    {
+      ';' => Keys.OemSemicolon,
+      '\'' => Keys.OemQuotes,
+      ',' => Keys.Oemcomma,
+      '.' => Keys.OemPeriod,
+      '/' => Keys.OemQuestion,
       _ => Keys.None
     };
   }
@@ -1448,8 +1454,7 @@ chrome.webview.addEventListener('message', event => {
 
 window.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.shiftKey) return;
-  const keys = new Set(['u','h','j','k','l',';','o',"'"]);
-  if (!keys.has(event.key.toLocaleLowerCase())) return;
+  if (event.key.length !== 1) return;
   event.preventDefault();
   event.stopPropagation();
   chrome.webview.postMessage({type:'transport', key:event.key, alt:event.altKey});

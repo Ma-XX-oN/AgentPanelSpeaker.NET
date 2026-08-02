@@ -251,12 +251,8 @@ internal sealed class UserSettingsStore
       Theme = Enum.IsDefined(typeof(AppTheme), settings.Theme)
         ? settings.Theme
         : AppTheme.System,
-      WindowsMediaBookmarks = settings.Version >= 13 &&
-          Enum.IsDefined(
-            typeof(WindowsMediaBookmarkMode),
-            settings.WindowsMediaBookmarks)
-        ? settings.WindowsMediaBookmarks
-        : WindowsMediaBookmarkMode.Fallback,
+      WindowsMediaBookmarks = WindowsMediaBookmarkMode.Always,
+      Hotkeys = (settings.Hotkeys ?? HotkeySettings.Default).Normalize(),
       PollIntervalMilliseconds = Math.Clamp(
         settings.PollIntervalMilliseconds,
         50,

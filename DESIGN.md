@@ -981,3 +981,8 @@ line from opening a block fence, so following prose is never swallowed by a
 false fence.  When a block already ends in sentence punctuation, the punctuation
 and block ending are one coincident boundary and never create an empty
 fragment.
+
+
+## v69 interaction rules
+
+Windows.Media bookmark timing is unconditional. Processing-time requests made during active playback wait only for the current speech fragment (sentence/code line), not the entire JSONL node. Requests made while paused interrupt the paused fragment, speak immediately, and return to a paused state with that fragment pending for replay. Hotkeys are persisted as unique single-character bindings.

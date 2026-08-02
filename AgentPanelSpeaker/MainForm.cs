@@ -57,6 +57,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly Button _saveSettingsButton = new();
   private readonly Button _resetSettingsButton = new();
   private readonly Button _openLogButton = new();
+  private readonly Button _hotkeysButton = new();
   private readonly Button _pronunciationsButton = new();
   private readonly Button _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
@@ -191,6 +192,7 @@ internal sealed class MainForm : Form, IMessageFilter
     ConfigureButton(_saveSettingsButton, "Save settings");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
+    ConfigureButton(_hotkeysButton, "Hotkeys...");
     ConfigureButton(_pronunciationsButton, "Pronunciations...");
     ConfigureButton(_audioWakeButton, "Bluetooth wake...");
     _themeComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -216,6 +218,7 @@ internal sealed class MainForm : Form, IMessageFilter
       "bookmarks when word cues are unreliable; Always uses bookmarks.");
 
     _followLatestCheckBox.AutoSize = true;
+    _followLatestCheckBox.Margin = new Padding(3, 6, 3, 3);
     _followLatestCheckBox.Text = "Auto-follow newest session";
     _previewTextBox.Multiline = true;
     _previewTextBox.ReadOnly = true;
@@ -266,8 +269,10 @@ internal sealed class MainForm : Form, IMessageFilter
     ConfigureNumeric(_pollNumeric, 50, 2000, 150, 80);
     _fenceTypesTextBox.Width = 430;
     _speakExistingCheckBox.AutoSize = true;
+    _speakExistingCheckBox.Margin = new Padding(3, 6, 3, 3);
     _speakExistingCheckBox.Text = "Speak complete latest turn on start";
     _keepDisplayOnCheckBox.AutoSize = true;
+    _keepDisplayOnCheckBox.Margin = new Padding(3, 6, 3, 3);
     _keepDisplayOnCheckBox.Text = "Keep display on while speaking";
     _toolTip.SetToolTip(
       _keepDisplayOnCheckBox,
@@ -314,8 +319,6 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
       _pronunciationsButton, _audioWakeButton,
-      MakeInlineLabel("Windows.Media bookmarks:"),
-      _windowsMediaBookmarksComboBox,
       MakeInlineLabel("Poll ms:"), _pollNumeric,
       _speakExistingCheckBox, _keepDisplayOnCheckBox
     });
@@ -341,7 +344,8 @@ internal sealed class MainForm : Form, IMessageFilter
     utility.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Theme:"), _themeComboBox,
-      _saveSettingsButton, _resetSettingsButton, _openLogButton
+      _saveSettingsButton, _resetSettingsButton, _openLogButton,
+      _hotkeysButton
     });
 
     var controls = new TableLayoutPanel
@@ -403,6 +407,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceDebounceTimer.Tick += FenceDebounceTimerTick;
     _detectLatestButton.Click += async (_, _) => await DetectLatestAsync();
     _browseButton.Click += BrowseButtonClicked;
+    _hotkeysButton.Click += HotkeysButtonClicked;
     _playPauseButton.Click += PlayPauseButtonClicked;
     _diagnosticTabs.SelectedIndexChanged += (_, _) =>
     {
@@ -661,7 +666,7 @@ internal sealed class MainForm : Form, IMessageFilter
       2,
       0);
     table.Controls.Add(
-      MakeSpeechColumnHeader("Context", SpeechProfileWidth),
+      MakeSpeechColumnHeader("Thoughts", SpeechProfileWidth),
       3,
       0);
   }
@@ -696,7 +701,7 @@ internal sealed class MainForm : Form, IMessageFilter
     };
     string contextTitle = role == SpeechRole.User
       ? "User Quoted Text Speech Profile"
-      : $"{roleTitle} Context Speech Profile";
+      : $"{roleTitle} Thoughts Speech Profile";
     var mainProfile = new SpeechProfileCompactControl(
       $"{roleTitle} Main Speech Profile")
     {
@@ -718,7 +723,7 @@ internal sealed class MainForm : Form, IMessageFilter
       contextProfile,
       previewTimer,
       $"{role} main speech is working.",
-      $"{role} context speech is working.");
+      $"{role} thoughts speech is working.");
     _voiceRows.Add(role, controls);
 
     table.Controls.Add(MakeInlineLabel(label), 0, row);
@@ -747,7 +752,7 @@ internal sealed class MainForm : Form, IMessageFilter
       contextProfile,
       role == SpeechRole.User
         ? "User quoted-text rate, pitch, and volume. Volume 0 mutes quoted text."
-        : $"{label} Context rate, pitch, and volume. Volume 0 mutes Context.");
+        : $"{label} Thoughts rate, pitch, and volume. Volume 0 mutes Thoughts.");
   }
 
   /// <summary>
@@ -1195,7 +1200,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
       _voiceSettingPreviewActive = true;
       AppendLog(
-        $"Previewing {role} {(context ? "Context" : "Main")}: " +
+        $"Previewing {role} {(context ? "Thoughts" : "Main")}: " +
         $"voice={profile.VoiceName}; rate={profile.Rate}; " +
         $"pitch={profile.Pitch}; volume={profile.Volume}%.");
       string message = context
@@ -1335,6 +1340,21 @@ internal sealed class MainForm : Form, IMessageFilter
       : endMessage ??
         $"{action}: no matching enabled history entry is available.");
     UpdateControlState();
+  }
+
+  /// <summary>
+  /// Opens the configurable keyboard-shortcut editor.
+  /// </summary>
+  private void HotkeysButtonClicked(object? sender, EventArgs eventArgs)
+  {
+    UserSettings current = _settingsStore.Current;
+    using var dialog = new HotkeySettingsDialog(current.Hotkeys, GetSelectedTheme());
+    if (dialog.ShowDialog(this) != DialogResult.OK)
+    {
+      return;
+    }
+    _settingsStore.Update(current with { Hotkeys = dialog.Settings });
+    AppendLog("Hotkeys updated.");
   }
 
   /// <summary>
@@ -1927,7 +1947,7 @@ internal sealed class MainForm : Form, IMessageFilter
       KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
       Theme = GetSelectedTheme(),
-      WindowsMediaBookmarks = GetWindowsMediaBookmarkMode(),
+      WindowsMediaBookmarks = WindowsMediaBookmarkMode.Always,
       Transcript = _transcriptSettingsPopup.Settings with
       {
         Maximized = _diagnosticsMaximized
@@ -2284,30 +2304,46 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private bool ActivateTransportShortcut(Keys keyCode, string shortcut)
   {
-    Button? button = keyCode switch
+    HotkeyAction action = _settingsStore.Current.Hotkeys.GetAction(keyCode);
+    if (action == HotkeyAction.None)
     {
-      Keys.U => _rewindSpeakerButton,
-      Keys.H => _rewindNodeButton,
-      Keys.J => _rewindSentenceButton,
-      Keys.K => _playPauseButton,
-      Keys.L => _forwardSentenceButton,
-      Keys.O => _forwardSpeakerButton,
-      Keys.OemSemicolon => _forwardNodeButton,
-      Keys.OemQuotes => _processingTimeButton,
+      return false;
+    }
+
+    if (action == HotkeyAction.ToggleTranscriptSize)
+    {
+      SetDiagnosticsMaximized(!_diagnosticsMaximized);
+      return true;
+    }
+    if (action == HotkeyAction.ToggleFollow)
+    {
+      _transcriptSettingsPopup.SetSettings(
+        _transcriptSettingsPopup.Settings with
+        {
+          FollowSpeech = !_transcriptSettingsPopup.Settings.FollowSpeech
+        },
+        ThemeManager.IsDark(GetSelectedTheme()));
+      TranscriptSettingsChanged();
+      AppendLog($"Transcript follow mode {(_transcriptSettingsPopup.Settings.FollowSpeech ? "enabled" : "disabled")}.");
+      return true;
+    }
+
+    Button? button = action switch
+    {
+      HotkeyAction.PreviousSpeaker => _rewindSpeakerButton,
+      HotkeyAction.PreviousNode => _rewindNodeButton,
+      HotkeyAction.PreviousSentence => _rewindSentenceButton,
+      HotkeyAction.PlayPause => _playPauseButton,
+      HotkeyAction.NextSentence => _forwardSentenceButton,
+      HotkeyAction.NextNode => _forwardNodeButton,
+      HotkeyAction.NextSpeaker => _forwardSpeakerButton,
+      HotkeyAction.ProcessingTime => _processingTimeButton,
       _ => null
     };
     if (button is null)
     {
       return false;
     }
-
-    DiagnosticLog.Write("transport.shortcut_requested", new
-    {
-      shortcut,
-      action = button.AccessibleName,
-      buttonVisible = button.Visible,
-      buttonEnabled = button.Enabled
-    });
     if (!button.Enabled)
     {
       return true;
@@ -2317,51 +2353,33 @@ internal sealed class MainForm : Form, IMessageFilter
       button.Focus();
     }
 
-    switch (keyCode)
+    switch (action)
     {
-      case Keys.U:
-        NavigateSpeech(
-          _speech.TryRewindSpeaker,
-          "Previous speaker turn");
+      case HotkeyAction.PreviousSpeaker:
+        NavigateSpeech(_speech.TryRewindSpeaker, "Previous speaker turn");
         break;
-      case Keys.H:
-        NavigateSpeech(
-          _speech.TryRewindNode,
-          "Previous JSONL node");
+      case HotkeyAction.PreviousNode:
+        NavigateSpeech(_speech.TryRewindNode, "Previous JSONL node");
         break;
-      case Keys.J:
-        NavigateSpeech(
-          _speech.TryRewindSentence,
-          "Previous sentence/code line");
+      case HotkeyAction.PreviousSentence:
+        NavigateSpeech(_speech.TryRewindSentence, "Previous sentence/code line");
         break;
-      case Keys.K:
+      case HotkeyAction.PlayPause:
         _pendingPlayPauseTrigger = $"keyboard:{shortcut}";
         PlayPauseButtonClicked(button, EventArgs.Empty);
         break;
-      case Keys.L:
-        NavigateSpeech(
-          _speech.TryForwardSentence,
-          "Next sentence/code line",
-          "Past end of last sentence/code line.");
+      case HotkeyAction.NextSentence:
+        NavigateSpeech(_speech.TryForwardSentence, "Next sentence/code line", "Past end of last sentence/code line.");
         break;
-      case Keys.OemSemicolon:
-        NavigateSpeech(
-          _speech.TryForwardNode,
-          "Next JSONL node",
-          "Past end of last JSONL node.");
+      case HotkeyAction.NextNode:
+        NavigateSpeech(_speech.TryForwardNode, "Next JSONL node", "Past end of last JSONL node.");
         break;
-      case Keys.O:
-        NavigateSpeech(
-          _speech.TryForwardSpeaker,
-          "Next speaker turn",
-          "Past end of last speaker turn.");
+      case HotkeyAction.NextSpeaker:
+        NavigateSpeech(_speech.TryForwardSpeaker, "Next speaker turn", "Past end of last speaker turn.");
         break;
-      case Keys.OemQuotes:
+      case HotkeyAction.ProcessingTime:
         ProcessingTimeButtonClicked(button, EventArgs.Empty);
         break;
-      default:
-        throw new InvalidOperationException(
-          $"Unsupported transport key: {keyCode}.");
     }
     return true;
   }
@@ -2462,7 +2480,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _pollNumeric.Enabled = !configurationLocked;
     _speakExistingCheckBox.Enabled = !configurationLocked;
     _playPauseButton.Enabled = !_playPauseTransitioning;
-    _pronunciationsButton.Enabled = true;
+    _pronunciationsButton.Enabled = paused || !_speech.IsSpeaking;
     UpdatePlayPauseButton(running);
     _processingTimeButton.Enabled =
       _speech.CanRequestProcessingTimeAnnouncement &&
@@ -2526,12 +2544,9 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Gets the selected Windows.Media bookmark policy.
   /// </summary>
-  private WindowsMediaBookmarkMode GetWindowsMediaBookmarkMode()
+  private static WindowsMediaBookmarkMode GetWindowsMediaBookmarkMode()
   {
-    return _windowsMediaBookmarksComboBox.SelectedItem is
-        WindowsMediaBookmarkMode mode
-      ? mode
-      : WindowsMediaBookmarkMode.Fallback;
+    return WindowsMediaBookmarkMode.Always;
   }
 
   /// <summary>

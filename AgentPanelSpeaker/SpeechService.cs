@@ -36,6 +36,7 @@ internal sealed class SpeechService : IDisposable
   private UntrackedSpeech? _pendingUntracked;
   private ProcessingTimeAnnouncement? _pendingProcessingTime;
   private bool _processingTimeAnnouncementRequested;
+  private bool _processingTimeReturnToPause;
   private FenceActivityKey? _lastFenceActivity;
   private bool _reportedSpeaking;
   private bool _isPaused;
@@ -393,21 +394,39 @@ internal sealed class SpeechService : IDisposable
         return false;
       }
 
-      long? waitForNodeId = _activeKind == ActiveSpeechKind.History &&
-        _activeHistoryIndex >= 0 &&
-        _activeHistoryIndex < _history.Count
-          ? _history[_activeHistoryIndex].NodeId
+      int? waitForHistoryIndex = _activeKind == ActiveSpeechKind.History &&
+        _activeHistoryIndex >= 0
+          ? _activeHistoryIndex
           : null;
       _pendingProcessingTime = new ProcessingTimeAnnouncement(
         announcement,
         profile,
-        waitForNodeId,
+        waitForHistoryIndex,
         context.UserNodeId,
         context.IsLatestTurn,
         context.IsProcessing,
         context.StartUtc,
         context.EndUtc);
       _processingTimeAnnouncementRequested = true;
+      if (_isPaused)
+      {
+        _pendingProcessingTime = _pendingProcessingTime with
+        {
+          WaitForHistoryIndex = null
+        };
+        _processingTimeReturnToPause = true;
+        _pendingHistoryIndex = _activeHistoryIndex >= 0
+          ? _activeHistoryIndex
+          : _pendingHistoryIndex;
+        if (_activeKind != ActiveSpeechKind.None)
+        {
+          CancelEngineLocked();
+        }
+        else
+        {
+          SetPausedLocked(false);
+        }
+      }
       ProcessingTimeAnnouncementStateChanged?.Invoke(true);
       DiagnosticLog.Write("processing_time.requested", new
       {
@@ -417,7 +436,7 @@ internal sealed class SpeechService : IDisposable
         context.IsProcessing,
         context.StartUtc,
         context.EndUtc,
-        waitForNodeId
+        waitForHistoryIndex
       });
       unavailableReason = string.Empty;
       StartPendingOrNextLocked();
@@ -986,6 +1005,11 @@ internal sealed class SpeechService : IDisposable
           endUtc = completedProcessing?.EndUtc
         });
         ClearProcessingTimeAnnouncementLocked();
+        if (_processingTimeReturnToPause)
+        {
+          _processingTimeReturnToPause = false;
+          SetPausedLocked(true);
+        }
       }
 
       TrimHistoryLocked();
@@ -1398,13 +1422,8 @@ internal sealed class SpeechService : IDisposable
   private bool CanStartProcessingTimeAnnouncementLocked(
     ProcessingTimeAnnouncement announcement)
   {
-    if (announcement.WaitForNodeId is not long nodeId)
-    {
-      return true;
-    }
-
-    int nextEligible = FindNextEligibleLocked(_nextHistoryIndex);
-    return nextEligible < 0 || _history[nextEligible].NodeId != nodeId;
+    return announcement.WaitForHistoryIndex is not int historyIndex ||
+      _activeHistoryIndex != historyIndex;
   }
 
   /// <summary>
@@ -2094,7 +2113,7 @@ internal sealed class SpeechService : IDisposable
   private sealed record ProcessingTimeAnnouncement(
     string Text,
     SpeechProfileSettings Profile,
-    long? WaitForNodeId,
+    int? WaitForHistoryIndex,
     long UserNodeId,
     bool IsLatestTurn,
     bool IsProcessing,
