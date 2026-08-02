@@ -466,6 +466,7 @@ internal sealed class MainForm : Form, IMessageFilter
         suppressHoverUntilLeave: true);
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
     _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
+    _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _transcriptSettingsOpenTimer.Tick += (_, _) =>
     {
       _transcriptSettingsOpenTimer.Stop();
@@ -1759,6 +1760,19 @@ internal sealed class MainForm : Form, IMessageFilter
       ? _maximizeTranscriptButton
       : _diagnosticTabs;
     target.Focus();
+  }
+
+  private void TranscriptFollowSpeechChanged(bool enabled)
+  {
+    if (_transcriptSettingsPopup.Settings.FollowSpeech == enabled)
+    {
+      return;
+    }
+    _transcriptSettingsPopup.SetSettings(
+      _transcriptSettingsPopup.Settings with { FollowSpeech = enabled },
+      ThemeManager.IsDark(GetSelectedTheme()));
+    TranscriptSettingsChanged();
+    AppendLog($"Transcript follow mode {(enabled ? "enabled" : "disabled")}.");
   }
 
   private void TranscriptSettingsChanged()

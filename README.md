@@ -1,4 +1,19 @@
-# Agent Panel Speaker v78
+# Agent Panel Speaker v79
+
+## v79 virtualized transcript and follow overlay
+
+Version 79 keeps the complete transcript, search index, speech position, and
+record mapping in C#, but renders only a bounded record window in WebView2.
+Search and speech navigation request a new window around the target record
+instead of scrolling through the complete transcript DOM.  Manual scrolling
+shifts the virtual window while retaining a visible record anchor.
+
+A translucent bottom-right `👁️ = 👄` / `👁️ ≠ 👄` control toggles transcript
+follow mode.  `=` means that the view follows speech.  `≠` leaves the current
+view independent while speech continues.  Manual scrolling automatically
+disables follow mode.  Enabling it recentres on the current speech position.
+When a transcript is first loaded, the initial window is centred on the known
+speech-start record, or on the newest record until that position is known.
 
 ## v78 C# transcript search
 

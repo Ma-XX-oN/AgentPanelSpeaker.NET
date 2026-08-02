@@ -72,11 +72,17 @@ internal sealed class TranscriptSearchIndex
       string text = WebUtility.HtmlDecode(value);
       foreach (Match token in TokenRegex.Matches(text))
       {
+        int localIndex = tokens.Count == 0 ||
+          tokens[^1].RecordNumber != recordNumber ||
+          !string.Equals(tokens[^1].SourceId, sourceId, StringComparison.Ordinal)
+            ? 0
+            : tokens[^1].RecordWordIndex + 1;
         tokens.Add(new MutableToken(
           token.Value,
           recordNumber,
           sourceId,
-          tokens.Count));
+          tokens.Count,
+          localIndex));
       }
     }
 
@@ -172,8 +178,13 @@ internal sealed class TranscriptSearchIndex
         }
       }
       result.Add(new TranscriptSearchMatch(
-        firstToken.RenderedIndex,
-        tokens[last].RenderedIndex,
+        firstToken.RecordNumber,
+        firstToken.SourceId,
+        firstToken.RecordWordIndex,
+        tokens[last].RecordNumber == firstToken.RecordNumber &&
+          string.Equals(tokens[last].SourceId, firstToken.SourceId, StringComparison.Ordinal)
+            ? tokens[last].RecordWordIndex
+            : firstToken.RecordWordIndex,
         voiced.NodeId,
         voiced.NodeWordIndex));
     }
@@ -221,7 +232,9 @@ internal sealed class TranscriptSearchIndex
       result.Add(new SearchToken(
         start,
         builder.Length,
-        token.RenderedIndex,
+        token.RecordNumber,
+        token.SourceId,
+        token.RecordWordIndex,
         token.NodeId,
         token.NodeWordIndex));
     }
@@ -321,16 +334,27 @@ internal sealed class TranscriptSearchIndex
 
   private sealed class MutableToken
   {
-    public MutableToken(string text, int recordNumber, string sourceId, int renderedIndex)
+    public MutableToken(
+      string text,
+      int recordNumber,
+      string sourceId,
+      int renderedIndex,
+      int recordWordIndex)
     {
       Text = text;
+      RecordNumber = recordNumber;
+      SourceId = sourceId;
       RecordKey = MakeKey(recordNumber, sourceId);
       RenderedIndex = renderedIndex;
+      RecordWordIndex = recordWordIndex;
     }
 
     public string Text { get; }
+    public int RecordNumber { get; }
+    public string SourceId { get; }
     public string RecordKey { get; }
     public int RenderedIndex { get; }
+    public int RecordWordIndex { get; }
     public long NodeId { get; set; }
     public int NodeWordIndex { get; set; } = -1;
   }
@@ -338,7 +362,9 @@ internal sealed class TranscriptSearchIndex
   private readonly record struct SearchToken(
     int Start,
     int End,
-    int RenderedIndex,
+    int RecordNumber,
+    string SourceId,
+    int RecordWordIndex,
     long NodeId,
     int NodeWordIndex);
 }
@@ -352,6 +378,8 @@ internal sealed record TranscriptSearchRequest(
   bool VoicedOnly);
 
 internal sealed record TranscriptSearchMatch(
+  int RecordNumber,
+  string SourceId,
   int StartWordIndex,
   int EndWordIndex,
   long NodeId,
