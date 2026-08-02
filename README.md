@@ -1,6 +1,20 @@
 # Agent Panel Speaker v69
 
 
+## v72 transcript find popup
+
+Version 72 adds a VS Code-style transcript find popup opened with `Ctrl+F`.
+It supports match-case, whole-word, regular-expression, and Voiced/All scope
+controls.  Voiced is the default.  Enter selects the next match, Shift+Enter
+selects the previous match, and Ctrl+Shift+Enter moves the paused speech marker
+to the current voiced match.
+
+Regular-expression matching runs in a disposable Web Worker.  Escape cancels a
+running search immediately.  If it is still running after five seconds, the
+viewer asks whether to continue waiting or cancel it; there is no fixed search
+timeout.  Escape closes the popup when a find control owns the caret and no
+search is running.
+
 ## v71 diagnostic and paused-seek corrections
 
 - System.Speech `SpeakProgress` callbacks are logged with provider positions,

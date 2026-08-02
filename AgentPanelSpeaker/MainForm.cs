@@ -465,6 +465,7 @@ internal sealed class MainForm : Form, IMessageFilter
         returnFocus: false,
         suppressHoverUntilLeave: true);
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
+    _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
     _transcriptSettingsOpenTimer.Tick += (_, _) =>
     {
       _transcriptSettingsOpenTimer.Stop();
@@ -1776,6 +1777,27 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsSaveTimer.Start();
   }
 
+  /// <summary>
+  /// Moves the paused speech marker to the voiced word selected by Find.
+  /// </summary>
+  private void TranscriptFindSeekRequested(
+    object? sender,
+    FindSeekRequestedEventArgs eventArgs)
+  {
+    if (_speech.TrySeekToTranscriptWord(
+          eventArgs.NodeId,
+          eventArgs.NodeWordIndex,
+          out string text))
+    {
+      AppendLog($"Find moved speech marker: {text}");
+    }
+    else
+    {
+      AppendLog("Find match is not in voiced speech history.");
+    }
+    UpdateControlState();
+  }
+
   private void TranscriptTransportKeyPressed(
     object? sender,
     TransportKeyPressedEventArgs eventArgs)
@@ -2240,6 +2262,11 @@ internal sealed class MainForm : Form, IMessageFilter
 
     Keys keyCode = (Keys)(int)message.WParam & Keys.KeyCode;
     Keys modifiers = Control.ModifierKeys & Keys.Modifiers;
+    if (keyCode == Keys.F && modifiers == Keys.Control)
+    {
+      _transcriptView.OpenFind();
+      return true;
+    }
     bool hasAltOnly = modifiers == Keys.Alt;
     bool hasNoModifiers = modifiers == Keys.None;
     if (!hasAltOnly && !hasNoModifiers)
@@ -2262,6 +2289,11 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
+    if (keyData == (Keys.Control | Keys.F))
+    {
+      _transcriptView.OpenFind();
+      return true;
+    }
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
       if (_transcriptSettingsPopup.Visible)

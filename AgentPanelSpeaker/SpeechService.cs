@@ -833,6 +833,65 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Moves the paused playback marker to one lexical word within a JSONL node.
+  /// </summary>
+  public bool TrySeekToTranscriptWord(
+    long nodeId,
+    int nodeWordIndex,
+    out string text)
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (nodeWordIndex < 0)
+      {
+        text = string.Empty;
+        return false;
+      }
+
+      int remaining = nodeWordIndex;
+      for (int index = 0; index < _history.Count; ++index)
+      {
+        SpeechFragment fragment = _history[index];
+        if (fragment.NodeId != nodeId ||
+            !TryGetEligibleProfileLocked(
+              fragment,
+              out _,
+              out _))
+        {
+          continue;
+        }
+
+        MatchCollection matches = SpeechTokenization.Matches(fragment.Text);
+        if (remaining >= matches.Count)
+        {
+          remaining -= matches.Count;
+          continue;
+        }
+
+        bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;
+        _pendingUntracked = null;
+        ClearProcessingTimeAnnouncementLocked();
+        _pendingHistoryIndex = index;
+        _nextHistoryIndex = index;
+        _lastFenceActivity = null;
+        SetPausedLocked(true);
+        SetPausedNavigationPositionLocked(index, remaining);
+        if (hadActiveSpeech)
+        {
+          _restorePauseAfterCancellation = true;
+          _engine.Cancel();
+        }
+        text = fragment.Text;
+        return true;
+      }
+
+      text = string.Empty;
+      return false;
+    }
+  }
+
+  /// <summary>
   /// Cancels speech and returns playback to the live end.
   /// </summary>
   public void CancelAll()
@@ -1854,16 +1913,27 @@ internal sealed class SpeechService : IDisposable
   /// Moves the transcript marker to a selected history fragment without
   /// starting its audio.
   /// </summary>
-  private void SetPausedNavigationPositionLocked(int index)
+  private void SetPausedNavigationPositionLocked(
+    int index,
+    int wordIndex = 0)
   {
     SpeechFragment fragment = _history[index];
+    MatchCollection matches = SpeechTokenization.Matches(fragment.Text);
+    int boundedWordIndex = matches.Count == 0
+      ? 0
+      : Math.Clamp(wordIndex, 0, matches.Count - 1);
     _activeHistoryIndex = index;
     _activeTranscriptText = fragment.Text;
-    _activeWordIndex = 0;
+    _activeWordIndex = boundedWordIndex;
     _activeWordBaseIndex = 0;
     _activeCharacterBaseOffset = 0;
-    _activeCharacterPosition = GetWordCharacterPosition(fragment.Text, 0);
-    _activeWord = FirstWord(fragment.Text);
+    _activeCharacterPosition = GetWordCharacterPosition(
+      fragment.Text,
+      boundedWordIndex);
+    _activeWord = GetTokenAtIndex(
+      fragment.Text,
+      boundedWordIndex,
+      FirstWord(fragment.Text));
     _activeCharacterCount = _activeWord.Length;
     _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
     ReportPlaybackPositionLocked(TranscriptPlaybackState.Paused);

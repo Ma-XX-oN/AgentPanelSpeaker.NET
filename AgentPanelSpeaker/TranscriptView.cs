@@ -76,6 +76,11 @@ internal sealed class TranscriptView : UserControl
   public event EventHandler<TransportKeyPressedEventArgs>? TransportKeyPressed;
 
   /// <summary>
+  /// Raised when the find popup requests that the speech marker move to a match.
+  /// </summary>
+  public event EventHandler<FindSeekRequestedEventArgs>? FindSeekRequested;
+
+  /// <summary>
   /// Selects a transcript source and immediately renders its current content.
   /// </summary>
   public void SelectSession(
@@ -263,6 +268,17 @@ internal sealed class TranscriptView : UserControl
       {
         exception = exception.ToString()
       });
+    }
+  }
+
+  /// <summary>
+  /// Opens and focuses the transcript find popup.
+  /// </summary>
+  public void OpenFind()
+  {
+    if (_initialized)
+    {
+      _ = ExecuteAsync("openFind();");
     }
   }
 
@@ -612,6 +628,20 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
+      if (type == "find-seek")
+      {
+        long? nodeId = ReadOptionalInt64(root, "nodeId");
+        int? nodeWordIndex = ReadOptionalInt32(root, "nodeWordIndex");
+        if (nodeId is long validNodeId &&
+            nodeWordIndex is int validNodeWordIndex &&
+            validNodeWordIndex >= 0)
+        {
+          FindSeekRequested?.Invoke(
+            this,
+            new FindSeekRequestedEventArgs(validNodeId, validNodeWordIndex));
+        }
+        return;
+      }
       if (type != "transport" ||
           !root.TryGetProperty("key", out JsonElement keyElement))
       {
@@ -753,7 +783,7 @@ internal sealed class TranscriptView : UserControl
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; script-src 'nonce-agent-panel-speaker'; object-src 'none'; frame-src 'none'; base-uri 'none'">
+      content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; script-src 'nonce-agent-panel-speaker'; worker-src blob:; object-src 'none'; frame-src 'none'; base-uri 'none'">
 <style>
 :root {
   color-scheme: light;
@@ -813,6 +843,42 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
 }
+#find-popup {
+  position: fixed;
+  top: 8px;
+  right: 18px;
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--quote);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 3px 14px rgba(0,0,0,.28);
+}
+#find-popup.open { display: flex; }
+#find-input {
+  width: 260px;
+  border: 1px solid var(--quote);
+  border-radius: 3px;
+  padding: 4px 7px;
+  color: var(--text);
+  background: var(--page);
+}
+.find-button, #find-scope {
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text);
+  background: transparent;
+}
+.find-button:hover, #find-scope:hover { background: var(--code); }
+.find-button.enabled { border-color: var(--link); background: var(--code); }
+#find-count { min-width: 72px; color: var(--muted); text-align: center; }
+.word.find-match { box-shadow: inset 0 -2px 0 #c08a00; }
+.word.find-current { background: #d99b22; color: #111; }
 #live-end-marker {
   display: none;
   max-width: 1050px;
@@ -828,11 +894,35 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 </style>
 </head>
 <body>
+<div id="find-popup" role="search" aria-label="Find in transcript">
+  <input id="find-input" type="text" spellcheck="false" aria-label="Find">
+  <button id="find-case" class="find-button" title="Match case">Aa</button>
+  <button id="find-word" class="find-button" title="Match whole word">ab</button>
+  <button id="find-regex" class="find-button" title="Use regular expression">.*</button>
+  <select id="find-scope" title="Search scope">
+    <option value="voiced" selected>Voiced</option>
+    <option value="all">All</option>
+  </select>
+  <span id="find-count">No results</span>
+  <button id="find-prev" class="find-button" title="Previous match (Shift+Enter)">↑</button>
+  <button id="find-next" class="find-button" title="Next match (Enter)">↓</button>
+  <button id="find-close" class="find-button" title="Close (Escape)">×</button>
+</div>
 <main id="transcript"></main>
 <div id="live-end-marker" aria-label="Next text position"></div>
 <script nonce="agent-panel-speaker">
 const transcript = document.getElementById('transcript');
 const liveEndMarker = document.getElementById('live-end-marker');
+const findPopup = document.getElementById('find-popup');
+const findInput = document.getElementById('find-input');
+const findCase = document.getElementById('find-case');
+const findWord = document.getElementById('find-word');
+const findRegex = document.getElementById('find-regex');
+const findScope = document.getElementById('find-scope');
+const findCount = document.getElementById('find-count');
+const findPrev = document.getElementById('find-prev');
+const findNext = document.getElementById('find-next');
+const findClose = document.getElementById('find-close');
 let words = [];
 let lexicalWords = [];
 let currentIndex = -1;
@@ -853,6 +943,14 @@ let lexicalWordsByRecord = new Map();
 let segmentRangesByNode = new Map();
 const reportedMappingFailures = new Set();
 const reportedPlaybackFailures = new Set();
+let findMatches = [];
+let currentFindMatch = -1;
+let findWorker = null;
+let findGeneration = 0;
+let findSlowTimer = 0;
+let findCaseEnabled = false;
+let findWordEnabled = false;
+let findRegexEnabled = false;
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu) || [];
@@ -1417,6 +1515,204 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   reveal(target);
 }
 
+
+function clearFindHighlights() {
+  for (const word of words) {
+    word.classList.remove('find-match', 'find-current');
+  }
+}
+
+function cancelFindSearch(updateStatus) {
+  ++findGeneration;
+  if (findWorker) {
+    findWorker.terminate();
+    findWorker = null;
+  }
+  if (findSlowTimer) {
+    clearTimeout(findSlowTimer);
+    findSlowTimer = 0;
+  }
+  if (updateStatus) findCount.textContent = 'Cancelled';
+}
+
+function buildFindCorpus(voicedOnly) {
+  const selected = voicedOnly
+    ? words.filter(word => word.dataset.nodeId)
+    : words;
+  let text = '';
+  const ranges = [];
+  const nodeWordCounts = new Map();
+  for (const word of selected) {
+    if (text) text += ' ';
+    const start = text.length;
+    text += word.textContent || '';
+    const nodeId = word.dataset.nodeId || '';
+    let nodeWordIndex = -1;
+    if (nodeId && word.dataset.lexical === '1') {
+      nodeWordIndex = nodeWordCounts.get(nodeId) || 0;
+      nodeWordCounts.set(nodeId, nodeWordIndex + 1);
+    }
+    ranges.push({start, end: text.length, word, nodeId, nodeWordIndex});
+  }
+  return {text, ranges};
+}
+
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mapFindMatches(rawMatches, corpus) {
+  const mapped = [];
+  for (const raw of rawMatches) {
+    const end = raw.start + Math.max(1, raw.length);
+    const touched = corpus.ranges.filter(range =>
+      range.start < end && range.end > raw.start);
+    if (!touched.length) continue;
+    const firstLexical = touched.find(item => item.nodeWordIndex >= 0);
+    mapped.push({
+      words: touched.map(item => item.word),
+      nodeId: firstLexical?.nodeId || '',
+      nodeWordIndex: firstLexical?.nodeWordIndex ?? -1
+    });
+  }
+  return mapped;
+}
+
+function applyFindMatches(matches) {
+  clearFindHighlights();
+  findMatches = matches;
+  for (const match of findMatches) {
+    for (const word of match.words) word.classList.add('find-match');
+  }
+  if (!findMatches.length) {
+    currentFindMatch = -1;
+    findCount.textContent = 'No results';
+    return;
+  }
+  const marker = currentIndex >= 0 ? currentIndex : 0;
+  currentFindMatch = findMatches.findIndex(match =>
+    Number(match.words[0]?.dataset.index || 0) >= marker);
+  if (currentFindMatch < 0) currentFindMatch = 0;
+  showFindMatch(currentFindMatch);
+}
+
+function showFindMatch(index) {
+  if (!findMatches.length) return;
+  for (const match of findMatches) {
+    for (const word of match.words) word.classList.remove('find-current');
+  }
+  currentFindMatch = (index + findMatches.length) % findMatches.length;
+  const match = findMatches[currentFindMatch];
+  for (const word of match.words) word.classList.add('find-current');
+  const target = match.words[0];
+  openAncestors(target);
+  target?.scrollIntoView({block:'center', behavior:'auto'});
+  findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
+}
+
+function runFind() {
+  cancelFindSearch(false);
+  clearFindHighlights();
+  findMatches = [];
+  currentFindMatch = -1;
+  const query = findInput.value;
+  if (!query) {
+    findCount.textContent = 'No results';
+    return;
+  }
+  const corpus = buildFindCorpus(findScope.value === 'voiced');
+  const source = findRegexEnabled ? query : escapeRegex(query);
+  const pattern = findWordEnabled
+    ? `(?<![\\p{L}\\p{N}_])(?:${source})(?![\\p{L}\\p{N}_])`
+    : source;
+  const generation = ++findGeneration;
+  const workerSource = `onmessage=e=>{try{const r=new RegExp(e.data.pattern,e.data.flags);const a=[];let m;while((m=r.exec(e.data.text))!==null){a.push({start:m.index,length:m[0].length});if(m[0].length===0)r.lastIndex++;}postMessage({matches:a});}catch(error){postMessage({error:String(error.message||error)});}};`;
+  findWorker = new Worker(URL.createObjectURL(
+    new Blob([workerSource], {type:'text/javascript'})));
+  findCount.textContent = 'Searching…';
+  findWorker.onmessage = event => {
+    if (generation !== findGeneration) return;
+    if (findSlowTimer) clearTimeout(findSlowTimer);
+    findSlowTimer = 0;
+    findWorker?.terminate();
+    findWorker = null;
+    if (event.data.error) {
+      findCount.textContent = 'Invalid regex';
+      return;
+    }
+    applyFindMatches(mapFindMatches(event.data.matches || [], corpus));
+  };
+  findWorker.postMessage({
+    text: corpus.text,
+    pattern,
+    flags: findCaseEnabled ? 'gu' : 'giu'
+  });
+  findSlowTimer = setTimeout(() => {
+    if (!findWorker || generation !== findGeneration) return;
+    if (!confirm('The regular-expression search is still running. Continue waiting?')) {
+      cancelFindSearch(true);
+    }
+  }, 5000);
+}
+
+function openFind() {
+  findPopup.classList.add('open');
+  findInput.focus();
+  findInput.select();
+}
+
+function closeFind() {
+  cancelFindSearch(false);
+  clearFindHighlights();
+  findMatches = [];
+  currentFindMatch = -1;
+  findPopup.classList.remove('open');
+  transcript.focus();
+}
+
+function toggleFindOption(button, setter) {
+  setter();
+  button.classList.toggle('enabled');
+  runFind();
+}
+
+findInput.addEventListener('input', runFind);
+findScope.addEventListener('change', runFind);
+findCase.addEventListener('click', () => toggleFindOption(findCase, () => findCaseEnabled = !findCaseEnabled));
+findWord.addEventListener('click', () => toggleFindOption(findWord, () => findWordEnabled = !findWordEnabled));
+findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => findRegexEnabled = !findRegexEnabled));
+findPrev.addEventListener('click', () => showFindMatch(currentFindMatch - 1));
+findNext.addEventListener('click', () => showFindMatch(currentFindMatch + 1));
+findClose.addEventListener('click', closeFind);
+
+findPopup.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    if (findWorker) cancelFindSearch(true);
+    else closeFind();
+    return;
+  }
+  if (event.key === 'Enter' && event.ctrlKey && event.shiftKey) {
+    event.preventDefault();
+    const match = findMatches[currentFindMatch];
+    if (!match || !match.nodeId || match.nodeWordIndex < 0) {
+      findCount.textContent = 'Not voiced';
+      return;
+    }
+    chrome.webview.postMessage({
+      type:'find-seek',
+      nodeId:Number(match.nodeId),
+      nodeWordIndex:match.nodeWordIndex
+    });
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    showFindMatch(currentFindMatch + (event.shiftKey ? -1 : 1));
+  }
+});
+
 chrome.webview.addEventListener('message', event => {
   const data = event.data;
   if (!data) return;
@@ -1459,6 +1755,14 @@ chrome.webview.addEventListener('message', event => {
 });
 
 window.addEventListener('keydown', event => {
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey &&
+      event.key.toLocaleLowerCase() === 'f') {
+    event.preventDefault();
+    event.stopPropagation();
+    openFind();
+    return;
+  }
+  if (findPopup.classList.contains('open')) return;
   if (event.ctrlKey || event.metaKey || event.shiftKey) return;
   if (event.key.length !== 1) return;
   event.preventDefault();
