@@ -28,6 +28,9 @@ internal static partial class SpeechTokenization
   }
 
   [GeneratedRegex(
-    @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*|[^\s\p{L}\p{N}_]")]
+    @"(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)" +
+    @"|\.+" +
+    @"|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*" +
+    @"|[^\s]")]
   private static partial Regex TokenRegex();
 }

@@ -1602,6 +1602,46 @@ internal sealed class SapiSpeechEngine : IDisposable
     return char.IsLetterOrDigit(value) || value == '_';
   }
 
+  /// <summary>
+  /// Returns whether one complete display token is a leading decimal.
+  /// </summary>
+  private static bool IsLeadingDecimal(string value)
+  {
+    if (value.Length < 2 || value[0] != '.')
+    {
+      return false;
+    }
+    for (int index = 1; index < value.Length; ++index)
+    {
+      if (!char.IsDigit(value[index]))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// <summary>
+  /// Returns synthesis text for one display token without changing its display
+  /// range.  Leading decimals are spoken as "point" plus their digits.
+  /// </summary>
+  private static string GetBookmarkedSynthesisText(
+    MatchCollection tokens,
+    int index)
+  {
+    Match token = tokens[index];
+    if (IsLeadingDecimal(token.Value))
+    {
+      return "point " + token.Value[1..];
+    }
+
+    bool attachedPeriod = token.Value == "." &&
+      index + 1 < tokens.Count &&
+      token.Index + token.Length == tokens[index + 1].Index &&
+      IsWordCharacter(tokens[index + 1].Value[0]);
+    return attachedPeriod ? "dot" : token.Value;
+  }
+
   private static bool TryBuildBookmarkedSsml(
     SpeechMarkup markup,
     string cultureName,
@@ -1652,15 +1692,11 @@ internal sealed class SapiSpeechEngine : IDisposable
           return false;
         }
 
-        bool attachedPeriod = token.Value == "." &&
-          index + 1 < tokens.Count &&
-          token.Index + token.Length == tokens[index + 1].Index &&
-          IsWordCharacter(tokens[index + 1].Value[0]);
         placements.Add((
           position,
           token.Length,
           index,
-          attachedPeriod ? "dot" : token.Value));
+          GetBookmarkedSynthesisText(tokens, index)));
         searchPosition = position + token.Length;
       }
 

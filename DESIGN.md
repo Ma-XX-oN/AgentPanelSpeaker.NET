@@ -1,5 +1,20 @@
 # Agent Panel Speaker internal design
 
+## v68 decimal-aware bookmark tokens
+
+`SpeechTokenization` recognizes decimal values before general period and word
+tokens.  This prevents token-level SSML marks from splitting the text that a
+Windows.Media voice must see contiguously to pronounce a decimal as “point”.
+The optional `f`, `F`, `l`, or `L` suffix is deliberately excluded from the
+decimal token and becomes the next display token.
+
+`SapiSpeechEngine.GetBookmarkedSynthesisText()` decouples display identity from
+synthesis text.  A leading-decimal token such as `.5` remains one display range
+but is rendered as `point 5`; an attached identifier period remains `.` in the
+display model but is rendered as `dot`.  Bookmark count and token indexes
+therefore continue to correspond to display tokens.
+
+
 
 ## System.Speech timing format
 

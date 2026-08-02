@@ -1,4 +1,4 @@
-# Agent Panel Speaker v63
+# Agent Panel Speaker v68
 
 ## v62: Windows.Media SSML cue-coordinate correction
 
@@ -1060,3 +1060,24 @@ The app reads all current cues, including bookmark cues, from
 deprecated by Microsoft.  Deprecation of `Markers` does not mean SSML
 bookmarks are deprecated: a `SpeechBookmark` timed-metadata track is the modern
 representation of SSML bookmark timing.
+
+## v68 decimal-aware Windows.Media bookmark tokenization
+
+Windows.Media bookmark timing now tokenizes decimal values as uninterrupted
+display units before inserting SSML bookmarks.  The decimal-aware alternative
+is evaluated before period and word alternatives:
+
+```regex
+(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)
+```
+
+Thus `1.25` and `1031.75` contain no internal bookmark, while `3.14f` is
+represented as `3.14 | f`.  A token matching `^\.\d+$` retains its complete
+display/highlight range but is synthesized as `point` followed by its digits;
+`.5` is therefore highlighted as one token while spoken as “point five”.
+
+The existing dotted-identifier behaviour remains: `PolicyMachinery.hpp` is
+represented as `PolicyMachinery | . | hpp`, and the period's synthesis text is
+`dot`.  Runs of periods are single tokens, and the prior apostrophe/hyphen word
+handling is preserved.
+
