@@ -1,4 +1,4 @@
-# Agent Panel Speaker v79
+# Agent Panel Speaker v80
 
 ## v79 virtualized transcript and follow overlay
 
@@ -1190,3 +1190,21 @@ represented as `PolicyMachinery | . | hpp`, and the period's synthesis text is
 `dot`.  Runs of periods are single tokens, and the prior apostrophe/hyphen word
 handling is preserved.
 
+
+## v80 transcript windowing corrections
+
+Version 80 keeps the complete transcript and search index in C#, but renders
+only five adjacent record regions in WebView2.  Estimated heights for unloaded
+records provide the full-document scrollbar.  Rendered records report their
+measured heights back to C#, improving spacer accuracy as the user moves
+through the transcript.
+
+The current region remains loaded with two regions above and two below.  When
+the visible record enters an outer loaded region, the next region is loaded and
+the opposite region remains until the view has crossed the central region.
+Window replacement preserves the first visible record and its viewport offset.
+
+Transcript loading and followed playback centre the virtual window directly on
+the current voice record.  Starting a Find operation disables follow mode
+before navigation.  A new search begins after the current selection, or after
+the voice marker when there is no selection.

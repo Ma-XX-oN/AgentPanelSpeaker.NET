@@ -190,10 +190,30 @@ internal sealed class TranscriptView : UserControl
   public void ShowPlaybackPosition(TranscriptPlaybackPosition position)
   {
     _pendingPosition = position;
-    if (_initialized && !_refreshInProgress)
+    if (!_initialized || _refreshInProgress)
     {
-      PostPlaybackPosition(position);
+      return;
     }
+
+    TranscriptNodeIdentity? identity = _identities.FirstOrDefault(
+      item => item.NodeId == position.NodeId);
+    if (_settings.FollowSpeech && identity is not null &&
+        _virtualDocument is TranscriptVirtualDocument document &&
+        document.TryGetIndex(
+          identity.RecordNumber,
+          identity.SourceId,
+          out int index) &&
+        (index < _windowStartIndex || index > _windowEndIndex))
+    {
+      _ = RenderWindowForRecordAsync(
+        identity.RecordNumber,
+        identity.SourceId,
+        "playback-position",
+        matchIndex: null);
+      return;
+    }
+
+    PostPlaybackPosition(position);
   }
 
   private void QueueSettingsApply(bool immediate)
@@ -507,7 +527,10 @@ internal sealed class TranscriptView : UserControl
       _identities = payload.Identities;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
       TranscriptWindow window = payload.Document.CreateWindow(focalIndex);
-      string script = BuildReplaceWindowScript(window, preserve: !force);
+      string script = BuildReplaceWindowScript(
+        window,
+        preserve: !force,
+        focusVirtualIndex: focalIndex);
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
       {
@@ -710,6 +733,28 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
+      if (type == "window-measured")
+      {
+        TranscriptVirtualDocument? virtualDocument = _virtualDocument;
+        if (virtualDocument is not null &&
+            root.TryGetProperty("measurements", out JsonElement measurements) &&
+            measurements.ValueKind == JsonValueKind.Array)
+        {
+          var values = new Dictionary<int, double>();
+          foreach (JsonElement measurement in measurements.EnumerateArray())
+          {
+            if (measurement.TryGetProperty("index", out JsonElement indexElement) &&
+                indexElement.TryGetInt32(out int index) &&
+                measurement.TryGetProperty("height", out JsonElement heightElement) &&
+                heightElement.TryGetDouble(out double height))
+            {
+              values[index] = height;
+            }
+          }
+          virtualDocument.UpdateMeasuredHeights(values);
+        }
+        return;
+      }
       if (type == "window-shift")
       {
         int? focalIndex = ReadOptionalInt32(root, "focalIndex");
@@ -824,6 +869,14 @@ internal sealed class TranscriptView : UserControl
       IReadOnlyList<TranscriptSearchMatch> matches = await index.SearchAsync(
         request,
         cancellation.Token);
+      int originRecordNumber = ReadOptionalInt32(root, "originRecordNumber") ?? 0;
+      string originSourceId = ReadOptionalString(root, "originSourceId");
+      int originWordIndex = ReadOptionalInt32(root, "originWordIndex") ?? -1;
+      matches = RotateMatchesAfterOrigin(
+        matches,
+        originRecordNumber,
+        originSourceId,
+        originWordIndex);
       if (cancellation.IsCancellationRequested ||
           !ReferenceEquals(_findCancellation, cancellation))
       {
@@ -872,6 +925,39 @@ internal sealed class TranscriptView : UserControl
       }
       cancellation.Dispose();
     }
+  }
+
+  private static IReadOnlyList<TranscriptSearchMatch> RotateMatchesAfterOrigin(
+    IReadOnlyList<TranscriptSearchMatch> matches,
+    int recordNumber,
+    string sourceId,
+    int wordIndex)
+  {
+    if (matches.Count < 2 || wordIndex < 0)
+    {
+      return matches;
+    }
+    int first = -1;
+    for (int index = 0; index < matches.Count; ++index)
+    {
+      TranscriptSearchMatch match = matches[index];
+      bool sameSource = string.Equals(
+        match.SourceId,
+        sourceId,
+        StringComparison.Ordinal);
+      if (match.RecordNumber > recordNumber ||
+          (match.RecordNumber == recordNumber && sameSource &&
+           match.StartWordIndex > wordIndex))
+      {
+        first = index;
+        break;
+      }
+    }
+    if (first <= 0)
+    {
+      return matches;
+    }
+    return matches.Skip(first).Concat(matches.Take(first)).ToArray();
   }
 
   private void CancelFindSearch()
@@ -1027,7 +1113,8 @@ internal sealed class TranscriptView : UserControl
     bool preserve,
     int? anchorRecordNumber = null,
     string? anchorSourceId = null,
-    double? anchorOffset = null)
+    double? anchorOffset = null,
+    int? focusVirtualIndex = null)
   {
     var keys = window.Records
       .Select(record => record.SourceId + "\0" + record.RecordNumber)
@@ -1041,9 +1128,12 @@ internal sealed class TranscriptView : UserControl
       JsonSerializer.Serialize(identities) + "," +
       window.StartIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.EndIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      window.TopSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      window.BottomSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       JsonSerializer.Serialize(anchorRecordNumber) + "," +
       JsonSerializer.Serialize(anchorSourceId) + "," +
-      JsonSerializer.Serialize(anchorOffset) + ");";
+      JsonSerializer.Serialize(anchorOffset) + "," +
+      JsonSerializer.Serialize(focusVirtualIndex) + ");";
   }
 
   private async Task RenderWindowForRecordAsync(
@@ -1068,7 +1158,10 @@ internal sealed class TranscriptView : UserControl
     }
     TranscriptWindow window = document.CreateWindow(focalIndex);
     var timer = Stopwatch.StartNew();
-    if (!await ExecuteAsync(BuildReplaceWindowScript(window, preserve: false)))
+    if (!await ExecuteAsync(BuildReplaceWindowScript(
+          window,
+          preserve: false,
+          focusVirtualIndex: focalIndex)))
     {
       return;
     }
@@ -1223,6 +1316,8 @@ body {
   line-height: 26px;
   text-align: center;
 }
+.virtual-spacer { width: 1px; pointer-events: none; }
+.virtual-record { display: flow-root; }
 #follow-toggle { cursor: pointer; font-weight: 700; }
 #follow-toggle:hover { background: rgba(255,255,255,.18); }
 #follow-toggle:active { background: rgba(255,255,255,.28); }
@@ -1448,9 +1543,12 @@ function replaceTranscriptWindow(
   nodeMap,
   startIndex = -1,
   endIndex = -1,
+  topSpacerHeight = 0,
+  bottomSpacerHeight = 0,
   anchorRecordNumber = null,
   anchorSourceId = null,
-  anchorOffset = null) {
+  anchorOffset = null,
+  focusVirtualIndex = null) {
   clearFindHighlights();
   findCurrentWords = [];
   const nearBottom = document.documentElement.scrollHeight -
@@ -1459,7 +1557,11 @@ function replaceTranscriptWindow(
   const openDetails = preserve
     ? [...transcript.querySelectorAll('details')].map(x => x.open)
     : [];
-  transcript.innerHTML = html;
+  transcript.innerHTML =
+    '<div class="virtual-spacer" data-virtual-spacer="top" style="height:' +
+    Math.max(0, Number(topSpacerHeight) || 0) + 'px"></div>' + html +
+    '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
+    Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
   [...transcript.querySelectorAll('details')].forEach((item, index) => {
@@ -1468,6 +1570,15 @@ function replaceTranscriptWindow(
   wrapWords();
   assignRecordScopes();
   assignNodeScopes(nodeMap || []);
+  const measurements = [...transcript.querySelectorAll('.virtual-record')]
+    .map(record => ({
+      index:Number(record.dataset.virtualIndex || -1),
+      height:record.getBoundingClientRect().height
+    }))
+    .filter(item => item.index >= 0 && item.height > 0);
+  if (measurements.length) {
+    chrome.webview.postMessage({type:'window-measured', measurements});
+  }
   virtualShiftPending = false;
   if (anchorRecordNumber !== null && anchorOffset !== null) {
     const selector = '.record-anchor[data-jsonl-record="' +
@@ -1478,6 +1589,14 @@ function replaceTranscriptWindow(
       const delta = anchor.getBoundingClientRect().top - Number(anchorOffset);
       programmaticScrollUntil = performance.now() + 500;
       window.scrollBy(0, delta);
+    }
+  } else if (focusVirtualIndex !== null) {
+    const focusRecord = transcript.querySelector(
+      '.virtual-record[data-virtual-index="' +
+      CSS.escape(String(focusVirtualIndex)) + '"]');
+    if (focusRecord) {
+      programmaticScrollUntil = performance.now() + 2000;
+      focusRecord.scrollIntoView({block:'center', behavior:'auto'});
     }
   }
   currentIndex = -1;
@@ -1496,7 +1615,7 @@ function replaceTranscriptWindow(
 }
 
 function replaceTranscript(html, preserve, nodeMap) {
-  replaceTranscriptWindow(html, preserve, nodeMap, -1, -1);
+  replaceTranscriptWindow(html, preserve, nodeMap, -1, -1, 0, 0);
 }
 
 function updateFollowToggle() {
@@ -2156,7 +2275,36 @@ function applyCSharpFindResults(data) {
   });
 }
 
+function getFindOrigin() {
+  const selection = window.getSelection();
+  if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+    const range = selection.getRangeAt(0);
+    const node = range.endContainer.nodeType === Node.ELEMENT_NODE
+      ? range.endContainer
+      : range.endContainer.parentElement;
+    const word = node?.closest?.('.word');
+    if (word) {
+      return {
+        recordNumber:Number(word.dataset.recordNumber || 0),
+        sourceId:word.dataset.sourceId || '',
+        wordIndex:Number(word.dataset.recordIndex || -1)
+      };
+    }
+  }
+  const voiceWord = voiceMarkerIndex >= 0 ? words[voiceMarkerIndex] : null;
+  if (voiceWord) {
+    return {
+      recordNumber:Number(voiceWord.dataset.recordNumber || 0),
+      sourceId:voiceWord.dataset.sourceId || '',
+      wordIndex:Number(voiceWord.dataset.recordIndex || -1)
+    };
+  }
+  return {recordNumber:0, sourceId:'', wordIndex:-1};
+}
+
 function runFind() {
+  const origin = getFindOrigin();
+  if (followSpeech) setFollowSpeech(false, true);
   cancelFindSearch(false);
   clearFindHighlights();
   findMatches = [];
@@ -2179,7 +2327,10 @@ function runFind() {
     caseEnabled:findCaseEnabled,
     wordEnabled:findWordEnabled,
     regexEnabled:findRegexEnabled,
-    voicedEnabled:findVoicedEnabled
+    voicedEnabled:findVoicedEnabled,
+    originRecordNumber:origin.recordNumber,
+    originSourceId:origin.sourceId,
+    originWordIndex:origin.wordIndex
   });
   findSlowTimer = setTimeout(() => {
     if (!findSearchPending || requestId !== findGeneration) return;
@@ -2296,22 +2447,30 @@ updateFollowToggle();
 
 let scrollFollowTimer = 0;
 let virtualShiftTimer = 0;
-function firstVisibleRecordAnchor() {
-  const anchors = transcript.querySelectorAll('.record-anchor');
-  for (const anchor of anchors) {
-    if (anchor.getBoundingClientRect().bottom >= 0) return anchor;
+function firstVisibleVirtualRecord() {
+  const records = transcript.querySelectorAll('.virtual-record');
+  for (const record of records) {
+    if (record.getBoundingClientRect().bottom >= 0) return record;
   }
-  return anchors.length ? anchors[anchors.length - 1] : null;
+  return records.length ? records[records.length - 1] : null;
+}
+
+function firstVisibleRecordAnchor() {
+  const record = firstVisibleVirtualRecord();
+  return record?.querySelector('.record-anchor') || null;
 }
 
 function requestVirtualShift(direction) {
   if (virtualShiftPending || windowStartIndex < 0 || windowEndIndex < 0) return;
+  const visibleRecord = firstVisibleVirtualRecord();
   const anchor = firstVisibleRecordAnchor();
-  if (!anchor) return;
+  if (!visibleRecord || !anchor) return;
+  const visibleIndex = Number(visibleRecord.dataset.virtualIndex || -1);
+  if (visibleIndex < 0) return;
   virtualShiftPending = true;
   const focalIndex = direction < 0
-    ? Math.max(0, windowStartIndex - 30)
-    : windowEndIndex + 30;
+    ? Math.max(0, visibleIndex - 20)
+    : visibleIndex + 20;
   chrome.webview.postMessage({
     type:'window-shift',
     reason:direction < 0 ? 'scroll-up' : 'scroll-down',
@@ -2337,10 +2496,12 @@ window.addEventListener('scroll', () => {
   if (virtualShiftTimer) clearTimeout(virtualShiftTimer);
   virtualShiftTimer = setTimeout(() => {
     virtualShiftTimer = 0;
-    if (window.scrollY < 700) {
+    const visibleRecord = firstVisibleVirtualRecord();
+    const visibleIndex = Number(visibleRecord?.dataset.virtualIndex || -1);
+    if (visibleIndex >= 0 && visibleIndex <= windowStartIndex + 20 &&
+        windowStartIndex > 0) {
       requestVirtualShift(-1);
-    } else if (document.documentElement.scrollHeight -
-               (window.scrollY + window.innerHeight) < 700) {
+    } else if (visibleIndex >= windowEndIndex - 20) {
       requestVirtualShift(1);
     }
   }, 80);
