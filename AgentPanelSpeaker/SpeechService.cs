@@ -342,12 +342,33 @@ internal sealed class SpeechService : IDisposable
     {
       ThrowIfDisposed();
       bool wasAtLiveEnd = _nextHistoryIndex >= _history.Count;
+      bool wasPausedAtLiveEnd = _isPaused &&
+        _activeHistoryIndex < 0 &&
+        wasAtLiveEnd;
       _history.Add(fragment with { Text = text });
       if (wasAtLiveEnd)
       {
         _nextHistoryIndex = _history.Count - 1;
       }
       TrimHistoryLocked();
+
+      if (wasPausedAtLiveEnd)
+      {
+        int nextEligible = FindNextEligibleLocked(_nextHistoryIndex);
+        if (nextEligible >= 0)
+        {
+          _nextHistoryIndex = nextEligible;
+          SetPausedNavigationPositionLocked(nextEligible);
+        }
+        else
+        {
+          _nextHistoryIndex = _history.Count;
+          ReportPlaybackPositionLocked(
+            TranscriptPlaybackState.PausedAtLiveEnd);
+        }
+        return;
+      }
+
       StartPendingOrNextLocked();
     }
   }
