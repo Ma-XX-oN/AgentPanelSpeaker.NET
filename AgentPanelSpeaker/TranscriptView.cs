@@ -2816,7 +2816,7 @@ window.addEventListener('keydown', event => {
   const lower = event.key.toLocaleLowerCase();
   const findOptionKey = findPopup.classList.contains('open') &&
     event.altKey && !event.ctrlKey && !event.shiftKey &&
-    (lower === 'c' || lower === 'w' || lower === 'r');
+    (lower === 'c' || lower === 'w' || lower === 'r' || lower === 'v');
   if (findOptionKey) return;
   if (event.ctrlKey || event.metaKey || event.shiftKey) return;
   if (event.key.length !== 1) return;
