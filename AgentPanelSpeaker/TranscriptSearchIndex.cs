@@ -92,6 +92,34 @@ internal sealed class TranscriptSearchIndex
     return new TranscriptSearchIndex(allText, allTokens, voicedText, voicedTokens);
   }
 
+
+  /// <summary>
+  /// Resolves an authoritative speech node/word position to its rendered
+  /// transcript search coordinates.
+  /// </summary>
+  public bool TryResolveVoiceOrigin(
+    long nodeId,
+    int nodeWordIndex,
+    out int recordNumber,
+    out string sourceId,
+    out int recordWordIndex)
+  {
+    foreach (SearchToken token in _voicedTokens)
+    {
+      if (token.NodeId == nodeId && token.NodeWordIndex == nodeWordIndex)
+      {
+        recordNumber = token.RecordNumber;
+        sourceId = token.SourceId;
+        recordWordIndex = token.RecordWordIndex;
+        return true;
+      }
+    }
+    recordNumber = 0;
+    sourceId = string.Empty;
+    recordWordIndex = -1;
+    return false;
+  }
+
   /// <summary>
   /// Finds matches without touching the WebView DOM.
   /// </summary>

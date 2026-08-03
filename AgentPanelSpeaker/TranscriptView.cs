@@ -893,9 +893,26 @@ internal sealed class TranscriptView : UserControl
     bool wordEnabled = ReadOptionalBoolean(root, "wordEnabled") == true;
     bool regexEnabled = ReadOptionalBoolean(root, "regexEnabled") == true;
     bool voicedEnabled = ReadOptionalBoolean(root, "voicedEnabled") != false;
+    bool hasSelectionOrigin = string.Equals(
+      ReadOptionalString(root, "originKind"),
+      "selection",
+      StringComparison.Ordinal);
     int originRecordNumber = ReadOptionalInt32(root, "originRecordNumber") ?? 0;
     string originSourceId = ReadOptionalString(root, "originSourceId");
     int originWordIndex = ReadOptionalInt32(root, "originWordIndex") ?? -1;
+    if (!hasSelectionOrigin &&
+        _pendingPosition is TranscriptPlaybackPosition voicePosition &&
+        index.TryResolveVoiceOrigin(
+          voicePosition.NodeId,
+          voicePosition.WordIndex,
+          out int voiceRecordNumber,
+          out string voiceSourceId,
+          out int voiceRecordWordIndex))
+    {
+      originRecordNumber = voiceRecordNumber;
+      originSourceId = voiceSourceId;
+      originWordIndex = voiceRecordWordIndex;
+    }
     var request = new TranscriptSearchRequest(
       validRequestId,
       query,
@@ -932,6 +949,10 @@ internal sealed class TranscriptView : UserControl
         query,
         request.Regex,
         request.VoicedOnly,
+        originKind = hasSelectionOrigin ? "selection" : "voice",
+        originRecordNumber,
+        originSourceId,
+        originWordIndex,
         matchCount = matches.Count,
         elapsedMilliseconds = timer.ElapsedMilliseconds
       });
@@ -2390,21 +2411,14 @@ function getFindOrigin() {
     const word = node?.closest?.('.word');
     if (word) {
       return {
+        kind:'selection',
         recordNumber:Number(word.dataset.recordNumber || 0),
         sourceId:word.dataset.sourceId || '',
         wordIndex:Number(word.dataset.recordIndex || -1)
       };
     }
   }
-  const voiceWord = voiceMarkerIndex >= 0 ? words[voiceMarkerIndex] : null;
-  if (voiceWord) {
-    return {
-      recordNumber:Number(voiceWord.dataset.recordNumber || 0),
-      sourceId:voiceWord.dataset.sourceId || '',
-      wordIndex:Number(voiceWord.dataset.recordIndex || -1)
-    };
-  }
-  return {recordNumber:0, sourceId:'', wordIndex:-1};
+  return {kind:'voice', recordNumber:0, sourceId:'', wordIndex:-1};
 }
 
 function runFind() {
@@ -2433,6 +2447,7 @@ function runFind() {
     wordEnabled:findWordEnabled,
     regexEnabled:findRegexEnabled,
     voicedEnabled:findVoicedEnabled,
+    originKind:origin.kind,
     originRecordNumber:origin.recordNumber,
     originSourceId:origin.sourceId,
     originWordIndex:origin.wordIndex

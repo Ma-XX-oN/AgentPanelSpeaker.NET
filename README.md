@@ -1,6 +1,10 @@
-# Agent Panel Speaker v85
+# Agent Panel Speaker v86
 
-## v85 authoritative startup marker
+A new search now resolves its no-selection origin from the authoritative C#
+playback marker.  It no longer depends on the voice word being present in the
+currently virtualized WebView window.
+
+## v86 authoritative search origin
 
 Selecting or restoring a session now indexes its speech history immediately, without starting the live monitor.  The resulting position is loaded into SpeechService in the paused state and published to the transcript before Play is pressed.  Startup virtualization therefore centres on the same fragment that Play will resume from instead of the newest-record fallback.
 
