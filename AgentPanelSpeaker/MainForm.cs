@@ -110,6 +110,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private int _pendingMonitorSeekWordIndex = -1;
   private bool _resumeAfterMonitorHistoryLoaded;
   private bool _reusePausedHistoryOnMonitorStart;
+  private bool _suppressMonitorTextUntilHistoryLoaded;
 
   /// <summary>
   /// Initializes controls, settings, event handlers, and policy providers.
@@ -143,7 +144,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v89";
+    Text = "Agent Panel Speaker v90";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1296,6 +1297,7 @@ internal sealed class MainForm : Form, IMessageFilter
       }
       bool reusePausedHistory = _speech.HasHistory;
       _reusePausedHistoryOnMonitorStart = reusePausedHistory;
+      _suppressMonitorTextUntilHistoryLoaded = reusePausedHistory;
       _resumeAfterMonitorHistoryLoaded = !reusePausedHistory;
       if (!reusePausedHistory)
       {
@@ -1603,6 +1605,7 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         return;
       }
+      _suppressMonitorTextUntilHistoryLoaded = false;
       if (_reusePausedHistoryOnMonitorStart)
       {
         _reusePausedHistoryOnMonitorStart = false;
@@ -1716,6 +1719,16 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       if (!_monitor.IsRunning || session != Volatile.Read(ref _monitorSession))
       {
+        return;
+      }
+      if (_suppressMonitorTextUntilHistoryLoaded)
+      {
+        DiagnosticLog.Write("monitor.history_fragment_suppressed", new
+        {
+          fragment.NodeId,
+          fragment.Category,
+          fragment.Text
+        });
         return;
       }
       _speech.SpeakLive(fragment);

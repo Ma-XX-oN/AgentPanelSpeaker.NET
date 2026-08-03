@@ -1,9 +1,22 @@
-# Agent Panel Speaker v89
+# Agent Panel Speaker v90
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
 currently virtualized WebView window.
 
+
+
+## v90 Exact Find resume and non-destructive monitor startup
+
+- Playback from a Find-selected word now starts from that word rather than the
+  beginning of its fragment.
+- The full transcript fragment remains authoritative while only the remaining
+  suffix is synthesized, so later word boundaries retain full-fragment indices.
+- Starting monitoring with pre-indexed paused history suppresses the monitor's
+  initial historical fragment replay until `HistoryLoaded`; those duplicate
+  fragments can no longer cancel or replace the active utterance.
+- Captured SAPI boundaries continue to be emitted from the WinMM playback clock,
+  not from synthesis-time callback timing.
 
 ## v89 Immediate indexed playback and pronunciation-safe highlighting
 

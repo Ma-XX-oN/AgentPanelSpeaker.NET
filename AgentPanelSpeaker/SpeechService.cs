@@ -33,6 +33,7 @@ internal sealed class SpeechService : IDisposable
   private int _activeHistoryIndex = -1;
   private int _nextHistoryIndex;
   private int? _pendingHistoryIndex;
+  private int _pendingHistoryWordIndex;
   private UntrackedSpeech? _pendingUntracked;
   private ProcessingTimeAnnouncement? _pendingProcessingTime;
   private bool _processingTimeAnnouncementRequested;
@@ -228,6 +229,7 @@ internal sealed class SpeechService : IDisposable
       _turnCompletions.Clear();
       _backgroundWork.Clear();
       _pendingHistoryIndex = null;
+      _pendingHistoryWordIndex = 0;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
       _activeHistoryIndex = -1;
@@ -257,6 +259,7 @@ internal sealed class SpeechService : IDisposable
     {
       ThrowIfDisposed();
       _pendingHistoryIndex = null;
+      _pendingHistoryWordIndex = 0;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
       _activeHistoryIndex = -1;
@@ -475,6 +478,7 @@ internal sealed class SpeechService : IDisposable
     {
       ThrowIfDisposed();
       _pendingHistoryIndex = null;
+      _pendingHistoryWordIndex = 0;
       _pendingUntracked = new UntrackedSpeech(text.Trim(), profile.Normalize());
       _nextHistoryIndex = _history.Count;
       RestartPendingLocked();
@@ -889,6 +893,7 @@ internal sealed class SpeechService : IDisposable
         _pendingUntracked = null;
         ClearProcessingTimeAnnouncementLocked();
         _pendingHistoryIndex = index;
+        _pendingHistoryWordIndex = remaining;
         _nextHistoryIndex = index;
         _lastFenceActivity = null;
         SetPausedLocked(true);
@@ -1557,10 +1562,13 @@ internal sealed class SpeechService : IDisposable
       return;
     }
 
+    int pendingWordIndex = 0;
     if (_pendingHistoryIndex is int pendingIndex)
     {
       _nextHistoryIndex = pendingIndex;
+      pendingWordIndex = Math.Max(0, _pendingHistoryWordIndex);
       _pendingHistoryIndex = null;
+      _pendingHistoryWordIndex = 0;
     }
 
     while (_nextHistoryIndex < _history.Count)
@@ -1577,11 +1585,12 @@ internal sealed class SpeechService : IDisposable
       }
 
       _activeHistoryIndex = index;
-      StartSpeechLocked(
-        ActiveSpeechKind.History,
+      StartHistorySpeechLocked(
         fragment.Text,
         profile,
-        fragment.PauseAfter);
+        fragment.PauseAfter,
+        pendingWordIndex);
+      pendingWordIndex = 0;
       ReportFenceActivityLocked(fragment, spoken: true, string.Empty);
       return;
     }
@@ -1594,6 +1603,54 @@ internal sealed class SpeechService : IDisposable
       _isPaused
         ? TranscriptPlaybackState.PausedAtLiveEnd
         : TranscriptPlaybackState.WaitingAtLiveEnd);
+  }
+
+
+  /// <summary>
+  /// Starts one history fragment at a selected token while preserving the
+  /// full transcript text used by the marker and search model.
+  /// </summary>
+  private void StartHistorySpeechLocked(
+    string text,
+    SpeechProfileSettings profile,
+    bool pauseAfter,
+    int wordIndex)
+  {
+    MatchCollection matches = SpeechTokenization.Matches(text);
+    int boundedWordIndex = matches.Count == 0
+      ? 0
+      : Math.Clamp(wordIndex, 0, matches.Count - 1);
+    int characterStart = matches.Count == 0
+      ? 0
+      : matches[boundedWordIndex].Index;
+    string spokenText = text[characterStart..];
+
+    _activeTranscriptText = text;
+    _activeWordIndex = boundedWordIndex;
+    _activeWordBaseIndex = boundedWordIndex;
+    _activeCharacterBaseOffset = characterStart;
+    _activeCharacterPosition = characterStart;
+    _activeCharacterCount = FirstWord(spokenText).Length;
+    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+    _activeWord = GetTokenAtIndex(
+      text,
+      boundedWordIndex,
+      FirstWord(spokenText));
+    _activeProfile = profile.Normalize();
+    _activePauseAfter = pauseAfter;
+    _pauseStartedUtc = null;
+    SetActiveKindLocked(ActiveSpeechKind.History);
+    ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
+    try
+    {
+      SpeakConfiguredLocked(spokenText, profile, pauseAfter);
+    }
+    catch
+    {
+      _activeHistoryIndex = -1;
+      SetActiveKindLocked(ActiveSpeechKind.None);
+      throw;
+    }
   }
 
   /// <summary>
@@ -1890,6 +1947,7 @@ internal sealed class SpeechService : IDisposable
   {
     _restorePauseAfterCancellation = false;
     _pendingHistoryIndex = null;
+    _pendingHistoryWordIndex = 0;
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
     _nextHistoryIndex = _history.Count;
