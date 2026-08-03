@@ -313,14 +313,19 @@ internal sealed class HoverPopupController : IDisposable
 
   private bool IsInsideComposite()
   {
-    if (IsPointerInside(_anchor) || _anchor.ContainsFocus)
+    // Pointer-driven dismissal is based on the pointer leaving the complete
+    // anchor/popup region.  A control can retain keyboard focus after a mouse
+    // interaction; treating that stale focus as pointer presence prevents the
+    // popup from ever closing.  Keyboard-only use remains open until a focus
+    // leave event schedules this same delayed close.
+    if (IsPointerInside(_anchor))
     {
       return true;
     }
 
     foreach (Control popup in EnumeratePopupControls())
     {
-      if (IsPointerInside(popup) || popup.ContainsFocus)
+      if (IsPointerInside(popup))
       {
         return true;
       }

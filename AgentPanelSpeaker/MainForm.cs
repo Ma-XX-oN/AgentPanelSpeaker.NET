@@ -2366,6 +2366,11 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
+      if (_transcriptSettingsPopup.IsColourPopupOpen)
+      {
+        _transcriptSettingsPopup.CloseColourPopupFromDismissKey();
+        return true;
+      }
       if (_transcriptSettingsPopup.Visible)
       {
         HideTranscriptSettingsPopup(returnFocus: true);

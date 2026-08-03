@@ -177,6 +177,19 @@ internal sealed class TranscriptSettingsPopup : UserControl
     UpdateDisplays();
   }
 
+  /// <summary>
+  /// Gets whether the nested colour editor is currently open.
+  /// </summary>
+  public bool IsColourPopupOpen => _colourHoverController.IsOpen;
+
+  /// <summary>
+  /// Closes only the nested colour editor.
+  /// </summary>
+  public void CloseColourPopupFromDismissKey()
+  {
+    _colourHoverController.Close(returnFocus: true);
+  }
+
   public void PrepareForHide()
   {
     FlushPendingColourChange();
@@ -251,7 +264,14 @@ internal sealed class TranscriptSettingsPopup : UserControl
     }
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
-      DismissRequested?.Invoke(this, EventArgs.Empty);
+      if (_colourHoverController.IsOpen)
+      {
+        _colourHoverController.Close(returnFocus: true);
+      }
+      else
+      {
+        DismissRequested?.Invoke(this, EventArgs.Empty);
+      }
       return true;
     }
     if (keyData == Keys.Tab && _queueCapacityNumeric.ContainsFocus)
