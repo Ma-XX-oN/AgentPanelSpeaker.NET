@@ -106,6 +106,9 @@ internal sealed class MainForm : Form, IMessageFilter
   private string? _pendingPlayPauseTrigger;
   private int _monitorSession;
   private int _historyPreviewGeneration;
+  private long _pendingMonitorSeekNodeId;
+  private int _pendingMonitorSeekWordIndex = -1;
+  private bool _resumeAfterMonitorHistoryLoaded;
 
   /// <summary>
   /// Initializes controls, settings, event handlers, and policy providers.
@@ -139,7 +142,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v86";
+    Text = "Agent Panel Speaker v87";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1290,6 +1293,7 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         return;
       }
+      _resumeAfterMonitorHistoryLoaded = true;
       _speech.BeginLiveSession();
       Interlocked.Increment(ref _monitorSession);
       string? explicitPath = _pathIsManual || !_followLatestCheckBox.Checked
@@ -1588,6 +1592,34 @@ internal sealed class MainForm : Form, IMessageFilter
         snapshot.Completions,
         snapshot.BackgroundWorkEvents,
         snapshot.StartMode);
+
+      if (_pendingMonitorSeekNodeId > 0 &&
+          _pendingMonitorSeekWordIndex >= 0)
+      {
+        if (_speech.TrySeekToTranscriptWord(
+              _pendingMonitorSeekNodeId,
+              _pendingMonitorSeekWordIndex,
+              out string seekText))
+        {
+          AppendLog($"Restored Find speech position: {seekText}");
+        }
+        else
+        {
+          AppendLog("Unable to restore the Find speech position after monitoring started.");
+        }
+        _pendingMonitorSeekNodeId = 0;
+        _pendingMonitorSeekWordIndex = -1;
+      }
+
+      if (_resumeAfterMonitorHistoryLoaded)
+      {
+        _resumeAfterMonitorHistoryLoaded = false;
+        PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
+        AppendLog(result == PauseToggleResult.Resumed
+          ? "Playback started after history indexing."
+          : "Playback could not start after history indexing.");
+      }
+
       AppendLog($"Indexed {snapshot.Fragments.Count} existing fragments.");
       UpdateControlState();
     });
@@ -1806,6 +1838,8 @@ internal sealed class MainForm : Form, IMessageFilter
           eventArgs.NodeWordIndex,
           out string text))
     {
+      _pendingMonitorSeekNodeId = eventArgs.NodeId;
+      _pendingMonitorSeekWordIndex = eventArgs.NodeWordIndex;
       AppendLog($"Find moved speech marker: {text}");
     }
     else

@@ -1,8 +1,18 @@
-# Agent Panel Speaker v86
+# Agent Panel Speaker v87
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
 currently virtualized WebView window.
+
+## v87 Find seek and first-play restoration
+
+- Find seek token indices now use the same punctuation-inclusive token coordinate
+  system as `SpeechService`.  A match no longer maps word index zero to a leading
+  slash or other punctuation by accident.
+- Starting monitoring preserves a Find-selected speech position across history
+  re-indexing.
+- The first Play request now resumes automatically after existing history has
+  finished indexing instead of returning to the original paused position.
 
 ## v86 authoritative search origin
 

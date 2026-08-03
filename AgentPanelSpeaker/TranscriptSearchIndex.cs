@@ -304,9 +304,9 @@ internal sealed class TranscriptSearchIndex
         for (int index = start; index < start + target.Length; ++index)
         {
           tokens[index].NodeId = identity.NodeId;
-          tokens[index].NodeWordIndex = IsLexical(tokens[index].Text)
-            ? nodeWordIndex++
-            : -1;
+          // SpeechService indexes every spoken token, including punctuation.
+          // Keep the transcript mapping in the same token coordinate system.
+          tokens[index].NodeWordIndex = nodeWordIndex++;
         }
         cursor = start + target.Length;
         cursors[key] = cursor;
