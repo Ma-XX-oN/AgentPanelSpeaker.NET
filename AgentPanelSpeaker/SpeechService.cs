@@ -295,14 +295,30 @@ internal sealed class SpeechService : IDisposable
         _nextHistoryIndex = _history.Count;
       }
 
-      SetPausedLocked(false);
       if (_activeKind != ActiveSpeechKind.None)
       {
         CancelEngineLocked();
       }
+
+      SetPausedLocked(true);
+      _pauseStartedUtc = DateTimeOffset.UtcNow;
+      if (_nextHistoryIndex >= 0 && _nextHistoryIndex < _history.Count)
+      {
+        SetPausedNavigationPositionLocked(_nextHistoryIndex);
+      }
       else
       {
-        StartPendingOrNextLocked();
+        _activeHistoryIndex = -1;
+        _activeTranscriptText = string.Empty;
+        _activeWord = string.Empty;
+        _activeWordIndex = 0;
+        _activeWordBaseIndex = 0;
+        _activeCharacterBaseOffset = 0;
+        _activeCharacterPosition = 0;
+        _activeCharacterCount = 0;
+        _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+        ReportPlaybackPositionLocked(
+          TranscriptPlaybackState.PausedAtLiveEnd);
       }
     }
   }

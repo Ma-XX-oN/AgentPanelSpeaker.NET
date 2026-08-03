@@ -539,6 +539,30 @@ internal sealed class TranscriptView : UserControl
       }
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
+
+      if (_pendingPosition is TranscriptPlaybackPosition latestPosition &&
+          TryResolvePositionIndex(
+            payload.Document,
+            payload.Identities,
+            latestPosition,
+            out int latestIndex) &&
+          (latestIndex < _windowStartIndex || latestIndex > _windowEndIndex))
+      {
+        window = payload.Document.CreateWindow(latestIndex);
+        if (!await ExecuteAsync(BuildReplaceWindowScript(
+              window,
+              preserve: false,
+              focusVirtualIndex: latestIndex)))
+        {
+          ShowLoading("Unable to position transcript at the voice marker. " +
+            "See diagnostic log.");
+          return;
+        }
+        _windowStartIndex = window.StartIndex;
+        _windowEndIndex = window.EndIndex;
+        focalIndex = latestIndex;
+      }
+
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
       _searchIndex = payload.SearchIndex;
@@ -1095,17 +1119,23 @@ internal sealed class TranscriptView : UserControl
     TranscriptVirtualDocument document,
     IReadOnlyList<TranscriptNodeIdentity> identities)
   {
-    if (_pendingPosition is TranscriptPlaybackPosition position)
-    {
-      TranscriptNodeIdentity? identity = identities.FirstOrDefault(
-        item => item.NodeId == position.NodeId);
-      if (identity is not null &&
-          document.TryGetIndex(identity.RecordNumber, identity.SourceId, out int index))
-      {
-        return index;
-      }
-    }
-    return Math.Max(0, document.Count - 1);
+    return _pendingPosition is TranscriptPlaybackPosition position &&
+      TryResolvePositionIndex(document, identities, position, out int index)
+        ? index
+        : Math.Max(0, document.Count - 1);
+  }
+
+  private static bool TryResolvePositionIndex(
+    TranscriptVirtualDocument document,
+    IReadOnlyList<TranscriptNodeIdentity> identities,
+    TranscriptPlaybackPosition position,
+    out int index)
+  {
+    index = -1;
+    TranscriptNodeIdentity? identity = identities.FirstOrDefault(
+      item => item.NodeId == position.NodeId);
+    return identity is not null &&
+      document.TryGetIndex(identity.RecordNumber, identity.SourceId, out index);
   }
 
   private string BuildReplaceWindowScript(

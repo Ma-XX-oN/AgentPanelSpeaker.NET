@@ -1,4 +1,10 @@
-# Agent Panel Speaker v80
+# Agent Panel Speaker v82
+
+## v82 compile correction
+
+Version 82 initializes the `TryResolvePositionIndex` out parameter before the
+short-circuit identity lookup. This fixes CS0177 when no matching node identity
+is present.
 
 ## v79 virtualized transcript and follow overlay
 
@@ -1208,3 +1214,12 @@ Transcript loading and followed playback centre the virtual window directly on
 the current voice record.  Starting a Find operation disables follow mode
 before navigation.  A new search begins after the current selection, or after
 the voice marker when there is no selection.
+
+## v81 startup voice positioning
+
+Version 81 loads indexed history into a paused playback position instead of
+starting speech immediately.  That paused position is published before the
+transcript loading overlay is removed, and the virtual transcript window is
+centred on its exact record.  A second position check after the first window
+render closes the race where history indexing completes during transcript DOM
+replacement.
