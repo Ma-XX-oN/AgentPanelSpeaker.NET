@@ -1,10 +1,20 @@
-# Agent Panel Speaker v91
+# Agent Panel Speaker v92
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
 currently virtualized WebView window.
 
 
+
+## v92 Single-owner monitor startup
+
+- The selected session's paused history snapshot is retained by `MainForm`.
+- Starting monitoring passes that exact snapshot to `JsonlSessionMonitor`.
+- The monitor begins tailing at the current file end and does not parse or
+  republish the existing session history a second time.
+- The duplicate monitor `HistoryLoaded` callback is treated as an invariant
+  violation and cannot restore a stale seek or pause active playback.
+- Same-session monitor confirmation preserves the existing player state.
 
 ## v91 Preserve reused history when the monitor confirms the same session
 

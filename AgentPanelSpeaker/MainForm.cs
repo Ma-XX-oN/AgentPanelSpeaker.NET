@@ -111,6 +111,8 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _resumeAfterMonitorHistoryLoaded;
   private bool _reusePausedHistoryOnMonitorStart;
   private bool _suppressMonitorTextUntilHistoryLoaded;
+  private SpeechHistorySnapshot? _selectedSessionHistory;
+  private string? _selectedSessionHistoryPath;
 
   /// <summary>
   /// Initializes controls, settings, event handlers, and policy providers.
@@ -144,7 +146,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v91";
+    Text = "Agent Panel Speaker v92";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1295,9 +1297,15 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         return;
       }
-      bool reusePausedHistory = _speech.HasHistory;
+      string selectedPath = _sessionPathTextBox.Text;
+      SpeechHistorySnapshot? preindexedHistory =
+        _selectedSessionHistory is not null &&
+        PathsReferToSameFile(_selectedSessionHistoryPath, selectedPath)
+          ? _selectedSessionHistory
+          : null;
+      bool reusePausedHistory = preindexedHistory is not null && _speech.HasHistory;
       _reusePausedHistoryOnMonitorStart = reusePausedHistory;
-      _suppressMonitorTextUntilHistoryLoaded = reusePausedHistory;
+      _suppressMonitorTextUntilHistoryLoaded = false;
       _resumeAfterMonitorHistoryLoaded = !reusePausedHistory;
       if (!reusePausedHistory)
       {
@@ -1312,7 +1320,8 @@ internal sealed class MainForm : Form, IMessageFilter
         explicitPath,
         _followLatestCheckBox.Checked,
         _speakExistingCheckBox.Checked,
-        TimeSpan.FromMilliseconds((double)_pollNumeric.Value)));
+        TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
+        preindexedHistory));
       if (reusePausedHistory)
       {
         PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
@@ -1608,20 +1617,18 @@ internal sealed class MainForm : Form, IMessageFilter
       _suppressMonitorTextUntilHistoryLoaded = false;
       if (_reusePausedHistoryOnMonitorStart)
       {
-        _reusePausedHistoryOnMonitorStart = false;
-        DiagnosticLog.Write("monitor.history_reused", new
+        DiagnosticLog.Write("monitor.unexpected_duplicate_history", new
         {
           fragmentCount = snapshot.Fragments.Count
         });
+        return;
       }
-      else
-      {
-        _speech.LoadHistory(
-          snapshot.Fragments,
-          snapshot.Completions,
-          snapshot.BackgroundWorkEvents,
-          snapshot.StartMode);
-      }
+
+      _speech.LoadHistory(
+        snapshot.Fragments,
+        snapshot.Completions,
+        snapshot.BackgroundWorkEvents,
+        snapshot.StartMode);
 
       if (_pendingMonitorSeekNodeId > 0 &&
           _pendingMonitorSeekWordIndex >= 0)
@@ -1692,7 +1699,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Compares two session paths using Windows file-name semantics.
   /// </summary>
-  private static bool PathsReferToSameFile(string left, string right)
+  private static bool PathsReferToSameFile(string? left, string? right)
   {
     if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
     {
@@ -1728,10 +1735,12 @@ internal sealed class MainForm : Form, IMessageFilter
         return;
       }
       bool preserveIndexedHistory =
-        _reusePausedHistoryOnMonitorStart &&
+        _selectedSessionHistory is not null &&
+        PathsReferToSameFile(_selectedSessionHistoryPath, session.Path) &&
         PathsReferToSameFile(_sessionPathTextBox.Text, session.Path);
       if (preserveIndexedHistory)
       {
+        _reusePausedHistoryOnMonitorStart = false;
         DiagnosticLog.Write("monitor.session_history_preserved", new
         {
           session.Path
@@ -2802,6 +2811,8 @@ internal sealed class MainForm : Form, IMessageFilter
         return;
       }
 
+      _selectedSessionHistory = snapshot;
+      _selectedSessionHistoryPath = expectedPath;
       _speech.LoadHistory(
         snapshot.Fragments,
         snapshot.Completions,
@@ -2829,6 +2840,11 @@ internal sealed class MainForm : Form, IMessageFilter
     LocatedSession session,
     bool restoredFromSettings = false)
   {
+    if (!PathsReferToSameFile(_selectedSessionHistoryPath, session.Path))
+    {
+      _selectedSessionHistory = null;
+      _selectedSessionHistoryPath = null;
+    }
     _sessionTitleTextBox.Text = session.DisplayName;
     _sessionPathTextBox.Text = session.Path;
     _transcriptView.SelectSession(

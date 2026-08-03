@@ -17,12 +17,17 @@ namespace AgentPanelSpeaker;
 /// Speak the complete latest turn at start.
 /// </param>
 /// <param name="PollInterval">File polling interval.</param>
+/// <param name="PreindexedHistory">
+/// Existing history for the selected session.  When supplied, monitoring
+/// begins at the file end without reparsing or republishing old history.
+/// </param>
 internal sealed record MonitorSettings(
   AgentSource RequestedSource,
   string? ExplicitPath,
   bool FollowLatest,
   bool SpeakExistingLatestTurn,
-  TimeSpan PollInterval);
+  TimeSpan PollInterval,
+  SpeechHistorySnapshot? PreindexedHistory = null);
 
 /// <summary>
 /// Tails Claude or Codex session JSONL and emits conversational text.
@@ -238,16 +243,32 @@ internal sealed class JsonlSessionMonitor : IDisposable
       DiagnosticLog.Write("monitor.session_selected", session);
       SessionChanged?.Invoke(session);
 
-      SpeechHistorySnapshot initialHistory = LoadExistingHistory(
-        session,
-        settings.SpeakExistingLatestTurn,
-        ref nextNodeId,
-        recentFingerprintQueue,
-        recentFingerprintSet,
-        preview,
-        pendingInputRequests);
-      HistoryLoaded?.Invoke(initialHistory);
-      MessagesChanged?.Invoke(preview.ToArray());
+      if (settings.PreindexedHistory is SpeechHistorySnapshot preindexedHistory)
+      {
+        nextNodeId = preindexedHistory.Fragments.Count == 0
+          ? 1
+          : preindexedHistory.Fragments.Max(fragment => fragment.NodeId) + 1;
+        DiagnosticLog.Write("monitor.preindexed_history_reused", new
+        {
+          session.Path,
+          fragmentCount = preindexedHistory.Fragments.Count,
+          nextNodeId,
+          tailOffset = tailReader.Offset
+        });
+      }
+      else
+      {
+        SpeechHistorySnapshot initialHistory = LoadExistingHistory(
+          session,
+          settings.SpeakExistingLatestTurn,
+          ref nextNodeId,
+          recentFingerprintQueue,
+          recentFingerprintSet,
+          preview,
+          pendingInputRequests);
+        HistoryLoaded?.Invoke(initialHistory);
+        MessagesChanged?.Invoke(preview.ToArray());
+      }
 
       while (!token.IsCancellationRequested)
       {
