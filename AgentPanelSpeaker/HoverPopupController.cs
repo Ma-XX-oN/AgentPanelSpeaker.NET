@@ -608,6 +608,19 @@ internal sealed class HoverPopupController : IDisposable
 
     node.FocusInitialControl();
 
+    Control? focusedAfterAttempt = FindFocusedControl(form);
+    if (focusedAfterAttempt is { IsDisposed: false })
+    {
+      focusedAfterAttempt.Invalidate();
+      focusedAfterAttempt.Update();
+      DiagnosticLog.Write("popup.focus_repainted", new
+      {
+        reason,
+        node.Id,
+        control = DescribeControl(focusedAfterAttempt)
+      });
+    }
+
     DiagnosticLog.Write("popup.focus_attempt_immediate", new
     {
       reason,

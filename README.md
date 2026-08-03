@@ -1448,3 +1448,11 @@ The log records the clicked surface, popup node, active form, active and focused
 controls before the focus request, immediately after it, and after the current
 Windows message has completed.  This instrumentation is intended to identify
 why a popup background click does not focus the configured initial control.
+
+
+## v121 focused-control repaint
+
+After a popup-background click transfers focus to the popup node's initial
+control, the shared popup controller invalidates and synchronously repaints the
+control.  The `popup.focus_repainted` diagnostic records the control that was
+repainted.
