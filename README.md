@@ -1,5 +1,16 @@
-# Agent Panel Speaker v102
+# Agent Panel Speaker v103
 
+
+## v103 live-end waiting and live transcript reveal
+
+- Reaching the live end while monitoring no longer hides the end cursor.  The
+  player remains unpaused, displays the flashing end marker, and waits for new
+  fragments.
+- The last located spoken position is retained across slow transcript refreshes.
+  Once a newly appended record is rendered, its containing User, Thoughts, or
+  user-facing details are expanded before the live-end marker is restored.
+- Follow mode moves through the newly rendered content to the live end instead
+  of losing the active node when speech finishes before rendering completes.
 
 ## v102 non-wrapping voiced seek and transcript-end marker
 

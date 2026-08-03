@@ -34,6 +34,7 @@ internal sealed class TranscriptView : UserControl
   private CancellationTokenSource? _renderCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
+  private TranscriptPlaybackPosition? _lastLocatedContentPosition;
   private bool _settingsApplyPending;
   private long _settingsMessageSequence;
   private long _playbackMessageSequence;
@@ -137,6 +138,7 @@ internal sealed class TranscriptView : UserControl
     }
 
     _pendingPosition = null;
+    _lastLocatedContentPosition = null;
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
@@ -208,6 +210,12 @@ internal sealed class TranscriptView : UserControl
   public void ShowPlaybackPosition(TranscriptPlaybackPosition position)
   {
     _pendingPosition = position;
+    if (position.NodeId > 0 &&
+        (position.State is TranscriptPlaybackState.Speaking or
+          TranscriptPlaybackState.Paused))
+    {
+      _lastLocatedContentPosition = position;
+    }
     if (!_initialized || _refreshInProgress)
     {
       return;
@@ -558,12 +566,28 @@ internal sealed class TranscriptView : UserControl
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
 
+      TranscriptPlaybackPosition? renderAnchor = null;
+      int latestIndex = -1;
       if (_pendingPosition is TranscriptPlaybackPosition latestPosition &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
             latestPosition,
-            out int latestIndex) &&
+            out latestIndex))
+      {
+        renderAnchor = latestPosition;
+      }
+      else if (_lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+          TryResolvePositionIndex(
+            payload.Document,
+            payload.Identities,
+            located,
+            out latestIndex))
+      {
+        renderAnchor = located;
+      }
+
+      if (renderAnchor is not null &&
           (latestIndex < _windowStartIndex || latestIndex > _windowEndIndex))
       {
         window = payload.Document.CreateWindow(latestIndex);
@@ -590,7 +614,17 @@ internal sealed class TranscriptView : UserControl
       HideLoading();
       _restoredFromSettings = false;
       QueueSettingsApply(immediate: true);
-      if (_pendingPosition is TranscriptPlaybackPosition pending)
+      if (_lastLocatedContentPosition is TranscriptPlaybackPosition locatedPosition &&
+          TryResolvePositionIndex(
+            payload.Document,
+            payload.Identities,
+            locatedPosition,
+            out _))
+      {
+        PostPlaybackPosition(locatedPosition);
+      }
+      if (_pendingPosition is TranscriptPlaybackPosition pending &&
+          pending != _lastLocatedContentPosition)
       {
         PostPlaybackPosition(pending);
       }
@@ -2290,11 +2324,11 @@ function applyRangeClass(range, className) {
 function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   setFollowSpeech(follow, false);
   clearMarkers();
-  if (state === 'none' || state === 'waiting-end') {
+  if (state === 'none') {
     retireCurrentWord(true);
     return;
   }
-  if (state === 'paused-end') {
+  if (state === 'waiting-end' || state === 'paused-end') {
     retireCurrentWord(true);
     liveEndMarker.style.display = 'block';
     reveal(liveEndMarker);
