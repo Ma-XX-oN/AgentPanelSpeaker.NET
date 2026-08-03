@@ -1,7 +1,7 @@
-# Agent Panel Speaker v93
+# Agent Panel Speaker v94
 
 
-## v93 Find readiness and follow shortcut
+## v94 Find readiness and follow shortcut
 
 - Find requests received before transcript indexing completes are retained and
   run when the index becomes available.
@@ -17,7 +17,7 @@ currently virtualized WebView window.
 
 
 
-## v93 Single-owner monitor startup
+## v94 Single-owner monitor startup
 
 - The selected session's paused history snapshot is retained by `MainForm`.
 - Starting monitoring passes that exact snapshot to `JsonlSessionMonitor`.

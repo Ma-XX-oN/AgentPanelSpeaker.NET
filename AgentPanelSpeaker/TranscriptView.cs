@@ -2543,6 +2543,15 @@ function openFind() {
   requestAnimationFrame(focusFindInput);
   setTimeout(focusFindInput, 0);
   setTimeout(focusFindInput, 50);
+
+  if (findMatches.length > 0 && currentFindMatch >= 0) {
+    updateFindNavigationState();
+    void showFindMatch(currentFindMatch, 'reopened');
+  } else if (findInput.value && !findSearchPending) {
+    runFind();
+  } else {
+    updateFindNavigationState();
+  }
   reportFind('opened');
 }
 
@@ -2553,8 +2562,6 @@ function closeFind() {
   }
   cancelFindSearch(false);
   clearFindHighlights();
-  findMatches = [];
-  currentFindMatch = -1;
   findPopup.classList.remove('open');
   reportFind('closed');
 }
