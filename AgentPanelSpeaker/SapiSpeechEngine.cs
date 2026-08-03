@@ -1127,6 +1127,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     var collected = new List<SpeechWordBoundary>();
     MatchCollection sourceTokens = SpeechTokenization.Matches(markup.PlainText);
     int? synthesisCharacterOffset = null;
+    int previousTokenIndex = -1;
     EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
       (_, eventArgs) =>
       {
@@ -1135,18 +1136,30 @@ internal sealed class SapiSpeechEngine : IDisposable
           : sourceTokens[0].Index;
         synthesisCharacterOffset ??=
           eventArgs.CharacterPosition - firstSourceTokenStart;
-        int sourcePosition = Math.Clamp(
+        int offsetSourcePosition = Math.Clamp(
           eventArgs.CharacterPosition - synthesisCharacterOffset.Value,
           0,
           markup.PlainText.Length);
-        int sourceCount = Math.Clamp(
+        int offsetSourceCount = Math.Clamp(
           eventArgs.CharacterCount,
           0,
-          markup.PlainText.Length - sourcePosition);
-        int tokenIndex = FindTokenIndexForSourceRange(
+          markup.PlainText.Length - offsetSourcePosition);
+        int tokenIndex = FindSequentialTokenIndex(
           sourceTokens,
-          sourcePosition,
-          sourceCount);
+          previousTokenIndex,
+          eventArgs.Text,
+          offsetSourcePosition,
+          offsetSourceCount);
+        if (tokenIndex >= 0)
+        {
+          previousTokenIndex = tokenIndex;
+        }
+        int sourcePosition = tokenIndex >= 0
+          ? sourceTokens[tokenIndex].Index
+          : offsetSourcePosition;
+        int sourceCount = tokenIndex >= 0
+          ? sourceTokens[tokenIndex].Length
+          : offsetSourceCount;
         DiagnosticLog.Write("sapi.speak_progress", new
         {
           provider = "System.Speech",
@@ -1204,6 +1217,43 @@ internal sealed class SapiSpeechEngine : IDisposable
     return wave;
   }
 
+
+  /// <summary>
+  /// Maps a System.Speech source range to the intersecting display token.
+  /// </summary>
+  private static int FindSequentialTokenIndex(
+    MatchCollection tokens,
+    int previousTokenIndex,
+    string spokenText,
+    int fallbackPosition,
+    int fallbackCount)
+  {
+    string spoken = spokenText.Trim();
+    int start = Math.Clamp(previousTokenIndex + 1, 0, tokens.Count);
+    if (spoken.Length != 0)
+    {
+      for (int index = start; index < tokens.Count; ++index)
+      {
+        if (string.Equals(
+              tokens[index].Value,
+              spoken,
+              StringComparison.OrdinalIgnoreCase))
+        {
+          return index;
+        }
+      }
+    }
+
+    int fallback = FindTokenIndexForSourceRange(
+      tokens,
+      fallbackPosition,
+      fallbackCount);
+    if (fallback > previousTokenIndex)
+    {
+      return fallback;
+    }
+    return start < tokens.Count ? start : -1;
+  }
 
   /// <summary>
   /// Maps a System.Speech source range to the intersecting display token.

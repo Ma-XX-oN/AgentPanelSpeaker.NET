@@ -1,8 +1,20 @@
-# Agent Panel Speaker v88
+# Agent Panel Speaker v89
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
 currently virtualized WebView window.
+
+
+## v89 Immediate indexed playback and pronunciation-safe highlighting
+
+- Starting monitoring reuses the already-indexed paused history and resumes
+  immediately instead of clearing it and waiting for a second full JSONL parse.
+- The background monitor still rebuilds its own tailing state, but its initial
+  history callback no longer replaces the actively playing indexed history.
+- System.Speech progress events are matched monotonically against display
+  tokens by spoken text before character-offset fallback.  Pronunciation
+  substitutions can therefore change synthesis text length without shifting
+  later highlight positions.
 
 ## v88 Follow control simplification
 

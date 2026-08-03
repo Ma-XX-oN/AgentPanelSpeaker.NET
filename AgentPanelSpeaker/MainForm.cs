@@ -109,6 +109,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private long _pendingMonitorSeekNodeId;
   private int _pendingMonitorSeekWordIndex = -1;
   private bool _resumeAfterMonitorHistoryLoaded;
+  private bool _reusePausedHistoryOnMonitorStart;
 
   /// <summary>
   /// Initializes controls, settings, event handlers, and policy providers.
@@ -142,7 +143,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v88";
+    Text = "Agent Panel Speaker v89";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1293,8 +1294,13 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         return;
       }
-      _resumeAfterMonitorHistoryLoaded = true;
-      _speech.BeginLiveSession();
+      bool reusePausedHistory = _speech.HasHistory;
+      _reusePausedHistoryOnMonitorStart = reusePausedHistory;
+      _resumeAfterMonitorHistoryLoaded = !reusePausedHistory;
+      if (!reusePausedHistory)
+      {
+        _speech.BeginLiveSession();
+      }
       Interlocked.Increment(ref _monitorSession);
       string? explicitPath = _pathIsManual || !_followLatestCheckBox.Checked
         ? _sessionPathTextBox.Text
@@ -1305,7 +1311,17 @@ internal sealed class MainForm : Form, IMessageFilter
         _followLatestCheckBox.Checked,
         _speakExistingCheckBox.Checked,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value)));
-      AppendLog("Monitoring started; existing history is being indexed.");
+      if (reusePausedHistory)
+      {
+        PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
+        AppendLog(result == PauseToggleResult.Resumed
+          ? "Monitoring started; playback resumed from indexed history."
+          : "Monitoring started, but indexed playback could not resume.");
+      }
+      else
+      {
+        AppendLog("Monitoring started; existing history is being indexed.");
+      }
     }
     catch (Exception exception) when (
       exception is IOException or UnauthorizedAccessException or
@@ -1587,11 +1603,22 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         return;
       }
-      _speech.LoadHistory(
-        snapshot.Fragments,
-        snapshot.Completions,
-        snapshot.BackgroundWorkEvents,
-        snapshot.StartMode);
+      if (_reusePausedHistoryOnMonitorStart)
+      {
+        _reusePausedHistoryOnMonitorStart = false;
+        DiagnosticLog.Write("monitor.history_reused", new
+        {
+          fragmentCount = snapshot.Fragments.Count
+        });
+      }
+      else
+      {
+        _speech.LoadHistory(
+          snapshot.Fragments,
+          snapshot.Completions,
+          snapshot.BackgroundWorkEvents,
+          snapshot.StartMode);
+      }
 
       if (_pendingMonitorSeekNodeId > 0 &&
           _pendingMonitorSeekWordIndex >= 0)
