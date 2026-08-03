@@ -74,10 +74,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly GlyphButton _transcriptSettingsButton = new();
   private readonly GlyphButton _maximizeTranscriptButton = new();
   private readonly TranscriptSettingsPopup _transcriptSettingsPopup = new();
-  private readonly System.Windows.Forms.Timer _transcriptSettingsOpenTimer =
-    new();
-  private readonly System.Windows.Forms.Timer _transcriptSettingsCloseTimer =
-    new();
+  private readonly HoverPopupController _transcriptSettingsHoverController;
   private readonly System.Windows.Forms.Timer _transcriptSettingsSaveTimer =
     new();
   private readonly TableLayoutPanel _mainLayout = new();
@@ -101,7 +98,6 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _playPauseTransitioning;
   private bool _voiceSettingPreviewActive;
   private bool _diagnosticsMaximized;
-  private bool _suppressTranscriptSettingsHoverUntilLeave;
   private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
   private int _monitorSession;
@@ -129,6 +125,13 @@ internal sealed class MainForm : Form, IMessageFilter
       _settingsStore.GetPronunciations,
       _settingsStore.GetAudioWakeSettings);
     InitializeControls();
+    _transcriptSettingsHoverController = new HoverPopupController(
+      _transcriptSettingsButton,
+      _transcriptSettingsPopup.GetHoverRegionControls,
+      ShowTranscriptSettingsPopupCore,
+      HideTranscriptSettingsPopupCore);
+    _transcriptSettingsPopup.HoverRegionChanged += (_, _) =>
+      _transcriptSettingsHoverController.RefreshPopupControls();
     PopulateSources();
     PopulateVoiceRows();
     LoadSettingsIntoControls(_settingsStore.Current);
@@ -269,8 +272,6 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _maximizeTranscriptButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _transcriptSettingsPopup.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-    _transcriptSettingsOpenTimer.Interval = 250;
-    _transcriptSettingsCloseTimer.Interval = 200;
     _transcriptSettingsSaveTimer.Interval = 250;
     _diagnosticHost.Resize += (_, _) => PositionTranscriptControls();
     UpdateDiagnosticTabTitles();
@@ -419,38 +420,14 @@ internal sealed class MainForm : Form, IMessageFilter
     _playPauseButton.Click += PlayPauseButtonClicked;
     _diagnosticTabs.SelectedIndexChanged += (_, _) =>
     {
-      HideTranscriptSettingsPopup(
-        returnFocus: false,
-        suppressHoverUntilLeave: true);
+      HideTranscriptSettingsPopup(returnFocus: false);
       UpdateDiagnosticTabTitles();
     };
     _transcriptSettingsButton.Click += (_, _) =>
-    {
-      _suppressTranscriptSettingsHoverUntilLeave = false;
-      ShowTranscriptSettingsPopup(focusPopup: true);
-    };
-    _transcriptSettingsButton.Enter += (_, _) =>
-    {
-      if (_suppressTranscriptSettingsHoverUntilLeave ||
-          MouseButtons != MouseButtons.None)
-      {
-        return;
-      }
-      BeginInvoke(new Action(() =>
-      {
-        if (_transcriptSettingsButton.ContainsFocus &&
-            !_transcriptSettingsPopup.Visible &&
-            !_suppressTranscriptSettingsHoverUntilLeave)
-        {
-          ShowTranscriptSettingsPopup(focusPopup: true);
-        }
-      }));
-    };
+      _transcriptSettingsHoverController.OpenImmediately(focusPopup: true);
     _maximizeTranscriptButton.Click += (_, _) =>
     {
-      HideTranscriptSettingsPopup(
-        returnFocus: false,
-        suppressHoverUntilLeave: true);
+      HideTranscriptSettingsPopup(returnFocus: false);
       SetDiagnosticsMaximized(!_diagnosticsMaximized);
     };
     _transcriptSettingsPopup.SettingsChanged += (_, _) =>
@@ -465,53 +442,11 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsPopup.FocusTraversalRequested +=
       TranscriptSettingsFocusTraversalRequested;
     _transcriptSettingsPopup.DismissRequested += (_, _) =>
-      HideTranscriptSettingsPopup(
-        returnFocus: true,
-        suppressHoverUntilLeave: true);
+      HideTranscriptSettingsPopup(returnFocus: true);
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
     _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
-    _transcriptSettingsOpenTimer.Tick += (_, _) =>
-    {
-      _transcriptSettingsOpenTimer.Stop();
-      ShowTranscriptSettingsPopup(focusPopup: false);
-    };
-    _transcriptSettingsCloseTimer.Tick += (_, _) =>
-    {
-      _transcriptSettingsCloseTimer.Stop();
-      if (!_transcriptSettingsButton.ClientRectangle.Contains(
-            _transcriptSettingsButton.PointToClient(Cursor.Position)) &&
-          !_transcriptSettingsPopup.IsPointerInsideComposite() &&
-          !_transcriptSettingsPopup.SuppressesParentAutoClose)
-      {
-        HideTranscriptSettingsPopup(
-          returnFocus: false,
-          suppressHoverUntilLeave: false);
-      }
-    };
-    _transcriptSettingsButton.MouseEnter += (_, _) =>
-    {
-      _transcriptSettingsCloseTimer.Stop();
-      if (!_suppressTranscriptSettingsHoverUntilLeave)
-      {
-        _transcriptSettingsOpenTimer.Start();
-      }
-    };
-    _transcriptSettingsButton.MouseLeave += (_, _) =>
-    {
-      _suppressTranscriptSettingsHoverUntilLeave = false;
-      _transcriptSettingsCloseTimer.Start();
-    };
-    _transcriptSettingsPopup.PointerEntered += (_, _) =>
-      _transcriptSettingsCloseTimer.Stop();
-    _transcriptSettingsPopup.PointerLeft += (_, _) =>
-    {
-      if (!_transcriptSettingsPopup.SuppressesParentAutoClose)
-      {
-        _transcriptSettingsCloseTimer.Start();
-      }
-    };
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
@@ -1819,19 +1754,26 @@ internal sealed class MainForm : Form, IMessageFilter
 
   private void ToggleTranscriptSettingsPopup(bool focusPopup)
   {
-    if (_transcriptSettingsPopup.Visible)
+    if (_transcriptSettingsHoverController.IsOpen)
     {
-      HideTranscriptSettingsPopup(
-        returnFocus: false,
-        suppressHoverUntilLeave: true);
+      _transcriptSettingsHoverController.Close(returnFocus: false);
       return;
     }
-    ShowTranscriptSettingsPopup(focusPopup);
+    _transcriptSettingsHoverController.OpenImmediately(focusPopup);
   }
 
   private void ShowTranscriptSettingsPopup(bool focusPopup)
   {
-    _transcriptSettingsOpenTimer.Stop();
+    _transcriptSettingsHoverController.OpenImmediately(focusPopup);
+  }
+
+  private void HideTranscriptSettingsPopup(bool returnFocus)
+  {
+    _transcriptSettingsHoverController.Close(returnFocus);
+  }
+
+  private void ShowTranscriptSettingsPopupCore(bool focusPopup)
+  {
     PositionTranscriptControls();
     _transcriptSettingsPopup.PrepareForDisplay();
     _transcriptSettingsPopup.Visible = true;
@@ -1842,27 +1784,13 @@ internal sealed class MainForm : Form, IMessageFilter
     }
   }
 
-  private void HideTranscriptSettingsPopup(
-    bool returnFocus,
-    bool suppressHoverUntilLeave)
+  private void HideTranscriptSettingsPopupCore(bool returnFocus)
   {
-    _transcriptSettingsOpenTimer.Stop();
-    _transcriptSettingsCloseTimer.Stop();
     _transcriptSettingsPopup.PrepareForHide();
     _transcriptSettingsPopup.Visible = false;
-    bool pointerInsideButton =
-      _transcriptSettingsButton.ClientRectangle.Contains(
-        _transcriptSettingsButton.PointToClient(Cursor.Position));
-    _suppressTranscriptSettingsHoverUntilLeave =
-      suppressHoverUntilLeave && (returnFocus || pointerInsideButton);
-    if (returnFocus)
+    if (returnFocus && _transcriptSettingsButton.CanFocus)
     {
       _transcriptSettingsButton.Focus();
-      if (!pointerInsideButton)
-      {
-        BeginInvoke(new Action(() =>
-          _suppressTranscriptSettingsHoverUntilLeave = false));
-      }
     }
   }
 
@@ -1870,9 +1798,7 @@ internal sealed class MainForm : Form, IMessageFilter
     object? sender,
     FocusTraversalRequestedEventArgs eventArgs)
   {
-    HideTranscriptSettingsPopup(
-      returnFocus: false,
-      suppressHoverUntilLeave: true);
+    HideTranscriptSettingsPopup(returnFocus: false);
     Control target = eventArgs.Forward
       ? _maximizeTranscriptButton
       : _diagnosticTabs;
@@ -2374,9 +2300,7 @@ internal sealed class MainForm : Form, IMessageFilter
     if (sender is not TranscriptSettingsPopup &&
         !ReferenceEquals(sender, _transcriptSettingsButton))
     {
-      HideTranscriptSettingsPopup(
-        returnFocus: false,
-        suppressHoverUntilLeave: true);
+      HideTranscriptSettingsPopup(returnFocus: false);
     }
   }
 
@@ -2444,9 +2368,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       if (_transcriptSettingsPopup.Visible)
       {
-        HideTranscriptSettingsPopup(
-          returnFocus: true,
-          suppressHoverUntilLeave: true);
+        HideTranscriptSettingsPopup(returnFocus: true);
         return true;
       }
       SpeechProfileCompactControl? openProfile = GetOpenProfileControl();
@@ -2971,8 +2893,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _displayAwake.Dispose();
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
-    _transcriptSettingsOpenTimer.Dispose();
-    _transcriptSettingsCloseTimer.Dispose();
+    _transcriptSettingsHoverController.Dispose();
     _transcriptSettingsSaveTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
     {

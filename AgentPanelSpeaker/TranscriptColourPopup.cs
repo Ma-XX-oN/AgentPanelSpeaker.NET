@@ -84,13 +84,10 @@ internal sealed class TranscriptColourPopup : UserControl
     Controls.Add(layout);
 
     Paint += PaintBorder;
-    WireHoverEvents(this);
   }
 
   public event EventHandler? ColourChanged;
   public event EventHandler? DismissRequested;
-  public event EventHandler? PointerEntered;
-  public event EventHandler? PointerLeft;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public Color Colour => _editor.Color;
@@ -240,22 +237,6 @@ internal sealed class TranscriptColourPopup : UserControl
     bounds.Width -= 1;
     bounds.Height -= 1;
     eventArgs.Graphics.DrawRectangle(pen, bounds);
-  }
-
-  private void WireHoverEvents(Control control)
-  {
-    control.MouseEnter += (_, _) => PointerEntered?.Invoke(this, EventArgs.Empty);
-    control.MouseLeave += (_, _) =>
-    {
-      if (!IsPointerInside())
-      {
-        PointerLeft?.Invoke(this, EventArgs.Empty);
-      }
-    };
-    foreach (Control child in control.Controls)
-    {
-      WireHoverEvents(child);
-    }
   }
 
   private static void ApplyThemeRecursive(

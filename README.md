@@ -1365,3 +1365,15 @@ Blocks in one record are separated by `\n`, while records are searched as
 independent inputs.  Consequently `.` cannot cross a block, `^` and `$` refer
 to block boundaries under multiline regex semantics, an explicit `\n` can
 match a block boundary, and no expression can cross a record boundary.
+
+## v110 centralized hover/focus popups
+
+All overlays that open from pointer hover or keyboard focus now use the same
+`HoverPopupController`.  The controller owns the open and close timers and the
+three shared states: closed, open awaiting popup entry, and open after entry.
+It opens from delayed pointer hover or anchor focus, does not auto-close before
+the popup has been entered, starts delayed closing only after leaving the
+combined anchor/popup region, cancels that close on re-entry, and closes
+immediately on the control's existing Escape path.  Transcript Settings, its
+nested colour picker, and every speech-profile editor use this controller;
+their former copied suppression flags and timer state machines were removed.

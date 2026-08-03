@@ -11,16 +11,9 @@ internal sealed class SpeechProfileCompactControl : Control
   private static readonly Color PitchColour = Color.FromArgb(46, 160, 67);
   private static readonly Color VolumeColour = Color.FromArgb(50, 107, 214);
 
-  private readonly System.Windows.Forms.Timer _openTimer;
-  private readonly System.Windows.Forms.Timer _closeTimer;
+  private readonly HoverPopupController _hoverPopupController;
   private SpeechProfilePopup? _popup;
-  private bool _popupMouseInside;
-  private bool _popupFocusInside;
   private bool _popupDragging;
-  private bool _keyboardEditing;
-  private bool _mouseOpening;
-  private bool _suppressFocusOpen;
-  private bool _suppressHoverOpenUntilPointerLeaves;
   private bool _dark;
   private int _rate;
   private int _pitch;
@@ -44,10 +37,12 @@ internal sealed class SpeechProfileCompactControl : Control
     Margin = new Padding(3);
     Anchor = AnchorStyles.Top;
 
-    _openTimer = new System.Windows.Forms.Timer { Interval = 250 };
-    _openTimer.Tick += OpenTimerTick;
-    _closeTimer = new System.Windows.Forms.Timer { Interval = 200 };
-    _closeTimer.Tick += CloseTimerTick;
+    _hoverPopupController = new HoverPopupController(
+      this,
+      GetVisiblePopupControls,
+      ShowEditorCore,
+      CloseEditorCore,
+      keepOpen: () => _popupDragging);
 
     AccessibleName = ProfileName;
     UpdateAccessibleDescription();
@@ -165,51 +160,15 @@ internal sealed class SpeechProfileCompactControl : Control
   /// </summary>
   public void OpenEditorFromKeyboard()
   {
-    ShowEditor(focusEditor: true, keyboardSession: true);
+    _hoverPopupController.OpenImmediately(focusPopup: true);
   }
 
   /// <summary>
   /// Closes the editor and optionally restores compact-control focus.
   /// </summary>
-  public void CloseEditor(
-    bool returnFocus,
-    bool suppressHoverUntilPointerLeaves = false)
+  public void CloseEditor(bool returnFocus)
   {
-    _openTimer.Stop();
-    _closeTimer.Stop();
-    bool popupHadFocus = _popup?.ContainsFocus ?? false;
-    if (popupHadFocus)
-    {
-      _suppressFocusOpen = true;
-    }
-
-    if (_popup is { IsDisposed: false })
-    {
-      _popup.Visible = false;
-    }
-
-    _keyboardEditing = false;
-    _popupMouseInside = false;
-    _popupFocusInside = false;
-    _popupDragging = false;
-    _suppressHoverOpenUntilPointerLeaves =
-      suppressHoverUntilPointerLeaves && IsPointerInside();
-    Invalidate();
-
-    if (returnFocus && CanFocus)
-    {
-      bool alreadyFocused = Focused;
-      _suppressFocusOpen = true;
-      Focus();
-      if (alreadyFocused)
-      {
-        _suppressFocusOpen = false;
-      }
-    }
-    else if (popupHadFocus && IsHandleCreated)
-    {
-      BeginInvoke(new Action(() => _suppressFocusOpen = false));
-    }
+    _hoverPopupController.Close(returnFocus);
   }
 
   /// <summary>
@@ -217,17 +176,14 @@ internal sealed class SpeechProfileCompactControl : Control
   /// </summary>
   public void CloseEditorFromDismissKey()
   {
-    CloseEditor(
-      returnFocus: true,
-      suppressHoverUntilPointerLeaves: true);
+    _hoverPopupController.Close(returnFocus: true);
   }
 
   /// <summary>
-  /// Ends temporary focus-open suppression after external traversal.
+  /// Completes external focus traversal.
   /// </summary>
   public void CompleteFocusTraversal()
   {
-    _suppressFocusOpen = false;
   }
 
   /// <inheritdoc />
@@ -235,10 +191,7 @@ internal sealed class SpeechProfileCompactControl : Control
   {
     if (disposing)
     {
-      _openTimer.Stop();
-      _closeTimer.Stop();
-      _openTimer.Dispose();
-      _closeTimer.Dispose();
+      _hoverPopupController.Dispose();
       _popup?.Dispose();
     }
 
@@ -260,20 +213,8 @@ internal sealed class SpeechProfileCompactControl : Control
   protected override void OnGotFocus(EventArgs eventArgs)
   {
     base.OnGotFocus(eventArgs);
+    ProfileActivated?.Invoke(this, EventArgs.Empty);
     Invalidate();
-    if (!Enabled)
-    {
-      return;
-    }
-    if (_suppressFocusOpen)
-    {
-      _suppressFocusOpen = false;
-      return;
-    }
-
-    ShowEditor(
-      focusEditor: true,
-      keyboardSession: !_mouseOpening);
   }
 
   /// <inheritdoc />
@@ -281,34 +222,16 @@ internal sealed class SpeechProfileCompactControl : Control
   {
     base.OnLostFocus(eventArgs);
     Invalidate();
-    ScheduleClose();
   }
 
   /// <inheritdoc />
   protected override void OnMouseEnter(EventArgs eventArgs)
   {
     base.OnMouseEnter(eventArgs);
-    if (!Enabled)
+    if (Enabled)
     {
-      return;
+      ProfileActivated?.Invoke(this, EventArgs.Empty);
     }
-
-    _closeTimer.Stop();
-    _openTimer.Stop();
-    ProfileActivated?.Invoke(this, EventArgs.Empty);
-    if (!_suppressHoverOpenUntilPointerLeaves)
-    {
-      _openTimer.Start();
-    }
-  }
-
-  /// <inheritdoc />
-  protected override void OnMouseLeave(EventArgs eventArgs)
-  {
-    base.OnMouseLeave(eventArgs);
-    _openTimer.Stop();
-    _suppressHoverOpenUntilPointerLeaves = false;
-    ScheduleClose();
   }
 
   /// <inheritdoc />
@@ -320,17 +243,8 @@ internal sealed class SpeechProfileCompactControl : Control
       return;
     }
 
-    _suppressHoverOpenUntilPointerLeaves = false;
-    _mouseOpening = true;
-    try
-    {
-      Focus();
-      ShowEditor(focusEditor: true, keyboardSession: false);
-    }
-    finally
-    {
-      _mouseOpening = false;
-    }
+    Focus();
+    _hoverPopupController.OpenImmediately(focusPopup: true);
   }
 
   /// <inheritdoc />
@@ -347,7 +261,7 @@ internal sealed class SpeechProfileCompactControl : Control
 
     if (eventArgs.KeyCode is Keys.Enter or Keys.Space)
     {
-      ShowEditor(focusEditor: true, keyboardSession: true);
+      _hoverPopupController.OpenImmediately(focusPopup: true);
       eventArgs.Handled = true;
       eventArgs.SuppressKeyPress = true;
       return;
@@ -403,48 +317,12 @@ internal sealed class SpeechProfileCompactControl : Control
   }
 
   /// <summary>
-  /// Receives popup hover state so anchor and editor form one hover region.
-  /// </summary>
-  internal void SetPopupMouseInside(bool inside)
-  {
-    _popupMouseInside = inside;
-    if (inside)
-    {
-      _closeTimer.Stop();
-      return;
-    }
-
-    ScheduleClose();
-  }
-
-  /// <summary>
   /// Prevents delayed closing while a popup slider is being dragged.
   /// </summary>
   internal void SetPopupDragging(bool dragging)
   {
     _popupDragging = dragging;
-    if (dragging)
-    {
-      _closeTimer.Stop();
-      return;
-    }
-
-    ScheduleClose();
-  }
-
-  /// <summary>
-  /// Receives popup focus state for delayed-close decisions.
-  /// </summary>
-  internal void SetPopupFocusInside(bool inside)
-  {
-    _popupFocusInside = inside;
-    if (inside)
-    {
-      _closeTimer.Stop();
-      return;
-    }
-
-    ScheduleClose();
+    _hoverPopupController.ReevaluateClose();
   }
 
   /// <summary>
@@ -452,13 +330,11 @@ internal sealed class SpeechProfileCompactControl : Control
   /// </summary>
   internal void MoveOutsideEditor(bool forward)
   {
-    _suppressFocusOpen = true;
     CloseEditor(returnFocus: false);
     EventHandler<FocusTraversalRequestedEventArgs>? handler =
       FocusTraversalRequested;
     if (handler is null)
     {
-      _suppressFocusOpen = false;
       return;
     }
 
@@ -492,50 +368,14 @@ internal sealed class SpeechProfileCompactControl : Control
       : $"Rate {_rate}, pitch {_pitch}, volume {_volume}";
   }
 
-  private void OpenTimerTick(object? sender, EventArgs eventArgs)
-  {
-    _openTimer.Stop();
-    if (Enabled && IsPointerInside() &&
-        !_suppressHoverOpenUntilPointerLeaves)
-    {
-      ShowEditor(focusEditor: false, keyboardSession: false);
-    }
-  }
-
-  private void CloseTimerTick(object? sender, EventArgs eventArgs)
-  {
-    _closeTimer.Stop();
-    if (IsPointerInside() || _popupMouseInside || _popupDragging ||
-        (_keyboardEditing && _popupFocusInside))
-    {
-      return;
-    }
-
-    CloseEditor(returnFocus: false);
-  }
-
-  private void ScheduleClose()
-  {
-    _closeTimer.Stop();
-    _closeTimer.Start();
-  }
-
-  private void ShowEditor(bool focusEditor, bool keyboardSession)
+  private void ShowEditorCore(bool focusEditor)
   {
     if (!Enabled)
     {
       return;
     }
-    if (!focusEditor && _suppressHoverOpenUntilPointerLeaves)
-    {
-      return;
-    }
 
     ProfileActivated?.Invoke(this, EventArgs.Empty);
-    _keyboardEditing = keyboardSession;
-    _openTimer.Stop();
-    _closeTimer.Stop();
-
     Form? owner = FindForm();
     if (owner is null)
     {
@@ -548,6 +388,7 @@ internal sealed class SpeechProfileCompactControl : Control
     PositionPopup(owner, popup);
     popup.Visible = true;
     popup.BringToFront();
+    _hoverPopupController.RefreshPopupControls();
 
     if (focusEditor)
     {
@@ -555,6 +396,29 @@ internal sealed class SpeechProfileCompactControl : Control
     }
 
     Invalidate();
+  }
+
+  private void CloseEditorCore(bool returnFocus)
+  {
+    if (_popup is { IsDisposed: false })
+    {
+      _popup.Visible = false;
+    }
+
+    _popupDragging = false;
+    if (returnFocus && CanFocus)
+    {
+      Focus();
+    }
+    Invalidate();
+  }
+
+  private IEnumerable<Control> GetVisiblePopupControls()
+  {
+    if (_popup is { IsDisposed: false, Visible: true } popup)
+    {
+      yield return popup;
+    }
   }
 
   private SpeechProfilePopup GetOrCreatePopup(Form owner)
@@ -594,11 +458,6 @@ internal sealed class SpeechProfileCompactControl : Control
       client.Top,
       Math.Max(client.Top, client.Bottom - popup.Height));
     popup.Location = new Point(x, y);
-  }
-
-  private bool IsPointerInside()
-  {
-    return ClientRectangle.Contains(PointToClient(Cursor.Position));
   }
 
   private void DrawProfile(Graphics graphics, Rectangle bounds)

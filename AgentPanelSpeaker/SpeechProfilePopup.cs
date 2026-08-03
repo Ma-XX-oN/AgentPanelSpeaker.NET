@@ -61,9 +61,6 @@ internal sealed class SpeechProfilePopup : UserControl
 
     Controls.Add(CreateLayout());
     Paint += PaintBorder;
-    Enter += PopupFocusEntered;
-    Leave += PopupFocusLeft;
-    WireHoverEvents(this);
     WireBackgroundFocus(this);
   }
 
@@ -273,7 +270,6 @@ internal sealed class SpeechProfilePopup : UserControl
   private void EndSliderDrag()
   {
     _ownerControl.SetPopupDragging(false);
-    _ownerControl.SetPopupMouseInside(IsPointerInside());
   }
 
   private void SliderValueChanged(object? sender, EventArgs eventArgs)
@@ -362,25 +358,6 @@ internal sealed class SpeechProfilePopup : UserControl
     _ownerControl.MoveOutsideEditor(forward: false);
   }
 
-  private void WireHoverEvents(Control control)
-  {
-    control.MouseEnter += PopupMouseEnter;
-    control.MouseLeave += PopupMouseLeave;
-    foreach (Control child in control.Controls)
-    {
-      WireHoverEvents(child);
-    }
-
-    control.ControlAdded += (_, eventArgs) =>
-    {
-      Control? childControl = eventArgs.Control;
-      if (childControl is not null)
-      {
-        WireHoverEvents(childControl);
-      }
-    };
-  }
-
   private void WireBackgroundFocus(Control control)
   {
     if (control is Label or Panel or TableLayoutPanel or FlowLayoutPanel)
@@ -397,26 +374,6 @@ internal sealed class SpeechProfilePopup : UserControl
     {
       WireBackgroundFocus(child);
     }
-  }
-
-  private void PopupMouseEnter(object? sender, EventArgs eventArgs)
-  {
-    _ownerControl.SetPopupMouseInside(true);
-  }
-
-  private void PopupMouseLeave(object? sender, EventArgs eventArgs)
-  {
-    _ownerControl.SetPopupMouseInside(IsPointerInside());
-  }
-
-  private void PopupFocusEntered(object? sender, EventArgs eventArgs)
-  {
-    _ownerControl.SetPopupFocusInside(true);
-  }
-
-  private void PopupFocusLeft(object? sender, EventArgs eventArgs)
-  {
-    _ownerControl.SetPopupFocusInside(false);
   }
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
