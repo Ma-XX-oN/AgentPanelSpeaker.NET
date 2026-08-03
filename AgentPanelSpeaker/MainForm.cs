@@ -146,7 +146,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v100";
+    Text = "Agent Panel Speaker v102";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -474,6 +474,7 @@ internal sealed class MainForm : Form, IMessageFilter
         suppressHoverUntilLeave: true);
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
     _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
+    _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _transcriptSettingsOpenTimer.Tick += (_, _) =>
     {
@@ -1933,6 +1934,17 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       AppendLog("Find match is not in voiced speech history.");
     }
+    UpdateControlState();
+  }
+
+  /// <summary>
+  /// Moves Find and paused speech navigation to the blank transcript-end
+  /// position when no later voiced result exists.
+  /// </summary>
+  private void TranscriptFindSeekEndRequested(object? sender, EventArgs eventArgs)
+  {
+    _speech.MoveToPausedLiveEnd();
+    AppendLog("Find reached the end of voiced transcript content.");
     UpdateControlState();
   }
 

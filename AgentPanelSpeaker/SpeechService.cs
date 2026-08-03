@@ -681,7 +681,7 @@ internal sealed class SpeechService : IDisposable
       int candidate = FindNextEligibleLocked(anchor + 1);
       if (candidate < 0)
       {
-        MoveToLiveEndLocked();
+        MoveToPausedLiveEndLocked();
         text = string.Empty;
         return false;
       }
@@ -728,7 +728,7 @@ internal sealed class SpeechService : IDisposable
       int anchor = GetNavigationAnchorLocked();
       if (anchor >= _history.Count)
       {
-        MoveToLiveEndLocked();
+        MoveToPausedLiveEndLocked();
         text = string.Empty;
         return false;
       }
@@ -747,7 +747,7 @@ internal sealed class SpeechService : IDisposable
         candidate = end + 1;
       }
 
-      MoveToLiveEndLocked();
+      MoveToPausedLiveEndLocked();
       text = string.Empty;
       return false;
     }
@@ -822,7 +822,7 @@ internal sealed class SpeechService : IDisposable
       int anchor = GetNavigationAnchorLocked();
       if (anchor >= _history.Count)
       {
-        MoveToLiveEndLocked();
+        MoveToPausedLiveEndLocked();
         text = string.Empty;
         return false;
       }
@@ -846,7 +846,7 @@ internal sealed class SpeechService : IDisposable
         candidate = runEnd + 1;
       }
 
-      MoveToLiveEndLocked();
+      MoveToPausedLiveEndLocked();
       text = string.Empty;
       return false;
     }
@@ -909,6 +909,18 @@ internal sealed class SpeechService : IDisposable
 
       text = string.Empty;
       return false;
+    }
+  }
+
+  /// <summary>
+  /// Moves paused navigation to the blank position after the final fragment.
+  /// </summary>
+  public void MoveToPausedLiveEnd()
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      MoveToPausedLiveEndLocked();
     }
   }
 
@@ -1938,6 +1950,39 @@ internal sealed class SpeechService : IDisposable
       reason
     });
     Activity?.Invoke(message);
+  }
+
+  /// <summary>
+  /// Cancels active playback and leaves a paused blank marker after the final
+  /// fragment.
+  /// </summary>
+  private void MoveToPausedLiveEndLocked()
+  {
+    _pendingHistoryIndex = null;
+    _pendingHistoryWordIndex = 0;
+    _pendingUntracked = null;
+    ClearProcessingTimeAnnouncementLocked();
+    _nextHistoryIndex = _history.Count;
+    _lastFenceActivity = null;
+    _activeHistoryIndex = -1;
+    _activeTranscriptText = string.Empty;
+    _activeWord = string.Empty;
+    _activeWordIndex = 0;
+    _activeWordBaseIndex = 0;
+    _activeCharacterBaseOffset = 0;
+    _activeCharacterPosition = 0;
+    _activeCharacterCount = 0;
+    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+
+    if (_activeKind != ActiveSpeechKind.None)
+    {
+      _restorePauseAfterCancellation = true;
+      _engine.Cancel();
+      return;
+    }
+
+    SetPausedLocked(true);
+    ReportPlaybackPositionLocked(TranscriptPlaybackState.PausedAtLiveEnd);
   }
 
   /// <summary>

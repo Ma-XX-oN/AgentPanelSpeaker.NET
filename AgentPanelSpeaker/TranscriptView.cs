@@ -101,6 +101,11 @@ internal sealed class TranscriptView : UserControl
   public event EventHandler<FindSeekRequestedEventArgs>? FindSeekRequested;
 
   /// <summary>
+  /// Raised when Find reaches the end without another voiced result.
+  /// </summary>
+  public event EventHandler? FindSeekEndRequested;
+
+  /// <summary>
   /// Raised when the transcript overlay or manual scrolling changes follow mode.
   /// </summary>
   public event Action<bool>? FollowSpeechChanged;
@@ -859,6 +864,11 @@ internal sealed class TranscriptView : UserControl
         }
         return;
       }
+      if (type == "find-seek-end")
+      {
+        FindSeekEndRequested?.Invoke(this, EventArgs.Empty);
+        return;
+      }
       if (type != "transport" ||
           !root.TryGetProperty("key", out JsonElement keyElement))
       {
@@ -1591,7 +1601,7 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   background: color-mix(in srgb, var(--link) 18%, transparent);
 }
 .find-button:disabled { opacity: .42; }
-#find-voiced svg { width: 17px; height: 17px; fill: currentColor; }
+#find-voiced svg, #find-seek-voiced svg { width: 17px; height: 17px; fill: currentColor; }
 #find-count { min-width: 62px; padding: 0 4px; color: var(--muted); text-align: center; white-space: nowrap; }
 .word.find-match { box-shadow: inset 0 -2px 0 #c08a00; }
 .word.find-current { background: #d99b22; color: #111; }
@@ -1618,6 +1628,12 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   <button type="button" id="find-voiced" class="find-button enabled" title="Search voiced text only (Alt+V)">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5c-2.2 0-3.3 1.6-4.5 2.4C6.2 8.8 4.8 9.3 3 10c1.7 4.2 5 6.5 9 6.5s7.3-2.3 9-6.5c-1.8-.7-3.2-1.2-4.5-2.1C15.3 7.1 14.2 5.5 12 5.5zm-6.1 5.1c2 .2 4 .4 6.1.4s4.1-.2 6.1-.4c-1.6 2.1-3.6 3.1-6.1 3.1s-4.5-1-6.1-3.1z"/></svg>
   </button>
+  <button type="button" id="find-seek-voiced" class="find-button" title="Move voice cursor to this or the next voiced match (Ctrl+Shift+Enter)" aria-label="Move voice cursor to this or the next voiced match">
+    <svg viewBox="0 0 28 24" aria-hidden="true">
+      <path d="M1 11h9.2L7.1 7.9 8.5 6.5 14 12l-5.5 5.5-1.4-1.4 3.1-3.1H1v-2z"/>
+      <path d="M21 5.5c-1.7 0-2.6 1.2-3.5 1.9-1 .7-2.1 1.1-3.5 1.6 1.3 3.3 3.9 5 7 5s5.7-1.7 7-5c-1.4-.5-2.5-.9-3.5-1.6-.9-.7-1.8-1.9-3.5-1.9zm-4.7 4c1.5.2 3.1.3 4.7.3s3.2-.1 4.7-.3c-1.2 1.6-2.8 2.4-4.7 2.4s-3.5-.8-4.7-2.4z"/>
+    </svg>
+  </button>
   <span id="find-count">No results</span>
   <button type="button" id="find-prev" class="find-button" title="Previous match (Shift+Enter)">↑</button>
   <button type="button" id="find-next" class="find-button" title="Next match (Enter)">↓</button>
@@ -1637,6 +1653,7 @@ const findCase = document.getElementById('find-case');
 const findWord = document.getElementById('find-word');
 const findRegex = document.getElementById('find-regex');
 const findVoiced = document.getElementById('find-voiced');
+const findSeekVoiced = document.getElementById('find-seek-voiced');
 const findCount = document.getElementById('find-count');
 const findPrev = document.getElementById('find-prev');
 const findNext = document.getElementById('find-next');
@@ -2365,6 +2382,7 @@ function updateFindNavigationState() {
   const available = !findSearchPending && findMatches.length > 0;
   findPrev.disabled = !available;
   findNext.disabled = !available;
+  findSeekVoiced.disabled = !available;
 }
 
 function cancelFindSearch(updateStatus) {
@@ -2401,6 +2419,7 @@ async function showFindMatch(index, trigger = 'unknown') {
   }
 
   clearFindHighlights();
+  liveEndMarker.style.display = 'none';
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
   const key = makeRecordKey(String(match.recordNumber), match.sourceId);
@@ -2590,6 +2609,69 @@ findCase.addEventListener('click', () => toggleFindOption(findCase, () => findCa
 findWord.addEventListener('click', () => toggleFindOption(findWord, () => findWordEnabled = !findWordEnabled));
 findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => findRegexEnabled = !findRegexEnabled));
 findVoiced.addEventListener('click', () => toggleFindOption(findVoiced, () => findVoicedEnabled = !findVoicedEnabled));
+
+function isVoicedFindMatch(match) {
+  return !!match && match.nodeId > 0 && match.nodeWordIndex >= 0;
+}
+
+function postFindSeek(match, trigger) {
+  reportFind('seek-requested', {
+    trigger,
+    targetMatch: currentFindMatch,
+    fileOrdinal: match.fileOrdinal
+  });
+  chrome.webview.postMessage({
+    type:'find-seek',
+    nodeId:match.nodeId,
+    nodeWordIndex:match.nodeWordIndex
+  });
+}
+
+async function seekCurrentOrNextVoiced(trigger) {
+  if (!findMatches.length || findSearchPending || currentFindMatch < 0) {
+    findCount.textContent = 'No results';
+    reportFind('seek-ignored', {trigger, reason:'no-results'});
+    return;
+  }
+
+  let targetIndex = currentFindMatch;
+  if (!isVoicedFindMatch(findMatches[targetIndex])) {
+    targetIndex = -1;
+    for (let candidate = currentFindMatch + 1;
+         candidate < findMatches.length;
+         ++candidate) {
+      if (isVoicedFindMatch(findMatches[candidate])) {
+        targetIndex = candidate;
+        break;
+      }
+    }
+    if (targetIndex < 0) {
+      clearFindHighlights();
+      currentFindMatch = findMatches.length - 1;
+      findCount.textContent = 'End';
+      liveEndMarker.style.display = 'block';
+      programmaticScrollUntil = performance.now() + 1500;
+      liveEndMarker.scrollIntoView({block:'center', behavior:'smooth'});
+      if (followSpeech) setFollowSpeech(false, true);
+      chrome.webview.postMessage({type:'find-seek-end'});
+      reportFind('seek-end', {trigger, reason:'no-later-voiced-result'});
+      return;
+    }
+    await showFindMatch(targetIndex, trigger + '-next-voiced');
+  }
+
+  const match = findMatches[currentFindMatch];
+  if (!isVoicedFindMatch(match)) {
+    findCount.textContent = 'Not voiced';
+    reportFind('seek-ignored', {trigger, reason:'target-not-voiced'});
+    return;
+  }
+  postFindSeek(match, trigger);
+}
+
+findSeekVoiced.addEventListener('click', () => {
+  void seekCurrentOrNextVoiced('button-seek-voiced');
+});
 findPrev.addEventListener('click', () => showFindMatch(currentFindMatch - 1, 'button-previous'));
 findNext.addEventListener('click', () => showFindMatch(currentFindMatch + 1, 'button-next'));
 findClose.addEventListener('click', closeFind);
@@ -2617,20 +2699,20 @@ findPopup.addEventListener('keydown', event => {
   }
   if (event.key === 'Enter' && event.ctrlKey) {
     event.preventDefault();
-    const match = findMatches[currentFindMatch];
-    if (!match || match.nodeId <= 0 || match.nodeWordIndex < 0) {
-      findCount.textContent = 'Not voiced';
-      reportFind('seek-ignored');
+    if (event.shiftKey) {
+      void seekCurrentOrNextVoiced('ctrl-shift-enter');
       return;
     }
-    reportFind('seek-requested', {
-      trigger: event.shiftKey ? 'ctrl-shift-enter' : 'ctrl-enter'
-    });
-    chrome.webview.postMessage({
-      type:'find-seek',
-      nodeId:match.nodeId,
-      nodeWordIndex:match.nodeWordIndex
-    });
+    const match = findMatches[currentFindMatch];
+    if (!isVoicedFindMatch(match)) {
+      findCount.textContent = 'Not voiced';
+      reportFind('seek-ignored', {
+        trigger:'ctrl-enter',
+        reason:'target-not-voiced'
+      });
+      return;
+    }
+    postFindSeek(match, 'ctrl-enter');
     return;
   }
   if (event.key === 'Enter') {

@@ -1,7 +1,19 @@
-# Agent Panel Speaker v100
+# Agent Panel Speaker v102
 
 
-## v100 search-corpus whitespace preservation
+## v102 non-wrapping voiced seek and transcript-end marker
+
+- Ctrl+Shift+Enter and the arrow-to-eye button search only later Find
+  results for a voiced target; they do not wrap to the beginning.
+- When no later voiced result exists, Find and speech navigation move to the
+  blank position after the final transcript fragment.
+- Explicit forward sentence, node, and speaker navigation use the same paused
+  end state.
+- The transcript-end marker is a blinking blank rectangle one em wide and
+  approximately one capital-letter high.
+
+
+## v101 search-corpus whitespace preservation
 
 - Search corpus construction now preserves whether rendered tokens were adjacent or separated by whitespace.
 - Punctuation is no longer separated from the preceding token by an invented space, so expressions such as `\d:` match timestamps and record headings correctly.
