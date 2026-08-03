@@ -61,7 +61,6 @@ internal sealed class SpeechProfilePopup : UserControl
 
     Controls.Add(CreateLayout());
     Paint += PaintBorder;
-    WireBackgroundFocus(this);
   }
 
   /// <summary>
@@ -125,16 +124,6 @@ internal sealed class SpeechProfilePopup : UserControl
   public bool IsPointerInside()
   {
     return ClientRectangle.Contains(PointToClient(Cursor.Position));
-  }
-
-  /// <inheritdoc />
-  protected override void OnMouseDown(MouseEventArgs eventArgs)
-  {
-    base.OnMouseDown(eventArgs);
-    if (eventArgs.Button == MouseButtons.Left && !ContainsFocus)
-    {
-      FocusInitialSlider();
-    }
   }
 
   /// <inheritdoc />
@@ -358,23 +347,6 @@ internal sealed class SpeechProfilePopup : UserControl
     _ownerControl.MoveOutsideEditor(forward: false);
   }
 
-  private void WireBackgroundFocus(Control control)
-  {
-    if (control is Label or Panel or TableLayoutPanel or FlowLayoutPanel)
-    {
-      control.MouseDown += (_, eventArgs) =>
-      {
-        if (eventArgs.Button == MouseButtons.Left)
-        {
-          FocusInitialSlider();
-        }
-      };
-    }
-    foreach (Control child in control.Controls)
-    {
-      WireBackgroundFocus(child);
-    }
-  }
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {

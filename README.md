@@ -1411,3 +1411,31 @@ maintains a type whitelist for transcript popup descendants.
 ## v117 compile correction
 
 - Aligns `PopupState` accessibility with the internal `PopupNode.State` property.
+
+
+## v118 centralized popup background focus
+
+The shared `HoverPopupController` now owns background-click focus behaviour for
+every hover/focus popup.  Clicking a popup background marks that popup entered,
+cancels pending closure for it and its ancestors, and focuses that popup's
+configured initial enabled control.  Clicking a specific focusable control still
+uses the control's normal focus behaviour.
+
+Transcript Settings, Highlight Colour, Advanced Transcript Settings, and all
+speech-profile popups now supply only their initial-focus callback; their copied
+background `MouseDown` handlers have been removed.
+
+## v119 popup lifecycle preflight
+
+All hover/focus popups now use the same `HoverPopupController` lifecycle and
+one global coordination path.  The controller owns delayed opening and closing,
+focus retention, popup-background activation, root mutual exclusion, nested
+sibling replacement, outside-click dismissal, deepest-first Escape handling,
+application-deactivation dismissal, and event cleanup.  The former profile
+activation loop and recursively wired outside-click handlers were removed.
+
+Opening an already open popup is idempotent and cannot demote its state.  A new
+popup enters its awaiting-entry state before any show or focus callback runs,
+and a failed show returns it to closed.  Clicking a popup background focuses
+that popup's configured first enabled control; clicking a specific control
+retains normal control focus behaviour.

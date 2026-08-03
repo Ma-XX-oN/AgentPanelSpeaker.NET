@@ -17,6 +17,10 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmGetLineCount = 0x00BA;
   private const int EmLineScroll = 0x00B6;
   private const int WmKeyDown = 0x0100;
+  private const int WmLButtonDown = 0x0201;
+  private const int WmRButtonDown = 0x0204;
+  private const int WmMButtonDown = 0x0207;
+  private const int WmXButtonDown = 0x020B;
   private const int WmSystemKeyDown = 0x0104;
   private const uint GaRoot = 2;
 
@@ -129,7 +133,8 @@ internal sealed class MainForm : Form, IMessageFilter
       _transcriptSettingsButton,
       () => new[] { _transcriptSettingsPopup },
       ShowTranscriptSettingsPopupCore,
-      HideTranscriptSettingsPopupCore);
+      HideTranscriptSettingsPopupCore,
+      _transcriptSettingsPopup.FocusInitialControl);
     _transcriptSettingsPopup.RegisterPopupTree(
       _transcriptSettingsHoverController);
     PopulateSources();
@@ -149,7 +154,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v117";
+    Text = "Agent Panel Speaker v119";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -388,7 +393,6 @@ internal sealed class MainForm : Form, IMessageFilter
     _mainLayout.Controls.Add(controls, 0, 6);
     _mainLayout.Controls.Add(_diagnosticHost, 0, 7);
     Controls.Add(_mainLayout);
-    WireProfileEditorOutsideClicks(this);
   }
 
   /// <summary>
@@ -448,6 +452,8 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
+    Deactivate += (_, _) =>
+      HoverPopupController.CloseAllGlobal(returnFocus: false);
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
       "Previous speaker turn");
@@ -679,8 +685,6 @@ internal sealed class MainForm : Form, IMessageFilter
       VoiceRowChanged(role, context: false);
     contextProfile.ProfileChanged += (_, _) =>
       VoiceRowChanged(role, context: true);
-    mainProfile.ProfileActivated += ProfileControlActivated;
-    contextProfile.ProfileActivated += ProfileControlActivated;
     mainProfile.TransportKeyPressed += ProfileTransportKeyPressed;
     contextProfile.TransportKeyPressed += ProfileTransportKeyPressed;
     mainProfile.FocusTraversalRequested += ProfileFocusTraversalRequested;
@@ -2152,25 +2156,6 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Closes any other profile editor before one profile becomes active.
-  /// </summary>
-  private void ProfileControlActivated(object? sender, EventArgs eventArgs)
-  {
-    if (sender is not SpeechProfileCompactControl active)
-    {
-      return;
-    }
-
-    foreach (SpeechProfileCompactControl profile in GetProfileControls())
-    {
-      if (!ReferenceEquals(profile, active) && profile.IsEditorVisible)
-      {
-        profile.CloseEditor(returnFocus: false);
-      }
-    }
-  }
-
-  /// <summary>
   /// Routes a transport key raised while a profile editor owns focus.
   /// </summary>
   private void ProfileTransportKeyPressed(
@@ -2259,50 +2244,6 @@ internal sealed class MainForm : Form, IMessageFilter
     };
   }
 
-  /// <summary>
-  /// Closes profile editors when another ordinary control is clicked.
-  /// </summary>
-  private void WireProfileEditorOutsideClicks(Control control)
-  {
-    if (control is SpeechProfilePopup or SpeechProfileCompactControl)
-    {
-      return;
-    }
-
-    control.MouseDown += OutsideProfileEditorMouseDown;
-    foreach (Control child in control.Controls)
-    {
-      WireProfileEditorOutsideClicks(child);
-    }
-
-    control.ControlAdded += (_, eventArgs) =>
-    {
-      Control? child = eventArgs.Control;
-      if (child is not null)
-      {
-        WireProfileEditorOutsideClicks(child);
-      }
-    };
-  }
-
-  private void OutsideProfileEditorMouseDown(
-    object? sender,
-    MouseEventArgs eventArgs)
-  {
-    foreach (SpeechProfileCompactControl profile in GetProfileControls())
-    {
-      if (profile.IsEditorVisible)
-      {
-        profile.CloseEditor(returnFocus: false);
-      }
-    }
-    if (!_transcriptSettingsHoverController.ContainsControl(
-          sender as Control))
-    {
-      HideTranscriptSettingsPopup(returnFocus: false);
-    }
-  }
-
   private SpeechProfileCompactControl? GetOpenProfileControl()
   {
     return GetProfileControls().FirstOrDefault(
@@ -2323,8 +2264,20 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   public bool PreFilterMessage(ref Message message)
   {
-    if (message.Msg is not (WmKeyDown or WmSystemKeyDown) ||
-        GetAncestor(message.HWnd, GaRoot) != Handle)
+    if (GetAncestor(message.HWnd, GaRoot) != Handle)
+    {
+      return false;
+    }
+
+    if (message.Msg is WmLButtonDown or WmRButtonDown or
+        WmMButtonDown or WmXButtonDown)
+    {
+      HoverPopupController.HandleGlobalPointerDown(
+        Control.FromChildHandle(message.HWnd));
+      return false;
+    }
+
+    if (message.Msg is not (WmKeyDown or WmSystemKeyDown))
     {
       return false;
     }
@@ -2363,19 +2316,10 @@ internal sealed class MainForm : Form, IMessageFilter
       _transcriptView.OpenFind();
       return true;
     }
-    if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
+    if ((keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4)) &&
+        HoverPopupController.CloseDeepestGlobal(returnFocus: true))
     {
-      if (_transcriptSettingsHoverController.CloseDeepest(
-            returnFocus: true))
-      {
-        return true;
-      }
-      SpeechProfileCompactControl? openProfile = GetOpenProfileControl();
-      if (openProfile is not null)
-      {
-        openProfile.CloseEditorFromDismissKey();
-        return true;
-      }
+      return true;
     }
 
     Keys modifiers = keyData & Keys.Modifiers;

@@ -42,6 +42,8 @@ internal sealed class SpeechProfileCompactControl : Control
       GetVisiblePopupControls,
       ShowEditorCore,
       CloseEditorCore,
+      () => GetOrCreatePopup(FindForm() ?? throw new InvalidOperationException(
+        "Speech profile is not attached to a form.")).FocusInitialSlider(),
       keepOpen: () => _popupDragging);
 
     AccessibleName = ProfileName;
@@ -57,11 +59,6 @@ internal sealed class SpeechProfileCompactControl : Control
   /// Raised when the control or editor receives a transport key.
   /// </summary>
   public event EventHandler<TransportKeyPressedEventArgs>? TransportKeyPressed;
-
-  /// <summary>
-  /// Raised whenever this profile becomes the active editor.
-  /// </summary>
-  public event EventHandler? ProfileActivated;
 
   /// <summary>
   /// Raised when Tab should move beyond this profile editor.
@@ -213,7 +210,6 @@ internal sealed class SpeechProfileCompactControl : Control
   protected override void OnGotFocus(EventArgs eventArgs)
   {
     base.OnGotFocus(eventArgs);
-    ProfileActivated?.Invoke(this, EventArgs.Empty);
     Invalidate();
   }
 
@@ -230,8 +226,7 @@ internal sealed class SpeechProfileCompactControl : Control
     base.OnMouseEnter(eventArgs);
     if (Enabled)
     {
-      ProfileActivated?.Invoke(this, EventArgs.Empty);
-    }
+      }
   }
 
   /// <inheritdoc />
@@ -375,7 +370,6 @@ internal sealed class SpeechProfileCompactControl : Control
       return;
     }
 
-    ProfileActivated?.Invoke(this, EventArgs.Empty);
     Form? owner = FindForm();
     if (owner is null)
     {

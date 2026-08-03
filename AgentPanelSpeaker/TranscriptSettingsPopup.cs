@@ -121,7 +121,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
       _advancedPopupHandle?.OpenImmediately(focusPopup: true);
 
     Paint += PaintBorder;
-    WireBackgroundFocus(this);
   }
 
   public event EventHandler? SettingsChanged;
@@ -199,8 +198,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public void PrepareForHide()
   {
     FlushPendingColourChange();
-    _colourPopupHandle?.Close(returnFocus: false);
-    _advancedPopupHandle?.Close(returnFocus: false);
   }
 
   public void ApplyTheme(bool dark)
@@ -249,12 +246,14 @@ internal sealed class TranscriptSettingsPopup : UserControl
       _currentSwatch,
       GetVisibleColourPopupControls,
       ShowColourPopupCore,
-      CloseColourPopupCore);
+      CloseColourPopupCore,
+      () => GetOrCreateColourPopup().FocusInitialControl());
     _advancedPopupHandle = popupTree.RegisterChild(
       _advancedButton,
       GetVisibleAdvancedPopupControls,
       ShowAdvancedPopupCore,
-      CloseAdvancedPopupCore);
+      CloseAdvancedPopupCore,
+      () => GetOrCreateAdvancedPopup().FocusInitialControl());
   }
 
   protected override void Dispose(bool disposing)
@@ -314,7 +313,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void ShowColourPopupCore(bool focusPopup)
   {
-    _advancedPopupHandle?.Close(returnFocus: false);
     TranscriptColourPopup popup = GetOrCreateColourPopup();
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
@@ -394,7 +392,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void ShowAdvancedPopupCore(bool focusPopup)
   {
-    _colourPopupHandle?.Close(returnFocus: false);
     TranscriptAdvancedSettingsPopup popup = GetOrCreateAdvancedPopup();
     popup.ApplyTheme(_dark);
     popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
@@ -648,26 +645,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
     bounds.Width -= 1;
     bounds.Height -= 1;
     eventArgs.Graphics.DrawRectangle(pen, bounds);
-  }
-
-  private void WireBackgroundFocus(Control control)
-  {
-    if (control is Label or Panel or TableLayoutPanel or FlowLayoutPanel)
-    {
-      control.MouseDown += (_, eventArgs) =>
-      {
-        if (eventArgs.Button == MouseButtons.Left &&
-            !ReferenceEquals(control, _previousSwatch) &&
-            !ReferenceEquals(control, _currentSwatch))
-        {
-          FocusInitialControl();
-        }
-      };
-    }
-    foreach (Control child in control.Controls)
-    {
-      WireBackgroundFocus(child);
-    }
   }
 
   private void ApplyThemeRecursive(Control control)

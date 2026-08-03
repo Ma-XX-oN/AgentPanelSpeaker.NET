@@ -3,16 +3,21 @@ namespace AgentPanelSpeaker;
 /// <summary>
 /// Owns one hover/focus popup tree, including nested popup lifecycle,
 /// delayed opening and closing, focus retention, sibling replacement,
-/// deepest-first dismissal, outside-click membership, and event cleanup.
+/// deepest-first dismissal, global outside-click handling, and event cleanup.
 /// </summary>
 internal sealed class HoverPopupController : IDisposable
 {
-  internal enum PopupState
+  private enum PopupState
   {
     Closed,
     OpenAwaitingEntry,
     OpenEntered
   }
+
+  private static readonly List<WeakReference<HoverPopupController>>
+    Controllers = new();
+  private static readonly object ControllersLock = new();
+  private static long _nextActivationOrder;
 
   /// <summary>
   /// Represents one popup node owned by a <see cref="HoverPopupController"/>.
@@ -20,38 +25,40 @@ internal sealed class HoverPopupController : IDisposable
   internal sealed class PopupHandle
   {
     private readonly HoverPopupController _owner;
-    private readonly PopupNode _node;
+    private readonly int _nodeId;
 
-    internal PopupHandle(HoverPopupController owner, PopupNode node)
+    internal PopupHandle(HoverPopupController owner, int nodeId)
     {
       _owner = owner;
-      _node = node;
+      _nodeId = nodeId;
     }
 
-    public bool IsOpen => _node.State != PopupState.Closed;
+    public bool IsOpen => _owner.IsNodeOpen(_nodeId);
 
     public void OpenImmediately(bool focusPopup)
     {
-      _owner.OpenNode(_node, focusPopup);
+      _owner.OpenNode(_owner.GetNode(_nodeId), focusPopup);
     }
 
     public void Close(bool returnFocus)
     {
-      _owner.CloseNode(_node, returnFocus);
+      _owner.CloseNode(_owner.GetNode(_nodeId), returnFocus);
     }
 
     public void ReevaluateClose()
     {
-      _owner.ReevaluateClose(_node);
+      _owner.ReevaluateClose(_owner.GetNode(_nodeId));
     }
   }
 
-  internal sealed class PopupNode
+  private sealed class PopupNode
   {
+    public required int Id { get; init; }
     public required Control Anchor { get; init; }
     public required Func<IEnumerable<Control>> GetPopupControls { get; init; }
     public required Action<bool> ShowPopup { get; init; }
     public required Action<bool> HidePopup { get; init; }
+    public required Action FocusInitialControl { get; init; }
     public Func<bool>? KeepOpen { get; init; }
     public required int OpenDelayMilliseconds { get; init; }
     public required int CloseDelayMilliseconds { get; init; }
@@ -66,6 +73,8 @@ internal sealed class HoverPopupController : IDisposable
 
   private readonly PopupNode _root;
   private readonly List<PopupNode> _nodes = new();
+  private int _nextNodeId;
+  private long _activationOrder;
   private bool _disposed;
 
   /// <summary>
@@ -76,6 +85,7 @@ internal sealed class HoverPopupController : IDisposable
     Func<IEnumerable<Control>> getPopupControls,
     Action<bool> showPopup,
     Action<bool> hidePopup,
+    Action focusInitialControl,
     int openDelayMilliseconds = 250,
     int closeDelayMilliseconds = 200,
     Func<bool>? keepOpen = null)
@@ -86,9 +96,11 @@ internal sealed class HoverPopupController : IDisposable
       getPopupControls,
       showPopup,
       hidePopup,
+      focusInitialControl,
       openDelayMilliseconds,
       closeDelayMilliseconds,
       keepOpen);
+    RegisterController(this);
   }
 
   /// <summary>
@@ -105,6 +117,7 @@ internal sealed class HoverPopupController : IDisposable
     Func<IEnumerable<Control>> getPopupControls,
     Action<bool> showPopup,
     Action<bool> hidePopup,
+    Action focusInitialControl,
     int openDelayMilliseconds = 250,
     int closeDelayMilliseconds = 200,
     Func<bool>? keepOpen = null)
@@ -116,11 +129,12 @@ internal sealed class HoverPopupController : IDisposable
       getPopupControls,
       showPopup,
       hidePopup,
+      focusInitialControl,
       openDelayMilliseconds,
       closeDelayMilliseconds,
       keepOpen);
     _root.Children.Add(node);
-    return new PopupHandle(this, node);
+    return new PopupHandle(this, node.Id);
   }
 
   /// <summary>
@@ -168,18 +182,57 @@ internal sealed class HoverPopupController : IDisposable
     {
       foreach (PopupNode node in _nodes)
       {
-        if (ReferenceEquals(current, node.Anchor))
-        {
-          return true;
-        }
-        if (EnumerateVisiblePopupControls(node).Any(
-          popup => ReferenceEquals(current, popup)))
+        if (ReferenceEquals(current, node.Anchor) ||
+            node.WiredControls.Contains(current))
         {
           return true;
         }
       }
     }
     return false;
+  }
+
+  /// <summary>
+  /// Closes every open popup tree that does not contain the clicked control.
+  /// This is the single outside-click policy for all hover/focus popups.
+  /// </summary>
+  public static void HandleGlobalPointerDown(Control? clickedControl)
+  {
+    foreach (HoverPopupController controller in GetLiveControllers())
+    {
+      if (controller.IsOpen && !controller.ContainsControl(clickedControl))
+      {
+        controller.Close(returnFocus: false);
+      }
+    }
+  }
+
+
+  /// <summary>
+  /// Closes every open hover/focus popup tree.
+  /// </summary>
+  public static void CloseAllGlobal(bool returnFocus)
+  {
+    HoverPopupController[] openControllers = GetLiveControllers()
+      .Where(controller => controller.IsOpen)
+      .OrderByDescending(controller => controller._activationOrder)
+      .ToArray();
+    for (int index = 0; index < openControllers.Length; index++)
+    {
+      openControllers[index].Close(returnFocus && index == 0);
+    }
+  }
+
+  /// <summary>
+  /// Closes the deepest popup in the most recently active popup tree.
+  /// </summary>
+  public static bool CloseDeepestGlobal(bool returnFocus)
+  {
+    HoverPopupController? controller = GetLiveControllers()
+      .Where(candidate => candidate.IsOpen)
+      .OrderByDescending(candidate => candidate._activationOrder)
+      .FirstOrDefault();
+    return controller?.CloseDeepest(returnFocus) ?? false;
   }
 
   /// <summary>
@@ -217,6 +270,7 @@ internal sealed class HoverPopupController : IDisposable
     }
 
     _disposed = true;
+    UnregisterController(this);
     foreach (PopupNode node in _nodes.ToArray())
     {
       UnwireNode(node);
@@ -234,6 +288,7 @@ internal sealed class HoverPopupController : IDisposable
     Func<IEnumerable<Control>> getPopupControls,
     Action<bool> showPopup,
     Action<bool> hidePopup,
+    Action focusInitialControl,
     int openDelayMilliseconds,
     int closeDelayMilliseconds,
     Func<bool>? keepOpen)
@@ -242,14 +297,17 @@ internal sealed class HoverPopupController : IDisposable
     ArgumentNullException.ThrowIfNull(getPopupControls);
     ArgumentNullException.ThrowIfNull(showPopup);
     ArgumentNullException.ThrowIfNull(hidePopup);
+    ArgumentNullException.ThrowIfNull(focusInitialControl);
 
     var node = new PopupNode
     {
+      Id = ++_nextNodeId,
       Parent = parent,
       Anchor = anchor,
       GetPopupControls = getPopupControls,
       ShowPopup = showPopup,
       HidePopup = hidePopup,
+      FocusInitialControl = focusInitialControl,
       OpenDelayMilliseconds = Math.Max(1, openDelayMilliseconds),
       CloseDelayMilliseconds = Math.Max(1, closeDelayMilliseconds),
       KeepOpen = keepOpen
@@ -268,8 +326,24 @@ internal sealed class HoverPopupController : IDisposable
     ThrowIfDisposed();
     node.OpenTimer.Stop();
     node.CloseTimer.Stop();
+    MarkActive();
 
-    if (node.Parent is not null)
+    if (node.State != PopupState.Closed)
+    {
+      CancelCloseForAncestors(node);
+      if (focusPopup)
+      {
+        node.State = PopupState.OpenEntered;
+        node.FocusInitialControl();
+      }
+      return;
+    }
+
+    if (node.Parent is null)
+    {
+      CloseOtherRootControllers();
+    }
+    else
     {
       if (node.Parent.State == PopupState.Closed)
       {
@@ -284,9 +358,21 @@ internal sealed class HoverPopupController : IDisposable
       }
     }
 
-    node.ShowPopup(focusPopup);
     node.State = PopupState.OpenAwaitingEntry;
+    node.ShowPopup(focusPopup);
     RefreshPopupControls(node);
+
+    if (!EnumerateVisiblePopupControls(node).Any())
+    {
+      node.State = PopupState.Closed;
+      return;
+    }
+
+    if (focusPopup || NodeContainsFocus(node) || NodeContainsPointer(node))
+    {
+      node.State = PopupState.OpenEntered;
+      CancelCloseForAncestors(node);
+    }
   }
 
   private void CloseNode(PopupNode node, bool returnFocus)
@@ -340,6 +426,7 @@ internal sealed class HoverPopupController : IDisposable
     }
 
     control.MouseEnter += PopupMouseEntered;
+    control.MouseDown += PopupMouseDown;
     control.MouseLeave += PopupMouseLeft;
     control.Enter += PopupFocusEntered;
     control.Leave += PopupFocusLeft;
@@ -367,6 +454,7 @@ internal sealed class HoverPopupController : IDisposable
   private void UnwirePopupControl(PopupNode node, Control control)
   {
     control.MouseEnter -= PopupMouseEntered;
+    control.MouseDown -= PopupMouseDown;
     control.MouseLeave -= PopupMouseLeft;
     control.Enter -= PopupFocusEntered;
     control.Leave -= PopupFocusLeft;
@@ -461,6 +549,28 @@ internal sealed class HoverPopupController : IDisposable
     }
   }
 
+  private void PopupMouseDown(object? sender, MouseEventArgs eventArgs)
+  {
+    if (eventArgs.Button != MouseButtons.Left || sender is not Control control)
+    {
+      return;
+    }
+
+    PopupNode? node = FindNodeForPopupControl(control);
+    if (node is null || node.State == PopupState.Closed)
+    {
+      return;
+    }
+
+    node.State = PopupState.OpenEntered;
+    MarkActive();
+    CancelCloseForAncestors(node);
+    if (IsBackgroundSurface(node, control))
+    {
+      node.FocusInitialControl();
+    }
+  }
+
   private void PopupMouseEntered(object? sender, EventArgs eventArgs)
   {
     PopupNode? node = FindNodeForPopupControl(sender as Control);
@@ -469,6 +579,7 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
     node.State = PopupState.OpenEntered;
+    MarkActive();
     CancelCloseForAncestors(node);
   }
 
@@ -489,6 +600,7 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
     node.State = PopupState.OpenEntered;
+    MarkActive();
     CancelCloseForAncestors(node);
   }
 
@@ -562,6 +674,31 @@ internal sealed class HoverPopupController : IDisposable
     return false;
   }
 
+  private bool NodeContainsPointer(PopupNode node)
+  {
+    return EnumerateVisiblePopupControls(node).Any(IsPointerInside);
+  }
+
+  private static bool IsBackgroundSurface(PopupNode node, Control control)
+  {
+    if (node.GetPopupControls().Any(popup => ReferenceEquals(popup, control)))
+    {
+      return true;
+    }
+    return !control.TabStop && control is Label or Panel or UserControl;
+  }
+
+  private void MarkActive()
+  {
+    _activationOrder = Interlocked.Increment(ref _nextActivationOrder);
+  }
+
+  private bool NodeContainsFocus(PopupNode node)
+  {
+    return node.Anchor.ContainsFocus || EnumerateVisiblePopupControls(node).Any(
+      popup => popup.ContainsFocus);
+  }
+
   private void RefreshPopupControls(PopupNode node)
   {
     foreach (Control popup in EnumerateVisiblePopupControls(node))
@@ -576,6 +713,18 @@ internal sealed class HoverPopupController : IDisposable
     {
       current.CloseTimer.Stop();
     }
+  }
+
+  private PopupNode GetNode(int nodeId)
+  {
+    ThrowIfDisposed();
+    return _nodes.First(node => node.Id == nodeId);
+  }
+
+  private bool IsNodeOpen(int nodeId)
+  {
+    return !_disposed && _nodes.FirstOrDefault(node => node.Id == nodeId) is
+      PopupNode node && node.State != PopupState.Closed;
   }
 
   private PopupNode? FindNodeByAnchor(Control? anchor)
@@ -607,6 +756,17 @@ internal sealed class HoverPopupController : IDisposable
     return node.State == PopupState.Closed ? null : node;
   }
 
+  private void CloseOtherRootControllers()
+  {
+    foreach (HoverPopupController controller in GetLiveControllers())
+    {
+      if (!ReferenceEquals(controller, this) && controller.IsOpen)
+      {
+        controller.Close(returnFocus: false);
+      }
+    }
+  }
+
   private static IEnumerable<Control> EnumerateVisiblePopupControls(
     PopupNode node)
   {
@@ -623,6 +783,46 @@ internal sealed class HoverPopupController : IDisposable
   {
     return control.Visible && control.ClientRectangle.Contains(
       control.PointToClient(Cursor.Position));
+  }
+
+  private static void RegisterController(HoverPopupController controller)
+  {
+    lock (ControllersLock)
+    {
+      RemoveDeadControllers();
+      Controllers.Add(new WeakReference<HoverPopupController>(controller));
+    }
+  }
+
+  private static void UnregisterController(HoverPopupController controller)
+  {
+    lock (ControllersLock)
+    {
+      Controllers.RemoveAll(reference =>
+        !reference.TryGetTarget(out HoverPopupController? target) ||
+        ReferenceEquals(target, controller));
+    }
+  }
+
+  private static HoverPopupController[] GetLiveControllers()
+  {
+    lock (ControllersLock)
+    {
+      RemoveDeadControllers();
+      return Controllers
+        .Select(reference =>
+          reference.TryGetTarget(out HoverPopupController? target)
+            ? target
+            : null)
+        .Where(controller => controller is not null)
+        .Cast<HoverPopupController>()
+        .ToArray();
+    }
+  }
+
+  private static void RemoveDeadControllers()
+  {
+    Controllers.RemoveAll(reference => !reference.TryGetTarget(out _));
   }
 
   private void ThrowIfDisposed()

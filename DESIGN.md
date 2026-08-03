@@ -999,3 +999,11 @@ range and optional speech node position.
 Unrestricted regular expressions execute in a separate worker process.  The
 main process cancels by terminating that worker; managed threads are never
 forcibly aborted.
+
+## Hover/focus popup lifecycle
+
+`HoverPopupController` is the sole lifecycle implementation for transcript and
+speech-profile popups.  Each instance owns one root popup tree; a centralized
+registry coordinates mutually exclusive roots, outside clicks, Escape, and form
+deactivation.  Nested transcript popups are child nodes in the transcript tree.
+No popup class owns open/close timers or outside-click policy.
