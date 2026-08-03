@@ -22,8 +22,8 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private bool _dark;
   private bool _updating;
   private bool _colourNotificationPending;
-  private readonly HoverPopupController _colourHoverController;
-  private readonly HoverPopupController _advancedHoverController;
+  private HoverPopupController.PopupHandle? _colourPopupHandle;
+  private HoverPopupController.PopupHandle? _advancedPopupHandle;
 
   public TranscriptSettingsPopup()
   {
@@ -115,20 +115,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
       _colourNotificationTimer.Stop();
       PublishPendingColourChange();
     };
-    _colourHoverController = new HoverPopupController(
-      _currentSwatch,
-      GetVisibleColourPopupControls,
-      ShowColourPopupCore,
-      CloseColourPopupCore);
     _currentSwatch.Click += (_, _) =>
-      _colourHoverController.OpenImmediately(focusPopup: true);
-    _advancedHoverController = new HoverPopupController(
-      _advancedButton,
-      GetVisibleAdvancedPopupControls,
-      ShowAdvancedPopupCore,
-      CloseAdvancedPopupCore);
+      _colourPopupHandle?.OpenImmediately(focusPopup: true);
     _advancedButton.Click += (_, _) =>
-      _advancedHoverController.OpenImmediately(focusPopup: true);
+      _advancedPopupHandle?.OpenImmediately(focusPopup: true);
 
     Paint += PaintBorder;
     WireBackgroundFocus(this);
@@ -139,7 +129,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public event EventHandler<FocusTraversalRequestedEventArgs>?
     FocusTraversalRequested;
   public event EventHandler? DismissRequested;
-  public event EventHandler? HoverRegionChanged;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public TranscriptSettings Settings { get; private set; } =
@@ -182,12 +171,12 @@ internal sealed class TranscriptSettingsPopup : UserControl
   /// <summary>
   /// Gets whether the nested colour editor is currently open.
   /// </summary>
-  public bool IsColourPopupOpen => _colourHoverController.IsOpen;
+  public bool IsColourPopupOpen => _colourPopupHandle?.IsOpen ?? false;
 
   /// <summary>
   /// Gets whether the nested advanced popup is currently open.
   /// </summary>
-  public bool IsAdvancedPopupOpen => _advancedHoverController.IsOpen;
+  public bool IsAdvancedPopupOpen => _advancedPopupHandle?.IsOpen ?? false;
 
   /// <summary>
   /// Gets whether any nested transcript-settings popup is open.
@@ -199,19 +188,19 @@ internal sealed class TranscriptSettingsPopup : UserControl
   /// </summary>
   public void CloseNestedPopupFromDismissKey()
   {
-    if (_advancedHoverController.IsOpen)
+    if (_advancedPopupHandle?.IsOpen == true)
     {
-      _advancedHoverController.Close(returnFocus: true);
+      _advancedPopupHandle.Close(returnFocus: true);
       return;
     }
-    _colourHoverController.Close(returnFocus: true);
+    _colourPopupHandle?.Close(returnFocus: true);
   }
 
   public void PrepareForHide()
   {
     FlushPendingColourChange();
-    _colourHoverController.Close(returnFocus: false);
-    _advancedHoverController.Close(returnFocus: false);
+    _colourPopupHandle?.Close(returnFocus: false);
+    _advancedPopupHandle?.Close(returnFocus: false);
   }
 
   public void ApplyTheme(bool dark)
@@ -250,25 +239,28 @@ internal sealed class TranscriptSettingsPopup : UserControl
     return ClientRectangle.Contains(PointToClient(Cursor.Position));
   }
 
-  public IEnumerable<Control> GetHoverRegionControls()
+  /// <summary>
+  /// Registers both nested transcript-settings popups in the root popup tree.
+  /// </summary>
+  public void RegisterPopupTree(HoverPopupController popupTree)
   {
-    yield return this;
-    if (_colourPopup is { IsDisposed: false, Visible: true } popup)
-    {
-      yield return popup;
-    }
-    if (_advancedPopup is { IsDisposed: false, Visible: true } advancedPopup)
-    {
-      yield return advancedPopup;
-    }
+    ArgumentNullException.ThrowIfNull(popupTree);
+    _colourPopupHandle = popupTree.RegisterChild(
+      _currentSwatch,
+      GetVisibleColourPopupControls,
+      ShowColourPopupCore,
+      CloseColourPopupCore);
+    _advancedPopupHandle = popupTree.RegisterChild(
+      _advancedButton,
+      GetVisibleAdvancedPopupControls,
+      ShowAdvancedPopupCore,
+      CloseAdvancedPopupCore);
   }
 
   protected override void Dispose(bool disposing)
   {
     if (disposing)
     {
-      _colourHoverController.Dispose();
-      _advancedHoverController.Dispose();
       _colourNotificationTimer.Dispose();
       _colourPopup?.Dispose();
       _advancedPopup?.Dispose();
@@ -322,15 +314,13 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void ShowColourPopupCore(bool focusPopup)
   {
-    _advancedHoverController.Close(returnFocus: false);
+    _advancedPopupHandle?.Close(returnFocus: false);
     TranscriptColourPopup popup = GetOrCreateColourPopup();
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
     PositionColourPopup(popup);
     popup.Visible = true;
     popup.BringToFront();
-    HoverRegionChanged?.Invoke(this, EventArgs.Empty);
-    _colourHoverController.RefreshPopupControls();
     if (focusPopup)
     {
       popup.FocusInitialControl();
@@ -354,7 +344,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       ValueChanged(popup, EventArgs.Empty);
     };
     popup.DismissRequested += (_, _) =>
-      _colourHoverController.Close(returnFocus: true);
+      _colourPopupHandle?.Close(returnFocus: true);
     _colourPopup = popup;
     owner.Controls.Add(popup);
     return popup;
@@ -388,7 +378,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
       popup.Visible = false;
     }
     FlushPendingColourChange();
-    HoverRegionChanged?.Invoke(this, EventArgs.Empty);
     if (returnFocus && _currentSwatch.CanFocus)
     {
       _currentSwatch.Focus();
@@ -405,15 +394,13 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void ShowAdvancedPopupCore(bool focusPopup)
   {
-    _colourHoverController.Close(returnFocus: false);
+    _colourPopupHandle?.Close(returnFocus: false);
     TranscriptAdvancedSettingsPopup popup = GetOrCreateAdvancedPopup();
     popup.ApplyTheme(_dark);
     popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
     PositionAdvancedPopup(popup);
     popup.Visible = true;
     popup.BringToFront();
-    HoverRegionChanged?.Invoke(this, EventArgs.Empty);
-    _advancedHoverController.RefreshPopupControls();
     if (focusPopup)
     {
       popup.FocusInitialControl();
@@ -439,7 +426,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       SettingsChanged?.Invoke(this, EventArgs.Empty);
     };
     popup.DismissRequested += (_, _) =>
-      _advancedHoverController.Close(returnFocus: true);
+      _advancedPopupHandle?.Close(returnFocus: true);
     _advancedPopup = popup;
     owner.Controls.Add(popup);
     return popup;
@@ -477,7 +464,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       popup.Visible = false;
     }
-    HoverRegionChanged?.Invoke(this, EventArgs.Empty);
     if (returnFocus && _advancedButton.CanFocus)
     {
       _advancedButton.Focus();

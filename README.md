@@ -1391,3 +1391,23 @@ recommended latest-only behaviour.
 ## v114 advanced-description sizing
 
 The Advanced Transcript Settings popup now measures the wrapped highlight-buffering explanation at the popup's actual content width and derives the description row and popup height from that result.  The explanation is no longer constrained to a fixed 82-pixel row.
+
+
+## v116 compile correction
+
+- `HoverPopupController.PopupHandle` can now be constructed by its owning
+  controller without violating nested-type accessibility.
+- The Transcript Settings root popup now supplies its root control directly to
+  the popup tree; the removed `GetHoverRegionControls` API is no longer called.
+
+## v115 centralized popup tree
+
+All transcript-settings overlays now belong to one `HoverPopupController` tree.
+The root settings popup, colour editor, and Advanced popup share one implementation
+for hover/focus opening, delayed closing, sibling replacement, outside-click
+membership, deepest-first Escape handling, and event cleanup.  MainForm no longer
+maintains a type whitelist for transcript popup descendants.
+
+## v117 compile correction
+
+- Aligns `PopupState` accessibility with the internal `PopupNode.State` property.

@@ -127,11 +127,11 @@ internal sealed class MainForm : Form, IMessageFilter
     InitializeControls();
     _transcriptSettingsHoverController = new HoverPopupController(
       _transcriptSettingsButton,
-      _transcriptSettingsPopup.GetHoverRegionControls,
+      () => new[] { _transcriptSettingsPopup },
       ShowTranscriptSettingsPopupCore,
       HideTranscriptSettingsPopupCore);
-    _transcriptSettingsPopup.HoverRegionChanged += (_, _) =>
-      _transcriptSettingsHoverController.RefreshPopupControls();
+    _transcriptSettingsPopup.RegisterPopupTree(
+      _transcriptSettingsHoverController);
     PopulateSources();
     PopulateVoiceRows();
     LoadSettingsIntoControls(_settingsStore.Current);
@@ -149,7 +149,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v114";
+    Text = "Agent Panel Speaker v117";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2264,8 +2264,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void WireProfileEditorOutsideClicks(Control control)
   {
-    if (control is SpeechProfilePopup or SpeechProfileCompactControl or
-        TranscriptSettingsPopup or TranscriptColourPopup)
+    if (control is SpeechProfilePopup or SpeechProfileCompactControl)
     {
       return;
     }
@@ -2297,8 +2296,8 @@ internal sealed class MainForm : Form, IMessageFilter
         profile.CloseEditor(returnFocus: false);
       }
     }
-    if (sender is not TranscriptSettingsPopup &&
-        !ReferenceEquals(sender, _transcriptSettingsButton))
+    if (!_transcriptSettingsHoverController.ContainsControl(
+          sender as Control))
     {
       HideTranscriptSettingsPopup(returnFocus: false);
     }
@@ -2366,14 +2365,9 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
-      if (_transcriptSettingsPopup.IsNestedPopupOpen)
+      if (_transcriptSettingsHoverController.CloseDeepest(
+            returnFocus: true))
       {
-        _transcriptSettingsPopup.CloseNestedPopupFromDismissKey();
-        return true;
-      }
-      if (_transcriptSettingsPopup.Visible)
-      {
-        HideTranscriptSettingsPopup(returnFocus: true);
         return true;
       }
       SpeechProfileCompactControl? openProfile = GetOpenProfileControl();
