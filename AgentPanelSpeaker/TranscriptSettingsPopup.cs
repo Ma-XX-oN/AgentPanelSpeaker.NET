@@ -22,7 +22,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private Color _currentColour;
   private bool _dark;
   private bool _updating;
-  private bool _suppressColourHoverUntilLeave;
+  private bool _blockSwatchHoverUntilMouseLeave;
   private bool _colourNotificationPending;
 
   public TranscriptSettingsPopup()
@@ -111,7 +111,11 @@ internal sealed class TranscriptSettingsPopup : UserControl
     Controls.Add(layout);
 
     _previousSwatch.Click += (_, _) => RestorePreviousColour();
-    _currentSwatch.Click += (_, _) => ShowColourPopup(focusPopup: true);
+    _currentSwatch.Click += (_, _) =>
+    {
+      _blockSwatchHoverUntilMouseLeave = false;
+      ShowColourPopup(focusPopup: true);
+    };
     _currentSwatch.MouseEnter += CurrentSwatchMouseEnter;
     _currentSwatch.MouseLeave += CurrentSwatchMouseLeave;
     _fadeSlider.ValueChanged += ValueChanged;
@@ -122,7 +126,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     _colourOpenTimer.Tick += (_, _) =>
     {
       _colourOpenTimer.Stop();
-      if (IsPointerInside(_currentSwatch) && !_suppressColourHoverUntilLeave)
+      if (IsPointerInside(_currentSwatch))
       {
         ShowColourPopup(focusPopup: false);
       }
@@ -193,7 +197,8 @@ internal sealed class TranscriptSettingsPopup : UserControl
   {
     _colourOpenTimer.Stop();
     FlushPendingColourChange();
-    CloseColourPopup(returnFocus: false, suppressHoverUntilLeave: false);
+    _blockSwatchHoverUntilMouseLeave = false;
+    CloseColourPopup(returnFocus: false);
   }
 
   public void ApplyTheme(bool dark)
@@ -284,7 +289,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private void ShowColourPopup(bool focusPopup)
   {
     _colourOpenTimer.Stop();
-    _suppressColourHoverUntilLeave = false;
+    _blockSwatchHoverUntilMouseLeave = false;
     TranscriptColourPopup popup = GetOrCreateColourPopup();
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
@@ -315,7 +320,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
       ValueChanged(popup, EventArgs.Empty);
     };
     popup.DismissRequested += (_, _) =>
-      CloseColourPopup(returnFocus: true, suppressHoverUntilLeave: true);
+    {
+      _blockSwatchHoverUntilMouseLeave = IsPointerInside(_currentSwatch);
+      CloseColourPopup(returnFocus: true);
+    };
     popup.PointerEntered += (_, _) => PointerEntered?.Invoke(this, EventArgs.Empty);
     popup.PointerLeft += (_, _) => CloseColourPopupFromPointer();
     _colourPopup = popup;
@@ -344,9 +352,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       Math.Clamp(y, ownerBounds.Top, maxY)));
   }
 
-  private void CloseColourPopup(
-    bool returnFocus,
-    bool suppressHoverUntilLeave)
+  private void CloseColourPopup(bool returnFocus)
   {
     _colourOpenTimer.Stop();
     if (_colourPopup is { IsDisposed: false } popup)
@@ -354,13 +360,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
       popup.Visible = false;
     }
     FlushPendingColourChange();
-    _suppressColourHoverUntilLeave = suppressHoverUntilLeave &&
-      IsPointerInside(_currentSwatch);
     if (returnFocus && _currentSwatch.CanFocus)
     {
       _currentSwatch.Focus();
     }
-    PointerEntered?.Invoke(this, EventArgs.Empty);
   }
 
   private void CloseColourPopupFromPointer()
@@ -370,31 +373,37 @@ internal sealed class TranscriptSettingsPopup : UserControl
       return;
     }
 
-    // The colour picker and transcript settings form one composite popup.
-    // Crossing from the picker into the settings panel must not close it.
-    if (IsPointerInside())
+    bool enteredSettings = IsPointerInside();
+    _blockSwatchHoverUntilMouseLeave =
+      enteredSettings && IsPointerInside(_currentSwatch);
+    CloseColourPopup(returnFocus: false);
+    if (enteredSettings)
     {
+      // The pointer moved from the child picker back into its parent.
+      // Close only the picker and keep the settings popup open.
       PointerEntered?.Invoke(this, EventArgs.Empty);
-      return;
     }
-
-    bool hadFocus = _colourPopup?.ContainsFocus ?? false;
-    CloseColourPopup(returnFocus: hadFocus, suppressHoverUntilLeave: false);
-    PointerLeft?.Invoke(this, EventArgs.Empty);
+    else
+    {
+      // The pointer left both nested popups.  The parent may now run its
+      // ordinary delayed-close policy.
+      PointerLeft?.Invoke(this, EventArgs.Empty);
+    }
   }
 
   private void CurrentSwatchMouseEnter(object? sender, EventArgs eventArgs)
   {
-    // A prior close must never consume the next deliberate hover.
-    _suppressColourHoverUntilLeave = false;
     _colourOpenTimer.Stop();
-    _colourOpenTimer.Start();
+    if (!_blockSwatchHoverUntilMouseLeave)
+    {
+      _colourOpenTimer.Start();
+    }
   }
 
   private void CurrentSwatchMouseLeave(object? sender, EventArgs eventArgs)
   {
     _colourOpenTimer.Stop();
-    _suppressColourHoverUntilLeave = false;
+    _blockSwatchHoverUntilMouseLeave = false;
   }
 
   private void RestorePreviousColour()
