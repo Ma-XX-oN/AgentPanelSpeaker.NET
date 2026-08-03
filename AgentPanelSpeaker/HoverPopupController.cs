@@ -7,6 +7,17 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class HoverPopupController : IDisposable
 {
+  private const int WmChangeUiState = 0x0127;
+  private const int UisClear = 2;
+  private const int UisfHideFocus = 0x1;
+
+  [System.Runtime.InteropServices.DllImport("user32.dll")]
+  private static extern IntPtr SendMessage(
+    IntPtr window,
+    int message,
+    IntPtr wParam,
+    IntPtr lParam);
+
   private enum PopupState
   {
     Closed,
@@ -607,23 +618,7 @@ internal sealed class HoverPopupController : IDisposable
     });
 
     node.FocusInitialControl();
-
-    if (reason == "popup-background-click" &&
-        popup is { Visible: true } &&
-        form is { IsDisposed: false, IsHandleCreated: true })
-    {
-      form.Invalidate(invalidateChildren: true);
-      form.Update();
-      DiagnosticLog.Write("popup.containing_window_repainted", new
-      {
-        reason,
-        node.Id,
-        popup = DescribeControl(popup),
-        containingForm = DescribeControl(form),
-        activeControl = DescribeControl(form.ActiveControl),
-        focusedControl = DescribeControl(FindFocusedControl(form))
-      });
-    }
+    ShowKeyboardFocusCue(form, node, reason);
 
     DiagnosticLog.Write("popup.focus_attempt_immediate", new
     {
@@ -689,6 +684,38 @@ internal sealed class HoverPopupController : IDisposable
         exception = exception.ToString()
       });
     }
+  }
+
+  private static void ShowKeyboardFocusCue(
+    Form? form,
+    PopupNode node,
+    string reason)
+  {
+    if (form is null || form.IsDisposed || !form.IsHandleCreated)
+    {
+      DiagnosticLog.Write("popup.focus_cue_unavailable", new
+      {
+        reason,
+        node.Id,
+        form = DescribeControl(form)
+      });
+      return;
+    }
+
+    int value = UisClear | (UisfHideFocus << 16);
+    _ = SendMessage(
+      form.Handle,
+      WmChangeUiState,
+      (IntPtr)value,
+      IntPtr.Zero);
+
+    DiagnosticLog.Write("popup.focus_cue_shown", new
+    {
+      reason,
+      node.Id,
+      form = DescribeControl(form),
+      value
+    });
   }
 
   private static Control? FindFocusedControl(Control? root)

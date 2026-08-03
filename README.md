@@ -1450,9 +1450,12 @@ Windows message has completed.  This instrumentation is intended to identify
 why a popup background click does not focus the configured initial control.
 
 
-## v123 containing-window repaint experiment
+## v124 mouse-focus cue correction
 
-Version 123 starts from v120.  After a popup-background click transfers focus
-to the popup's initial control, the shared popup controller invalidates the
-containing form and synchronously repaints it.  The repaint runs only when the
-popup is visible and logs `popup.containing_window_repainted`.
+Version 124 starts from v120.  After the shared popup controller moves focus
+to a popup's initial control, it sends `WM_CHANGEUISTATE` with
+`UIS_CLEAR | UISF_HIDEFOCUS` to the containing popup form.  This clears the
+Windows UI-state flag that hides keyboard focus cues after mouse input while
+leaving the actual focused control unchanged.  Existing popup focus
+diagnostics remain enabled and now also record `popup.focus_cue_shown` or
+`popup.focus_cue_unavailable`.
