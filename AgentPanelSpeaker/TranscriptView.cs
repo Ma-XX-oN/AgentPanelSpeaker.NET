@@ -793,6 +793,15 @@ internal sealed class TranscriptView : UserControl
         }
         return;
       }
+      if (type == "window-edge")
+      {
+        string edge = ReadOptionalString(root, "edge");
+        if (edge is "start" or "end")
+        {
+          _ = RenderWindowForEdgeAsync(edge);
+        }
+        return;
+      }
       if (type == "window-request")
       {
         int? recordNumber = ReadOptionalInt32(root, "recordNumber");
@@ -1144,7 +1153,8 @@ internal sealed class TranscriptView : UserControl
     int? anchorRecordNumber = null,
     string? anchorSourceId = null,
     double? anchorOffset = null,
-    int? focusVirtualIndex = null)
+    int? focusVirtualIndex = null,
+    string? focusEdge = null)
   {
     var keys = window.Records
       .Select(record => record.SourceId + "\0" + record.RecordNumber)
@@ -1163,7 +1173,8 @@ internal sealed class TranscriptView : UserControl
       JsonSerializer.Serialize(anchorRecordNumber) + "," +
       JsonSerializer.Serialize(anchorSourceId) + "," +
       JsonSerializer.Serialize(anchorOffset) + "," +
-      JsonSerializer.Serialize(focusVirtualIndex) + ");";
+      JsonSerializer.Serialize(focusVirtualIndex) + "," +
+      JsonSerializer.Serialize(focusEdge) + ");";
   }
 
   private async Task RenderWindowForRecordAsync(
@@ -1210,6 +1221,42 @@ internal sealed class TranscriptView : UserControl
       reason,
       recordNumber,
       sourceId,
+      window.StartIndex,
+      window.EndIndex,
+      recordCount = window.Records.Count,
+      htmlCharacters = window.Html.Length,
+      elapsedMilliseconds = timer.ElapsedMilliseconds
+    });
+  }
+
+  private async Task RenderWindowForEdgeAsync(string edge)
+  {
+    TranscriptVirtualDocument? document = _virtualDocument;
+    if (document is null || document.Count == 0)
+    {
+      return;
+    }
+    int focalIndex = edge == "start" ? 0 : document.Count - 1;
+    TranscriptWindow window = document.CreateWindow(focalIndex);
+    var timer = Stopwatch.StartNew();
+    if (!await ExecuteAsync(BuildReplaceWindowScript(
+          window,
+          preserve: false,
+          focusVirtualIndex: focalIndex,
+          focusEdge: edge)))
+    {
+      return;
+    }
+    _windowStartIndex = window.StartIndex;
+    _windowEndIndex = window.EndIndex;
+    if (_pendingPosition is TranscriptPlaybackPosition pending)
+    {
+      PostPlaybackPosition(pending);
+    }
+    DiagnosticLog.Write("transcript.window_rendered", new
+    {
+      reason = "keyboard-" + edge,
+      focalIndex,
       window.StartIndex,
       window.EndIndex,
       recordCount = window.Records.Count,
@@ -1578,7 +1625,8 @@ function replaceTranscriptWindow(
   anchorRecordNumber = null,
   anchorSourceId = null,
   anchorOffset = null,
-  focusVirtualIndex = null) {
+  focusVirtualIndex = null,
+  focusEdge = null) {
   clearFindHighlights();
   findCurrentWords = [];
   const nearBottom = document.documentElement.scrollHeight -
@@ -1626,7 +1674,13 @@ function replaceTranscriptWindow(
       CSS.escape(String(focusVirtualIndex)) + '"]');
     if (focusRecord) {
       programmaticScrollUntil = performance.now() + 2000;
-      focusRecord.scrollIntoView({block:'center', behavior:'auto'});
+      if (focusEdge === 'start') {
+        window.scrollTo(0, 0);
+      } else if (focusEdge === 'end') {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+      } else {
+        focusRecord.scrollIntoView({block:'center', behavior:'auto'});
+      }
     }
   }
   currentIndex = -1;
@@ -2602,6 +2656,18 @@ chrome.webview.addEventListener('message', event => {
 });
 
 window.addEventListener('keydown', event => {
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
+      (event.key === 'Home' || event.key === 'End') &&
+      !findPopup.contains(document.activeElement)) {
+    event.preventDefault();
+    event.stopPropagation();
+    setFollowSpeech(false, true);
+    chrome.webview.postMessage({
+      type:'window-edge',
+      edge:event.key === 'Home' ? 'start' : 'end'
+    });
+    return;
+  }
   if ((event.ctrlKey || event.metaKey) && !event.shiftKey &&
       event.key.toLocaleLowerCase() === 'f') {
     event.preventDefault();
