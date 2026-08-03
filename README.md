@@ -1468,3 +1468,12 @@ constructed, populated, themed, and laid out.  After the synchronous `Shown`
 work completes, one deferred presentation pass performs the final layout and
 reveals the completed window.  This prevents startup from visibly painting the
 form a control at a time.
+
+
+## v126 low-opacity startup paint
+
+The main form now starts at 1/255 opacity rather than fully transparent.  It
+performs a complete layout and child-control paint at that opacity, waits one
+additional UI-message turn, and only then restores full opacity.  This keeps
+the native child windows technically visible during their first paint while
+preventing their progressive construction from being perceptible.

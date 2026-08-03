@@ -123,7 +123,7 @@ internal sealed class MainForm : Form, IMessageFilter
     // Keep the native window fully transparent until the synchronous WinForms
     // control tree has been populated, themed, and laid out.  This prevents
     // Windows from presenting intermediate construction/layout paints.
-    Opacity = 0.0;
+    Opacity = 1.0 / 255.0;
     SetStyle(
       ControlStyles.AllPaintingInWmPaint |
       ControlStyles.OptimizedDoubleBuffer,
@@ -175,7 +175,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v125";
+    Text = "Agent Panel Speaker v126";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2848,9 +2848,27 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
 
-    _startupPresentationPending = false;
+    // Keep the form technically visible at 1/255 opacity while forcing the
+    // first complete layout and native-child paint.  Restore full opacity on
+    // the following UI turn so those controls have already painted once.
     _mainLayout.PerformLayout();
     PerformLayout();
+    Invalidate(invalidateChildren: true);
+    Update();
+    BeginInvoke((Action)FinishStartupPresentation);
+  }
+
+  /// <summary>
+  /// Restores full opacity after the initial low-opacity paint has completed.
+  /// </summary>
+  private void FinishStartupPresentation()
+  {
+    if (!_startupPresentationPending || _closing || IsDisposed)
+    {
+      return;
+    }
+
+    _startupPresentationPending = false;
     Opacity = 1.0;
     Invalidate(invalidateChildren: true);
     Update();
