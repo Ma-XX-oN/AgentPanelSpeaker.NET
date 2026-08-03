@@ -380,13 +380,17 @@ internal sealed class SpeechProfileCompactControl : Control
     popup.ApplyTheme(_dark);
     popup.SyncFromProfile();
     PositionPopup(owner, popup);
+    if (focusEditor)
+    {
+      popup.PrepareInitialSlider();
+    }
     popup.Visible = true;
     popup.BringToFront();
     _hoverPopupController.RefreshPopupControls();
 
     if (focusEditor)
     {
-      popup.FocusInitialSlider();
+      popup.Select();
     }
 
     Invalidate();

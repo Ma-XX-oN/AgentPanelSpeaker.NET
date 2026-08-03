@@ -154,7 +154,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v121";
+    Text = "Agent Panel Speaker v122";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1780,11 +1780,15 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     PositionTranscriptControls();
     _transcriptSettingsPopup.PrepareForDisplay();
+    if (focusPopup)
+    {
+      _transcriptSettingsPopup.PrepareInitialControl();
+    }
     _transcriptSettingsPopup.Visible = true;
     _transcriptSettingsPopup.BringToFront();
     if (focusPopup)
     {
-      _transcriptSettingsPopup.FocusInitialControl();
+      _transcriptSettingsPopup.Select();
     }
   }
 
