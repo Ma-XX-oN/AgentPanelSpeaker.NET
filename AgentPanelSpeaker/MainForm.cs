@@ -105,6 +105,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
   private int _monitorSession;
+  private int _historyPreviewGeneration;
 
   /// <summary>
   /// Initializes controls, settings, event handlers, and policy providers.
@@ -138,7 +139,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v82";
+    Text = "Agent Panel Speaker v83";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2666,6 +2667,49 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Indexes the selected transcript immediately and publishes its paused
+  /// playback marker before the user presses Play.
+  /// </summary>
+  private async Task LoadPausedHistoryPreviewAsync(LocatedSession session)
+  {
+    int generation = Interlocked.Increment(ref _historyPreviewGeneration);
+    string expectedPath = session.Path;
+    bool startAtLatestTurn = _speakExistingCheckBox.Checked;
+    try
+    {
+      SpeechHistorySnapshot snapshot = await Task.Run(() =>
+        _monitor.LoadHistoryPreview(session, startAtLatestTurn));
+      if (_closing || IsDisposed || generation != Volatile.Read(
+            ref _historyPreviewGeneration) || _monitor.IsRunning ||
+          !string.Equals(
+            expectedPath,
+            _sessionPathTextBox.Text,
+            StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      _speech.LoadHistory(
+        snapshot.Fragments,
+        snapshot.Completions,
+        snapshot.BackgroundWorkEvents,
+        snapshot.StartMode);
+      AppendLog(
+        $"Indexed {snapshot.Fragments.Count} existing fragments for paused navigation.");
+      UpdateControlState();
+    }
+    catch (Exception exception) when (
+      exception is IOException or UnauthorizedAccessException or
+      InvalidDataException or InvalidOperationException or ArgumentException)
+    {
+      if (generation == Volatile.Read(ref _historyPreviewGeneration))
+      {
+        AppendLog($"Unable to index paused history: {exception.Message}");
+      }
+    }
+  }
+
+  /// <summary>
   /// Displays one resolved session.
   /// </summary>
   private void SetSessionDisplay(
@@ -2679,6 +2723,10 @@ internal sealed class MainForm : Form, IMessageFilter
       session.Source,
       session.DisplayName,
       restoredFromSettings);
+    if (!_monitor.IsRunning)
+    {
+      _ = LoadPausedHistoryPreviewAsync(session);
+    }
     _sessionTitleTextBox.SelectionStart = 0;
     _sessionPathTextBox.SelectionStart = 0;
   }

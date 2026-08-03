@@ -181,6 +181,42 @@ internal sealed class JsonlSessionMonitor : IDisposable
   }
 
   /// <summary>
+  /// Builds the same existing-history snapshot used by monitoring without
+  /// starting the tail thread.  The caller can load this snapshot in the
+  /// paused state so the transcript has an authoritative startup marker.
+  /// </summary>
+  public SpeechHistorySnapshot LoadHistoryPreview(
+    LocatedSession session,
+    bool speakExistingLatestTurn)
+  {
+    ArgumentNullException.ThrowIfNull(session);
+    lock (_sync)
+    {
+      ObjectDisposedException.ThrowIf(_disposed, this);
+      if (_thread is not null)
+      {
+        throw new InvalidOperationException(
+          "A history preview cannot be built while monitoring is active.");
+      }
+    }
+
+    long nextNodeId = 1;
+    var recentFingerprintQueue = new Queue<string>();
+    var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
+    var preview = new Queue<string>();
+    var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
+      StringComparer.Ordinal);
+    return LoadExistingHistory(
+      session,
+      speakExistingLatestTurn,
+      ref nextNodeId,
+      recentFingerprintQueue,
+      recentFingerprintSet,
+      preview,
+      pendingInputRequests);
+  }
+
+  /// <summary>
   /// Runs the file-tail loop.
   /// </summary>
   private void Run(MonitorSettings settings, CancellationToken token)

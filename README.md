@@ -1,4 +1,8 @@
-# Agent Panel Speaker v82
+# Agent Panel Speaker v83
+
+## v83 authoritative startup marker
+
+Selecting or restoring a session now indexes its speech history immediately, without starting the live monitor.  The resulting position is loaded into SpeechService in the paused state and published to the transcript before Play is pressed.  Startup virtualization therefore centres on the same fragment that Play will resume from instead of the newest-record fallback.
 
 ## v82 compile correction
 
