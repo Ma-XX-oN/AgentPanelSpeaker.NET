@@ -17,6 +17,7 @@ internal sealed class UserSettingsStore
   private readonly object _sync = new();
   private readonly HashSet<string> _installedVoices;
   private UserSettings _current;
+  private UserSettings _saved;
 
   /// <summary>
   /// Initializes the store and loads the persisted snapshot when valid.
@@ -28,6 +29,7 @@ internal sealed class UserSettingsStore
       StringComparer.OrdinalIgnoreCase);
     string? defaultVoice = installedVoices.FirstOrDefault();
     _current = LoadOrDefault(defaultVoice);
+    _saved = _current;
   }
 
   /// <summary>
@@ -53,7 +55,7 @@ internal sealed class UserSettingsStore
   }
 
   /// <summary>
-  /// Replaces and immediately saves the current snapshot.
+  /// Replaces the in-memory working snapshot without persisting it.
   /// </summary>
   public void Update(UserSettings settings)
   {
@@ -61,30 +63,71 @@ internal sealed class UserSettingsStore
     lock (_sync)
     {
       _current = Normalize(settings);
-      SaveLocked();
     }
   }
 
   /// <summary>
-  /// Saves the current snapshot again.
+  /// Commits the current working snapshot to persistent storage.
   /// </summary>
   public void Save()
   {
     lock (_sync)
     {
-      SaveLocked();
+      UserSettings candidate = _current;
+      SaveLocked(candidate);
+      _saved = candidate;
     }
   }
 
   /// <summary>
-  /// Replaces the current snapshot with defaults and saves it.
+  /// Gets the last persisted snapshot.
+  /// </summary>
+  public UserSettings Saved
+  {
+    get
+    {
+      lock (_sync)
+      {
+        return _saved;
+      }
+    }
+  }
+
+  /// <summary>
+  /// Replaces both working and persisted snapshots with a selected merge.
+  /// </summary>
+  public void Commit(UserSettings settings)
+  {
+    ArgumentNullException.ThrowIfNull(settings);
+    lock (_sync)
+    {
+      UserSettings candidate = Normalize(settings);
+      SaveLocked(candidate);
+      _current = candidate;
+      _saved = candidate;
+    }
+  }
+
+  /// <summary>
+  /// Restores the working snapshot to the last persisted snapshot.
+  /// </summary>
+  public UserSettings DiscardWorkingChanges()
+  {
+    lock (_sync)
+    {
+      _current = _saved;
+      return _current;
+    }
+  }
+
+  /// <summary>
+  /// Replaces the working snapshot with defaults without saving it.
   /// </summary>
   public UserSettings ResetDefaults()
   {
     lock (_sync)
     {
       _current = UserSettings.CreateDefault(_installedVoices.FirstOrDefault());
-      SaveLocked();
       return _current;
     }
   }
@@ -265,7 +308,7 @@ internal sealed class UserSettingsStore
   /// <summary>
   /// Writes settings through a temporary file and atomic replacement.
   /// </summary>
-  private void SaveLocked()
+  private void SaveLocked(UserSettings settings)
   {
     string? directory = Path.GetDirectoryName(FilePath);
     if (string.IsNullOrWhiteSpace(directory))
@@ -277,7 +320,7 @@ internal sealed class UserSettingsStore
     string temporaryPath = FilePath + ".tmp";
     File.WriteAllText(
       temporaryPath,
-      JsonSerializer.Serialize(_current, JsonOptions));
+      JsonSerializer.Serialize(settings, JsonOptions));
     File.Move(temporaryPath, FilePath, overwrite: true);
     DiagnosticLog.Write("settings.saved", new { path = FilePath });
   }

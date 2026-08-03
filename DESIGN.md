@@ -1018,3 +1018,13 @@ still transparent, then schedules a single deferred presentation pass.  That
 pass performs final layout, restores full opacity, and repaints the completed
 control tree.  Asynchronous transcript initialization remains represented by
 its own stable loading UI rather than exposing intermediate WinForms layout.
+
+## v127 settings transaction model
+
+`UserSettingsStore` owns two immutable snapshots: `Saved` is the last snapshot
+successfully written to disk and `Current` is the live working snapshot.
+Ordinary UI updates replace only `Current`.  Persistence is explicit and atomic:
+the candidate snapshot is written before `Saved` is advanced.  A property-level
+`SettingsChangeSet` supplies display names, dirty-state detection, and selective
+merging.  The Save button, selective-save popup, reset operation, and close
+confirmation all use this one comparison/merge implementation.

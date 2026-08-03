@@ -59,6 +59,9 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly GlyphButton _forwardNodeButton = new();
   private readonly GlyphButton _forwardSpeakerButton = new();
   private readonly Button _saveSettingsButton = new();
+  private readonly Button _saveSelectedSettingsButton = new();
+  private readonly ChangedSettingsPopup _saveSettingsPopup;
+  private readonly HoverPopupController _saveSettingsPopupController;
   private readonly Button _resetSettingsButton = new();
   private readonly Button _openLogButton = new();
   private readonly Button _hotkeysButton = new();
@@ -150,6 +153,25 @@ internal sealed class MainForm : Form, IMessageFilter
         _transcriptSettingsPopup.FocusInitialControl);
       _transcriptSettingsPopup.RegisterPopupTree(
         _transcriptSettingsHoverController);
+      _saveSettingsPopup = new ChangedSettingsPopup(
+        Array.Empty<SettingsChangeSet.Change>(),
+        GetSelectedTheme(),
+        showSaveButton: true);
+      _saveSettingsPopupController = new HoverPopupController(
+        _saveSelectedSettingsButton,
+        () => new[] { _saveSettingsPopup },
+        ShowSaveSettingsPopup,
+        HideSaveSettingsPopup,
+        _saveSettingsPopup.FocusInitialControl);
+      _saveSettingsPopup.SaveRequested += (_, _) =>
+      {
+        if (CommitSelectedSettings(
+              _saveSettingsPopup.SelectedKeys,
+              discardUnselected: false))
+        {
+          _saveSettingsPopupController.Close(returnFocus: true);
+        }
+      };
       PopulateSources();
       PopulateVoiceRows();
       LoadSettingsIntoControls(_settingsStore.Current);
@@ -175,7 +197,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v126";
+    Text = "Agent Panel Speaker v127";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -227,6 +249,11 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.ProcessingClock,
       "Speak AI processing time (' or Alt+')");
     ConfigureButton(_saveSettingsButton, "Save settings");
+    ConfigureButton(_saveSelectedSettingsButton, "›");
+    _saveSelectedSettingsButton.Width = 28;
+    _toolTip.SetToolTip(
+      _saveSelectedSettingsButton,
+      "Choose which changed settings to save.");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
     ConfigureButton(_hotkeysButton, "Hotkeys...");
@@ -379,7 +406,8 @@ internal sealed class MainForm : Form, IMessageFilter
     utility.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Theme:"), _themeComboBox,
-      _saveSettingsButton, _resetSettingsButton, _openLogButton,
+      _saveSettingsButton, _saveSelectedSettingsButton,
+      _resetSettingsButton, _openLogButton,
       _hotkeysButton
     });
 
@@ -497,6 +525,8 @@ internal sealed class MainForm : Form, IMessageFilter
       "Next speaker turn",
       "Past end of last speaker turn.");
     _saveSettingsButton.Click += (_, _) => SaveSettingsExplicitly();
+    _saveSelectedSettingsButton.Click += (_, _) =>
+      _saveSettingsPopupController.OpenImmediately(focusPopup: true);
     _resetSettingsButton.Click += (_, _) => ResetSettings();
     _openLogButton.Click += OpenLogButtonClicked;
     _pronunciationsButton.Click += PronunciationsButtonClicked;
@@ -1068,7 +1098,7 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Normalizes, displays, logs, and saves the fenced-type CSV.
+  /// Normalizes, displays, logs, and updates the working fenced-type CSV.
   /// </summary>
   private void ApplyFenceTypesImmediately()
   {
@@ -1083,7 +1113,7 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Handles a role-profile change and persists it immediately.
+  /// Handles a role-profile change and marks the working settings dirty.
   /// </summary>
   private void VoiceRowChanged(SpeechRole role, bool context)
   {
@@ -1347,6 +1377,7 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
     _settingsStore.Update(current with { Hotkeys = dialog.Settings });
+    UpdateSettingsSaveState();
     AppendLog("Hotkeys updated.");
   }
 
@@ -1382,6 +1413,7 @@ internal sealed class MainForm : Form, IMessageFilter
         SpelledWords = spelled.NormalizedText,
         Pronunciations = pronunciations.NormalizedText
       });
+      UpdateSettingsSaveState();
       AppendLog(
         $"Pronunciations updated: {spelled.OrderedWords.Count} spelled; " +
         $"{pronunciations.Rules.Count} IPA rules.");
@@ -1416,6 +1448,7 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         AudioWake = settings
       });
+      UpdateSettingsSaveState();
       AppendLog(
         settings.Enabled
           ? $"Bluetooth wake enabled: {settings.FrequencyHertz} Hz; " +
@@ -2080,6 +2113,7 @@ internal sealed class MainForm : Form, IMessageFilter
     try
     {
       _settingsStore.Update(settings);
+      UpdateSettingsSaveState();
     }
     catch (Exception exception) when (
       exception is IOException or UnauthorizedAccessException)
@@ -2097,7 +2131,17 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
-    AppendLog("Settings saved.");
+    try
+    {
+      _settingsStore.Save();
+      UpdateSettingsSaveState();
+      AppendLog("Settings saved.");
+    }
+    catch (Exception exception) when (
+      exception is IOException or UnauthorizedAccessException)
+    {
+      AppendLog($"Settings save failed: {exception.Message}");
+    }
   }
 
   /// <summary>
@@ -2115,7 +2159,8 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
     LoadSettingsIntoControls(_settingsStore.ResetDefaults());
-    AppendLog("Settings reset to defaults.");
+    UpdateSettingsSaveState();
+    AppendLog("Defaults loaded. Press Save settings to keep them.");
   }
 
   /// <summary>
@@ -2556,6 +2601,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _rewindNodeButton.Enabled = hasHistory;
     _forwardNodeButton.Enabled = hasHistory;
     _forwardSpeakerButton.Enabled = hasHistory;
+    UpdateSettingsSaveState();
   }
 
   /// <summary>
@@ -2882,16 +2928,130 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Shows the selective-save popup beside the disclosure button.
+  /// </summary>
+  private void ShowSaveSettingsPopup(bool focusPopup)
+  {
+    IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
+    if (changes.Count == 0)
+    {
+      return;
+    }
+    _saveSettingsPopup.SetChanges(changes);
+    Point location = _saveSelectedSettingsButton.PointToScreen(
+      new Point(0, _saveSelectedSettingsButton.Height + 4));
+    _saveSettingsPopup.Location = location;
+    if (!_saveSettingsPopup.Visible)
+    {
+      _saveSettingsPopup.Show(this);
+    }
+    _saveSettingsPopup.BringToFront();
+    if (focusPopup)
+    {
+      _saveSettingsPopup.FocusInitialControl();
+    }
+  }
+
+  /// <summary>
+  /// Hides the selective-save popup.
+  /// </summary>
+  private void HideSaveSettingsPopup(bool returnFocus)
+  {
+    _saveSettingsPopup.Hide();
+    if (returnFocus)
+    {
+      _saveSelectedSettingsButton.Focus();
+    }
+  }
+
+  /// <summary>
+  /// Gets all settings that differ from the persisted snapshot.
+  /// </summary>
+  private IReadOnlyList<SettingsChangeSet.Change> GetSettingsChanges()
+  {
+    return SettingsChangeSet.GetChanges(
+      _settingsStore.Saved,
+      _settingsStore.Current);
+  }
+
+  /// <summary>
+  /// Enables save controls only while unsaved settings exist.
+  /// </summary>
+  private void UpdateSettingsSaveState()
+  {
+    bool dirty = GetSettingsChanges().Count > 0;
+    _saveSettingsButton.Enabled = dirty;
+    _saveSelectedSettingsButton.Enabled = dirty;
+    if (!dirty && _saveSettingsPopupController.IsOpen)
+    {
+      _saveSettingsPopupController.Close(returnFocus: false);
+    }
+  }
+
+  /// <summary>
+  /// Commits selected changes and optionally discards every unselected change.
+  /// </summary>
+  private bool CommitSelectedSettings(
+    IReadOnlySet<string> selectedKeys,
+    bool discardUnselected)
+  {
+    try
+    {
+      UserSettings saved = _settingsStore.Saved;
+      UserSettings working = _settingsStore.Current;
+      UserSettings merged = SettingsChangeSet.MergeSelected(
+        saved,
+        working,
+        selectedKeys);
+      _settingsStore.Commit(merged);
+      if (!discardUnselected)
+      {
+        _settingsStore.Update(working);
+      }
+      UpdateSettingsSaveState();
+      AppendLog($"Saved {selectedKeys.Count} changed setting(s).");
+      return true;
+    }
+    catch (Exception exception) when (
+      exception is IOException or UnauthorizedAccessException)
+    {
+      AppendLog($"Settings save failed: {exception.Message}");
+      return false;
+    }
+  }
+
+  /// <summary>
   /// Flushes pending settings and releases resources.
   /// </summary>
   private void MainFormClosing(object? sender, FormClosingEventArgs eventArgs)
   {
-    Application.RemoveMessageFilter(this);
-    SystemEvents.UserPreferenceChanged -= WindowsUserPreferenceChanged;
     _transcriptSettingsSaveTimer.Stop();
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
+    IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
+    if (changes.Count > 0)
+    {
+      using var dialog = new SaveChangedSettingsDialog(
+        changes,
+        GetSelectedTheme(),
+        closing: true);
+      if (dialog.ShowDialog(this) != DialogResult.OK)
+      {
+        eventArgs.Cancel = true;
+        return;
+      }
+      if (!CommitSelectedSettings(
+            dialog.SelectedKeys,
+            discardUnselected: true))
+      {
+        eventArgs.Cancel = true;
+        return;
+      }
+    }
+
+    Application.RemoveMessageFilter(this);
+    SystemEvents.UserPreferenceChanged -= WindowsUserPreferenceChanged;
     _closing = true;
     _playbackMailbox.Clear();
     Interlocked.Increment(ref _monitorSession);
@@ -2900,6 +3060,8 @@ internal sealed class MainForm : Form, IMessageFilter
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
     _transcriptSettingsHoverController.Dispose();
+    _saveSettingsPopupController.Dispose();
+    _saveSettingsPopup.Dispose();
     _transcriptSettingsSaveTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
     {

@@ -1477,3 +1477,19 @@ performs a complete layout and child-control paint at that opacity, waits one
 additional UI-message turn, and only then restores full opacity.  This keeps
 the native child windows technically visible during their first paint while
 preventing their progressive construction from being perceptible.
+
+## v127 explicit settings persistence
+
+Settings now use a saved snapshot and an in-memory working snapshot.  Changing a
+control updates application behaviour immediately but does not write the setting
+to disk.  **Save settings** is enabled only while the working snapshot differs
+from the persisted snapshot.  The adjacent disclosure control opens a shared
+hover/focus popup listing only changed settings; checked items can be saved
+selectively.  Resetting defaults changes the working snapshot and becomes
+persistent only after saving.
+
+Closing with unsaved settings displays **Save changed settings before closing?**
+with **Cancel** as the default action.  The **changed settings** link opens a
+secondary popup containing only modified settings, with Select all and Select
+none controls.  Pressing OK saves checked changes, discards unchecked changes,
+and closes.  Cancel returns to the application.
