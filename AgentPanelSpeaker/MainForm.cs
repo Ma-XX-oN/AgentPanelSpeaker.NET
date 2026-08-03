@@ -144,7 +144,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v90";
+    Text = "Agent Panel Speaker v91";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -1690,8 +1690,33 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Cancels speech from the previous JSONL and displays the newly selected
-  /// fixed or automatically followed session.
+  /// Compares two session paths using Windows file-name semantics.
+  /// </summary>
+  private static bool PathsReferToSameFile(string left, string right)
+  {
+    if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+    {
+      return false;
+    }
+
+    try
+    {
+      return string.Equals(
+        Path.GetFullPath(left),
+        Path.GetFullPath(right),
+        StringComparison.OrdinalIgnoreCase);
+    }
+    catch (Exception exception) when (
+      exception is ArgumentException or NotSupportedException or
+      PathTooLongException)
+    {
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Preserves indexed playback when monitoring confirms the same JSONL, or
+  /// resets speech state when monitoring switches to a different session.
   /// </summary>
   private void MonitorSessionChanged(LocatedSession session)
   {
@@ -1702,7 +1727,20 @@ internal sealed class MainForm : Form, IMessageFilter
       {
         return;
       }
-      _speech.BeginLiveSession();
+      bool preserveIndexedHistory =
+        _reusePausedHistoryOnMonitorStart &&
+        PathsReferToSameFile(_sessionPathTextBox.Text, session.Path);
+      if (preserveIndexedHistory)
+      {
+        DiagnosticLog.Write("monitor.session_history_preserved", new
+        {
+          session.Path
+        });
+      }
+      else
+      {
+        _speech.BeginLiveSession();
+      }
       SetSessionDisplay(session);
       AppendLog($"Active session: {session.DisplayName}");
       UpdateControlState();

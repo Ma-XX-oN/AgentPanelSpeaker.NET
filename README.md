@@ -1,10 +1,19 @@
-# Agent Panel Speaker v90
+# Agent Panel Speaker v91
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
 currently virtualized WebView window.
 
 
+
+## v91 Preserve reused history when the monitor confirms the same session
+
+When playback starts from already-indexed paused history, the monitor's initial
+`SessionChanged` notification refers to the same JSONL file.  That notification
+must not call `BeginLiveSession()`: doing so clears the reused history and
+cancels the utterance that has just started.  The notification now compares the
+confirmed path with the selected path and preserves speech state when they are
+the same.  A genuinely different session still resets speech state.
 
 ## v90 Exact Find resume and non-destructive monitor startup
 
