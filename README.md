@@ -1,5 +1,16 @@
-# Agent Panel Speaker v95
+# Agent Panel Speaker v98
 
+
+## v98 Regex record boundaries and smooth Find navigation
+
+- Search corpora now preserve transcript-record boundaries with newlines instead
+  of flattening the entire session into one line.
+- Regex `.` no longer crosses into unrelated transcript records.  `^` and `$`
+  operate per record through multiline regex semantics.
+- A regex match maps and highlights the complete token range within its record.
+- Find navigation uses smooth scrolling.  When virtualization must load another
+  window, it keeps the current scroll position until the target window is ready
+  and then smoothly scrolls to the result instead of pre-centring with a jump.
 
 ## v95 Find readiness and follow shortcut
 
@@ -1312,3 +1323,15 @@ replacement.
   after the voice position.
 - Removed the Follow Speech checkbox from Transcript Settings.  Follow remains
   controlled by the transcript overlay and the `=` / `Alt+=` shortcut.
+
+## v98 regex block model
+
+Transcript regex search now uses rendered structural blocks rather than one
+flattened record string.  Each paragraph, list item, heading, whole fenced code
+block, and disclosure summary is a block.  Collapsed Thoughts and tool/activity
+content are indexed as though expanded and use the same internal block rules.
+
+Blocks in one record are separated by `\n`, while records are searched as
+independent inputs.  Consequently `.` cannot cross a block, `^` and `$` refer
+to block boundaries under multiline regex semantics, an explicit `\n` can
+match a block boundary, and no expression can cross a record boundary.

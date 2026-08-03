@@ -1310,7 +1310,12 @@ internal sealed class TranscriptView : UserControl
     if (!await ExecuteAsync(BuildReplaceWindowScript(
           window,
           preserve: false,
-          focusVirtualIndex: focalIndex)))
+          focusVirtualIndex: string.Equals(
+            reason,
+            "search",
+            StringComparison.OrdinalIgnoreCase)
+              ? null
+              : focalIndex)))
     {
       return;
     }
@@ -1826,8 +1831,8 @@ function setFollowSpeech(enabled, notify) {
   if (followSpeech && currentIndex >= 0) {
     const target = words[currentIndex];
     if (target) {
-      programmaticScrollUntil = performance.now() + 500;
-      target.scrollIntoView({block:'center', behavior:'auto'});
+      programmaticScrollUntil = performance.now() + 1500;
+      target.scrollIntoView({block:'center', behavior:'smooth'});
     }
   }
 }
@@ -2429,8 +2434,8 @@ async function showFindMatch(index, trigger = 'unknown') {
   }
   const target = recordWords[match.startWordIndex];
   const openedDetailsCount = openAncestors(target);
-  programmaticScrollUntil = performance.now() + 500;
-  target.scrollIntoView({block:'center', behavior:'auto'});
+  programmaticScrollUntil = performance.now() + 1500;
+  target.scrollIntoView({block:'center', behavior:'smooth'});
   if (followSpeech) setFollowSpeech(false, true);
   findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
   reportFind('navigated', {

@@ -15,32 +15,36 @@ internal sealed class TranscriptSearchIndex
   private static readonly Regex HtmlPartRegex = new(
     "<[^>]+>|[^<]+",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
+  private static readonly Regex HtmlTagRegex = new(
+    @"^<\s*(?<close>/)?\s*(?<name>[A-Za-z0-9]+)",
+    RegexOptions.Compiled | RegexOptions.CultureInvariant);
   private static readonly Regex TokenRegex = new(
     @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*|[^\s\p{L}\p{N}_]",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
   private static readonly Regex RecordRegex = new(
     "class=\\\"record-anchor\\\"[^>]*data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*data-source-id=\\\"(?<source>[^\\\"]*)\\\"",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
+  private static readonly HashSet<string> BlockTags = new(
+    new[] { "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "summary" },
+    StringComparer.OrdinalIgnoreCase);
 
-  private readonly string _allText;
-  private readonly string _voicedText;
-  private readonly SearchToken[] _allTokens;
-  private readonly SearchToken[] _voicedTokens;
+  private readonly SearchRecord[] _allRecords;
+  private readonly SearchRecord[] _voicedRecords;
 
   private TranscriptSearchIndex(
-    string allText,
-    SearchToken[] allTokens,
-    string voicedText,
-    SearchToken[] voicedTokens)
+    SearchRecord[] allRecords,
+    SearchRecord[] voicedRecords)
   {
-    _allText = allText;
-    _allTokens = allTokens;
-    _voicedText = voicedText;
-    _voicedTokens = voicedTokens;
+    _allRecords = allRecords;
+    _voicedRecords = voicedRecords;
   }
 
   /// <summary>
   /// Builds the search corpus directly from rendered HTML and node identities.
+  /// Paragraphs, list items, headings, whole code blocks, and disclosure
+  /// summaries are independent regex blocks.  A newline separates adjacent
+  /// blocks within a record; records are searched independently so no match
+  /// can cross a record boundary.
   /// </summary>
   public static TranscriptSearchIndex Build(
     string html,
@@ -48,8 +52,12 @@ internal sealed class TranscriptSearchIndex
     CancellationToken cancellationToken)
   {
     var tokens = new List<MutableToken>();
+    var blockStack = new Stack<BlockContext>();
+    int nextBlockId = 0;
+    int implicitBlockId = -1;
     int recordNumber = 0;
     string sourceId = string.Empty;
+
     foreach (Match part in HtmlPartRegex.Matches(html))
     {
       cancellationToken.ThrowIfCancellationRequested();
@@ -65,11 +73,50 @@ internal sealed class TranscriptSearchIndex
             CultureInfo.InvariantCulture,
             out recordNumber);
           sourceId = WebUtility.HtmlDecode(anchor.Groups["source"].Value);
+          blockStack.Clear();
+          implicitBlockId = -1;
+        }
+
+        Match tag = HtmlTagRegex.Match(value);
+        if (!tag.Success)
+        {
+          continue;
+        }
+        string name = tag.Groups["name"].Value;
+        bool closing = tag.Groups["close"].Success;
+        if (closing && BlockTags.Contains(name))
+        {
+          PopThroughTag(blockStack, name);
+          implicitBlockId = -1;
+        }
+        else if (!closing && BlockTags.Contains(name))
+        {
+          int openedBlockId = ++nextBlockId;
+          blockStack.Push(new BlockContext(name, openedBlockId));
+          implicitBlockId = -1;
         }
         continue;
       }
 
       string text = WebUtility.HtmlDecode(value);
+      if (string.IsNullOrWhiteSpace(text))
+      {
+        continue;
+      }
+      int blockId;
+      if (blockStack.Count != 0)
+      {
+        blockId = blockStack.Peek().BlockId;
+      }
+      else
+      {
+        if (implicitBlockId < 0)
+        {
+          implicitBlockId = ++nextBlockId;
+        }
+        blockId = implicitBlockId;
+      }
+
       foreach (Match token in TokenRegex.Matches(text))
       {
         int localIndex = tokens.Count == 0 ||
@@ -81,17 +128,17 @@ internal sealed class TranscriptSearchIndex
           token.Value,
           recordNumber,
           sourceId,
+          blockId,
           tokens.Count,
           localIndex));
       }
     }
 
     MarkVoicedTokens(tokens, identities, cancellationToken);
-    SearchToken[] allTokens = BuildCorpus(tokens, voicedOnly: false, out string allText);
-    SearchToken[] voicedTokens = BuildCorpus(tokens, voicedOnly: true, out string voicedText);
-    return new TranscriptSearchIndex(allText, allTokens, voicedText, voicedTokens);
+    SearchRecord[] allRecords = BuildCorpus(tokens, voicedOnly: false);
+    SearchRecord[] voicedRecords = BuildCorpus(tokens, voicedOnly: true);
+    return new TranscriptSearchIndex(allRecords, voicedRecords);
   }
-
 
   /// <summary>
   /// Resolves an authoritative speech node/word position to its rendered
@@ -104,14 +151,17 @@ internal sealed class TranscriptSearchIndex
     out string sourceId,
     out int recordWordIndex)
   {
-    foreach (SearchToken token in _voicedTokens)
+    foreach (SearchRecord record in _voicedRecords)
     {
-      if (token.NodeId == nodeId && token.NodeWordIndex == nodeWordIndex)
+      foreach (SearchToken token in record.Tokens)
       {
-        recordNumber = token.RecordNumber;
-        sourceId = token.SourceId;
-        recordWordIndex = token.RecordWordIndex;
-        return true;
+        if (token.NodeId == nodeId && token.NodeWordIndex == nodeWordIndex)
+        {
+          recordNumber = token.RecordNumber;
+          sourceId = token.SourceId;
+          recordWordIndex = token.RecordWordIndex;
+          return true;
+        }
       }
     }
     recordNumber = 0;
@@ -127,46 +177,52 @@ internal sealed class TranscriptSearchIndex
     TranscriptSearchRequest request,
     CancellationToken cancellationToken)
   {
-    string text = request.VoicedOnly ? _voicedText : _allText;
-    SearchToken[] tokens = request.VoicedOnly ? _voicedTokens : _allTokens;
-    IReadOnlyList<TextMatch> raw = request.Regex
+    SearchRecord[] records = request.VoicedOnly ? _voicedRecords : _allRecords;
+    IReadOnlyList<RecordTextMatch> raw = request.Regex
       ? await RegexWorkerClient.SearchAsync(
-          text,
+          records.Select(record => record.Text).ToArray(),
           request.Query,
           request.CaseSensitive,
           request.WholeWord,
           cancellationToken)
       : await Task.Run(
-          () => FindLiteral(text, request, cancellationToken),
+          () => FindLiteral(records, request, cancellationToken),
           cancellationToken);
-    return MapMatches(raw, tokens);
+    return MapMatches(raw, records);
   }
 
-  private static IReadOnlyList<TextMatch> FindLiteral(
-    string text,
+  private static IReadOnlyList<RecordTextMatch> FindLiteral(
+    IReadOnlyList<SearchRecord> records,
     TranscriptSearchRequest request,
     CancellationToken cancellationToken)
   {
-    var matches = new List<TextMatch>();
+    var matches = new List<RecordTextMatch>();
     StringComparison comparison = request.CaseSensitive
       ? StringComparison.Ordinal
       : StringComparison.OrdinalIgnoreCase;
-    int position = 0;
-    while (position <= text.Length - request.Query.Length)
+    for (int recordIndex = 0; recordIndex < records.Count; ++recordIndex)
     {
-      cancellationToken.ThrowIfCancellationRequested();
-      int found = text.IndexOf(request.Query, position, comparison);
-      if (found < 0)
+      string text = records[recordIndex].Text;
+      int position = 0;
+      while (position <= text.Length - request.Query.Length)
       {
-        break;
+        cancellationToken.ThrowIfCancellationRequested();
+        int found = text.IndexOf(request.Query, position, comparison);
+        if (found < 0)
+        {
+          break;
+        }
+        int end = found + request.Query.Length;
+        if (!request.WholeWord ||
+            (IsBoundary(text, found - 1) && IsBoundary(text, end)))
+        {
+          matches.Add(new RecordTextMatch(
+            recordIndex,
+            found,
+            request.Query.Length));
+        }
+        position = found + Math.Max(1, request.Query.Length);
       }
-      int end = found + request.Query.Length;
-      if (!request.WholeWord ||
-          (IsBoundary(text, found - 1) && IsBoundary(text, end)))
-      {
-        matches.Add(new TextMatch(found, request.Query.Length));
-      }
-      position = found + Math.Max(1, request.Query.Length);
     }
     return matches;
   }
@@ -178,14 +234,22 @@ internal sealed class TranscriptSearchIndex
   }
 
   private static IReadOnlyList<TranscriptSearchMatch> MapMatches(
-    IReadOnlyList<TextMatch> raw,
-    SearchToken[] tokens)
+    IReadOnlyList<RecordTextMatch> raw,
+    IReadOnlyList<SearchRecord> records)
   {
     var result = new List<TranscriptSearchMatch>(raw.Count);
-    foreach (TextMatch match in raw)
+    foreach (RecordTextMatch match in raw)
     {
-      int first = FirstEndingAfter(tokens, match.Start);
-      if (first >= tokens.Length)
+      if ((uint)match.RecordIndex >= (uint)records.Count)
+      {
+        continue;
+      }
+      SearchRecord record = records[match.RecordIndex];
+      SearchToken[] tokens = record.Tokens;
+      int first = match.Length == 0
+        ? ResolveZeroLengthMatchToken(tokens, match.Start)
+        : FirstEndingAfter(tokens, match.Start);
+      if (first < 0 || first >= tokens.Length)
       {
         continue;
       }
@@ -210,14 +274,30 @@ internal sealed class TranscriptSearchIndex
         firstToken.RecordNumber,
         firstToken.SourceId,
         firstToken.RecordWordIndex,
-        tokens[last].RecordNumber == firstToken.RecordNumber &&
-          string.Equals(tokens[last].SourceId, firstToken.SourceId, StringComparison.Ordinal)
-            ? tokens[last].RecordWordIndex
-            : firstToken.RecordWordIndex,
+        tokens[last].RecordWordIndex,
         voiced.NodeId,
         voiced.NodeWordIndex));
     }
     return result;
+  }
+
+
+  private static int ResolveZeroLengthMatchToken(
+    SearchToken[] tokens,
+    int position)
+  {
+    int next = FirstEndingAfter(tokens, position);
+    if (next > 0 && tokens[next - 1].End == position)
+    {
+      // A zero-length match at a token end is an end-of-block anchor ($).
+      return next - 1;
+    }
+    if (next < tokens.Length)
+    {
+      // Otherwise it is at the beginning of a block (^).
+      return next;
+    }
+    return tokens.Length == 0 ? -1 : tokens.Length - 1;
   }
 
   private static int FirstEndingAfter(SearchToken[] tokens, int position)
@@ -239,36 +319,60 @@ internal sealed class TranscriptSearchIndex
     return low;
   }
 
-  private static SearchToken[] BuildCorpus(
+  private static SearchRecord[] BuildCorpus(
     IReadOnlyList<MutableToken> source,
-    bool voicedOnly,
-    out string text)
+    bool voicedOnly)
   {
-    var builder = new StringBuilder();
-    var result = new List<SearchToken>();
-    foreach (MutableToken token in source)
+    var records = new List<SearchRecord>();
+    foreach (IGrouping<string, MutableToken> group in source
+      .Where(token => !voicedOnly || token.NodeId > 0)
+      .GroupBy(token => token.RecordKey, StringComparer.Ordinal))
     {
-      if (voicedOnly && token.NodeId <= 0)
+      var builder = new StringBuilder();
+      var tokens = new List<SearchToken>();
+      int? previousBlockId = null;
+      foreach (MutableToken token in group)
       {
-        continue;
+        if (builder.Length != 0)
+        {
+          builder.Append(previousBlockId == token.BlockId ? ' ' : '\n');
+        }
+        int start = builder.Length;
+        builder.Append(token.Text);
+        tokens.Add(new SearchToken(
+          start,
+          builder.Length,
+          token.RecordNumber,
+          token.SourceId,
+          token.RecordWordIndex,
+          token.NodeId,
+          token.NodeWordIndex));
+        previousBlockId = token.BlockId;
       }
-      if (builder.Length != 0)
+      if (tokens.Count != 0)
       {
-        builder.Append(' ');
+        // Newlines separate blocks inside a record.  The final block ends at
+        // the end of that record's independent search input.
+        records.Add(new SearchRecord(builder.ToString(), tokens.ToArray()));
       }
-      int start = builder.Length;
-      builder.Append(token.Text);
-      result.Add(new SearchToken(
-        start,
-        builder.Length,
-        token.RecordNumber,
-        token.SourceId,
-        token.RecordWordIndex,
-        token.NodeId,
-        token.NodeWordIndex));
     }
-    text = builder.ToString();
-    return result.ToArray();
+    return records.ToArray();
+  }
+
+  private static void PopThroughTag(Stack<BlockContext> stack, string name)
+  {
+    if (!BlockTags.Contains(name))
+    {
+      return;
+    }
+    while (stack.Count != 0)
+    {
+      BlockContext context = stack.Pop();
+      if (string.Equals(context.TagName, name, StringComparison.OrdinalIgnoreCase))
+      {
+        break;
+      }
+    }
   }
 
   private static void MarkVoicedTokens(
@@ -305,8 +409,6 @@ internal sealed class TranscriptSearchIndex
         for (int index = start; index < start + target.Length; ++index)
         {
           tokens[index].NodeId = identity.NodeId;
-          // SpeechService indexes every spoken token, including punctuation.
-          // Keep the transcript mapping in the same token coordinate system.
           tokens[index].NodeWordIndex = nodeWordIndex++;
         }
         cursor = start + target.Length;
@@ -351,11 +453,6 @@ internal sealed class TranscriptSearchIndex
     return -1;
   }
 
-  private static bool IsLexical(string text)
-  {
-    return text.Any(character => char.IsLetterOrDigit(character) || character == '_');
-  }
-
   private static string MakeKey(int recordNumber, string sourceId)
   {
     return sourceId + "\0" + recordNumber.ToString(CultureInfo.InvariantCulture);
@@ -367,6 +464,7 @@ internal sealed class TranscriptSearchIndex
       string text,
       int recordNumber,
       string sourceId,
+      int blockId,
       int renderedIndex,
       int recordWordIndex)
     {
@@ -374,6 +472,7 @@ internal sealed class TranscriptSearchIndex
       RecordNumber = recordNumber;
       SourceId = sourceId;
       RecordKey = MakeKey(recordNumber, sourceId);
+      BlockId = blockId;
       RenderedIndex = renderedIndex;
       RecordWordIndex = recordWordIndex;
     }
@@ -382,12 +481,15 @@ internal sealed class TranscriptSearchIndex
     public int RecordNumber { get; }
     public string SourceId { get; }
     public string RecordKey { get; }
+    public int BlockId { get; }
     public int RenderedIndex { get; }
     public int RecordWordIndex { get; }
     public long NodeId { get; set; }
     public int NodeWordIndex { get; set; } = -1;
   }
 
+  private readonly record struct BlockContext(string TagName, int BlockId);
+  private readonly record struct SearchRecord(string Text, SearchToken[] Tokens);
   private readonly record struct SearchToken(
     int Start,
     int End,
@@ -415,12 +517,15 @@ internal sealed record TranscriptSearchMatch(
   long NodeId,
   int NodeWordIndex);
 
-internal readonly record struct TextMatch(int Start, int Length);
+internal readonly record struct RecordTextMatch(
+  int RecordIndex,
+  int Start,
+  int Length);
 
 internal static class RegexWorkerClient
 {
-  public static async Task<IReadOnlyList<TextMatch>> SearchAsync(
-    string text,
+  public static async Task<IReadOnlyList<RecordTextMatch>> SearchAsync(
+    IReadOnlyList<string> records,
     string pattern,
     bool caseSensitive,
     bool wholeWord,
@@ -443,7 +548,7 @@ internal static class RegexWorkerClient
     }
     try
     {
-      var request = new RegexWorkerRequest(text, pattern, caseSensitive, wholeWord);
+      var request = new RegexWorkerRequest(records, pattern, caseSensitive, wholeWord);
       await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(request));
       process.StandardInput.Close();
       using CancellationTokenRegistration registration = cancellationToken.Register(() =>
@@ -473,7 +578,7 @@ internal static class RegexWorkerClient
       {
         throw new ArgumentException(response.Error);
       }
-      return response.Matches ?? Array.Empty<TextMatch>();
+      return response.Matches ?? Array.Empty<RecordTextMatch>();
     }
     finally
     {
@@ -482,13 +587,13 @@ internal static class RegexWorkerClient
 }
 
 internal sealed record RegexWorkerRequest(
-  string Text,
+  IReadOnlyList<string> Records,
   string Pattern,
   bool CaseSensitive,
   bool WholeWord);
 
 internal sealed record RegexWorkerResponse(
-  IReadOnlyList<TextMatch>? Matches,
+  IReadOnlyList<RecordTextMatch>? Matches,
   string? Error);
 
 internal static class RegexSearchWorker
@@ -504,16 +609,23 @@ internal static class RegexSearchWorker
       string pattern = request.WholeWord
         ? $@"(?<![\p{{L}}\p{{N}}_])(?:{request.Pattern})(?![\p{{L}}\p{{N}}_])"
         : request.Pattern;
-      RegexOptions options = RegexOptions.CultureInvariant;
+      RegexOptions options =
+        RegexOptions.CultureInvariant | RegexOptions.Multiline;
       if (!request.CaseSensitive)
       {
         options |= RegexOptions.IgnoreCase;
       }
       var regex = new Regex(pattern, options);
-      var matches = new List<TextMatch>();
-      foreach (Match match in regex.Matches(request.Text))
+      var matches = new List<RecordTextMatch>();
+      for (int recordIndex = 0; recordIndex < request.Records.Count; ++recordIndex)
       {
-        matches.Add(new TextMatch(match.Index, match.Length));
+        foreach (Match match in regex.Matches(request.Records[recordIndex]))
+        {
+          matches.Add(new RecordTextMatch(
+            recordIndex,
+            match.Index,
+            match.Length));
+        }
       }
       Console.Out.WriteLine(JsonSerializer.Serialize(
         new RegexWorkerResponse(matches, null)));
