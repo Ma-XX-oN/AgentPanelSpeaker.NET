@@ -1439,3 +1439,12 @@ popup enters its awaiting-entry state before any show or focus callback runs,
 and a failed show returns it to closed.  Clicking a popup background focuses
 that popup's configured first enabled control; clicking a specific control
 retains normal control focus behaviour.
+
+
+## v120 popup focus diagnostics
+
+Version 120 adds structured diagnostics around popup-background focus transfer.
+The log records the clicked surface, popup node, active form, active and focused
+controls before the focus request, immediately after it, and after the current
+Windows message has completed.  This instrumentation is intended to identify
+why a popup background click does not focus the configured initial control.

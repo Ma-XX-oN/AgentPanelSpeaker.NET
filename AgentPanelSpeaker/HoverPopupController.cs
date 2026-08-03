@@ -334,7 +334,7 @@ internal sealed class HoverPopupController : IDisposable
       if (focusPopup)
       {
         node.State = PopupState.OpenEntered;
-        node.FocusInitialControl();
+        FocusInitialControlWithDiagnostics(node, "open-existing");
       }
       return;
     }
@@ -565,10 +565,156 @@ internal sealed class HoverPopupController : IDisposable
     node.State = PopupState.OpenEntered;
     MarkActive();
     CancelCloseForAncestors(node);
-    if (IsBackgroundSurface(node, control))
+    bool isBackgroundSurface = IsBackgroundSurface(node, control);
+    DiagnosticLog.Write("popup.pointer_down", new
     {
-      node.FocusInitialControl();
+      node.Id,
+      state = node.State.ToString(),
+      control = DescribeControl(control),
+      isBackgroundSurface,
+      activeForm = DescribeControl(Form.ActiveForm),
+      containingForm = DescribeControl(control.FindForm()),
+      activeControl = DescribeControl(control.FindForm()?.ActiveControl),
+      focusedControl = DescribeControl(FindFocusedControl(control.FindForm()))
+    });
+    if (isBackgroundSurface)
+    {
+      FocusInitialControlWithDiagnostics(node, "popup-background-click", control);
     }
+  }
+
+  private void FocusInitialControlWithDiagnostics(
+    PopupNode node,
+    string reason,
+    Control? triggerControl = null)
+  {
+    Control? popup = EnumerateVisiblePopupControls(node).FirstOrDefault();
+    Form? form = popup?.FindForm() ?? node.Anchor.FindForm();
+    DiagnosticLog.Write("popup.focus_attempt", new
+    {
+      reason,
+      node.Id,
+      state = node.State.ToString(),
+      anchor = DescribeControl(node.Anchor),
+      trigger = DescribeControl(triggerControl),
+      popup = DescribeControl(popup),
+      activeForm = DescribeControl(Form.ActiveForm),
+      containingForm = DescribeControl(form),
+      activeControl = DescribeControl(form?.ActiveControl),
+      focusedControl = DescribeControl(FindFocusedControl(form)),
+      anchorContainsFocus = node.Anchor.ContainsFocus,
+      popupContainsFocus = popup?.ContainsFocus ?? false
+    });
+
+    node.FocusInitialControl();
+
+    DiagnosticLog.Write("popup.focus_attempt_immediate", new
+    {
+      reason,
+      node.Id,
+      state = node.State.ToString(),
+      activeForm = DescribeControl(Form.ActiveForm),
+      containingForm = DescribeControl(form),
+      activeControl = DescribeControl(form?.ActiveControl),
+      focusedControl = DescribeControl(FindFocusedControl(form)),
+      anchorContainsFocus = node.Anchor.ContainsFocus,
+      popupContainsFocus = popup?.ContainsFocus ?? false
+    });
+
+    Control? dispatcher = popup is { IsDisposed: false }
+      ? popup
+      : node.Anchor is { IsDisposed: false }
+        ? node.Anchor
+        : null;
+    if (dispatcher is null || !dispatcher.IsHandleCreated)
+    {
+      DiagnosticLog.Write("popup.focus_attempt_deferred_unavailable", new
+      {
+        reason,
+        node.Id,
+        dispatcher = DescribeControl(dispatcher)
+      });
+      return;
+    }
+
+    try
+    {
+      dispatcher.BeginInvoke((MethodInvoker)(() =>
+      {
+        if (_disposed)
+        {
+          return;
+        }
+        Control? currentPopup = EnumerateVisiblePopupControls(node)
+          .FirstOrDefault();
+        Form? currentForm = currentPopup?.FindForm() ?? node.Anchor.FindForm();
+        DiagnosticLog.Write("popup.focus_attempt_settled", new
+        {
+          reason,
+          node.Id,
+          state = node.State.ToString(),
+          activeForm = DescribeControl(Form.ActiveForm),
+          containingForm = DescribeControl(currentForm),
+          activeControl = DescribeControl(currentForm?.ActiveControl),
+          focusedControl = DescribeControl(FindFocusedControl(currentForm)),
+          anchorContainsFocus = node.Anchor.ContainsFocus,
+          popup = DescribeControl(currentPopup),
+          popupContainsFocus = currentPopup?.ContainsFocus ?? false
+        });
+      }));
+    }
+    catch (InvalidOperationException exception)
+    {
+      DiagnosticLog.Write("popup.focus_attempt_deferred_failed", new
+      {
+        reason,
+        node.Id,
+        exception = exception.ToString()
+      });
+    }
+  }
+
+  private static Control? FindFocusedControl(Control? root)
+  {
+    if (root is null)
+    {
+      return null;
+    }
+    if (root.Focused)
+    {
+      return root;
+    }
+    foreach (Control child in root.Controls)
+    {
+      Control? focused = FindFocusedControl(child);
+      if (focused is not null)
+      {
+        return focused;
+      }
+    }
+    return null;
+  }
+
+  private static object? DescribeControl(Control? control)
+  {
+    return control is null
+      ? null
+      : new
+      {
+        type = control.GetType().FullName,
+        control.Name,
+        control.Text,
+        control.Visible,
+        control.Enabled,
+        control.TabStop,
+        control.CanFocus,
+        control.CanSelect,
+        control.Focused,
+        control.ContainsFocus,
+        control.IsHandleCreated,
+        control.IsDisposed,
+        bounds = control.Bounds.ToString()
+      };
   }
 
   private void PopupMouseEntered(object? sender, EventArgs eventArgs)
