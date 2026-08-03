@@ -1416,31 +1416,33 @@ body {
   right: 18px;
   bottom: 18px;
   display: flex;
-  gap: 2px;
   padding: 3px;
   border: 1px solid rgba(128,128,128,.45);
   border-radius: 6px;
   background: rgba(35,35,35,.58);
   backdrop-filter: blur(4px);
+  opacity: .5;
+  transition: opacity 120ms ease-in-out;
   z-index: 40;
 }
+#view-voice-overlay:hover,
+#view-voice-overlay:focus-within { opacity: 1; }
 .view-voice-button {
-  width: 30px;
-  height: 28px;
+  min-width: 76px;
+  height: 32px;
   border: 0;
   border-radius: 4px;
   color: #fff;
   background: transparent;
   font-size: 17px;
-  line-height: 26px;
+  line-height: 30px;
   text-align: center;
 }
 .virtual-spacer { width: 1px; pointer-events: none; }
 .virtual-record { display: flow-root; }
-#follow-toggle { cursor: pointer; font-weight: 700; }
+#follow-toggle { cursor: pointer; font-weight: 700; padding: 0 8px; }
 #follow-toggle:hover { background: rgba(255,255,255,.18); }
 #follow-toggle:active { background: rgba(255,255,255,.28); }
-.view-voice-button[disabled] { opacity: .82; }
 h1, h2, h3 { line-height: 1.25; margin-top: 1.45em; }
 h2 { padding-bottom: .25em; border-bottom: 1px solid var(--quote); }
 a { color: var(--link); }
@@ -1551,10 +1553,8 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   <button type="button" id="find-close" class="find-button" title="Close (Escape)">×</button>
 </div>
 <main id="transcript"></main>
-<div id="view-voice-overlay" aria-label="Transcript follow controls">
-  <button type="button" class="view-voice-button" disabled title="Current view">👁️</button>
-  <button type="button" id="follow-toggle" class="view-voice-button" title="Toggle follow speech">=</button>
-  <button type="button" class="view-voice-button" disabled title="Current speech position">👄</button>
+<div id="view-voice-overlay" aria-label="Transcript follow control">
+  <button type="button" id="follow-toggle" class="view-voice-button" title="Toggle follow speech (=)">👁️ = 👄</button>
 </div>
 <div id="live-end-marker" aria-label="Next text position"></div>
 <script nonce="agent-panel-speaker">
@@ -1745,10 +1745,10 @@ function replaceTranscript(html, preserve, nodeMap) {
 }
 
 function updateFollowToggle() {
-  followToggle.textContent = followSpeech ? '=' : '≠';
+  followToggle.textContent = followSpeech ? '👁️ = 👄' : '👁️ ≠ 👄';
   followToggle.title = followSpeech
-    ? 'Following speech; click to stop following'
-    : 'Not following speech; click to follow';
+    ? 'Following speech; click or press = to stop following'
+    : 'Not following speech; click or press = to follow';
 }
 
 function setFollowSpeech(enabled, notify) {

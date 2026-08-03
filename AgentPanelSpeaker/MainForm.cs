@@ -142,7 +142,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v87";
+    Text = "Agent Panel Speaker v88";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2387,18 +2387,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private bool ActivateTransportShortcut(Keys keyCode, string shortcut)
   {
-    HotkeyAction action = _settingsStore.Current.Hotkeys.GetAction(keyCode);
-    if (action == HotkeyAction.None)
-    {
-      return false;
-    }
-
-    if (action == HotkeyAction.ToggleTranscriptSize)
-    {
-      SetDiagnosticsMaximized(!_diagnosticsMaximized);
-      return true;
-    }
-    if (action == HotkeyAction.ToggleFollow)
+    if (keyCode == Keys.Oemplus)
     {
       _transcriptSettingsPopup.SetSettings(
         _transcriptSettingsPopup.Settings with
@@ -2411,6 +2400,17 @@ internal sealed class MainForm : Form, IMessageFilter
       return true;
     }
 
+    HotkeyAction action = _settingsStore.Current.Hotkeys.GetAction(keyCode);
+    if (action == HotkeyAction.None)
+    {
+      return false;
+    }
+
+    if (action == HotkeyAction.ToggleTranscriptSize)
+    {
+      SetDiagnosticsMaximized(!_diagnosticsMaximized);
+      return true;
+    }
     Button? button = action switch
     {
       HotkeyAction.PreviousSpeaker => _rewindSpeakerButton,
@@ -2476,6 +2476,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       Keys.OemSemicolon => ";",
       Keys.OemQuotes => "'",
+      Keys.Oemplus => "=",
       _ => keyCode.ToString()
     };
   }

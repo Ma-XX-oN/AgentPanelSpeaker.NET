@@ -80,8 +80,7 @@ internal sealed class HotkeySettingsDialog : Form
     NextNode = Value(HotkeyAction.NextNode),
     NextSpeaker = Value(HotkeyAction.NextSpeaker),
     ProcessingTime = Value(HotkeyAction.ProcessingTime),
-    ToggleTranscriptSize = Value(HotkeyAction.ToggleTranscriptSize),
-    ToggleFollow = Value(HotkeyAction.ToggleFollow)
+    ToggleTranscriptSize = Value(HotkeyAction.ToggleTranscriptSize)
   }.Normalize();
 
   private string Value(HotkeyAction action) => _editors[action].Text;
@@ -117,6 +116,5 @@ internal sealed class HotkeySettingsDialog : Form
     yield return (HotkeyAction.NextSpeaker, "Next speaker", settings.NextSpeaker);
     yield return (HotkeyAction.ProcessingTime, "Speak processing time", settings.ProcessingTime);
     yield return (HotkeyAction.ToggleTranscriptSize, "Minimize / maximize transcript", settings.ToggleTranscriptSize);
-    yield return (HotkeyAction.ToggleFollow, "Toggle follow mode", settings.ToggleFollow);
   }
 }

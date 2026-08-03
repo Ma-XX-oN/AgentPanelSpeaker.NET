@@ -11,8 +11,7 @@ internal enum HotkeyAction
   NextNode,
   NextSpeaker,
   ProcessingTime,
-  ToggleTranscriptSize,
-  ToggleFollow
+  ToggleTranscriptSize
 }
 
 internal sealed record HotkeySettings
@@ -28,7 +27,6 @@ internal sealed record HotkeySettings
   public string NextSpeaker { get; init; } = "O";
   public string ProcessingTime { get; init; } = "'";
   public string ToggleTranscriptSize { get; init; } = "M";
-  public string ToggleFollow { get; init; } = "F";
 
   public HotkeySettings Normalize()
   {
@@ -54,8 +52,7 @@ internal sealed record HotkeySettings
       NextNode = NormalizeOne(NextNode, ";"),
       NextSpeaker = NormalizeOne(NextSpeaker, "O"),
       ProcessingTime = NormalizeOne(ProcessingTime, "'"),
-      ToggleTranscriptSize = NormalizeOne(ToggleTranscriptSize, "M"),
-      ToggleFollow = NormalizeOne(ToggleFollow, "F")
+      ToggleTranscriptSize = NormalizeOne(ToggleTranscriptSize, "M")
     };
   }
 
@@ -83,7 +80,6 @@ internal sealed record HotkeySettings
     yield return (HotkeyAction.NextSpeaker, NextSpeaker);
     yield return (HotkeyAction.ProcessingTime, ProcessingTime);
     yield return (HotkeyAction.ToggleTranscriptSize, ToggleTranscriptSize);
-    yield return (HotkeyAction.ToggleFollow, ToggleFollow);
   }
 
   public static Keys ParseKey(string? value)

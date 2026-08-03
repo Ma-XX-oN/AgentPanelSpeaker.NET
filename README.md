@@ -1,8 +1,16 @@
-# Agent Panel Speaker v87
+# Agent Panel Speaker v88
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
 currently virtualized WebView window.
+
+## v88 Follow control simplification
+
+- The eye/equality/lips group is now one follow toggle button.
+- The button is 50% opaque normally and fully visible on hover or keyboard focus.
+- The fixed follow shortcut is now `=` (and `Alt+=` through the existing transport shortcut path).
+- Follow mode is no longer listed in the hotkey-remapping dialog.
+
 
 ## v87 Find seek and first-play restoration
 
