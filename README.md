@@ -1,7 +1,7 @@
-# Agent Panel Speaker v94
+# Agent Panel Speaker v95
 
 
-## v94 Find readiness and follow shortcut
+## v95 Find readiness and follow shortcut
 
 - Find requests received before transcript indexing completes are retained and
   run when the index becomes available.
@@ -17,7 +17,7 @@ currently virtualized WebView window.
 
 
 
-## v94 Single-owner monitor startup
+## v95 Single-owner monitor startup
 
 - The selected session's paused history snapshot is retained by `MainForm`.
 - Starting monitoring passes that exact snapshot to `JsonlSessionMonitor`.
@@ -1304,3 +1304,11 @@ transcript loading overlay is removed, and the virtual transcript window is
 centred on its exact record.  A second position check after the first window
 render closes the race where history indexing completes during transcript DOM
 replacement.
+
+## v95
+
+- Find result counters now retain each match's absolute ordinal from the
+  beginning of the file, even when the initial result list is rotated to start
+  after the voice position.
+- Removed the Follow Speech checkbox from Transcript Settings.  Follow remains
+  controlled by the transcript overlay and the `=` / `Alt+=` shortcut.

@@ -2379,6 +2379,7 @@ function cancelFindSearch(updateStatus) {
 
 function normalizeFindMatch(match) {
   return {
+    fileOrdinal: Number(match.FileOrdinal ?? match.fileOrdinal ?? 0),
     recordNumber: Number(match.RecordNumber ?? match.recordNumber ?? 0),
     sourceId: String(match.SourceId ?? match.sourceId ?? ''),
     startWordIndex: Number(match.StartWordIndex ?? match.startWordIndex ?? -1),
@@ -2400,7 +2401,7 @@ async function showFindMatch(index, trigger = 'unknown') {
   const key = makeRecordKey(String(match.recordNumber), match.sourceId);
   const recordWords = displayWordsByRecord.get(key);
   if (!recordWords) {
-    findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
+    findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
     chrome.webview.postMessage({
       type:'window-request',
       recordNumber:match.recordNumber,
@@ -2431,7 +2432,7 @@ async function showFindMatch(index, trigger = 'unknown') {
   programmaticScrollUntil = performance.now() + 500;
   target.scrollIntoView({block:'center', behavior:'auto'});
   if (followSpeech) setFollowSpeech(false, true);
-  findCount.textContent = `${currentFindMatch + 1} of ${findMatches.length}`;
+  findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
   reportFind('navigated', {
     trigger,
     targetIndex: currentFindMatch,

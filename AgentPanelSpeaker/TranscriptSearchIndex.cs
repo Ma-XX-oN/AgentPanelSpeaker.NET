@@ -206,6 +206,7 @@ internal sealed class TranscriptSearchIndex
         }
       }
       result.Add(new TranscriptSearchMatch(
+        result.Count + 1,
         firstToken.RecordNumber,
         firstToken.SourceId,
         firstToken.RecordWordIndex,
@@ -406,6 +407,7 @@ internal sealed record TranscriptSearchRequest(
   bool VoicedOnly);
 
 internal sealed record TranscriptSearchMatch(
+  int FileOrdinal,
   int RecordNumber,
   string SourceId,
   int StartWordIndex,
