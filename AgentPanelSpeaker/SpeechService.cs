@@ -1048,12 +1048,38 @@ internal sealed class SpeechService : IDisposable
       }
       int absoluteCharacterPosition = checked(
         _activeCharacterBaseOffset + Math.Max(0, boundary.CharacterPosition));
-      _activeWordIndex = GetTokenIndexForBoundary(
+      if (boundary.CharacterCount == 0 &&
+          absoluteCharacterPosition >= _activeTranscriptText.Length)
+      {
+        DiagnosticLog.Write("speech.word_boundary_terminal_ignored", new
+        {
+          nodeId = _activeHistoryIndex >= 0 &&
+            _activeHistoryIndex < _history.Count
+              ? _history[_activeHistoryIndex].NodeId
+              : -1,
+          activeHistoryIndex = _activeHistoryIndex,
+          activeFragmentText = _activeTranscriptText,
+          boundary.WordIndex,
+          boundary.CharacterPosition,
+          boundary.CharacterCount,
+          boundary.Text,
+          boundary.AudioPosition,
+          characterBaseOffset = _activeCharacterBaseOffset,
+          absoluteCharacterPosition,
+          retainedWordIndex = _activeWordIndex
+        });
+        return;
+      }
+
+      int mappedWordIndex = GetTokenIndexForBoundary(
         _activeTranscriptText,
         absoluteCharacterPosition,
         boundary.CharacterCount,
         _activeWordBaseIndex + boundary.WordIndex);
-      _activeCharacterPosition = absoluteCharacterPosition;
+      _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);
+      _activeCharacterPosition = Math.Max(
+        _activeCharacterPosition,
+        absoluteCharacterPosition);
       _activeCharacterCount = Math.Max(0, boundary.CharacterCount);
       _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
       _activeWord = GetTokenAtIndex(
