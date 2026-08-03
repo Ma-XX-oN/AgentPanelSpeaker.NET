@@ -1,4 +1,11 @@
-# Agent Panel Speaker v98
+# Agent Panel Speaker v99
+
+
+## v99 search-corpus whitespace preservation
+
+- Search corpus construction now preserves whether rendered tokens were adjacent or separated by whitespace.
+- Punctuation is no longer separated from the preceding token by an invented space, so expressions such as `\d:` match timestamps and record headings correctly.
+- Whitespace between rendered tokens is normalized to one space; block boundaries remain newlines and record boundaries remain separate regex inputs.
 
 
 ## v98 Regex record boundaries and smooth Find navigation

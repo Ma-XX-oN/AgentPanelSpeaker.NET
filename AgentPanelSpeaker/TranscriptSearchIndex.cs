@@ -53,6 +53,8 @@ internal sealed class TranscriptSearchIndex
   {
     var tokens = new List<MutableToken>();
     var blockStack = new Stack<BlockContext>();
+    var blocksWithTokens = new HashSet<int>();
+    var blocksWithPendingWhitespace = new HashSet<int>();
     int nextBlockId = 0;
     int implicitBlockId = -1;
     int recordNumber = 0;
@@ -117,8 +119,13 @@ internal sealed class TranscriptSearchIndex
         blockId = implicitBlockId;
       }
 
+      int textCursor = 0;
+      bool pendingWhitespace = blocksWithPendingWhitespace.Remove(blockId);
       foreach (Match token in TokenRegex.Matches(text))
       {
+        string gap = text[textCursor..token.Index];
+        bool spaceBefore = blocksWithTokens.Contains(blockId) &&
+          (pendingWhitespace || gap.Any(char.IsWhiteSpace));
         int localIndex = tokens.Count == 0 ||
           tokens[^1].RecordNumber != recordNumber ||
           !string.Equals(tokens[^1].SourceId, sourceId, StringComparison.Ordinal)
@@ -130,7 +137,15 @@ internal sealed class TranscriptSearchIndex
           sourceId,
           blockId,
           tokens.Count,
-          localIndex));
+          localIndex,
+          spaceBefore));
+        blocksWithTokens.Add(blockId);
+        pendingWhitespace = false;
+        textCursor = token.Index + token.Length;
+      }
+      if (text[textCursor..].Any(char.IsWhiteSpace))
+      {
+        blocksWithPendingWhitespace.Add(blockId);
       }
     }
 
@@ -335,7 +350,14 @@ internal sealed class TranscriptSearchIndex
       {
         if (builder.Length != 0)
         {
-          builder.Append(previousBlockId == token.BlockId ? ' ' : '\n');
+          if (previousBlockId != token.BlockId)
+          {
+            builder.Append('\n');
+          }
+          else if (token.SpaceBefore)
+          {
+            builder.Append(' ');
+          }
         }
         int start = builder.Length;
         builder.Append(token.Text);
@@ -466,7 +488,8 @@ internal sealed class TranscriptSearchIndex
       string sourceId,
       int blockId,
       int renderedIndex,
-      int recordWordIndex)
+      int recordWordIndex,
+      bool spaceBefore)
     {
       Text = text;
       RecordNumber = recordNumber;
@@ -475,6 +498,7 @@ internal sealed class TranscriptSearchIndex
       BlockId = blockId;
       RenderedIndex = renderedIndex;
       RecordWordIndex = recordWordIndex;
+      SpaceBefore = spaceBefore;
     }
 
     public string Text { get; }
@@ -484,6 +508,7 @@ internal sealed class TranscriptSearchIndex
     public int BlockId { get; }
     public int RenderedIndex { get; }
     public int RecordWordIndex { get; }
+    public bool SpaceBefore { get; }
     public long NodeId { get; set; }
     public int NodeWordIndex { get; set; } = -1;
   }
