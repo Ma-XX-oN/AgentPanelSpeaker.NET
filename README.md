@@ -1450,18 +1450,9 @@ Windows message has completed.  This instrumentation is intended to identify
 why a popup background click does not focus the configured initial control.
 
 
-## v121 focused-control repaint
+## v123 containing-window repaint experiment
 
-After a popup-background click transfers focus to the popup node's initial
-control, the shared popup controller invalidates and synchronously repaints the
-control.  The `popup.focus_repainted` diagnostic records the control that was
-repainted.
-
-## v122 pre-show active-control experiment
-
-Before a hover/focus popup is made visible, its intended first enabled control is
-assigned to the popup container's `ActiveControl`.  After the popup is shown,
-the container is selected so WinForms activates that already-selected child.
-This replaces the previous sequence that first showed the popup and then called
-`Focus()` directly on the child control.  The existing popup-focus diagnostics
-remain enabled for comparison.
+Version 123 starts from v120.  After a popup-background click transfers focus
+to the popup's initial control, the shared popup controller invalidates the
+containing form and synchronously repaints it.  The repaint runs only when the
+popup is visible and logs `popup.containing_window_repainted`.

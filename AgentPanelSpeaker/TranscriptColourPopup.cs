@@ -124,15 +124,9 @@ internal sealed class TranscriptColourPopup : UserControl
     Invalidate(true);
   }
 
-  public void PrepareInitialControl()
-  {
-    ActiveControl = _wheel;
-  }
-
   public void FocusInitialControl()
   {
-    PrepareInitialControl();
-    Select();
+    _wheel.Focus();
   }
 
   public bool IsPointerInside()

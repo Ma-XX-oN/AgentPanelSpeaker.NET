@@ -181,15 +181,9 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     Invalidate(true);
   }
 
-  public void PrepareInitialControl()
-  {
-    ActiveControl = _queueCapacitySlider;
-  }
-
   public void FocusInitialControl()
   {
-    PrepareInitialControl();
-    Select();
+    _queueCapacitySlider.Focus();
   }
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)

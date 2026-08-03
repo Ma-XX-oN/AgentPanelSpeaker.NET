@@ -226,15 +226,9 @@ internal sealed class TranscriptSettingsPopup : UserControl
     Invalidate(true);
   }
 
-  public void PrepareInitialControl()
-  {
-    ActiveControl = _previousSwatch;
-  }
-
   public void FocusInitialControl()
   {
-    PrepareInitialControl();
-    Select();
+    _previousSwatch.Focus();
   }
 
   public bool IsPointerInside()
@@ -323,15 +317,11 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
     PositionColourPopup(popup);
-    if (focusPopup)
-    {
-      popup.PrepareInitialControl();
-    }
     popup.Visible = true;
     popup.BringToFront();
     if (focusPopup)
     {
-      popup.Select();
+      popup.FocusInitialControl();
     }
   }
 
@@ -406,15 +396,11 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.ApplyTheme(_dark);
     popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
     PositionAdvancedPopup(popup);
-    if (focusPopup)
-    {
-      popup.PrepareInitialControl();
-    }
     popup.Visible = true;
     popup.BringToFront();
     if (focusPopup)
     {
-      popup.Select();
+      popup.FocusInitialControl();
     }
   }
 

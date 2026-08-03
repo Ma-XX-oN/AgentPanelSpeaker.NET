@@ -106,17 +106,16 @@ internal sealed class SpeechProfilePopup : UserControl
   /// <summary>
   /// Focuses Rate normally, or Volume when the profile is muted.
   /// </summary>
-  public void PrepareInitialSlider()
-  {
-    ActiveControl = _ownerControl.Volume == 0
-      ? _volumeSlider
-      : _rateSlider;
-  }
-
   public void FocusInitialSlider()
   {
-    PrepareInitialSlider();
-    Select();
+    if (_ownerControl.Volume == 0)
+    {
+      _volumeSlider.Focus();
+    }
+    else
+    {
+      _rateSlider.Focus();
+    }
   }
 
   /// <summary>

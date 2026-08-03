@@ -608,16 +608,20 @@ internal sealed class HoverPopupController : IDisposable
 
     node.FocusInitialControl();
 
-    Control? focusedAfterAttempt = FindFocusedControl(form);
-    if (focusedAfterAttempt is { IsDisposed: false })
+    if (reason == "popup-background-click" &&
+        popup is { Visible: true } &&
+        form is { IsDisposed: false, IsHandleCreated: true })
     {
-      focusedAfterAttempt.Invalidate();
-      focusedAfterAttempt.Update();
-      DiagnosticLog.Write("popup.focus_repainted", new
+      form.Invalidate(invalidateChildren: true);
+      form.Update();
+      DiagnosticLog.Write("popup.containing_window_repainted", new
       {
         reason,
         node.Id,
-        control = DescribeControl(focusedAfterAttempt)
+        popup = DescribeControl(popup),
+        containingForm = DescribeControl(form),
+        activeControl = DescribeControl(form.ActiveControl),
+        focusedControl = DescribeControl(FindFocusedControl(form))
       });
     }
 
