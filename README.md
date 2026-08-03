@@ -1,7 +1,7 @@
-# Agent Panel Speaker v103
+# Agent Panel Speaker v104
 
 
-## v103 live-end waiting and live transcript reveal
+## v104 live-end waiting and live transcript reveal
 
 - Reaching the live end while monitoring no longer hides the end cursor.  The
   player remains unpaused, displays the flashing end marker, and waits for new

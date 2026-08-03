@@ -1641,13 +1641,16 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 .word.find-current { background: #d99b22; color: #111; }
 #live-end-marker {
   display: none;
-  max-width: 1050px;
-  margin-left: auto;
-  margin-right: auto;
-  width: 1em;
-  height: .72em;
-  margin-top: .25em;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: min(1050px, calc(100vw - 48px));
+  min-height: 1.2em;
+  margin: .5em auto 1em;
+  padding: .25em .65em;
   border: 2px solid var(--highlight);
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
   animation: marker-blink 1s steps(1, end) infinite;
 }
 @keyframes marker-blink { 50% { opacity: .2; } }
@@ -1677,7 +1680,7 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 <div id="view-voice-overlay" aria-label="Transcript follow control">
   <button type="button" id="follow-toggle" class="view-voice-button" title="Toggle follow speech (=)">👁️ = 👄</button>
 </div>
-<div id="live-end-marker" aria-label="Next text position"></div>
+<div id="live-end-marker" aria-label="End of transcript status" aria-live="polite"></div>
 <script nonce="agent-panel-speaker">
 const transcript = document.getElementById('transcript');
 const liveEndMarker = document.getElementById('live-end-marker');
@@ -2330,6 +2333,9 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   }
   if (state === 'waiting-end' || state === 'paused-end') {
     retireCurrentWord(true);
+    liveEndMarker.textContent = state === 'waiting-end'
+      ? 'Waiting for new text...'
+      : 'Press play to wait for more text.';
     liveEndMarker.style.display = 'block';
     reveal(liveEndMarker);
     return;
@@ -2683,6 +2689,7 @@ async function seekCurrentOrNextVoiced(trigger) {
       clearFindHighlights();
       currentFindMatch = findMatches.length - 1;
       findCount.textContent = 'End';
+      liveEndMarker.textContent = 'Press play to wait for more text.';
       liveEndMarker.style.display = 'block';
       programmaticScrollUntil = performance.now() + 1500;
       liveEndMarker.scrollIntoView({block:'center', behavior:'smooth'});
