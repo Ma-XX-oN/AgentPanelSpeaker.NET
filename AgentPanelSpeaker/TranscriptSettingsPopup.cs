@@ -370,26 +370,25 @@ internal sealed class TranscriptSettingsPopup : UserControl
       return;
     }
 
-    bool hadFocus = _colourPopup?.ContainsFocus ?? false;
-    CloseColourPopup(returnFocus: hadFocus, suppressHoverUntilLeave: false);
-    _suppressColourHoverUntilLeave = true;
-
+    // The colour picker and transcript settings form one composite popup.
+    // Crossing from the picker into the settings panel must not close it.
     if (IsPointerInside())
     {
       PointerEntered?.Invoke(this, EventArgs.Empty);
+      return;
     }
-    else
-    {
-      PointerLeft?.Invoke(this, EventArgs.Empty);
-    }
+
+    bool hadFocus = _colourPopup?.ContainsFocus ?? false;
+    CloseColourPopup(returnFocus: hadFocus, suppressHoverUntilLeave: false);
+    PointerLeft?.Invoke(this, EventArgs.Empty);
   }
 
   private void CurrentSwatchMouseEnter(object? sender, EventArgs eventArgs)
   {
-    if (!_suppressColourHoverUntilLeave)
-    {
-      _colourOpenTimer.Start();
-    }
+    // A prior close must never consume the next deliberate hover.
+    _suppressColourHoverUntilLeave = false;
+    _colourOpenTimer.Stop();
+    _colourOpenTimer.Start();
   }
 
   private void CurrentSwatchMouseLeave(object? sender, EventArgs eventArgs)
