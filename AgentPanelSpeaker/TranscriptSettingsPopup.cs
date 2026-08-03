@@ -17,7 +17,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private readonly Label _queueCapacityValue = new();
   private readonly System.Windows.Forms.Timer _colourOpenTimer = new();
   private readonly System.Windows.Forms.Timer _colourNotificationTimer = new();
-  private readonly System.Windows.Forms.Timer _parentCloseSuppressionTimer = new();
   private TranscriptColourPopup? _colourPopup;
   private Color _previousColour;
   private Color _currentColour;
@@ -25,8 +24,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private bool _updating;
   private bool _suppressColourHoverUntilLeave;
   private bool _colourNotificationPending;
-  private bool _parentCloseSuppressed;
-  private bool _returnedToColourAnchor;
 
   public TranscriptSettingsPopup()
   {
@@ -136,15 +133,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
       _colourNotificationTimer.Stop();
       PublishPendingColourChange();
     };
-    _parentCloseSuppressionTimer.Interval = 3000;
-    _parentCloseSuppressionTimer.Tick += (_, _) =>
-    {
-      _parentCloseSuppressionTimer.Stop();
-      _parentCloseSuppressed = false;
-      _returnedToColourAnchor = false;
-      ParentAutoCloseRequested?.Invoke(this, EventArgs.Empty);
-    };
-
     Paint += PaintBorder;
     WireHoverEvents(this);
     WireBackgroundFocus(this);
@@ -155,7 +143,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public event EventHandler<FocusTraversalRequestedEventArgs>?
     FocusTraversalRequested;
   public event EventHandler? DismissRequested;
-  public event EventHandler? ParentAutoCloseRequested;
   public event EventHandler? PointerEntered;
   public event EventHandler? PointerLeft;
 
@@ -164,8 +151,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     TranscriptSettings.Default;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-  public bool SuppressesParentAutoClose =>
-    _parentCloseSuppressed || IsColourPopupVisible;
+  public bool SuppressesParentAutoClose => IsColourPopupVisible;
 
   private bool IsColourPopupVisible =>
     _colourPopup is { IsDisposed: false, Visible: true };
@@ -207,9 +193,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   {
     _colourOpenTimer.Stop();
     FlushPendingColourChange();
-    _parentCloseSuppressionTimer.Stop();
-    _parentCloseSuppressed = false;
-    _returnedToColourAnchor = false;
     CloseColourPopup(returnFocus: false, suppressHoverUntilLeave: false);
   }
 
@@ -256,7 +239,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       _colourOpenTimer.Dispose();
       _colourNotificationTimer.Dispose();
-      _parentCloseSuppressionTimer.Dispose();
       _colourPopup?.Dispose();
     }
     base.Dispose(disposing);
@@ -303,8 +285,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   {
     _colourOpenTimer.Stop();
     _suppressColourHoverUntilLeave = false;
-    _parentCloseSuppressionTimer.Stop();
-    _parentCloseSuppressed = false;
     TranscriptColourPopup popup = GetOrCreateColourPopup();
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
@@ -389,21 +369,23 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       return;
     }
+
     bool hadFocus = _colourPopup?.ContainsFocus ?? false;
     CloseColourPopup(returnFocus: hadFocus, suppressHoverUntilLeave: false);
     _suppressColourHoverUntilLeave = true;
-    _parentCloseSuppressed = true;
-    _returnedToColourAnchor = false;
-    _parentCloseSuppressionTimer.Stop();
-    _parentCloseSuppressionTimer.Start();
+
+    if (IsPointerInside())
+    {
+      PointerEntered?.Invoke(this, EventArgs.Empty);
+    }
+    else
+    {
+      PointerLeft?.Invoke(this, EventArgs.Empty);
+    }
   }
 
   private void CurrentSwatchMouseEnter(object? sender, EventArgs eventArgs)
   {
-    if (_parentCloseSuppressed)
-    {
-      _returnedToColourAnchor = true;
-    }
     if (!_suppressColourHoverUntilLeave)
     {
       _colourOpenTimer.Start();
@@ -414,13 +396,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
   {
     _colourOpenTimer.Stop();
     _suppressColourHoverUntilLeave = false;
-    if (_parentCloseSuppressed && _returnedToColourAnchor)
-    {
-      _parentCloseSuppressionTimer.Stop();
-      _parentCloseSuppressed = false;
-      _returnedToColourAnchor = false;
-      ParentAutoCloseRequested?.Invoke(this, EventArgs.Empty);
-    }
   }
 
   private void RestorePreviousColour()

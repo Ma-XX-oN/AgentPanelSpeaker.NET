@@ -468,10 +468,6 @@ internal sealed class MainForm : Form, IMessageFilter
       HideTranscriptSettingsPopup(
         returnFocus: true,
         suppressHoverUntilLeave: true);
-    _transcriptSettingsPopup.ParentAutoCloseRequested += (_, _) =>
-      HideTranscriptSettingsPopup(
-        returnFocus: false,
-        suppressHoverUntilLeave: true);
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
     _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
