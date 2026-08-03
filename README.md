@@ -1377,3 +1377,13 @@ combined anchor/popup region, cancels that close on re-entry, and closes
 immediately on the control's existing Escape path.  Transcript Settings, its
 nested colour picker, and every speech-profile editor use this controller;
 their former copied suppression flags and timer state machines were removed.
+
+
+## v113 advanced transcript setting
+
+The highlight-buffer capacity is no longer shown as an unexplained numeric row
+in the compact Transcript Settings popup.  An `Advanced >` hover/focus control
+opens a larger popup using the shared `HoverPopupController`.  The advanced
+popup provides a visible explanation of the latency-versus-intermediate-motion
+tradeoff and an accessible 1–16 slider.  A value of 1 is labelled as the
+recommended latest-only behaviour.

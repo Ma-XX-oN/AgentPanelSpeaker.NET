@@ -149,7 +149,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v104";
+    Text = "Agent Panel Speaker v113";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2366,9 +2366,9 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
-      if (_transcriptSettingsPopup.IsColourPopupOpen)
+      if (_transcriptSettingsPopup.IsNestedPopupOpen)
       {
-        _transcriptSettingsPopup.CloseColourPopupFromDismissKey();
+        _transcriptSettingsPopup.CloseNestedPopupFromDismissKey();
         return true;
       }
       if (_transcriptSettingsPopup.Visible)

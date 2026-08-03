@@ -3,7 +3,7 @@ using System.ComponentModel;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Edits transcript colour, fade, tracking, and queue settings.
+/// Edits common and advanced transcript display settings.
 /// </summary>
 internal sealed class TranscriptSettingsPopup : UserControl
 {
@@ -13,16 +13,17 @@ internal sealed class TranscriptSettingsPopup : UserControl
   private readonly Label _fadeValue = new();
   private readonly TrackBar _trackingSlider = new();
   private readonly Label _trackingValue = new();
-  private readonly NumericUpDown _queueCapacityNumeric = new();
-  private readonly Label _queueCapacityValue = new();
+  private readonly Button _advancedButton = new();
   private readonly System.Windows.Forms.Timer _colourNotificationTimer = new();
   private TranscriptColourPopup? _colourPopup;
+  private TranscriptAdvancedSettingsPopup? _advancedPopup;
   private Color _previousColour;
   private Color _currentColour;
   private bool _dark;
   private bool _updating;
   private bool _colourNotificationPending;
   private readonly HoverPopupController _colourHoverController;
+  private readonly HoverPopupController _advancedHoverController;
 
   public TranscriptSettingsPopup()
   {
@@ -57,14 +58,13 @@ internal sealed class TranscriptSettingsPopup : UserControl
     _trackingSlider.TabIndex = 3;
     ConfigureValueLabel(_trackingValue);
 
-    _queueCapacityNumeric.Minimum = 1;
-    _queueCapacityNumeric.Maximum = 16;
-    _queueCapacityNumeric.Value = 1;
-    _queueCapacityNumeric.Dock = DockStyle.Fill;
-    _queueCapacityNumeric.TextAlign = HorizontalAlignment.Right;
-    _queueCapacityNumeric.TabIndex = 4;
-    ConfigureValueLabel(_queueCapacityValue);
-    _queueCapacityValue.Text = "positions";
+    _advancedButton.AutoSize = false;
+    _advancedButton.Dock = DockStyle.Left;
+    _advancedButton.Size = new Size(104, 28);
+    _advancedButton.Text = "Advanced >";
+    _advancedButton.TextAlign = ContentAlignment.MiddleLeft;
+    _advancedButton.TabIndex = 4;
+    _advancedButton.AccessibleName = "Advanced transcript settings";
 
     var swatchLayout = new FlowLayoutPanel
     {
@@ -101,18 +101,13 @@ internal sealed class TranscriptSettingsPopup : UserControl
     layout.SetColumnSpan(swatchLayout, 3);
     AddSliderRow(layout, 2, "Fade Duration", _fadeSlider, _fadeValue);
     AddSliderRow(layout, 3, "Tracking Update", _trackingSlider, _trackingValue);
-    AddSliderRow(
-      layout,
-      4,
-      "Highlight Queue",
-      _queueCapacityNumeric,
-      _queueCapacityValue);
+    layout.Controls.Add(_advancedButton, 0, 4);
+    layout.SetColumnSpan(_advancedButton, 3);
     Controls.Add(layout);
 
     _previousSwatch.Click += (_, _) => RestorePreviousColour();
     _fadeSlider.ValueChanged += ValueChanged;
     _trackingSlider.ValueChanged += ValueChanged;
-    _queueCapacityNumeric.ValueChanged += ValueChanged;
 
     _colourNotificationTimer.Interval = 75;
     _colourNotificationTimer.Tick += (_, _) =>
@@ -127,6 +122,13 @@ internal sealed class TranscriptSettingsPopup : UserControl
       CloseColourPopupCore);
     _currentSwatch.Click += (_, _) =>
       _colourHoverController.OpenImmediately(focusPopup: true);
+    _advancedHoverController = new HoverPopupController(
+      _advancedButton,
+      GetVisibleAdvancedPopupControls,
+      ShowAdvancedPopupCore,
+      CloseAdvancedPopupCore);
+    _advancedButton.Click += (_, _) =>
+      _advancedHoverController.OpenImmediately(focusPopup: true);
 
     Paint += PaintBorder;
     WireBackgroundFocus(this);
@@ -158,10 +160,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
         Settings.HighlightUpdateMilliseconds / 5,
         1,
         8);
-      _queueCapacityNumeric.Value = Math.Clamp(
-        Settings.HighlightQueueCapacity,
-        1,
-        16);
+      if (_advancedPopup is { IsDisposed: false } advancedPopup)
+      {
+        advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);
+      }
       UpdateDisplays();
     }
     finally
@@ -183,10 +185,25 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public bool IsColourPopupOpen => _colourHoverController.IsOpen;
 
   /// <summary>
+  /// Gets whether the nested advanced popup is currently open.
+  /// </summary>
+  public bool IsAdvancedPopupOpen => _advancedHoverController.IsOpen;
+
+  /// <summary>
+  /// Gets whether any nested transcript-settings popup is open.
+  /// </summary>
+  public bool IsNestedPopupOpen => IsColourPopupOpen || IsAdvancedPopupOpen;
+
+  /// <summary>
   /// Closes only the nested colour editor.
   /// </summary>
-  public void CloseColourPopupFromDismissKey()
+  public void CloseNestedPopupFromDismissKey()
   {
+    if (_advancedHoverController.IsOpen)
+    {
+      _advancedHoverController.Close(returnFocus: true);
+      return;
+    }
     _colourHoverController.Close(returnFocus: true);
   }
 
@@ -194,6 +211,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   {
     FlushPendingColourChange();
     _colourHoverController.Close(returnFocus: false);
+    _advancedHoverController.Close(returnFocus: false);
   }
 
   public void ApplyTheme(bool dark)
@@ -212,6 +230,11 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       colourPopup.ApplyTheme(dark);
       colourPopup.SetColours(_currentColour, _previousColour);
+    }
+    if (_advancedPopup is { IsDisposed: false } advancedPopup)
+    {
+      advancedPopup.ApplyTheme(dark);
+      advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);
     }
     UpdateDisplays();
     Invalidate(true);
@@ -234,6 +257,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       yield return popup;
     }
+    if (_advancedPopup is { IsDisposed: false, Visible: true } advancedPopup)
+    {
+      yield return advancedPopup;
+    }
   }
 
   protected override void Dispose(bool disposing)
@@ -241,8 +268,10 @@ internal sealed class TranscriptSettingsPopup : UserControl
     if (disposing)
     {
       _colourHoverController.Dispose();
+      _advancedHoverController.Dispose();
       _colourNotificationTimer.Dispose();
       _colourPopup?.Dispose();
+      _advancedPopup?.Dispose();
     }
     base.Dispose(disposing);
   }
@@ -264,9 +293,9 @@ internal sealed class TranscriptSettingsPopup : UserControl
     }
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
-      if (_colourHoverController.IsOpen)
+      if (IsNestedPopupOpen)
       {
-        _colourHoverController.Close(returnFocus: true);
+        CloseNestedPopupFromDismissKey();
       }
       else
       {
@@ -274,7 +303,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       }
       return true;
     }
-    if (keyData == Keys.Tab && _queueCapacityNumeric.ContainsFocus)
+    if (keyData == Keys.Tab && _advancedButton.ContainsFocus)
     {
       FocusTraversalRequested?.Invoke(
         this,
@@ -293,6 +322,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void ShowColourPopupCore(bool focusPopup)
   {
+    _advancedHoverController.Close(returnFocus: false);
     TranscriptColourPopup popup = GetOrCreateColourPopup();
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
@@ -373,6 +403,95 @@ internal sealed class TranscriptSettingsPopup : UserControl
     }
   }
 
+  private void ShowAdvancedPopupCore(bool focusPopup)
+  {
+    _colourHoverController.Close(returnFocus: false);
+    TranscriptAdvancedSettingsPopup popup = GetOrCreateAdvancedPopup();
+    popup.ApplyTheme(_dark);
+    popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
+    PositionAdvancedPopup(popup);
+    popup.Visible = true;
+    popup.BringToFront();
+    HoverRegionChanged?.Invoke(this, EventArgs.Empty);
+    _advancedHoverController.RefreshPopupControls();
+    if (focusPopup)
+    {
+      popup.FocusInitialControl();
+    }
+  }
+
+  private TranscriptAdvancedSettingsPopup GetOrCreateAdvancedPopup()
+  {
+    if (_advancedPopup is { IsDisposed: false } existing)
+    {
+      return existing;
+    }
+
+    Form owner = FindForm() ?? throw new InvalidOperationException(
+      "Transcript settings are not attached to a form.");
+    var popup = new TranscriptAdvancedSettingsPopup();
+    popup.ValueChanged += (_, _) =>
+    {
+      Settings = (Settings with
+      {
+        HighlightQueueCapacity = popup.QueueCapacity
+      }).Normalize();
+      SettingsChanged?.Invoke(this, EventArgs.Empty);
+    };
+    popup.DismissRequested += (_, _) =>
+      _advancedHoverController.Close(returnFocus: true);
+    _advancedPopup = popup;
+    owner.Controls.Add(popup);
+    return popup;
+  }
+
+  private void PositionAdvancedPopup(TranscriptAdvancedSettingsPopup popup)
+  {
+    Form? owner = FindForm();
+    if (owner is null)
+    {
+      return;
+    }
+
+    Point anchorScreen = _advancedButton.PointToScreen(Point.Empty);
+    Rectangle ownerBounds = owner.RectangleToScreen(owner.ClientRectangle);
+    int x = Math.Clamp(
+      anchorScreen.X,
+      ownerBounds.Left,
+      Math.Max(ownerBounds.Left, ownerBounds.Right - popup.Width));
+    int preferredY = _advancedButton.PointToScreen(
+      new Point(0, _advancedButton.Height + 2)).Y;
+    int y = preferredY + popup.Height <= ownerBounds.Bottom
+      ? preferredY
+      : anchorScreen.Y - popup.Height - 2;
+    y = Math.Clamp(
+      y,
+      ownerBounds.Top,
+      Math.Max(ownerBounds.Top, ownerBounds.Bottom - popup.Height));
+    popup.Location = owner.PointToClient(new Point(x, y));
+  }
+
+  private void CloseAdvancedPopupCore(bool returnFocus)
+  {
+    if (_advancedPopup is { IsDisposed: false } popup)
+    {
+      popup.Visible = false;
+    }
+    HoverRegionChanged?.Invoke(this, EventArgs.Empty);
+    if (returnFocus && _advancedButton.CanFocus)
+    {
+      _advancedButton.Focus();
+    }
+  }
+
+  private IEnumerable<Control> GetVisibleAdvancedPopupControls()
+  {
+    if (_advancedPopup is { IsDisposed: false, Visible: true } popup)
+    {
+      yield return popup;
+    }
+  }
+
   private void RestorePreviousColour()
   {
     Color current = _currentColour;
@@ -393,7 +512,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       FadeMilliseconds = FadeMillisecondsFromStep(_fadeSlider.Value),
       HighlightUpdateMilliseconds = _trackingSlider.Value * 5,
-      HighlightQueueCapacity = Decimal.ToInt32(_queueCapacityNumeric.Value)
+      HighlightQueueCapacity = Settings.HighlightQueueCapacity
     }).Normalize();
     UpdateDisplays();
     if (_colourPopup is { IsDisposed: false, Visible: true } popup)
