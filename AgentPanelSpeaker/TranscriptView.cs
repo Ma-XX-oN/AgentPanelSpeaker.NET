@@ -44,6 +44,19 @@ internal sealed class TranscriptView : UserControl
   private int _windowStartIndex = -1;
   private int _windowEndIndex = -1;
   private CancellationTokenSource? _findCancellation;
+  private PendingFindRequest? _pendingFindRequest;
+
+  private sealed record PendingFindRequest(
+    long RequestId,
+    string Query,
+    bool CaseEnabled,
+    bool WordEnabled,
+    bool RegexEnabled,
+    bool VoicedEnabled,
+    bool HasSelectionOrigin,
+    int OriginRecordNumber,
+    string OriginSourceId,
+    int OriginWordIndex);
 
   /// <summary>
   /// Initializes the embedded renderer and live-file refresh timer.
@@ -566,6 +579,7 @@ internal sealed class TranscriptView : UserControl
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
       _searchIndex = payload.SearchIndex;
+      StartPendingFindRequest();
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
       HideLoading();
@@ -720,7 +734,7 @@ internal sealed class TranscriptView : UserControl
       }
       if (type == "find-query")
       {
-        _ = HandleFindQueryAsync(root);
+        HandleFindQuery(root);
         return;
       }
       if (type == "find-cancel")
@@ -876,31 +890,75 @@ internal sealed class TranscriptView : UserControl
     }
   }
 
-  private async Task HandleFindQueryAsync(JsonElement root)
+  private void HandleFindQuery(JsonElement root)
   {
-    TranscriptSearchIndex? index = _searchIndex;
     long? requestId = ReadOptionalInt64(root, "requestId");
     string query = ReadOptionalString(root, "query");
-    if (index is null || requestId is not long validRequestId || query.Length == 0)
+    if (requestId is not long validRequestId || query.Length == 0)
     {
       return;
     }
 
+    var request = new PendingFindRequest(
+      validRequestId,
+      query,
+      ReadOptionalBoolean(root, "caseEnabled") == true,
+      ReadOptionalBoolean(root, "wordEnabled") == true,
+      ReadOptionalBoolean(root, "regexEnabled") == true,
+      ReadOptionalBoolean(root, "voicedEnabled") != false,
+      string.Equals(
+        ReadOptionalString(root, "originKind"),
+        "selection",
+        StringComparison.Ordinal),
+      ReadOptionalInt32(root, "originRecordNumber") ?? 0,
+      ReadOptionalString(root, "originSourceId"),
+      ReadOptionalInt32(root, "originWordIndex") ?? -1);
+
+    CancelFindSearch();
+    _pendingFindRequest = request;
+    if (_searchIndex is null)
+    {
+      PostMessage(new
+      {
+        type = "find-waiting",
+        requestId = request.RequestId
+      });
+      DiagnosticLog.Write("transcript.find_waiting_for_index", new
+      {
+        requestId = request.RequestId,
+        request.Query
+      });
+      return;
+    }
+
+    StartPendingFindRequest();
+  }
+
+  private void StartPendingFindRequest()
+  {
+    PendingFindRequest? request = _pendingFindRequest;
+    TranscriptSearchIndex? index = _searchIndex;
+    if (request is null || index is null)
+    {
+      return;
+    }
+
+    _pendingFindRequest = null;
+    _ = ExecuteFindQueryAsync(index, request);
+  }
+
+  private async Task ExecuteFindQueryAsync(
+    TranscriptSearchIndex index,
+    PendingFindRequest pending)
+  {
     CancelFindSearch();
     var cancellation = new CancellationTokenSource();
     _findCancellation = cancellation;
-    bool caseEnabled = ReadOptionalBoolean(root, "caseEnabled") == true;
-    bool wordEnabled = ReadOptionalBoolean(root, "wordEnabled") == true;
-    bool regexEnabled = ReadOptionalBoolean(root, "regexEnabled") == true;
-    bool voicedEnabled = ReadOptionalBoolean(root, "voicedEnabled") != false;
-    bool hasSelectionOrigin = string.Equals(
-      ReadOptionalString(root, "originKind"),
-      "selection",
-      StringComparison.Ordinal);
-    int originRecordNumber = ReadOptionalInt32(root, "originRecordNumber") ?? 0;
-    string originSourceId = ReadOptionalString(root, "originSourceId");
-    int originWordIndex = ReadOptionalInt32(root, "originWordIndex") ?? -1;
-    if (!hasSelectionOrigin &&
+
+    int originRecordNumber = pending.OriginRecordNumber;
+    string originSourceId = pending.OriginSourceId;
+    int originWordIndex = pending.OriginWordIndex;
+    if (!pending.HasSelectionOrigin &&
         _pendingPosition is TranscriptPlaybackPosition voicePosition &&
         index.TryResolveVoiceOrigin(
           voicePosition.NodeId,
@@ -913,13 +971,19 @@ internal sealed class TranscriptView : UserControl
       originSourceId = voiceSourceId;
       originWordIndex = voiceRecordWordIndex;
     }
+
     var request = new TranscriptSearchRequest(
-      validRequestId,
-      query,
-      caseEnabled,
-      wordEnabled,
-      regexEnabled,
-      voicedEnabled);
+      pending.RequestId,
+      pending.Query,
+      pending.CaseEnabled,
+      pending.WordEnabled,
+      pending.RegexEnabled,
+      pending.VoicedEnabled);
+    PostMessage(new
+    {
+      type = "find-started",
+      requestId = pending.RequestId
+    });
     var timer = Stopwatch.StartNew();
     try
     {
@@ -939,17 +1003,17 @@ internal sealed class TranscriptView : UserControl
       PostMessage(new
       {
         type = "find-results",
-        requestId = validRequestId,
+        requestId = pending.RequestId,
         matches,
         elapsedMilliseconds = timer.ElapsedMilliseconds
       });
       DiagnosticLog.Write("transcript.find_csharp_completed", new
       {
-        requestId = validRequestId,
-        query,
+        requestId = pending.RequestId,
+        query = pending.Query,
         request.Regex,
         request.VoicedOnly,
-        originKind = hasSelectionOrigin ? "selection" : "voice",
+        originKind = pending.HasSelectionOrigin ? "selection" : "voice",
         originRecordNumber,
         originSourceId,
         originWordIndex,
@@ -961,7 +1025,7 @@ internal sealed class TranscriptView : UserControl
     {
       DiagnosticLog.Write("transcript.find_csharp_cancelled", new
       {
-        requestId = validRequestId,
+        requestId = pending.RequestId,
         elapsedMilliseconds = timer.ElapsedMilliseconds
       });
     }
@@ -970,7 +1034,7 @@ internal sealed class TranscriptView : UserControl
       PostMessage(new
       {
         type = "find-error",
-        requestId = validRequestId,
+        requestId = pending.RequestId,
         errorKind = "regex",
         error = exception.Message
       });
@@ -980,14 +1044,14 @@ internal sealed class TranscriptView : UserControl
       PostMessage(new
       {
         type = "find-error",
-        requestId = validRequestId,
+        requestId = pending.RequestId,
         errorKind = "search",
         error = exception.Message
       });
       DiagnosticLog.Write("transcript.find_csharp_failed", new
       {
-        requestId = validRequestId,
-        query,
+        requestId = pending.RequestId,
+        query = pending.Query,
         request.Regex,
         exception = exception.ToString()
       });
@@ -1037,6 +1101,7 @@ internal sealed class TranscriptView : UserControl
 
   private void CancelFindSearch()
   {
+    _pendingFindRequest = null;
     CancellationTokenSource? cancellation = _findCancellation;
     _findCancellation = null;
     cancellation?.Cancel();
@@ -1116,6 +1181,7 @@ internal sealed class TranscriptView : UserControl
       ',' => Keys.Oemcomma,
       '.' => Keys.OemPeriod,
       '/' => Keys.OemQuestion,
+      '=' => Keys.Oemplus,
       _ => Keys.None
     };
   }
@@ -2373,6 +2439,18 @@ async function showFindMatch(index, trigger = 'unknown') {
   });
 }
 
+function startFindSlowTimer(requestId) {
+  if (!findSearchPending || requestId !== findGeneration) return;
+  if (findSlowTimer) clearTimeout(findSlowTimer);
+  findSlowTimer = setTimeout(() => {
+    if (!findSearchPending || requestId !== findGeneration) return;
+    reportFind('slow-prompt');
+    if (!confirm('The search is still running. Continue waiting?')) {
+      cancelFindSearch(true);
+    }
+  }, 5000);
+}
+
 function applyCSharpFindResults(data) {
   const requestId = Number(data.requestId ?? data.RequestId ?? 0);
   if (!findSearchPending || requestId !== findGeneration) return;
@@ -2452,13 +2530,6 @@ function runFind() {
     originSourceId:origin.sourceId,
     originWordIndex:origin.wordIndex
   });
-  findSlowTimer = setTimeout(() => {
-    if (!findSearchPending || requestId !== findGeneration) return;
-    reportFind('slow-prompt');
-    if (!confirm('The search is still running. Continue waiting?')) {
-      cancelFindSearch(true);
-    }
-  }, 5000);
 }
 
 function focusFindInput() {
@@ -2631,6 +2702,21 @@ window.addEventListener('scroll', () => {
 chrome.webview.addEventListener('message', event => {
   const data = event.data;
   if (!data) return;
+  if (data.type === 'find-waiting') {
+    const requestId = Number(data.requestId ?? data.RequestId ?? 0);
+    if (!findSearchPending || requestId !== findGeneration) return;
+    findCount.textContent = 'Waiting for transcript…';
+    reportFind('waiting-for-index');
+    return;
+  }
+  if (data.type === 'find-started') {
+    const requestId = Number(data.requestId ?? data.RequestId ?? 0);
+    if (!findSearchPending || requestId !== findGeneration) return;
+    findCount.textContent = 'Searching…';
+    startFindSlowTimer(requestId);
+    reportFind('search-started');
+    return;
+  }
   if (data.type === 'find-results') {
     applyCSharpFindResults(data);
     return;

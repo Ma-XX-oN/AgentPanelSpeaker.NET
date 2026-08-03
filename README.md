@@ -1,4 +1,15 @@
-# Agent Panel Speaker v92
+# Agent Panel Speaker v93
+
+
+## v93 Find readiness and follow shortcut
+
+- Find requests received before transcript indexing completes are retained and
+  run when the index becomes available.
+- Waiting for the index does not count toward the five-second active-search
+  warning timer.
+- The latest pending query replaces any earlier pending query.
+- `=` and `Alt+=` are routed through the same WebView2 transport-key path as
+  `K` and `Alt+K`.
 
 A new search now resolves its no-selection origin from the authoritative C#
 playback marker.  It no longer depends on the voice word being present in the
@@ -6,7 +17,7 @@ currently virtualized WebView window.
 
 
 
-## v92 Single-owner monitor startup
+## v93 Single-owner monitor startup
 
 - The selected session's paused history snapshot is retained by `MainForm`.
 - Starting monitoring passes that exact snapshot to `JsonlSessionMonitor`.
