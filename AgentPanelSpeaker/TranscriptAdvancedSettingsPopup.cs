@@ -20,7 +20,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
   public TranscriptAdvancedSettingsPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(540, 244);
+    Width = 540;
     TabStop = false;
     Visible = false;
 
@@ -115,9 +115,27 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+    Size descriptionSize = TextRenderer.MeasureText(
+      BufferingDescription,
+      description.Font,
+      new Size(Width - layout.Padding.Horizontal, int.MaxValue),
+      TextFormatFlags.TextBoxControl |
+      TextFormatFlags.WordBreak |
+      TextFormatFlags.NoPadding);
+    int descriptionHeight = descriptionSize.Height + 6;
+
+    layout.RowStyles.Add(new RowStyle(
+      SizeType.Absolute,
+      descriptionHeight));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+    Height = layout.Padding.Vertical +
+      28 +
+      28 +
+      descriptionHeight +
+      42 +
+      24 +
+      2;
     layout.Controls.Add(title, 0, 0);
     layout.Controls.Add(settingTitle, 0, 1);
     layout.Controls.Add(description, 0, 2);

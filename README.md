@@ -1387,3 +1387,7 @@ opens a larger popup using the shared `HoverPopupController`.  The advanced
 popup provides a visible explanation of the latency-versus-intermediate-motion
 tradeoff and an accessible 1–16 slider.  A value of 1 is labelled as the
 recommended latest-only behaviour.
+
+## v114 advanced-description sizing
+
+The Advanced Transcript Settings popup now measures the wrapped highlight-buffering explanation at the popup's actual content width and derives the description row and popup height from that result.  The explanation is no longer constrained to a fixed 82-pixel row.
