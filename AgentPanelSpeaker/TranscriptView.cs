@@ -889,22 +889,26 @@ internal sealed class TranscriptView : UserControl
     CancelFindSearch();
     var cancellation = new CancellationTokenSource();
     _findCancellation = cancellation;
+    bool caseEnabled = ReadOptionalBoolean(root, "caseEnabled") == true;
+    bool wordEnabled = ReadOptionalBoolean(root, "wordEnabled") == true;
+    bool regexEnabled = ReadOptionalBoolean(root, "regexEnabled") == true;
+    bool voicedEnabled = ReadOptionalBoolean(root, "voicedEnabled") != false;
+    int originRecordNumber = ReadOptionalInt32(root, "originRecordNumber") ?? 0;
+    string originSourceId = ReadOptionalString(root, "originSourceId");
+    int originWordIndex = ReadOptionalInt32(root, "originWordIndex") ?? -1;
     var request = new TranscriptSearchRequest(
       validRequestId,
       query,
-      ReadOptionalBoolean(root, "caseEnabled") == true,
-      ReadOptionalBoolean(root, "wordEnabled") == true,
-      ReadOptionalBoolean(root, "regexEnabled") == true,
-      ReadOptionalBoolean(root, "voicedEnabled") != false);
+      caseEnabled,
+      wordEnabled,
+      regexEnabled,
+      voicedEnabled);
     var timer = Stopwatch.StartNew();
     try
     {
       IReadOnlyList<TranscriptSearchMatch> matches = await index.SearchAsync(
         request,
         cancellation.Token);
-      int originRecordNumber = ReadOptionalInt32(root, "originRecordNumber") ?? 0;
-      string originSourceId = ReadOptionalString(root, "originSourceId");
-      int originWordIndex = ReadOptionalInt32(root, "originWordIndex") ?? -1;
       matches = RotateMatchesAfterOrigin(
         matches,
         originRecordNumber,
@@ -940,14 +944,31 @@ internal sealed class TranscriptView : UserControl
         elapsedMilliseconds = timer.ElapsedMilliseconds
       });
     }
-    catch (Exception exception) when (
-      exception is ArgumentException or InvalidOperationException)
+    catch (ArgumentException exception) when (request.Regex)
     {
       PostMessage(new
       {
         type = "find-error",
         requestId = validRequestId,
+        errorKind = "regex",
         error = exception.Message
+      });
+    }
+    catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+    {
+      PostMessage(new
+      {
+        type = "find-error",
+        requestId = validRequestId,
+        errorKind = "search",
+        error = exception.Message
+      });
+      DiagnosticLog.Write("transcript.find_csharp_failed", new
+      {
+        requestId = validRequestId,
+        query,
+        request.Regex,
+        exception = exception.ToString()
       });
     }
     finally
@@ -2612,9 +2633,12 @@ chrome.webview.addEventListener('message', event => {
     findSearchPending = false;
     if (findSlowTimer) clearTimeout(findSlowTimer);
     findSlowTimer = 0;
-    findCount.textContent = 'Invalid regex';
+    const errorKind = data.errorKind ?? data.ErrorKind ?? 'search';
+    const errorText = data.error ?? data.Error ?? '';
+    findCount.textContent = errorKind === 'regex' ? 'Invalid regex' : 'Search failed';
+    findCount.title = errorText;
     updateFindNavigationState();
-    reportFind('invalid-regex', {error:data.error ?? data.Error ?? ''});
+    reportFind(errorKind === 'regex' ? 'invalid-regex' : 'search-failed', {error:errorText});
     return;
   }
   if (data.type === 'settings') {
