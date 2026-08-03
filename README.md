@@ -1459,3 +1459,12 @@ Windows UI-state flag that hides keyboard focus cues after mouse input while
 leaving the actual focused control unchanged.  Existing popup focus
 diagnostics remain enabled and now also record `popup.focus_cue_shown` or
 `popup.focus_cue_unavailable`.
+
+
+## v125 startup presentation
+
+The main form remains transparent while its ordinary WinForms controls are
+constructed, populated, themed, and laid out.  After the synchronous `Shown`
+work completes, one deferred presentation pass performs the final layout and
+reveals the completed window.  This prevents startup from visibly painting the
+form a control at a time.

@@ -97,6 +97,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly DisplayAwakeController _displayAwake = new();
 
   private bool _pathIsManual;
+  private bool _startupPresentationPending = true;
   private bool _loadingSettings;
   private bool _closing;
   private bool _playPauseTransitioning;
@@ -119,34 +120,54 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   public MainForm()
   {
-    _installedVoices = _speech.GetInstalledVoices();
-    _settingsStore = new UserSettingsStore(
-      _installedVoices.Select(voice => voice.Name).ToArray());
-    _speech.SetPolicyProviders(
-      _settingsStore.GetProfile,
-      _settingsStore.IsFenceTypeSpoken,
-      _settingsStore.GetSpelledWords,
-      _settingsStore.GetPronunciations,
-      _settingsStore.GetAudioWakeSettings);
-    InitializeControls();
-    _transcriptSettingsHoverController = new HoverPopupController(
-      _transcriptSettingsButton,
-      () => new[] { _transcriptSettingsPopup },
-      ShowTranscriptSettingsPopupCore,
-      HideTranscriptSettingsPopupCore,
-      _transcriptSettingsPopup.FocusInitialControl);
-    _transcriptSettingsPopup.RegisterPopupTree(
-      _transcriptSettingsHoverController);
-    PopulateSources();
-    PopulateVoiceRows();
-    LoadSettingsIntoControls(_settingsStore.Current);
-    ConnectEvents();
-    UpdateControlState();
-    ApplyCurrentTheme();
-    Application.AddMessageFilter(this);
-    SystemEvents.UserPreferenceChanged += WindowsUserPreferenceChanged;
-    AppendLog($"Diagnostic log: {DiagnosticLog.FilePath}");
-    AppendLog($"Settings: {UserSettingsStore.FilePath}");
+    // Keep the native window fully transparent until the synchronous WinForms
+    // control tree has been populated, themed, and laid out.  This prevents
+    // Windows from presenting intermediate construction/layout paints.
+    Opacity = 0.0;
+    SetStyle(
+      ControlStyles.AllPaintingInWmPaint |
+      ControlStyles.OptimizedDoubleBuffer,
+      true);
+    SuspendLayout();
+    _mainLayout.SuspendLayout();
+    try
+    {
+      _installedVoices = _speech.GetInstalledVoices();
+      _settingsStore = new UserSettingsStore(
+        _installedVoices.Select(voice => voice.Name).ToArray());
+      _speech.SetPolicyProviders(
+        _settingsStore.GetProfile,
+        _settingsStore.IsFenceTypeSpoken,
+        _settingsStore.GetSpelledWords,
+        _settingsStore.GetPronunciations,
+        _settingsStore.GetAudioWakeSettings);
+      InitializeControls();
+      _transcriptSettingsHoverController = new HoverPopupController(
+        _transcriptSettingsButton,
+        () => new[] { _transcriptSettingsPopup },
+        ShowTranscriptSettingsPopupCore,
+        HideTranscriptSettingsPopupCore,
+        _transcriptSettingsPopup.FocusInitialControl);
+      _transcriptSettingsPopup.RegisterPopupTree(
+        _transcriptSettingsHoverController);
+      PopulateSources();
+      PopulateVoiceRows();
+      LoadSettingsIntoControls(_settingsStore.Current);
+      ConnectEvents();
+      UpdateControlState();
+      ApplyCurrentTheme();
+      Application.AddMessageFilter(this);
+      SystemEvents.UserPreferenceChanged += WindowsUserPreferenceChanged;
+      AppendLog($"Diagnostic log: {DiagnosticLog.FilePath}");
+      AppendLog($"Settings: {UserSettingsStore.FilePath}");
+    }
+    finally
+    {
+      _mainLayout.ResumeLayout(performLayout: false);
+      ResumeLayout(performLayout: false);
+      _mainLayout.PerformLayout();
+      PerformLayout();
+    }
   }
 
   /// <summary>
@@ -154,7 +175,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v124";
+    Text = "Agent Panel Speaker v125";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2810,6 +2831,30 @@ internal sealed class MainForm : Form, IMessageFilter
         AppendLog($"Saved session could not be opened: {exception.Message}");
       }
     }
+
+    // Shown fires after the native form has been created.  Defer presentation
+    // by one message turn so all synchronous Shown work and its resulting
+    // layout have completed while the form is still transparent.
+    BeginInvoke((Action)PresentInitializedWindow);
+  }
+
+  /// <summary>
+  /// Presents the fully populated ordinary WinForms UI in one completed frame.
+  /// </summary>
+  private void PresentInitializedWindow()
+  {
+    if (!_startupPresentationPending || _closing || IsDisposed)
+    {
+      return;
+    }
+
+    _startupPresentationPending = false;
+    _mainLayout.PerformLayout();
+    PerformLayout();
+    Opacity = 1.0;
+    Invalidate(invalidateChildren: true);
+    Update();
+
     DiagnosticLog.Write("ui.shown", new
     {
       highDpiMode = Application.HighDpiMode.ToString(),

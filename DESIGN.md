@@ -1007,3 +1007,14 @@ speech-profile popups.  Each instance owns one root popup tree; a centralized
 registry coordinates mutually exclusive roots, outside clicks, Escape, and form
 deactivation.  Nested transcript popups are child nodes in the transcript tree.
 No popup class owns open/close timers or outside-click policy.
+
+
+## Startup presentation
+
+The native main window is created at zero opacity.  Synchronous control-tree
+construction and initial settings/theme population occur under suspended
+layout.  `Shown` completes any saved-session restoration while the window is
+still transparent, then schedules a single deferred presentation pass.  That
+pass performs final layout, restores full opacity, and repaints the completed
+control tree.  Asynchronous transcript initialization remains represented by
+its own stable loading UI rather than exposing intermediate WinForms layout.
