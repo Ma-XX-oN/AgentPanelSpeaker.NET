@@ -200,7 +200,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v140";
+    Text = "Agent Panel Speaker v141";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3000,11 +3000,14 @@ internal sealed class MainForm : Form, IMessageFilter
   private void MainFormClosing(object? sender, FormClosingEventArgs eventArgs)
   {
     bool externalTermination = Program.ExternalTerminationRequested;
+    bool immediateTermination = externalTermination ||
+      eventArgs.CloseReason == CloseReason.TaskManagerClosing ||
+      eventArgs.CloseReason == CloseReason.WindowsShutDown;
     _transcriptSettingsSaveTimer.Stop();
     _fenceDebounceTimer.Stop();
 
     IReadOnlyList<SettingsChangeSet.Change> changes = [];
-    if (!externalTermination)
+    if (!immediateTermination)
     {
       ApplyFenceTypesImmediately();
       SaveControlsToSettings(includeWindowPlacement: true);
@@ -3014,9 +3017,11 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       eventArgs.CloseReason,
       externalTermination,
+      immediateTermination,
+      promptBypassed = immediateTermination,
       changedKeys = changes.Select(change => change.Key).ToArray()
     });
-    if (!externalTermination && changes.Count > 0)
+    if (!immediateTermination && changes.Count > 0)
     {
       using var dialog = new SaveChangedSettingsDialog(
         changes,

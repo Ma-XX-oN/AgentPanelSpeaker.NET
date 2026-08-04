@@ -1,6 +1,13 @@
-# Agent Panel Speaker v140
+# Agent Panel Speaker v141
 
 
+
+
+## v141 external termination and advanced-popup layout correction
+
+- Bypasses the unsaved-settings prompt for console/task-manager and Windows shutdown close reasons.
+- Replaces manual description-height padding with preferred-size layout based on the label's actual width.
+- Vertically raises the highlight-buffer value label without increasing its row height.
 
 
 ## v140 shutdown, dialog spacing, and popup layout fixes
