@@ -1,14 +1,18 @@
-# Agent Panel Speaker v139
+# Agent Panel Speaker v140
 
 
 
 
-## v139 advanced transcript popup layout
+## v140 shutdown, dialog spacing, and popup layout fixes
 
-- The Highlight buffering description is remeasured after the popup has its
-  actual width, DPI, and font.
-- The popup height now follows the wrapped description height, preventing the
-  final words and punctuation from being clipped.
+- Ctrl+C from the launching console is treated as external termination.  It
+  bypasses the unsaved-settings prompt and does not save pending changes.
+- The unsaved-settings sentence retains separate controls for popup anchoring,
+  but removes their default margins so `changed settings` has normal sentence
+  spacing.
+- The Advanced Transcript Settings description now derives its height from the
+  label's actual laid-out width and preferred size, with a full line of vertical
+  safety space so the final line and `speech.` remain visible.
 - Slider value wording remains unchanged.
 
 ## v138 hierarchical settings schema

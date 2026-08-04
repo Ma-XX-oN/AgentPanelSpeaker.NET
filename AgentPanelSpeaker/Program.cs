@@ -2,6 +2,14 @@ namespace AgentPanelSpeaker;
 
 internal static class Program
 {
+  private static int _externalTerminationRequested;
+
+  /// <summary>
+  /// Gets whether the process is being terminated by its console host.
+  /// </summary>
+  internal static bool ExternalTerminationRequested =>
+    Volatile.Read(ref _externalTerminationRequested) != 0;
+
   /// <summary>
   /// Starts the Windows Forms application.
   /// </summary>
@@ -13,6 +21,12 @@ internal static class Program
       Environment.ExitCode = RegexSearchWorker.Run();
       return;
     }
+
+    Console.CancelKeyPress += (_, eventArgs) =>
+    {
+      Volatile.Write(ref _externalTerminationRequested, 1);
+      eventArgs.Cancel = false;
+    };
 
     DiagnosticLog.Initialize();
     Application.ThreadException += (_, eventArgs) =>

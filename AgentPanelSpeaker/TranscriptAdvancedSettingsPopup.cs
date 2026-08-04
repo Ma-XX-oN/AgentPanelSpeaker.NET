@@ -54,8 +54,9 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
 
     _description = new Label
     {
-      AutoSize = false,
+      AutoSize = true,
       Dock = DockStyle.Fill,
+      Margin = Padding.Empty,
       Text = BufferingDescription,
       TextAlign = ContentAlignment.TopLeft
     };
@@ -121,7 +122,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+    _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
     _layout.Controls.Add(title, 0, 0);
@@ -225,7 +226,8 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
       return;
     }
 
-    int textWidth = Math.Max(1, ClientSize.Width - _layout.Padding.Horizontal);
+    _layout.PerformLayout();
+    int textWidth = Math.Max(1, _description.ClientSize.Width);
     int dpi = DeviceDpi;
     if (!force &&
         textWidth == _lastMeasuredTextWidth &&
@@ -238,17 +240,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     _adjustingLayout = true;
     try
     {
-      Size descriptionSize = TextRenderer.MeasureText(
-        BufferingDescription,
-        _description.Font,
-        new Size(textWidth, int.MaxValue),
-        TextFormatFlags.TextBoxControl |
-        TextFormatFlags.WordBreak |
-        TextFormatFlags.NoPadding);
-      int verticalAllowance = Math.Max(6, LogicalToDeviceUnits(6));
-      int descriptionHeight = descriptionSize.Height + verticalAllowance;
-      _layout.RowStyles[2].Height = descriptionHeight;
+      _description.MaximumSize = new Size(textWidth, 0);
+      Size preferredDescription = _description.GetPreferredSize(
+        new Size(textWidth, 0));
+      int descriptionHeight = preferredDescription.Height +
+        Math.Max(_description.Font.Height, LogicalToDeviceUnits(4));
+      _description.MinimumSize = new Size(0, descriptionHeight);
 
+      _layout.PerformLayout();
       int requiredHeight = _layout.Padding.Vertical +
         (int)_layout.RowStyles[0].Height +
         (int)_layout.RowStyles[1].Height +

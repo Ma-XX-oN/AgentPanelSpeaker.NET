@@ -38,9 +38,11 @@ internal sealed class SaveChangedSettingsDialog : Form
     prompt.Controls.Add(new Label
     {
       AutoSize = true,
-      Text = closing ? "Save " : "Save "
+      Margin = Padding.Empty,
+      Text = "Save "
     });
     _changedSettingsLink.AutoSize = true;
+    _changedSettingsLink.Margin = Padding.Empty;
     _changedSettingsLink.Text = "changed settings";
     _changedSettingsLink.TabStop = true;
     _changedSettingsLink.TabIndex = 0;
@@ -48,6 +50,7 @@ internal sealed class SaveChangedSettingsDialog : Form
     prompt.Controls.Add(new Label
     {
       AutoSize = true,
+      Margin = Padding.Empty,
       Text = closing ? " before closing?" : "?"
     });
 
