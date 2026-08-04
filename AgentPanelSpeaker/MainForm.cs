@@ -197,7 +197,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v127";
+    Text = "Agent Panel Speaker v129";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2330,16 +2330,16 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   public bool PreFilterMessage(ref Message message)
   {
-    if (GetAncestor(message.HWnd, GaRoot) != Handle)
-    {
-      return false;
-    }
-
     if (message.Msg is WmLButtonDown or WmRButtonDown or
         WmMButtonDown or WmXButtonDown)
     {
       HoverPopupController.HandleGlobalPointerDown(
         Control.FromChildHandle(message.HWnd));
+      return false;
+    }
+
+    if (GetAncestor(message.HWnd, GaRoot) != Handle)
+    {
       return false;
     }
 
@@ -2382,8 +2382,7 @@ internal sealed class MainForm : Form, IMessageFilter
       _transcriptView.OpenFind();
       return true;
     }
-    if ((keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4)) &&
-        HoverPopupController.CloseDeepestGlobal(returnFocus: true))
+    if (HoverPopupController.HandleGlobalDismissKey(keyData))
     {
       return true;
     }
@@ -2979,9 +2978,15 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void UpdateSettingsSaveState()
   {
-    bool dirty = GetSettingsChanges().Count > 0;
+    IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
+    bool dirty = changes.Count > 0;
     _saveSettingsButton.Enabled = dirty;
     _saveSelectedSettingsButton.Enabled = dirty;
+    DiagnosticLog.Write("settings.dirty_state", new
+    {
+      dirty,
+      changedKeys = changes.Select(change => change.Key).ToArray()
+    });
     if (!dirty && _saveSettingsPopupController.IsOpen)
     {
       _saveSettingsPopupController.Close(returnFocus: false);
@@ -3030,6 +3035,11 @@ internal sealed class MainForm : Form, IMessageFilter
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
     IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
+    DiagnosticLog.Write("settings.closing", new
+    {
+      eventArgs.CloseReason,
+      changedKeys = changes.Select(change => change.Key).ToArray()
+    });
     if (changes.Count > 0)
     {
       using var dialog = new SaveChangedSettingsDialog(

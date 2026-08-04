@@ -129,6 +129,11 @@ internal sealed class SpeechProfilePopup : UserControl
   /// <inheritdoc />
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
+    if (HoverPopupController.HandleGlobalPopupKey(keyData, this))
+    {
+      return true;
+    }
+
     if (_ownerControl.TryHandleTransportKey(keyData))
     {
       return true;

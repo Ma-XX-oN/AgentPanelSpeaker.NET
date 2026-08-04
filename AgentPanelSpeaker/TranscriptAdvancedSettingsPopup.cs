@@ -188,6 +188,11 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
+    if (HoverPopupController.HandleGlobalPopupKey(keyData, this))
+    {
+      return true;
+    }
+
     if (keyData == Keys.Escape || keyData == (Keys.Alt | Keys.F4))
     {
       DismissRequested?.Invoke(this, EventArgs.Empty);

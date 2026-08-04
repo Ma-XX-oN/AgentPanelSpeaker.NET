@@ -89,11 +89,21 @@ internal sealed class SaveChangedSettingsDialog : Form
       HidePopup,
       _popup.FocusInitialControl,
       openDelayMilliseconds: 250,
-      closeDelayMilliseconds: 250);
+      closeDelayMilliseconds: 1000);
     _changedSettingsLink.LinkClicked += (_, _) =>
       _popupController.OpenImmediately(focusPopup: true);
 
-    ApplyTheme(theme);
+    ThemeManager.Apply(this, theme);
+  }
+
+  protected override void OnShown(EventArgs eventArgs)
+  {
+    base.OnShown(eventArgs);
+    _cancelButton.TabIndex = 0;
+    _okButton.TabIndex = 1;
+    _changedSettingsLink.TabIndex = 2;
+    ActiveControl = _cancelButton;
+    _cancelButton.Select();
   }
 
   public IReadOnlySet<string> SelectedKeys => _popup.SelectedKeys;
@@ -110,7 +120,7 @@ internal sealed class SaveChangedSettingsDialog : Form
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
-    if (keyData == Keys.Escape && _popupController.CloseDeepest(returnFocus: true))
+    if (HoverPopupController.HandleGlobalDismissKey(keyData))
     {
       return true;
     }
@@ -142,32 +152,12 @@ internal sealed class SaveChangedSettingsDialog : Form
     }
   }
 
-  private void ApplyTheme(AppTheme theme)
-  {
-    bool dark = theme == AppTheme.Dark;
-    BackColor = dark ? Color.FromArgb(38, 38, 38) : SystemColors.Control;
-    ForeColor = dark ? Color.Gainsboro : SystemColors.ControlText;
-    foreach (Control control in Controls)
-    {
-      ApplyColours(control, BackColor, ForeColor);
-    }
-  }
-
-  private static void ApplyColours(Control control, Color back, Color fore)
-  {
-    control.BackColor = back;
-    control.ForeColor = fore;
-    foreach (Control child in control.Controls)
-    {
-      ApplyColours(child, back, fore);
-    }
-  }
 }
 
 /// <summary>
 /// Displays the changed settings and lets the user select which to save.
 /// </summary>
-internal sealed class ChangedSettingsPopup : Form
+internal sealed class ChangedSettingsPopup : PopupFormBase
 {
   private readonly CheckedListBox _list = new();
 
@@ -186,8 +176,11 @@ internal sealed class ChangedSettingsPopup : Form
     {
       AutoSize = true,
       MaximumSize = new Size(385, 0),
-      Text = "Choose which changed settings will be saved. " +
-        "Unselected changes will be discarded."
+      Text = showSaveButton
+        ? "Choose which changed settings will be saved. " +
+          "Unselected changes will remain unsaved."
+        : "Choose which changed settings will be saved. " +
+          "Unselected changes will be discarded."
     };
     _list.CheckOnClick = true;
     _list.Dock = DockStyle.Fill;
@@ -235,11 +228,16 @@ internal sealed class ChangedSettingsPopup : Form
     layout.Controls.Add(buttons, 0, 2);
     Controls.Add(layout);
 
-    bool dark = theme == AppTheme.Dark;
-    BackColor = dark ? Color.FromArgb(46, 46, 46) : Color.White;
-    ForeColor = dark ? Color.Gainsboro : Color.Black;
-    _list.BackColor = BackColor;
-    _list.ForeColor = ForeColor;
+    ThemeManager.Apply(this, theme);
+  }
+
+  protected override bool ProcessCmdKey(ref Message message, Keys keyData)
+  {
+    if (HoverPopupController.HandleGlobalPopupKey(keyData, this))
+    {
+      return true;
+    }
+    return base.ProcessCmdKey(ref message, keyData);
   }
 
   public event EventHandler? SaveRequested;

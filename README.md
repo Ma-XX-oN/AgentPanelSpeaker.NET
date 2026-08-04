@@ -1478,7 +1478,7 @@ additional UI-message turn, and only then restores full opacity.  This keeps
 the native child windows technically visible during their first paint while
 preventing their progressive construction from being perceptible.
 
-## v127 explicit settings persistence
+## v128 explicit settings persistence
 
 Settings now use a saved snapshot and an in-memory working snapshot.  Changing a
 control updates application behaviour immediately but does not write the setting
@@ -1493,3 +1493,21 @@ with **Cancel** as the default action.  The **changed settings** link opens a
 secondary popup containing only modified settings, with Select all and Select
 none controls.  Pressing OK saves checked changes, discards unchecked changes,
 and closes.  Cancel returns to the application.
+
+### v128
+
+- Centralizes popup leaf/ancestor click routing, one-second leaf leave closing,
+  keyboard dismissal, and keyboard-close hover suppression.
+- Makes the unsaved-settings dialog focus Cancel first, followed by OK and the
+  changed-settings link.
+- Applies the shared theme manager to the unsaved-settings dialog and changed-
+  settings selector.
+- Adds dirty-setting and close-prompt diagnostics.
+
+### v129
+
+- Fixed the centralized popup keyboard router so popup content implemented as a
+  `UserControl` can use the same Escape, Alt+F4, and boundary-Tab handling as
+  popup forms.  The router now accepts any `Control`, resolves its containing
+  form for popup ownership, and retains the popup control as the tab-order
+  boundary.

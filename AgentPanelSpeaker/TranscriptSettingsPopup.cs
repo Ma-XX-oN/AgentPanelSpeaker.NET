@@ -269,6 +269,11 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
+    if (HoverPopupController.HandleGlobalPopupKey(keyData, this))
+    {
+      return true;
+    }
+
     Keys code = keyData & Keys.KeyCode;
     Keys modifiers = keyData & Keys.Modifiers;
     bool supportedModifiers = modifiers == Keys.None || modifiers == Keys.Alt;

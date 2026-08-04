@@ -1028,3 +1028,24 @@ the candidate snapshot is written before `Saved` is advanced.  A property-level
 `SettingsChangeSet` supplies display names, dirty-state detection, and selective
 merging.  The Save button, selective-save popup, reset operation, and close
 confirmation all use this one comparison/merge implementation.
+
+## v128 centralized popup leaf routing
+
+All hover/focus popups use `HoverPopupController` for one shared popup-chain
+policy.  Pointer-down collapses the chain to the deepest popup containing the
+clicked control.  A click in an ancestor closes its descendants deepest-first
+before the original click is delivered.  Only the current leaf receives the
+one-second pointer-leave timeout.  Escape, Alt+F4, and tab traversal beyond a
+popup boundary close the current leaf through the same controller path.
+Keyboard closure suppresses hover reopening until the pointer leaves and
+re-enters the opener.
+
+Popup theming remains orthogonal and is applied by `ThemeManager` to both
+modal dialogs and popup forms.
+
+## v129 popup keyboard routing type correction
+
+`HoverPopupController.HandleGlobalPopupKey` accepts a `Control` rather than a
+`Form`.  Popup implementations are reusable `UserControl` instances hosted by
+popup forms, so the shared router resolves `context.FindForm()` only for
+ownership checks while enumerating tab stops from the supplied popup control.
