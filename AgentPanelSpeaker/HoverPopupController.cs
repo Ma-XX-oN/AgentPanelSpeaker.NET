@@ -228,7 +228,7 @@ internal sealed class HoverPopupController : IDisposable
     {
       return false;
     }
-    return CloseDeepestGlobal(returnFocus: true, keyboardClose: true);
+    return CloseDeepestGlobal(returnFocus: false, keyboardClose: true);
   }
 
 
@@ -275,7 +275,8 @@ internal sealed class HoverPopupController : IDisposable
     {
       return false;
     }
-    controller.CloseNode(leaf, returnFocus: true, keyboardClose: true);
+    controller.CloseNode(leaf, returnFocus: false, keyboardClose: true);
+    controller.MoveFocusBeyondAnchor(leaf, forward: !backward);
     return true;
   }
 
@@ -474,6 +475,23 @@ internal sealed class HoverPopupController : IDisposable
     {
       node.SuppressNextAnchorFocusOpen = false;
     }
+  }
+
+  private void MoveFocusBeyondAnchor(PopupNode node, bool forward)
+  {
+    Control anchor = node.Anchor;
+    Form? form = anchor.FindForm();
+    if (form is null || form.IsDisposed || anchor.IsDisposed)
+    {
+      return;
+    }
+
+    _ = form.SelectNextControl(
+      anchor,
+      forward,
+      tabStopOnly: true,
+      nested: true,
+      wrap: false);
   }
 
   private void ReevaluateClose(PopupNode node)

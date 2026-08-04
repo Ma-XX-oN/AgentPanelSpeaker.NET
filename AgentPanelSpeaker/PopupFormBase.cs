@@ -20,7 +20,7 @@ internal abstract class PopupFormBase : Form
   {
     if (eventArgs.CloseReason == CloseReason.UserClosing &&
         HoverPopupController.CloseDeepestGlobal(
-          returnFocus: true,
+          returnFocus: false,
           keyboardClose: true))
     {
       eventArgs.Cancel = true;

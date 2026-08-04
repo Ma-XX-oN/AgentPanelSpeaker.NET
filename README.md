@@ -1,7 +1,18 @@
-# Agent Panel Speaker v134
+# Agent Panel Speaker v135
 
 
-## v134 hierarchical changed-settings tree
+## v135 popup focus traversal
+
+- Tabbing forward past the final control in a popup closes the popup and
+  advances to the control after its opener.
+- Shift+Tab before the first control closes the popup and moves to the control
+  before its opener.
+- Escape, Alt+F4, pointer-leave, and outside-click closure do not assign focus.
+- Keyboard closure still suppresses hover reopening until the pointer leaves
+  the opener.
+
+
+## v133 hierarchical changed-settings tree
 
 - Replaced the flat changed-settings checklist with a shared hierarchical tree.
 - Speech profiles can be selected at category, role, or individual property level.
