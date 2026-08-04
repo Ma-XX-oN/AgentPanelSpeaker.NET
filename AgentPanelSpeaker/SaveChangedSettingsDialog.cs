@@ -138,10 +138,6 @@ internal sealed class SaveChangedSettingsDialog : Form
       _popup.Show(this);
     }
     _popup.BringToFront();
-    if (focusPopup)
-    {
-      _popup.FocusInitialControl();
-    }
   }
 
   private void HidePopup(bool returnFocus)

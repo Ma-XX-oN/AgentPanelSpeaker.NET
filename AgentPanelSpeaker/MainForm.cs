@@ -201,7 +201,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v136";
+    Text = "Agent Panel Speaker v137";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -506,7 +506,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     Deactivate += (_, _) =>
-      HoverPopupController.CloseAllGlobal(returnFocus: false);
+      HoverPopupController.HandleOwnerDeactivated(this);
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
       "Previous speaker turn");
@@ -1842,10 +1842,6 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsPopup.PrepareForDisplay();
     _transcriptSettingsPopup.Visible = true;
     _transcriptSettingsPopup.BringToFront();
-    if (focusPopup)
-    {
-      _transcriptSettingsPopup.FocusInitialControl();
-    }
   }
 
   private void HideTranscriptSettingsPopupCore(bool returnFocus)
@@ -2951,10 +2947,6 @@ internal sealed class MainForm : Form, IMessageFilter
       _saveSettingsPopup.Show(this);
     }
     _saveSettingsPopup.BringToFront();
-    if (focusPopup)
-    {
-      _saveSettingsPopup.FocusInitialControl();
-    }
   }
 
   /// <summary>

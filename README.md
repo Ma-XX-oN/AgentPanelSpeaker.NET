@@ -1,5 +1,15 @@
-# Agent Panel Speaker v136
+# Agent Panel Speaker v137
 
+
+
+## v137 popup activation race fix
+
+- Popup forms no longer close when their owner deactivates because focus moved
+  into that owner's popup form.
+- Popup initial focus is now performed only by the shared popup controller.
+- Deferred focus retries verify the node generation, visibility, and active-leaf
+  identity before acting, and retry the configured initial control after form
+  activation settles.
 
 ## v136 popup-form focus activation
 

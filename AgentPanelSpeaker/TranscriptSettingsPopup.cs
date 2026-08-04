@@ -324,10 +324,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
     PositionColourPopup(popup);
     popup.Visible = true;
     popup.BringToFront();
-    if (focusPopup)
-    {
-      popup.FocusInitialControl();
-    }
   }
 
   private TranscriptColourPopup GetOrCreateColourPopup()
@@ -403,10 +399,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
     PositionAdvancedPopup(popup);
     popup.Visible = true;
     popup.BringToFront();
-    if (focusPopup)
-    {
-      popup.FocusInitialControl();
-    }
   }
 
   private TranscriptAdvancedSettingsPopup GetOrCreateAdvancedPopup()

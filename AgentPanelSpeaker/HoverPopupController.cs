@@ -220,6 +220,50 @@ internal sealed class HoverPopupController : IDisposable
   }
 
   /// <summary>
+  /// Closes popup trees owned by a deactivated form unless focus moved into
+  /// one of that tree's own popup forms.
+  /// </summary>
+  public static void HandleOwnerDeactivated(Form owner)
+  {
+    ArgumentNullException.ThrowIfNull(owner);
+    if (owner.IsDisposed || !owner.IsHandleCreated)
+    {
+      return;
+    }
+
+    try
+    {
+      owner.BeginInvoke((MethodInvoker)(() =>
+      {
+        if (owner.IsDisposed)
+        {
+          return;
+        }
+
+        Form? activeForm = Form.ActiveForm;
+        foreach (HoverPopupController controller in GetLiveControllers())
+        {
+          if (!controller.IsOpen ||
+              !ReferenceEquals(controller._root.Anchor.FindForm(), owner))
+          {
+            continue;
+          }
+          if (activeForm is not null &&
+              controller.ContainsOpenPopupForm(activeForm))
+          {
+            continue;
+          }
+          controller.Close(returnFocus: false);
+        }
+      }));
+    }
+    catch (InvalidOperationException)
+    {
+      // The owner is already tearing down; there is no live UI turn left.
+    }
+  }
+
+  /// <summary>
   /// Handles popup-level keyboard dismissal centrally.
   /// </summary>
   public static bool HandleGlobalDismissKey(Keys keyData)
@@ -440,6 +484,11 @@ internal sealed class HoverPopupController : IDisposable
       node.State = PopupState.OpenEntered;
       node.PointerEnteredAsLeaf = NodeContainsPointer(node);
       CancelCloseForAncestors(node);
+    }
+
+    if (focusPopup)
+    {
+      FocusInitialControlWithDiagnostics(node, "open-new");
     }
   }
 
@@ -690,6 +739,7 @@ internal sealed class HoverPopupController : IDisposable
     string reason,
     Control? triggerControl = null)
   {
+    long generation = node.Generation;
     Control? popup = EnumerateVisiblePopupControls(node).FirstOrDefault();
     Form? form = popup?.FindForm() ?? node.Anchor.FindForm();
     DiagnosticLog.Write("popup.focus_attempt", new
@@ -745,19 +795,33 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
 
-    long generation = node.Generation;
     try
     {
       dispatcher.BeginInvoke((MethodInvoker)(() =>
       {
         if (_disposed || node.Generation != generation ||
-            node.State == PopupState.Closed)
+            node.State == PopupState.Closed ||
+            !ReferenceEquals(node, FindDeepestOpenNode(_root)))
         {
           return;
         }
         Control? currentPopup = EnumerateVisiblePopupControls(node)
           .FirstOrDefault();
-        Form? currentForm = currentPopup?.FindForm() ?? node.Anchor.FindForm();
+        if (currentPopup is null || !currentPopup.Visible)
+        {
+          return;
+        }
+        Form? currentForm = currentPopup.FindForm() ?? node.Anchor.FindForm();
+        if (currentForm is { IsDisposed: false, Visible: true } &&
+            !ReferenceEquals(Form.ActiveForm, currentForm))
+        {
+          currentForm.Activate();
+        }
+        if (!currentPopup.ContainsFocus)
+        {
+          node.FocusInitialControl();
+          ShowKeyboardFocusCue(currentForm, node, reason);
+        }
         DiagnosticLog.Write("popup.focus_attempt_settled", new
         {
           reason,
@@ -1140,6 +1204,12 @@ internal sealed class HoverPopupController : IDisposable
         yield return popup;
       }
     }
+  }
+
+  private bool ContainsOpenPopupForm(Form form)
+  {
+    return _nodes.Any(node =>
+      node.State != PopupState.Closed && NodeOwnsForm(node, form));
   }
 
   private bool NodeOwnsForm(PopupNode node, Form form)
