@@ -201,7 +201,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v131";
+    Text = "Agent Panel Speaker v132";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -726,7 +726,9 @@ internal sealed class MainForm : Form, IMessageFilter
       contextProfile,
       previewTimer,
       $"{role} main speech is working.",
-      $"{role} thoughts speech is working.");
+      role == SpeechRole.User
+        ? "User quoted text speech is working."
+        : $"{role} thoughts speech is working.");
     _voiceRows.Add(role, controls);
 
     table.Controls.Add(MakeInlineLabel(label), 0, row);

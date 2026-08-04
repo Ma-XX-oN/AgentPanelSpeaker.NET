@@ -1,5 +1,11 @@
-# Agent Panel Speaker v131
+# Agent Panel Speaker v132
 
+
+## v132 user-context preview phrase
+
+The User Context profile preview now says “User quoted text speech is working.”
+instead of incorrectly referring to user thoughts.  Agent and subagent Context
+profiles continue to use their thoughts preview phrases.
 
 ## v131 context heading, close-dialog focus, and non-client popup dismissal
 
