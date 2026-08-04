@@ -43,6 +43,7 @@ internal sealed class SaveChangedSettingsDialog : Form
     _changedSettingsLink.AutoSize = true;
     _changedSettingsLink.Text = "changed settings";
     _changedSettingsLink.TabStop = true;
+    _changedSettingsLink.TabIndex = 0;
     prompt.Controls.Add(_changedSettingsLink);
     prompt.Controls.Add(new Label
     {
@@ -53,9 +54,11 @@ internal sealed class SaveChangedSettingsDialog : Form
     _okButton.AutoSize = true;
     _okButton.Text = "OK";
     _okButton.DialogResult = DialogResult.OK;
+    _okButton.TabIndex = 1;
     _cancelButton.AutoSize = true;
     _cancelButton.Text = "Cancel";
     _cancelButton.DialogResult = DialogResult.Cancel;
+    _cancelButton.TabIndex = 0;
 
     var buttons = new FlowLayoutPanel
     {
@@ -64,8 +67,11 @@ internal sealed class SaveChangedSettingsDialog : Form
       FlowDirection = FlowDirection.RightToLeft,
       WrapContents = false
     };
+    buttons.TabIndex = 0;
     buttons.Controls.Add(_cancelButton);
     buttons.Controls.Add(_okButton);
+
+    prompt.TabIndex = 1;
 
     var layout = new TableLayoutPanel
     {
@@ -99,9 +105,6 @@ internal sealed class SaveChangedSettingsDialog : Form
   protected override void OnShown(EventArgs eventArgs)
   {
     base.OnShown(eventArgs);
-    _cancelButton.TabIndex = 0;
-    _okButton.TabIndex = 1;
-    _changedSettingsLink.TabIndex = 2;
     ActiveControl = _cancelButton;
     _cancelButton.Select();
   }

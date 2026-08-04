@@ -1,4 +1,17 @@
-# Agent Panel Speaker v104
+# Agent Panel Speaker v131
+
+
+## v131 context heading, close-dialog focus, and non-client popup dismissal
+
+- Restored the shared speech-profile column heading from `Thoughts` to
+  `Context`, since the User row represents quoted text rather than thoughts.
+- The unsaved-settings dialog prevents its changed-settings link from receiving
+  construction-time focus.  Cancel is selected first; tab order proceeds from
+  Cancel to OK to the link.
+- Dark-mode link labels now use a centralized high-contrast link palette.
+- The centralized popup pointer router now treats non-client title-bar pointer
+  presses as outside clicks, so clicking a parent dialog title bar collapses its
+  active popup leaf.
 
 
 ## v104 live-end waiting and live transcript reveal

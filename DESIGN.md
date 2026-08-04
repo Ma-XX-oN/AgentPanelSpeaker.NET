@@ -1049,3 +1049,14 @@ modal dialogs and popup forms.
 `Form`.  Popup implementations are reusable `UserControl` instances hosted by
 popup forms, so the shared router resolves `context.FindForm()` only for
 ownership checks while enumerating tab stops from the supplied popup control.
+
+
+## v131 close-dialog and non-client routing corrections
+
+The changed-settings link is temporarily excluded from tab traversal while the
+modal dialog is being shown so WinForms cannot focus it before `OnShown`.  The
+dialog then selects Cancel and enables the link for the intended Cancel, OK,
+link traversal order.  Non-client button-down messages use the same centralized
+popup pointer-down route as client-area clicks; popup classes contain no
+title-bar-specific closure code.  Link contrast remains the responsibility of
+the separate centralized theme manager.

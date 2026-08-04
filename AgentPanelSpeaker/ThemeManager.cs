@@ -15,6 +15,8 @@ internal static class ThemeManager
   private static readonly Color DarkInput = Color.FromArgb(30, 30, 30);
   private static readonly Color DarkText = Color.FromArgb(240, 240, 240);
   private static readonly Color DarkDisabled = Color.FromArgb(145, 145, 145);
+  private static readonly Color DarkLink = Color.FromArgb(100, 180, 255);
+  private static readonly Color DarkActiveLink = Color.FromArgb(160, 210, 255);
 
   /// <summary>
   /// Gets whether the effective theme is dark.
@@ -113,6 +115,14 @@ internal static class ThemeManager
       case ListBox listBox:
         listBox.BackColor = input;
         listBox.ForeColor = inputText;
+        break;
+
+      case LinkLabel linkLabel:
+        linkLabel.LinkColor = dark ? DarkLink : SystemColors.HotTrack;
+        linkLabel.ActiveLinkColor = dark
+          ? DarkActiveLink
+          : SystemColors.Highlight;
+        linkLabel.VisitedLinkColor = linkLabel.LinkColor;
         break;
 
       case Label label when !label.Enabled && dark:

@@ -18,9 +18,13 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmLineScroll = 0x00B6;
   private const int WmKeyDown = 0x0100;
   private const int WmLButtonDown = 0x0201;
+  private const int WmNcLButtonDown = 0x00A1;
   private const int WmRButtonDown = 0x0204;
+  private const int WmNcRButtonDown = 0x00A4;
   private const int WmMButtonDown = 0x0207;
+  private const int WmNcMButtonDown = 0x00A7;
   private const int WmXButtonDown = 0x020B;
+  private const int WmNcXButtonDown = 0x00AB;
   private const int WmSystemKeyDown = 0x0104;
   private const uint GaRoot = 2;
 
@@ -197,7 +201,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v129";
+    Text = "Agent Panel Speaker v131";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -665,7 +669,7 @@ internal sealed class MainForm : Form, IMessageFilter
       2,
       0);
     table.Controls.Add(
-      MakeSpeechColumnHeader("Thoughts", SpeechProfileWidth),
+      MakeSpeechColumnHeader("Context", SpeechProfileWidth),
       3,
       0);
   }
@@ -2331,7 +2335,9 @@ internal sealed class MainForm : Form, IMessageFilter
   public bool PreFilterMessage(ref Message message)
   {
     if (message.Msg is WmLButtonDown or WmRButtonDown or
-        WmMButtonDown or WmXButtonDown)
+        WmMButtonDown or WmXButtonDown or
+        WmNcLButtonDown or WmNcRButtonDown or
+        WmNcMButtonDown or WmNcXButtonDown)
     {
       HoverPopupController.HandleGlobalPointerDown(
         Control.FromChildHandle(message.HWnd));
