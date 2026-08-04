@@ -23,17 +23,34 @@ internal static class SettingsChangeSet
     AddScalar("Session/FollowNewest", ["Session", "Auto-follow newest session"], saved.FollowNewestSession, working.FollowNewestSession);
     AddScalar("Session/Path", ["Session", "Selected session path"], saved.ManualSessionPath, working.ManualSessionPath);
 
-    AddProfile("Speech/Assistant", ["Speech", "Assistant"], saved.Assistant, working.Assistant);
-    AddProfile("Speech/Thoughts", ["Speech", "Thoughts"], saved.Reasoning, working.Reasoning);
-    AddProfile("Speech/Subagent/Assistant", ["Speech", "Subagent", "Assistant"], saved.SubagentAssistant, working.SubagentAssistant);
-    AddProfile("Speech/Subagent/Thoughts", ["Speech", "Subagent", "Thoughts"], saved.SubagentReasoning, working.SubagentReasoning);
-    AddProfile("Speech/User", ["Speech", "User"], saved.User, working.User);
-    AddProfile("Speech/User/Context", ["Speech", "User", "Context"], saved.UserContext, working.UserContext);
+    AddSpeechRole(
+      "Speech/Assistant",
+      ["Speech", "Assistant"],
+      "Thoughts",
+      saved.Assistant,
+      saved.Reasoning,
+      working.Assistant,
+      working.Reasoning);
+    AddSpeechRole(
+      "Speech/Subagent",
+      ["Speech", "Subagent"],
+      "Thoughts",
+      saved.SubagentAssistant,
+      saved.SubagentReasoning,
+      working.SubagentAssistant,
+      working.SubagentReasoning);
+    AddSpeechRole(
+      "Speech/User",
+      ["Speech", "User"],
+      "Quote",
+      saved.User,
+      saved.UserContext,
+      working.User,
+      working.UserContext);
 
-    AddScalar("Speech/FencedCodeTypes", ["Speech", "Spoken fenced-code types"], saved.SpokenFencedCodeTypes, working.SpokenFencedCodeTypes);
-    AddScalar("Speech/SpeakExisting", ["Speech", "Speak existing text on startup"], saved.SpeakLastExistingEnabledMessage, working.SpeakLastExistingEnabledMessage);
+    AddScalar("Speech/FencedCodeTypes", ["Speech", "Spoken code-block types"], saved.SpokenFencedCodeTypes, working.SpokenFencedCodeTypes);
+    AddScalar("Speech/SpeakExisting", ["Speech", "Speak latest existing message on startup"], saved.SpeakLastExistingEnabledMessage, working.SpeakLastExistingEnabledMessage);
     AddScalar("Speech/KeepDisplayOn", ["Speech", "Keep display on while speaking"], saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking);
-    AddScalar("Speech/WindowsMediaBookmarks", ["Speech", "Windows.Media highlight timing"], saved.WindowsMediaBookmarks, working.WindowsMediaBookmarks);
 
     AddScalar("General/PollInterval", ["General", "Polling interval"], saved.PollIntervalMilliseconds, working.PollIntervalMilliseconds);
     AddScalar("General/Theme", ["General", "Theme"], saved.Theme, working.Theme);
@@ -69,13 +86,38 @@ internal static class SettingsChangeSet
       }
     }
 
-    void AddProfile(
+    void AddSpeechRole(
+      string keyPrefix,
+      IReadOnlyList<string> pathPrefix,
+      string secondaryLabel,
+      SpeechProfileSettings oldMain,
+      SpeechProfileSettings oldSecondary,
+      SpeechProfileSettings newMain,
+      SpeechProfileSettings newSecondary)
+    {
+      AddScalar(
+        $"{keyPrefix}/Voice",
+        [.. pathPrefix, "Voice"],
+        oldMain.VoiceName,
+        newMain.VoiceName);
+      AddAdjustments(
+        $"{keyPrefix}/Main",
+        [.. pathPrefix, "Main"],
+        oldMain,
+        newMain);
+      AddAdjustments(
+        $"{keyPrefix}/Secondary",
+        [.. pathPrefix, secondaryLabel],
+        oldSecondary,
+        newSecondary);
+    }
+
+    void AddAdjustments(
       string keyPrefix,
       IReadOnlyList<string> pathPrefix,
       SpeechProfileSettings oldValue,
       SpeechProfileSettings newValue)
     {
-      AddScalar($"{keyPrefix}/Voice", [.. pathPrefix, "Voice"], oldValue.VoiceName, newValue.VoiceName);
       AddScalar($"{keyPrefix}/Rate", [.. pathPrefix, "Rate"], oldValue.Rate, newValue.Rate);
       AddScalar($"{keyPrefix}/Pitch", [.. pathPrefix, "Pitch"], oldValue.Pitch, newValue.Pitch);
       AddScalar($"{keyPrefix}/Volume", [.. pathPrefix, "Volume"], oldValue.Volume, newValue.Volume);
@@ -84,10 +126,10 @@ internal static class SettingsChangeSet
     void AddTranscript(TranscriptSettings oldValue, TranscriptSettings newValue)
     {
       AddScalar("Transcript/FollowSpeech", ["Transcript", "Follow speech"], oldValue.FollowSpeech, newValue.FollowSpeech);
-      AddScalar("Transcript/LightHighlight", ["Transcript", "Light highlight colour"], oldValue.LightHighlightArgb, newValue.LightHighlightArgb);
-      AddScalar("Transcript/DarkHighlight", ["Transcript", "Dark highlight colour"], oldValue.DarkHighlightArgb, newValue.DarkHighlightArgb);
-      AddScalar("Transcript/Fade", ["Transcript", "Highlight fade"], oldValue.FadeMilliseconds, newValue.FadeMilliseconds);
-      AddScalar("Transcript/UpdateInterval", ["Transcript", "Highlight update interval"], oldValue.HighlightUpdateMilliseconds, newValue.HighlightUpdateMilliseconds);
+      AddScalar("Transcript/LightHighlight", ["Transcript", "Highlight colours", "Light theme"], oldValue.LightHighlightArgb, newValue.LightHighlightArgb);
+      AddScalar("Transcript/DarkHighlight", ["Transcript", "Highlight colours", "Dark theme"], oldValue.DarkHighlightArgb, newValue.DarkHighlightArgb);
+      AddScalar("Transcript/Fade", ["Transcript", "Highlight timing", "Fade"], oldValue.FadeMilliseconds, newValue.FadeMilliseconds);
+      AddScalar("Transcript/UpdateInterval", ["Transcript", "Highlight timing", "Update interval"], oldValue.HighlightUpdateMilliseconds, newValue.HighlightUpdateMilliseconds);
       AddScalar("Transcript/QueueCapacity", ["Transcript", "Highlight queue capacity"], oldValue.HighlightQueueCapacity, newValue.HighlightQueueCapacity);
       AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);
     }
@@ -95,25 +137,25 @@ internal static class SettingsChangeSet
     void AddAudioWake(AudioWakeSettings oldValue, AudioWakeSettings newValue)
     {
       AddScalar("BluetoothWake/Enabled", ["Bluetooth wake", "Enabled"], oldValue.Enabled, newValue.Enabled);
-      AddScalar("BluetoothWake/QuietDuration", ["Bluetooth wake", "Quiet duration"], oldValue.QuietDurationMilliseconds, newValue.QuietDurationMilliseconds);
-      AddScalar("BluetoothWake/Frequency", ["Bluetooth wake", "Frequency"], oldValue.FrequencyHertz, newValue.FrequencyHertz);
-      AddScalar("BluetoothWake/ToneVolume", ["Bluetooth wake", "Tone volume"], oldValue.ToneVolume, newValue.ToneVolume);
-      AddScalar("BluetoothWake/PlayDuration", ["Bluetooth wake", "Play duration"], oldValue.PlayDurationMilliseconds, newValue.PlayDurationMilliseconds);
-      AddScalar("BluetoothWake/SettleDuration", ["Bluetooth wake", "Settle duration"], oldValue.SettleDurationMilliseconds, newValue.SettleDurationMilliseconds);
-      AddScalar("BluetoothWake/IpaExampleDelay", ["Bluetooth wake", "IPA example delay"], oldValue.IpaExampleDelayMilliseconds, newValue.IpaExampleDelayMilliseconds);
+      AddScalar("BluetoothWake/QuietDuration", ["Bluetooth wake", "Timing", "Quiet duration"], oldValue.QuietDurationMilliseconds, newValue.QuietDurationMilliseconds);
+      AddScalar("BluetoothWake/Frequency", ["Bluetooth wake", "Tone", "Frequency"], oldValue.FrequencyHertz, newValue.FrequencyHertz);
+      AddScalar("BluetoothWake/ToneVolume", ["Bluetooth wake", "Tone", "Volume"], oldValue.ToneVolume, newValue.ToneVolume);
+      AddScalar("BluetoothWake/PlayDuration", ["Bluetooth wake", "Tone", "Play duration"], oldValue.PlayDurationMilliseconds, newValue.PlayDurationMilliseconds);
+      AddScalar("BluetoothWake/SettleDuration", ["Bluetooth wake", "Timing", "Settle duration"], oldValue.SettleDurationMilliseconds, newValue.SettleDurationMilliseconds);
+      AddScalar("BluetoothWake/IpaExampleDelay", ["Bluetooth wake", "Timing", "IPA example delay"], oldValue.IpaExampleDelayMilliseconds, newValue.IpaExampleDelayMilliseconds);
     }
 
     void AddHotkeys(HotkeySettings oldValue, HotkeySettings newValue)
     {
-      AddScalar("Hotkeys/PreviousSpeaker", ["Hotkeys", "Previous speaker"], oldValue.PreviousSpeaker, newValue.PreviousSpeaker);
-      AddScalar("Hotkeys/PreviousNode", ["Hotkeys", "Previous node"], oldValue.PreviousNode, newValue.PreviousNode);
-      AddScalar("Hotkeys/PreviousSentence", ["Hotkeys", "Previous sentence"], oldValue.PreviousSentence, newValue.PreviousSentence);
-      AddScalar("Hotkeys/PlayPause", ["Hotkeys", "Play or pause"], oldValue.PlayPause, newValue.PlayPause);
-      AddScalar("Hotkeys/NextSentence", ["Hotkeys", "Next sentence"], oldValue.NextSentence, newValue.NextSentence);
-      AddScalar("Hotkeys/NextNode", ["Hotkeys", "Next node"], oldValue.NextNode, newValue.NextNode);
-      AddScalar("Hotkeys/NextSpeaker", ["Hotkeys", "Next speaker"], oldValue.NextSpeaker, newValue.NextSpeaker);
-      AddScalar("Hotkeys/ProcessingTime", ["Hotkeys", "Processing time"], oldValue.ProcessingTime, newValue.ProcessingTime);
-      AddScalar("Hotkeys/ToggleTranscriptSize", ["Hotkeys", "Toggle transcript size"], oldValue.ToggleTranscriptSize, newValue.ToggleTranscriptSize);
+      AddScalar("Hotkeys/PreviousSpeaker", ["Hotkeys", "Navigation", "Previous speaker"], oldValue.PreviousSpeaker, newValue.PreviousSpeaker);
+      AddScalar("Hotkeys/PreviousNode", ["Hotkeys", "Navigation", "Previous node"], oldValue.PreviousNode, newValue.PreviousNode);
+      AddScalar("Hotkeys/PreviousSentence", ["Hotkeys", "Navigation", "Previous sentence"], oldValue.PreviousSentence, newValue.PreviousSentence);
+      AddScalar("Hotkeys/PlayPause", ["Hotkeys", "Playback", "Play or pause"], oldValue.PlayPause, newValue.PlayPause);
+      AddScalar("Hotkeys/NextSentence", ["Hotkeys", "Navigation", "Next sentence"], oldValue.NextSentence, newValue.NextSentence);
+      AddScalar("Hotkeys/NextNode", ["Hotkeys", "Navigation", "Next node"], oldValue.NextNode, newValue.NextNode);
+      AddScalar("Hotkeys/NextSpeaker", ["Hotkeys", "Navigation", "Next speaker"], oldValue.NextSpeaker, newValue.NextSpeaker);
+      AddScalar("Hotkeys/ProcessingTime", ["Hotkeys", "Status announcements", "Speak AI processing time"], oldValue.ProcessingTime, newValue.ProcessingTime);
+      AddScalar("Hotkeys/ToggleTranscriptSize", ["Hotkeys", "Display", "Toggle transcript window size"], oldValue.ToggleTranscriptSize, newValue.ToggleTranscriptSize);
     }
 
     void AddOrderedTextCollection(
@@ -184,32 +226,45 @@ internal static class SettingsChangeSet
     bool Has(string key) => selected.Contains(key);
     T Pick<T>(string key, T oldValue, T newValue) => Has(key) ? newValue : oldValue;
 
-    SpeechProfileSettings MergeProfile(
+    SpeechProfileSettings MergeAdjustments(
       string prefix,
+      string voice,
       SpeechProfileSettings oldValue,
       SpeechProfileSettings newValue) => oldValue with
     {
-      VoiceName = Pick($"{prefix}/Voice", oldValue.VoiceName, newValue.VoiceName),
+      VoiceName = voice,
       Rate = Pick($"{prefix}/Rate", oldValue.Rate, newValue.Rate),
       Pitch = Pick($"{prefix}/Pitch", oldValue.Pitch, newValue.Pitch),
       Volume = Pick($"{prefix}/Volume", oldValue.Volume, newValue.Volume)
     };
+
+    string assistantVoice = Pick(
+      "Speech/Assistant/Voice",
+      saved.Assistant.VoiceName,
+      working.Assistant.VoiceName);
+    string subagentVoice = Pick(
+      "Speech/Subagent/Voice",
+      saved.SubagentAssistant.VoiceName,
+      working.SubagentAssistant.VoiceName);
+    string userVoice = Pick(
+      "Speech/User/Voice",
+      saved.User.VoiceName,
+      working.User.VoiceName);
 
     var merged = saved with
     {
       Source = Pick("Session/Source", saved.Source, working.Source),
       FollowNewestSession = Pick("Session/FollowNewest", saved.FollowNewestSession, working.FollowNewestSession),
       ManualSessionPath = Pick("Session/Path", saved.ManualSessionPath, working.ManualSessionPath),
-      Assistant = MergeProfile("Speech/Assistant", saved.Assistant, working.Assistant),
-      Reasoning = MergeProfile("Speech/Thoughts", saved.Reasoning, working.Reasoning),
-      SubagentAssistant = MergeProfile("Speech/Subagent/Assistant", saved.SubagentAssistant, working.SubagentAssistant),
-      SubagentReasoning = MergeProfile("Speech/Subagent/Thoughts", saved.SubagentReasoning, working.SubagentReasoning),
-      User = MergeProfile("Speech/User", saved.User, working.User),
-      UserContext = MergeProfile("Speech/User/Context", saved.UserContext, working.UserContext),
+      Assistant = MergeAdjustments("Speech/Assistant/Main", assistantVoice, saved.Assistant, working.Assistant),
+      Reasoning = MergeAdjustments("Speech/Assistant/Secondary", assistantVoice, saved.Reasoning, working.Reasoning),
+      SubagentAssistant = MergeAdjustments("Speech/Subagent/Main", subagentVoice, saved.SubagentAssistant, working.SubagentAssistant),
+      SubagentReasoning = MergeAdjustments("Speech/Subagent/Secondary", subagentVoice, saved.SubagentReasoning, working.SubagentReasoning),
+      User = MergeAdjustments("Speech/User/Main", userVoice, saved.User, working.User),
+      UserContext = MergeAdjustments("Speech/User/Secondary", userVoice, saved.UserContext, working.UserContext),
       SpokenFencedCodeTypes = Pick("Speech/FencedCodeTypes", saved.SpokenFencedCodeTypes, working.SpokenFencedCodeTypes),
       SpeakLastExistingEnabledMessage = Pick("Speech/SpeakExisting", saved.SpeakLastExistingEnabledMessage, working.SpeakLastExistingEnabledMessage),
       KeepDisplayOnWhileSpeaking = Pick("Speech/KeepDisplayOn", saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking),
-      WindowsMediaBookmarks = Pick("Speech/WindowsMediaBookmarks", saved.WindowsMediaBookmarks, working.WindowsMediaBookmarks),
       PollIntervalMilliseconds = Pick("General/PollInterval", saved.PollIntervalMilliseconds, working.PollIntervalMilliseconds),
       Theme = Pick("General/Theme", saved.Theme, working.Theme),
       Transcript = saved.Transcript with

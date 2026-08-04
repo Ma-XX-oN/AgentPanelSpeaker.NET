@@ -11,6 +11,8 @@ internal sealed class UserSettingsStore
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
     WriteIndented = true,
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    PropertyNameCaseInsensitive = true,
     Converters = { new JsonStringEnumConverter() }
   };
 
@@ -203,12 +205,25 @@ internal sealed class UserSettingsStore
       }
 
       string json = File.ReadAllText(FilePath);
-      UserSettings? settings = JsonSerializer.Deserialize<UserSettings>(
+      using JsonDocument document = JsonDocument.Parse(json);
+      if (document.RootElement.TryGetProperty(
+            "schemaVersion",
+            out JsonElement schemaVersion) &&
+          schemaVersion.GetInt32() >= SettingsDocument.CurrentSchemaVersion)
+      {
+        SettingsDocument? current =
+          JsonSerializer.Deserialize<SettingsDocument>(json, JsonOptions);
+        return current is null
+          ? UserSettings.CreateDefault(defaultVoice)
+          : Normalize(current.ToRuntime(defaultVoice));
+      }
+
+      UserSettings? legacy = JsonSerializer.Deserialize<UserSettings>(
         json,
         JsonOptions);
-      return settings is null
+      return legacy is null
         ? UserSettings.CreateDefault(defaultVoice)
-        : Normalize(settings);
+        : Normalize(legacy);
     }
     catch (Exception exception) when (
       exception is IOException or
@@ -257,6 +272,29 @@ internal sealed class UserSettingsStore
       return normalized;
     }
 
+    SpeechProfileSettings assistant = NormalizeProfile(settings.Assistant);
+    SpeechProfileSettings reasoning = NormalizeProfile(settings.Reasoning) with
+    {
+      VoiceName = assistant.VoiceName
+    };
+    SpeechProfileSettings subagentMain = NormalizeProfile(
+      settings.Version < 6
+        ? settings.Assistant
+        : settings.SubagentAssistant);
+    SpeechProfileSettings subagentThoughts = NormalizeProfile(
+      settings.Version < 6
+        ? settings.Reasoning
+        : settings.SubagentReasoning) with
+    {
+      VoiceName = subagentMain.VoiceName
+    };
+    SpeechProfileSettings userMain = NormalizeProfile(settings.User);
+    SpeechProfileSettings userQuote = NormalizeProfile(
+      settings.Version < 8 ? settings.User : settings.UserContext) with
+    {
+      VoiceName = userMain.VoiceName
+    };
+
     return settings with
     {
       Version = UserSettings.CurrentVersion,
@@ -268,19 +306,12 @@ internal sealed class UserSettingsStore
       Transcript = settings.Version >= 10
         ? (settings.Transcript ?? TranscriptSettings.Default).Normalize()
         : TranscriptSettings.Default,
-      Assistant = NormalizeProfile(settings.Assistant),
-      Reasoning = NormalizeProfile(settings.Reasoning),
-      SubagentAssistant = NormalizeProfile(
-        settings.Version < 6
-          ? settings.Assistant
-          : settings.SubagentAssistant),
-      SubagentReasoning = NormalizeProfile(
-        settings.Version < 6
-          ? settings.Reasoning
-          : settings.SubagentReasoning),
-      User = NormalizeProfile(settings.User),
-      UserContext = NormalizeProfile(
-        settings.Version < 8 ? settings.User : settings.UserContext),
+      Assistant = assistant,
+      Reasoning = reasoning,
+      SubagentAssistant = subagentMain,
+      SubagentReasoning = subagentThoughts,
+      User = userMain,
+      UserContext = userQuote,
       SpokenFencedCodeTypes = FencedCodeTypeSet
         .Parse(settings.SpokenFencedCodeTypes)
         .NormalizedCsv,
@@ -294,7 +325,6 @@ internal sealed class UserSettingsStore
       Theme = Enum.IsDefined(typeof(AppTheme), settings.Theme)
         ? settings.Theme
         : AppTheme.System,
-      WindowsMediaBookmarks = WindowsMediaBookmarkMode.Always,
       Hotkeys = (settings.Hotkeys ?? HotkeySettings.Default).Normalize(),
       PollIntervalMilliseconds = Math.Clamp(
         settings.PollIntervalMilliseconds,
@@ -320,7 +350,9 @@ internal sealed class UserSettingsStore
     string temporaryPath = FilePath + ".tmp";
     File.WriteAllText(
       temporaryPath,
-      JsonSerializer.Serialize(settings, JsonOptions));
+      JsonSerializer.Serialize(
+        SettingsDocument.FromRuntime(settings),
+        JsonOptions));
     File.Move(temporaryPath, FilePath, overwrite: true);
     DiagnosticLog.Write("settings.saved", new { path = FilePath });
   }

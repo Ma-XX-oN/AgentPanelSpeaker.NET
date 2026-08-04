@@ -1060,3 +1060,20 @@ link traversal order.  Non-client button-down messages use the same centralized
 popup pointer-down route as client-area clicks; popup classes contain no
 title-bar-specific closure code.  Link contrast remains the responsibility of
 the separate centralized theme manager.
+
+## Versioned hierarchical settings storage (v138)
+
+`settings.json` is written as `SettingsDocument`, whose hierarchy matches the
+ownership shown by the changed-settings tree.  `schemaVersion` is storage
+metadata, not a user setting, and never participates in dirty-state comparison.
+
+Older flat `UserSettings` files are deserialized and normalized in memory.  The
+migrated snapshot becomes both the saved and working baseline, so migration
+alone neither enables Save nor rewrites the file.  The next genuine save writes
+the complete current schema and naturally omits obsolete fields.
+
+Each speech role stores one shared voice plus independent Main and secondary
+adjustments.  The secondary branch is presented as Thoughts for Assistant and
+Subagent, and Quote for User.  Selective saving uses the same ownership model:
+selecting a role Voice applies that voice to both profiles, while Rate, Pitch,
+and Volume remain independently selectable under Main and Thoughts/Quote.

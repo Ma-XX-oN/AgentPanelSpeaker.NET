@@ -72,7 +72,6 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly Button _pronunciationsButton = new();
   private readonly Button _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
-  private readonly ComboBox _windowsMediaBookmarksComboBox = new();
   private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
   private readonly Panel _diagnosticHost = new();
@@ -201,7 +200,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v137";
+    Text = "Agent Panel Speaker v138";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -271,19 +270,7 @@ internal sealed class MainForm : Form, IMessageFilter
       AppTheme.Light,
       AppTheme.Dark
     });
-    _windowsMediaBookmarksComboBox.DropDownStyle =
-      ComboBoxStyle.DropDownList;
-    _windowsMediaBookmarksComboBox.Width = 90;
-    _windowsMediaBookmarksComboBox.Items.AddRange(new object[]
-    {
-      WindowsMediaBookmarkMode.Off,
-      WindowsMediaBookmarkMode.Fallback,
-      WindowsMediaBookmarkMode.Always
-    });
-    _toolTip.SetToolTip(
-      _windowsMediaBookmarksComboBox,
-      "Windows.Media highlight timing: Off uses word cues; Fallback uses " +
-      "bookmarks when word cues are unreliable; Always uses bookmarks.");
+
 
     _followLatestCheckBox.AutoSize = true;
     _followLatestCheckBox.Margin = new Padding(3, 6, 3, 3);
@@ -456,12 +443,6 @@ internal sealed class MainForm : Form, IMessageFilter
     _sourceComboBox.SelectedIndexChanged += SourceSelectionChanged;
     _followLatestCheckBox.CheckedChanged += FollowLatestChanged;
     _pollNumeric.ValueChanged += (_, _) => SaveControlsToSettings();
-    _windowsMediaBookmarksComboBox.SelectedIndexChanged += (_, _) =>
-    {
-      WindowsMediaBookmarkMode mode = GetWindowsMediaBookmarkMode();
-      _speech.SetWindowsMediaBookmarkMode(mode);
-      SaveControlsToSettings();
-    };
     _speakExistingCheckBox.CheckedChanged += (_, _) =>
       SaveControlsToSettings();
     _keepDisplayOnCheckBox.CheckedChanged += (_, _) =>
@@ -922,9 +903,8 @@ internal sealed class MainForm : Form, IMessageFilter
         settings.KeepDisplayOnWhileSpeaking;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
       _themeComboBox.SelectedItem = settings.Theme;
-      _windowsMediaBookmarksComboBox.SelectedItem =
-        settings.WindowsMediaBookmarks;
-      _speech.SetWindowsMediaBookmarkMode(settings.WindowsMediaBookmarks);
+      _speech.SetWindowsMediaBookmarkMode(
+        WindowsMediaBookmarkMode.Always);
       bool transcriptDark = ThemeManager.IsDark(settings.Theme);
       _transcriptSettingsPopup.SetSettings(
         settings.Transcript,
@@ -2101,7 +2081,6 @@ internal sealed class MainForm : Form, IMessageFilter
       KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
       Theme = GetSelectedTheme(),
-      WindowsMediaBookmarks = WindowsMediaBookmarkMode.Always,
       Transcript = _transcriptSettingsPopup.Settings with
       {
         Maximized = _diagnosticsMaximized
@@ -2653,14 +2632,6 @@ internal sealed class MainForm : Form, IMessageFilter
         ApplyCurrentTheme();
       }
     });
-  }
-
-  /// <summary>
-  /// Gets the selected Windows.Media bookmark policy.
-  /// </summary>
-  private static WindowsMediaBookmarkMode GetWindowsMediaBookmarkMode()
-  {
-    return WindowsMediaBookmarkMode.Always;
   }
 
   /// <summary>

@@ -1,5 +1,23 @@
-# Agent Panel Speaker v137
+# Agent Panel Speaker v138
 
+
+
+## v138 hierarchical settings schema
+
+- Settings are written using a versioned hierarchical schema.  Loading an older
+  flat settings file migrates it in memory without marking settings as changed
+  or forcing a save.  The new schema is written on the next genuine save.
+- Speech settings store one shared voice for each of Assistant, Subagent, and
+  User.  Main and Thoughts/Quote retain independent rate, pitch, and volume.
+- The changed-settings tree mirrors the stored hierarchy, including Transcript
+  highlight colour/timing groups, Bluetooth wake Tone/Timing groups, and Hotkey
+  Navigation/Playback/Status announcements/Display groups.
+- User quoted-text settings are labelled Quote.
+- Obsolete Windows.Media highlight-timing persistence and UI wiring were
+  removed.  Any legacy field is ignored and disappears on the next genuine
+  save.
+- Spelled words report only Added and Removed items.  Pronunciations report
+  Added, Modified, and Removed items.
 
 
 ## v137 popup activation race fix

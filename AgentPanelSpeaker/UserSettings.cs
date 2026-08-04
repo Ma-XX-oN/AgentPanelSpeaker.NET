@@ -20,7 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 14;
+  public const int CurrentVersion = 15;
 
   /// <summary>
   /// Gets the main speech profile used for background-agent results.
@@ -61,11 +61,6 @@ internal sealed record UserSettings(
   /// </summary>
   public AppTheme Theme { get; init; } = AppTheme.System;
 
-  /// <summary>
-  /// Gets when Windows.Media voices use bookmark/compaction timing.
-  /// </summary>
-  public WindowsMediaBookmarkMode WindowsMediaBookmarks { get; init; } =
-    WindowsMediaBookmarkMode.Always;
 
   public HotkeySettings Hotkeys { get; init; } = HotkeySettings.Default;
 
@@ -105,7 +100,6 @@ internal sealed record UserSettings(
       Pronunciations = string.Empty,
       AudioWake = AudioWakeSettings.Default,
       Theme = AppTheme.System,
-      WindowsMediaBookmarks = WindowsMediaBookmarkMode.Always,
       Hotkeys = HotkeySettings.Default,
       SubagentAssistant = new SpeechProfileSettings(voice, 0, 0)
       {
