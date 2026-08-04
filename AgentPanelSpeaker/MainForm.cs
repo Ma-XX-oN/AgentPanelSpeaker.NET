@@ -201,7 +201,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v132";
+    Text = "Agent Panel Speaker v134";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2945,9 +2945,7 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
     _saveSettingsPopup.SetChanges(changes);
-    Point location = _saveSelectedSettingsButton.PointToScreen(
-      new Point(0, _saveSelectedSettingsButton.Height + 4));
-    _saveSettingsPopup.Location = location;
+    _saveSettingsPopup.PositionBelow(_saveSelectedSettingsButton);
     if (!_saveSettingsPopup.Visible)
     {
       _saveSettingsPopup.Show(this);

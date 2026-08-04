@@ -1,5 +1,13 @@
-# Agent Panel Speaker v132
+# Agent Panel Speaker v134
 
+
+## v134 hierarchical changed-settings tree
+
+- Replaced the flat changed-settings checklist with a shared hierarchical tree.
+- Speech profiles can be selected at category, role, or individual property level.
+- Pronunciation changes are shown as ordered `Added`, `Modified`, then `Removed` entries.
+- Group selection propagates to descendants and partially selected groups show a mixed state.
+- The popup sizes to its expanded content up to the current monitor working area, using scrollbars only when the screen cannot contain it.
 
 ## v132 user-context preview phrase
 
