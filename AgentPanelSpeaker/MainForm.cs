@@ -200,7 +200,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v143";
+    Text = "Agent Panel Speaker v144";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -252,7 +252,7 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.ProcessingClock,
       "Speak AI processing time (' or Alt+')");
     ConfigureButton(_saveSettingsButton, "Save settings");
-    ConfigureButton(_saveSelectedSettingsButton, "›");
+    ConfigureButton(_saveSelectedSettingsButton, "⌄");
     _saveSettingsButton.Margin = new Padding(3, 3, 0, 3);
     _saveSelectedSettingsButton.Margin = new Padding(0, 3, 3, 3);
     _saveSelectedSettingsButton.Width = 28;

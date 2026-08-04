@@ -28,31 +28,19 @@ internal sealed class SaveChangedSettingsDialog : Form
     StartPosition = FormStartPosition.CenterParent;
     Padding = new Padding(14);
 
-    var prompt = new FlowLayoutPanel
-    {
-      AutoSize = true,
-      WrapContents = false,
-      Dock = DockStyle.Fill,
-      Margin = new Padding(0, 0, 0, 12)
-    };
-    prompt.Controls.Add(new Label
-    {
-      AutoSize = true,
-      Margin = Padding.Empty,
-      Text = "Save "
-    });
+    const string linkedText = "changed settings";
+    string promptText = closing
+      ? $"Save {linkedText} before closing?"
+      : $"Save {linkedText}?";
     _changedSettingsLink.AutoSize = true;
-    _changedSettingsLink.Margin = Padding.Empty;
-    _changedSettingsLink.Text = "changed settings";
+    _changedSettingsLink.Dock = DockStyle.Fill;
+    _changedSettingsLink.Margin = new Padding(0, 0, 0, 12);
+    _changedSettingsLink.Text = promptText;
+    _changedSettingsLink.LinkArea = new LinkArea(
+      promptText.IndexOf(linkedText, StringComparison.Ordinal),
+      linkedText.Length);
     _changedSettingsLink.TabStop = true;
     _changedSettingsLink.TabIndex = 0;
-    prompt.Controls.Add(_changedSettingsLink);
-    prompt.Controls.Add(new Label
-    {
-      AutoSize = true,
-      Margin = Padding.Empty,
-      Text = closing ? " before closing?" : "?"
-    });
 
     _okButton.AutoSize = true;
     _okButton.Text = "OK";
@@ -74,7 +62,7 @@ internal sealed class SaveChangedSettingsDialog : Form
     buttons.Controls.Add(_cancelButton);
     buttons.Controls.Add(_okButton);
 
-    prompt.TabIndex = 1;
+    _changedSettingsLink.TabIndex = 1;
 
     var layout = new TableLayoutPanel
     {
@@ -83,7 +71,7 @@ internal sealed class SaveChangedSettingsDialog : Form
       RowCount = 2,
       Dock = DockStyle.Fill
     };
-    layout.Controls.Add(prompt, 0, 0);
+    layout.Controls.Add(_changedSettingsLink, 0, 0);
     layout.Controls.Add(buttons, 0, 1);
     Controls.Add(layout);
 

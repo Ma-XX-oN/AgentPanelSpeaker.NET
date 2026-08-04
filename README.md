@@ -1,7 +1,13 @@
-# Agent Panel Speaker v143
+# Agent Panel Speaker v144
 
 
 
+
+## v144 dropdown affordance and inline close prompt
+
+- Changed the selective-save split-button glyph from `›` to `⌄`.
+- Rendered “Save changed settings before closing?” as one `LinkLabel`,
+  with only “changed settings” linked, eliminating artificial word spacing.
 
 ## v143 changed-settings root and joined Save control
 
