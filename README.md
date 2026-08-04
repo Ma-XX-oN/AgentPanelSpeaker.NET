@@ -1,6 +1,15 @@
-# Agent Panel Speaker v138
+# Agent Panel Speaker v139
 
 
+
+
+## v139 advanced transcript popup layout
+
+- The Highlight buffering description is remeasured after the popup has its
+  actual width, DPI, and font.
+- The popup height now follows the wrapped description height, preventing the
+  final words and punctuation from being clipped.
+- Slider value wording remains unchanged.
 
 ## v138 hierarchical settings schema
 

@@ -12,8 +12,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     "older pending positions. Higher values preserve more intermediate " +
     "movements but can make the visible cursor lag behind speech.";
 
+  private readonly Label _description;
+  private readonly TableLayoutPanel _layout;
   private readonly TrackBar _queueCapacitySlider = new();
   private readonly Label _queueCapacityValue = new();
+  private bool _adjustingLayout;
+  private int _lastMeasuredTextWidth = -1;
+  private int _lastMeasuredDpi = -1;
+  private Font? _lastMeasuredFont;
   private bool _dark;
   private bool _updating;
 
@@ -46,7 +52,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
         FontStyle.Bold)
     };
 
-    var description = new Label
+    _description = new Label
     {
       AutoSize = false,
       Dock = DockStyle.Fill,
@@ -105,43 +111,26 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     sliderLayout.Controls.Add(_queueCapacitySlider, 0, 0);
     sliderLayout.Controls.Add(_queueCapacityValue, 1, 0);
 
-    var layout = new TableLayoutPanel
+    _layout = new TableLayoutPanel
     {
       ColumnCount = 1,
       RowCount = 5,
       Dock = DockStyle.Fill,
       Padding = new Padding(14)
     };
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    Size descriptionSize = TextRenderer.MeasureText(
-      BufferingDescription,
-      description.Font,
-      new Size(Width - layout.Padding.Horizontal, int.MaxValue),
-      TextFormatFlags.TextBoxControl |
-      TextFormatFlags.WordBreak |
-      TextFormatFlags.NoPadding);
-    int descriptionHeight = descriptionSize.Height + 6;
-
-    layout.RowStyles.Add(new RowStyle(
-      SizeType.Absolute,
-      descriptionHeight));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-    Height = layout.Padding.Vertical +
-      28 +
-      28 +
-      descriptionHeight +
-      42 +
-      24 +
-      2;
-    layout.Controls.Add(title, 0, 0);
-    layout.Controls.Add(settingTitle, 0, 1);
-    layout.Controls.Add(description, 0, 2);
-    layout.Controls.Add(sliderLayout, 0, 3);
-    layout.Controls.Add(scaleLabels, 0, 4);
-    Controls.Add(layout);
+    _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+    _layout.Controls.Add(title, 0, 0);
+    _layout.Controls.Add(settingTitle, 0, 1);
+    _layout.Controls.Add(_description, 0, 2);
+    _layout.Controls.Add(sliderLayout, 0, 3);
+    _layout.Controls.Add(scaleLabels, 0, 4);
+    Controls.Add(_layout);
+    RecalculateLayout(force: true);
 
     _queueCapacitySlider.ValueChanged += (_, _) =>
     {
@@ -199,6 +188,87 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
       return true;
     }
     return base.ProcessCmdKey(ref message, keyData);
+  }
+
+
+  protected override void OnFontChanged(EventArgs eventArgs)
+  {
+    base.OnFontChanged(eventArgs);
+    RecalculateLayout(force: true);
+  }
+
+  protected override void OnDpiChangedAfterParent(EventArgs eventArgs)
+  {
+    base.OnDpiChangedAfterParent(eventArgs);
+    RecalculateLayout(force: true);
+  }
+
+  protected override void OnResize(EventArgs eventArgs)
+  {
+    base.OnResize(eventArgs);
+    RecalculateLayout(force: false);
+  }
+
+  protected override void OnVisibleChanged(EventArgs eventArgs)
+  {
+    if (Visible)
+    {
+      RecalculateLayout(force: true);
+    }
+    base.OnVisibleChanged(eventArgs);
+  }
+
+  private void RecalculateLayout(bool force)
+  {
+    if (_adjustingLayout || _layout is null || _description is null)
+    {
+      return;
+    }
+
+    int textWidth = Math.Max(1, ClientSize.Width - _layout.Padding.Horizontal);
+    int dpi = DeviceDpi;
+    if (!force &&
+        textWidth == _lastMeasuredTextWidth &&
+        dpi == _lastMeasuredDpi &&
+        ReferenceEquals(_description.Font, _lastMeasuredFont))
+    {
+      return;
+    }
+
+    _adjustingLayout = true;
+    try
+    {
+      Size descriptionSize = TextRenderer.MeasureText(
+        BufferingDescription,
+        _description.Font,
+        new Size(textWidth, int.MaxValue),
+        TextFormatFlags.TextBoxControl |
+        TextFormatFlags.WordBreak |
+        TextFormatFlags.NoPadding);
+      int verticalAllowance = Math.Max(6, LogicalToDeviceUnits(6));
+      int descriptionHeight = descriptionSize.Height + verticalAllowance;
+      _layout.RowStyles[2].Height = descriptionHeight;
+
+      int requiredHeight = _layout.Padding.Vertical +
+        (int)_layout.RowStyles[0].Height +
+        (int)_layout.RowStyles[1].Height +
+        descriptionHeight +
+        (int)_layout.RowStyles[3].Height +
+        (int)_layout.RowStyles[4].Height +
+        Math.Max(2, LogicalToDeviceUnits(2));
+      if (Height != requiredHeight)
+      {
+        Height = requiredHeight;
+      }
+
+      _lastMeasuredTextWidth = textWidth;
+      _lastMeasuredDpi = dpi;
+      _lastMeasuredFont = _description.Font;
+    }
+    finally
+    {
+      _adjustingLayout = false;
+    }
   }
 
   private void UpdateValueText()
