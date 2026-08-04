@@ -72,11 +72,11 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     _queueCapacitySlider.AccessibleName = "Highlight buffering";
     _queueCapacitySlider.AccessibleDescription = BufferingDescription;
 
-    _queueCapacityValue.AutoSize = false;
-    _queueCapacityValue.Dock = DockStyle.Fill;
+    _queueCapacityValue.AutoSize = true;
+    _queueCapacityValue.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _queueCapacityValue.Margin = Padding.Empty;
-    _queueCapacityValue.Padding = new Padding(0, 0, 0, 6);
-    _queueCapacityValue.TextAlign = ContentAlignment.MiddleRight;
+    _queueCapacityValue.TextAlign = ContentAlignment.TopRight;
+    UpdateValueLabelMinimumWidth();
 
     var scaleLabels = new TableLayoutPanel
     {
@@ -110,7 +110,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
       Margin = Padding.Empty
     };
     sliderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    sliderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
+    sliderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     sliderLayout.Controls.Add(_queueCapacitySlider, 0, 0);
     sliderLayout.Controls.Add(_queueCapacityValue, 1, 0);
 
@@ -246,6 +246,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     _adjustingLayout = true;
     try
     {
+      UpdateValueLabelMinimumWidth();
       _layout.Width = layoutWidth;
       _description.MinimumSize = Size.Empty;
       _description.MaximumSize = new Size(textWidth, 0);
@@ -266,6 +267,16 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
     {
       _adjustingLayout = false;
     }
+  }
+
+  private void UpdateValueLabelMinimumWidth()
+  {
+    int width = TextRenderer.MeasureText(
+      "16 positions",
+      _queueCapacityValue.Font,
+      Size.Empty,
+      TextFormatFlags.NoPadding).Width + LogicalToDeviceUnits(8);
+    _queueCapacityValue.MinimumSize = new Size(width, 0);
   }
 
   private void UpdateValueText()

@@ -1,6 +1,14 @@
-# Agent Panel Speaker v141
+# Agent Panel Speaker v142
 
 
+
+
+## v142 advanced-popup value-label alignment
+
+- Top-aligns the highlight-buffer value label in the existing slider row.
+- Sizes the value column from the widest possible label (`16 positions`) so
+  two-digit values are never clipped.
+- Leaves the confirmed Ctrl+C shutdown behavior unchanged.
 
 
 ## v141 external termination and advanced-popup layout correction
