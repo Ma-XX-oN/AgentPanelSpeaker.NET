@@ -708,6 +708,11 @@ internal sealed class HoverPopupController : IDisposable
       popupContainsFocus = popup?.ContainsFocus ?? false
     });
 
+    if (form is { IsDisposed: false, Visible: true } &&
+        !ReferenceEquals(Form.ActiveForm, form))
+    {
+      form.Activate();
+    }
     node.FocusInitialControl();
     ShowKeyboardFocusCue(form, node, reason);
 

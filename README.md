@@ -1,5 +1,11 @@
-# Agent Panel Speaker v135
+# Agent Panel Speaker v136
 
+
+## v136 popup-form focus activation
+
+When keyboard or click interaction requests focus inside a popup hosted by its own
+`Form`, the shared popup controller now activates that form before selecting the
+popup's initial control.  Hover-only opening remains non-activating.
 
 ## v135 popup focus traversal
 
