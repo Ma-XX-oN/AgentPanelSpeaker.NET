@@ -73,6 +73,8 @@ internal sealed class HoverPopupController : IDisposable
     public Func<bool>? KeepOpen { get; init; }
     public required int OpenDelayMilliseconds { get; init; }
     public required int CloseDelayMilliseconds { get; init; }
+    public required bool OpenOnHover { get; init; }
+    public required bool OpenOnFocus { get; init; }
     public PopupNode? Parent { get; init; }
     public List<PopupNode> Children { get; } = new();
     public HashSet<Control> WiredControls { get; } = new();
@@ -102,7 +104,9 @@ internal sealed class HoverPopupController : IDisposable
     Action focusInitialControl,
     int openDelayMilliseconds = 250,
     int closeDelayMilliseconds = 1000,
-    Func<bool>? keepOpen = null)
+    Func<bool>? keepOpen = null,
+    bool openOnHover = true,
+    bool openOnFocus = true)
   {
     _root = CreateNode(
       parent: null,
@@ -113,7 +117,9 @@ internal sealed class HoverPopupController : IDisposable
       focusInitialControl,
       openDelayMilliseconds,
       closeDelayMilliseconds,
-      keepOpen);
+      keepOpen,
+      openOnHover,
+      openOnFocus);
     RegisterController(this);
   }
 
@@ -134,7 +140,9 @@ internal sealed class HoverPopupController : IDisposable
     Action focusInitialControl,
     int openDelayMilliseconds = 250,
     int closeDelayMilliseconds = 1000,
-    Func<bool>? keepOpen = null)
+    Func<bool>? keepOpen = null,
+    bool openOnHover = true,
+    bool openOnFocus = true)
   {
     ThrowIfDisposed();
     PopupNode node = CreateNode(
@@ -146,7 +154,9 @@ internal sealed class HoverPopupController : IDisposable
       focusInitialControl,
       openDelayMilliseconds,
       closeDelayMilliseconds,
-      keepOpen);
+      keepOpen,
+      openOnHover,
+      openOnFocus);
     _root.Children.Add(node);
     return new PopupHandle(this, node.Id);
   }
@@ -409,7 +419,9 @@ internal sealed class HoverPopupController : IDisposable
     Action focusInitialControl,
     int openDelayMilliseconds,
     int closeDelayMilliseconds,
-    Func<bool>? keepOpen)
+    Func<bool>? keepOpen,
+    bool openOnHover,
+    bool openOnFocus)
   {
     ArgumentNullException.ThrowIfNull(anchor);
     ArgumentNullException.ThrowIfNull(getPopupControls);
@@ -428,7 +440,9 @@ internal sealed class HoverPopupController : IDisposable
       FocusInitialControl = focusInitialControl,
       OpenDelayMilliseconds = Math.Max(1, openDelayMilliseconds),
       CloseDelayMilliseconds = Math.Max(1, closeDelayMilliseconds),
-      KeepOpen = keepOpen
+      KeepOpen = keepOpen,
+      OpenOnHover = openOnHover,
+      OpenOnFocus = openOnFocus
     };
     node.OpenTimer.Interval = node.OpenDelayMilliseconds;
     node.CloseTimer.Interval = node.CloseDelayMilliseconds;
@@ -647,7 +661,9 @@ internal sealed class HoverPopupController : IDisposable
     {
       return;
     }
-    if (node.State == PopupState.Closed && node.Anchor.Enabled)
+    if (node.OpenOnHover &&
+        node.State == PopupState.Closed &&
+        node.Anchor.Enabled)
     {
       node.OpenTimer.Stop();
       node.OpenTimer.Start();
@@ -680,7 +696,9 @@ internal sealed class HoverPopupController : IDisposable
       node.SuppressNextAnchorFocusOpen = false;
       return;
     }
-    if (node.State == PopupState.Closed && node.Anchor.Enabled)
+    if (node.OpenOnFocus &&
+        node.State == PopupState.Closed &&
+        node.Anchor.Enabled)
     {
       OpenNode(node, focusPopup: true);
     }

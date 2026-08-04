@@ -1,7 +1,15 @@
-# Agent Panel Speaker v144
+# Agent Panel Speaker v145
 
 
 
+
+## v145 click-only selective-save dropdown
+
+- Changed the selective-save glyph to `▼` and narrowed its button.
+- The selective-save popup now opens only from an explicit click on that
+  dropdown button.  Hovering or tab-focusing the button does not open it.
+- The click-only behaviour is configured through the shared popup controller,
+  not through popup-specific event suppression.
 
 ## v144 dropdown affordance and inline close prompt
 

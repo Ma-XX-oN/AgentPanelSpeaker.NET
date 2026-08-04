@@ -165,7 +165,9 @@ internal sealed class MainForm : Form, IMessageFilter
         () => new[] { _saveSettingsPopup },
         ShowSaveSettingsPopup,
         HideSaveSettingsPopup,
-        _saveSettingsPopup.FocusInitialControl);
+        _saveSettingsPopup.FocusInitialControl,
+        openOnHover: false,
+        openOnFocus: false);
       _saveSettingsPopup.SaveRequested += (_, _) =>
       {
         if (CommitSelectedSettings(
@@ -200,7 +202,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v144";
+    Text = "Agent Panel Speaker v145";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -252,10 +254,10 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.ProcessingClock,
       "Speak AI processing time (' or Alt+')");
     ConfigureButton(_saveSettingsButton, "Save settings");
-    ConfigureButton(_saveSelectedSettingsButton, "⌄");
+    ConfigureButton(_saveSelectedSettingsButton, "▼");
     _saveSettingsButton.Margin = new Padding(3, 3, 0, 3);
     _saveSelectedSettingsButton.Margin = new Padding(0, 3, 3, 3);
-    _saveSelectedSettingsButton.Width = 28;
+    _saveSelectedSettingsButton.Width = 22;
     _toolTip.SetToolTip(
       _saveSelectedSettingsButton,
       "Choose which changed settings to save.");
