@@ -197,15 +197,9 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
     _tree.NodeMouseClick += TreeNodeMouseClick;
     _tree.KeyDown += TreeKeyDown;
 
-    var selectAll = new Button { AutoSize = true, Text = "Select all" };
-    var selectNone = new Button { AutoSize = true, Text = "Select none" };
-    selectAll.Click += (_, _) => SetAll(true);
-    selectNone.Click += (_, _) => SetAll(false);
     _buttons.AutoSize = true;
     _buttons.Dock = DockStyle.Fill;
     _buttons.WrapContents = false;
-    _buttons.Controls.Add(selectAll);
-    _buttons.Controls.Add(selectNone);
     if (showSaveButton)
     {
       var saveSelected = new Button
@@ -257,11 +251,16 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
     try
     {
       _tree.Nodes.Clear();
+      var allNode = new TreeNode("All")
+      {
+        StateImageIndex = StateChecked
+      };
+      _tree.Nodes.Add(allNode);
       foreach (SettingsChangeSet.Change change in changes
         .OrderBy(change => change.Path.FirstOrDefault(), StringComparer.CurrentCultureIgnoreCase)
         .ThenBy(change => change.Order))
       {
-        TreeNodeCollection level = _tree.Nodes;
+        TreeNodeCollection level = allNode.Nodes;
         TreeNode? node = null;
         for (int index = 0; index < change.Path.Count; index++)
         {
@@ -286,10 +285,7 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
       _tree.ExpandAll();
       UpdateParentStates(_tree.Nodes);
       SizeToContent(changes);
-      if (_tree.Nodes.Count > 0)
-      {
-        _tree.SelectedNode = FirstLeaf(_tree.Nodes[0]);
-      }
+      _tree.SelectedNode = allNode;
     }
     finally
     {
@@ -368,24 +364,6 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
     }
   }
 
-  private void SetAll(bool isChecked)
-  {
-    _updatingChecks = true;
-    try
-    {
-      foreach (TreeNode node in _tree.Nodes)
-      {
-        SetNodeAndDescendants(
-          node,
-          isChecked ? StateChecked : StateUnchecked);
-      }
-    }
-    finally
-    {
-      _updatingChecks = false;
-    }
-  }
-
   private static void SetNodeAndDescendants(TreeNode node, int state)
   {
     node.StateImageIndex = state;
@@ -431,7 +409,7 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
   {
     Rectangle workingArea = Screen.FromPoint(Cursor.Position).WorkingArea;
     int visibleRows = CountVisibleNodes(_tree.Nodes);
-    int deepest = changes.Count == 0 ? 1 : changes.Max(change => change.Path.Count);
+    int deepest = changes.Count == 0 ? 1 : changes.Max(change => change.Path.Count) + 1;
     int longestText = changes
       .SelectMany(change => change.Path)
       .DefaultIfEmpty("Changed settings")
@@ -461,15 +439,6 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
       count += CountVisibleNodes(node.Nodes);
     }
     return count;
-  }
-
-  private static TreeNode FirstLeaf(TreeNode node)
-  {
-    while (node.Nodes.Count > 0)
-    {
-      node = node.Nodes[0];
-    }
-    return node;
   }
 
   private static IEnumerable<TreeNode> EnumerateLeaves(TreeNodeCollection nodes)

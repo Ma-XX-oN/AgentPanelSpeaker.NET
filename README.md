@@ -1,7 +1,15 @@
-# Agent Panel Speaker v142
+# Agent Panel Speaker v143
 
 
 
+
+## v143 changed-settings root and joined Save control
+
+- Replaced the changed-settings popup's Select all/Select none buttons with a
+  tri-state `All` root node.  Selecting the root selects or clears every changed
+  setting, while partial selection is shown by the existing mixed state.
+- Removed the visual gap between `Save settings` and its selective-save `›`
+  disclosure button so they read as one split control.
 
 ## v142 advanced-popup value-label alignment
 
@@ -1590,8 +1598,8 @@ persistent only after saving.
 
 Closing with unsaved settings displays **Save changed settings before closing?**
 with **Cancel** as the default action.  The **changed settings** link opens a
-secondary popup containing only modified settings, with Select all and Select
-none controls.  Pressing OK saves checked changes, discards unchecked changes,
+secondary popup containing only modified settings, rooted by a tri-state All
+item that selects or clears every changed setting.  Pressing OK saves checked changes, discards unchecked changes,
 and closes.  Cancel returns to the application.
 
 ### v128
