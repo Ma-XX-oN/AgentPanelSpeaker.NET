@@ -205,7 +205,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v148";
+    Text = "Agent Panel Speaker v149";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -358,7 +358,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       AutoSize = true,
       ColumnCount = 4,
-      RowCount = 5,
+      RowCount = 6,
       Dock = DockStyle.Fill,
       CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
     };
@@ -369,9 +369,10 @@ internal sealed class MainForm : Form, IMessageFilter
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     AddSpeechHeader(speechTable);
     AddMasterSpeechRow(speechTable, 1);
-    AddVoiceRow(speechTable, 2, SpeechRole.Agent, "AI agent");
-    AddVoiceRow(speechTable, 3, SpeechRole.Subagent, "AI subagent");
-    AddVoiceRow(speechTable, 4, SpeechRole.User, "User");
+    AddMasterSpeechTestRow(speechTable, 2);
+    AddVoiceRow(speechTable, 3, SpeechRole.Agent, "AI agent");
+    AddVoiceRow(speechTable, 4, SpeechRole.Subagent, "AI subagent");
+    AddVoiceRow(speechTable, 5, SpeechRole.User, "User");
 
     var options = new FlowLayoutPanel
     {
@@ -693,6 +694,76 @@ internal sealed class MainForm : Form, IMessageFilter
       "Neutral values are rate 0, pitch 0, and volume 100.");
   }
 
+
+  /// <summary>
+  /// Adds test buttons that speak every role/profile combination using the
+  /// current master adjustments.
+  /// </summary>
+  private void AddMasterSpeechTestRow(TableLayoutPanel table, int row)
+  {
+    var tests = new FlowLayoutPanel
+    {
+      AutoSize = true,
+      Dock = DockStyle.Fill,
+      Margin = new Padding(3),
+      WrapContents = true
+    };
+
+    AddMasterSpeechTestButton(
+      tests,
+      "Agent Main",
+      SpeechRole.Agent,
+      context: false);
+    AddMasterSpeechTestButton(
+      tests,
+      "Agent Context",
+      SpeechRole.Agent,
+      context: true);
+    AddMasterSpeechTestButton(
+      tests,
+      "Subagent Main",
+      SpeechRole.Subagent,
+      context: false);
+    AddMasterSpeechTestButton(
+      tests,
+      "Subagent Context",
+      SpeechRole.Subagent,
+      context: true);
+    AddMasterSpeechTestButton(
+      tests,
+      "User Main",
+      SpeechRole.User,
+      context: false);
+    AddMasterSpeechTestButton(
+      tests,
+      "User Quote",
+      SpeechRole.User,
+      context: true);
+
+    table.Controls.Add(MakeInlineLabel("Test"), 0, row);
+    table.Controls.Add(tests, 1, row);
+    table.SetColumnSpan(tests, 3);
+  }
+
+  /// <summary>
+  /// Adds one immediate master-adjusted speech test button.
+  /// </summary>
+  private void AddMasterSpeechTestButton(
+    FlowLayoutPanel tests,
+    string text,
+    SpeechRole role,
+    bool context)
+  {
+    var button = new Button
+    {
+      AutoSize = true,
+      Text = text,
+      Margin = new Padding(3)
+    };
+    button.Click += (_, _) => PreviewVoiceSettings(role, context);
+    tests.Controls.Add(button);
+  }
+
   /// <summary>
   /// Adds one shared-voice role row with independent Main and Context
   /// profiles.
@@ -766,7 +837,8 @@ internal sealed class MainForm : Form, IMessageFilter
     contextProfile.TransportKeyPressed += ProfileTransportKeyPressed;
     mainProfile.FocusTraversalRequested += ProfileFocusTraversalRequested;
     contextProfile.FocusTraversalRequested += ProfileFocusTraversalRequested;
-    previewTimer.Tick += (_, _) => PreviewVoiceSettings(role);
+    previewTimer.Tick += (_, _) =>
+      PreviewVoiceSettings(role, controls.PreviewContext);
 
     _toolTip.SetToolTip(
       mainProfile,
@@ -1206,9 +1278,23 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Returns the user-facing profile name for diagnostics.
+  /// </summary>
+  private static string GetProfileDisplayName(
+    SpeechRole role,
+    bool context)
+  {
+    if (!context)
+    {
+      return "Main";
+    }
+    return role == SpeechRole.User ? "Quote" : "Context";
+  }
+
+  /// <summary>
   /// Speaks the edited role profile unless monitoring owns speech.
   /// </summary>
-  private void PreviewVoiceSettings(SpeechRole role)
+  private void PreviewVoiceSettings(SpeechRole role, bool context)
   {
     VoiceRowControls row = _voiceRows[role];
     row.PreviewTimer.Stop();
@@ -1220,7 +1306,6 @@ internal sealed class MainForm : Form, IMessageFilter
 
     try
     {
-      bool context = row.PreviewContext;
       SpeechProfileSettings profile = new SpeechMasterSettings(
         _masterSpeechProfile.Rate,
         _masterSpeechProfile.Pitch,
@@ -1233,7 +1318,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
       _voiceSettingPreviewActive = true;
       AppendLog(
-        $"Previewing {role} {(context ? "Thoughts" : "Main")}: " +
+        $"Previewing {role} {GetProfileDisplayName(role, context)}: " +
         $"voice={profile.VoiceName}; rate={profile.Rate}; " +
         $"pitch={profile.Pitch}; volume={profile.Volume}%.");
       string message = context

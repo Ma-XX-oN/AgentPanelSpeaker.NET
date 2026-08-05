@@ -1,7 +1,13 @@
-# Agent Panel Speaker v148
+# Agent Panel Speaker v149
 
 
+## v149 master speech test buttons
 
+- Adds six immediate test buttons below the Master Speech Profile.
+- The order is Agent Main, Agent Context, Subagent Main, Subagent Context,
+  User Main, and User Quote.
+- Each test uses the selected role voice and profile after applying the current
+  Master rate, pitch, and volume adjustments.
 
 ## v148 master speech and voice-state defaults
 
