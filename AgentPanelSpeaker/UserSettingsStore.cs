@@ -18,6 +18,7 @@ internal sealed class UserSettingsStore
 
   private readonly object _sync = new();
   private readonly HashSet<string> _installedVoices;
+  private readonly IReadOnlyList<string> _installedVoiceOrder;
   private UserSettings _current;
   private UserSettings _saved;
 
@@ -26,11 +27,11 @@ internal sealed class UserSettingsStore
   /// </summary>
   public UserSettingsStore(IReadOnlyList<string> installedVoices)
   {
+    _installedVoiceOrder = installedVoices.ToArray();
     _installedVoices = new HashSet<string>(
       installedVoices,
       StringComparer.OrdinalIgnoreCase);
-    string? defaultVoice = installedVoices.FirstOrDefault();
-    _current = LoadOrDefault(defaultVoice);
+    _current = LoadOrDefault(_installedVoiceOrder);
     _saved = _current;
   }
 
@@ -129,7 +130,7 @@ internal sealed class UserSettingsStore
   {
     lock (_sync)
     {
-      _current = UserSettings.CreateDefault(_installedVoices.FirstOrDefault());
+      _current = UserSettings.CreateDefault(_installedVoiceOrder);
       return _current;
     }
   }
@@ -195,13 +196,13 @@ internal sealed class UserSettingsStore
   /// <summary>
   /// Loads settings or returns defaults after any read/parse failure.
   /// </summary>
-  private UserSettings LoadOrDefault(string? defaultVoice)
+  private UserSettings LoadOrDefault(IReadOnlyList<string> defaultVoices)
   {
     try
     {
       if (!File.Exists(FilePath))
       {
-        return UserSettings.CreateDefault(defaultVoice);
+        return UserSettings.CreateDefault(defaultVoices);
       }
 
       string json = File.ReadAllText(FilePath);
@@ -209,20 +210,20 @@ internal sealed class UserSettingsStore
       if (document.RootElement.TryGetProperty(
             "schemaVersion",
             out JsonElement schemaVersion) &&
-          schemaVersion.GetInt32() >= SettingsDocument.CurrentSchemaVersion)
+          schemaVersion.GetInt32() > 0)
       {
         SettingsDocument? current =
           JsonSerializer.Deserialize<SettingsDocument>(json, JsonOptions);
         return current is null
-          ? UserSettings.CreateDefault(defaultVoice)
-          : Normalize(current.ToRuntime(defaultVoice));
+          ? UserSettings.CreateDefault(defaultVoices)
+          : Normalize(current.ToRuntime(defaultVoices));
       }
 
       UserSettings? legacy = JsonSerializer.Deserialize<UserSettings>(
         json,
         JsonOptions);
       return legacy is null
-        ? UserSettings.CreateDefault(defaultVoice)
+        ? UserSettings.CreateDefault(defaultVoices)
         : Normalize(legacy);
     }
     catch (Exception exception) when (
@@ -235,7 +236,7 @@ internal sealed class UserSettingsStore
         path = FilePath,
         exception = exception.ToString()
       });
-      return UserSettings.CreateDefault(defaultVoice);
+      return UserSettings.CreateDefault(defaultVoices);
     }
   }
 
@@ -326,6 +327,8 @@ internal sealed class UserSettingsStore
         ? settings.Theme
         : AppTheme.System,
       Hotkeys = (settings.Hotkeys ?? HotkeySettings.Default).Normalize(),
+      MasterSpeech = (settings.MasterSpeech ?? SpeechMasterSettings.Default)
+        .Normalize(),
       PollIntervalMilliseconds = Math.Clamp(
         settings.PollIntervalMilliseconds,
         50,

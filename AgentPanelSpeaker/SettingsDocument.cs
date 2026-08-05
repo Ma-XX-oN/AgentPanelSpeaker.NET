@@ -5,7 +5,7 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed record SettingsDocument
 {
-  public const int CurrentSchemaVersion = 15;
+  public const int CurrentSchemaVersion = 16;
 
   public int SchemaVersion { get; init; } = CurrentSchemaVersion;
   public SessionSettingsDocument Session { get; init; } = new();
@@ -27,6 +27,7 @@ internal sealed record SettingsDocument
     },
     Speech = new SpeechSettingsDocument
     {
+      Master = SpeechAdjustmentSettingsDocument.FromMaster(settings.MasterSpeech),
       Assistant = SpeechRoleSettingsDocument.FromProfiles(
         settings.Assistant,
         settings.Reasoning),
@@ -64,15 +65,16 @@ internal sealed record SettingsDocument
     }
   };
 
-  public UserSettings ToRuntime(string? defaultVoice)
+  public UserSettings ToRuntime(IReadOnlyList<string> defaultVoices)
   {
-    UserSettings defaults = UserSettings.CreateDefault(defaultVoice);
+    UserSettings defaults = UserSettings.CreateDefault(defaultVoices);
     SpeechRoleSettingsDocument assistant = Speech.Assistant ?? new();
     SpeechRoleSettingsDocument subagent = Speech.Subagent ?? new();
     SpeechRoleSettingsDocument user = Speech.User ?? new();
     return defaults with
     {
       Version = UserSettings.CurrentVersion,
+      MasterSpeech = Speech.Master.ToMaster(),
       Source = Session.Source,
       FollowNewestSession = Session.FollowNewestSession,
       ManualSessionPath = Session.ManualSessionPath,
@@ -111,6 +113,7 @@ internal sealed record SessionSettingsDocument
 
 internal sealed record SpeechSettingsDocument
 {
+  public SpeechAdjustmentSettingsDocument Master { get; init; } = new();
   public SpeechRoleSettingsDocument Assistant { get; init; } = new();
   public SpeechRoleSettingsDocument Subagent { get; init; } = new();
   public SpeechRoleSettingsDocument User { get; init; } = new();
@@ -146,6 +149,17 @@ internal sealed record SpeechAdjustmentSettingsDocument
   public int Rate { get; init; }
   public int Pitch { get; init; }
   public int Volume { get; init; } = 100;
+
+  public static SpeechAdjustmentSettingsDocument FromMaster(
+    SpeechMasterSettings master) => new()
+  {
+    Rate = master.Rate,
+    Pitch = master.Pitch,
+    Volume = master.Volume
+  };
+
+  public SpeechMasterSettings ToMaster() =>
+    new SpeechMasterSettings(Rate, Pitch, Volume).Normalize();
 
   public static SpeechAdjustmentSettingsDocument FromProfile(
     SpeechProfileSettings profile) => new()

@@ -10,6 +10,8 @@ internal static class ThemeManager
 {
   private const int DwmUseImmersiveDarkMode = 20;
 
+  public const string VoiceSelectorTag = "voice-selector";
+
   private static readonly Color DarkWindow = Color.FromArgb(32, 32, 32);
   private static readonly Color DarkControl = Color.FromArgb(45, 45, 48);
   private static readonly Color DarkInput = Color.FromArgb(30, 30, 30);
@@ -17,6 +19,10 @@ internal static class ThemeManager
   private static readonly Color DarkDisabled = Color.FromArgb(145, 145, 145);
   private static readonly Color DarkLink = Color.FromArgb(100, 180, 255);
   private static readonly Color DarkActiveLink = Color.FromArgb(160, 210, 255);
+  private static readonly Color DarkCaution = Color.FromArgb(105, 82, 20);
+  private static readonly Color DarkCautionText = Color.FromArgb(255, 236, 160);
+  private static readonly Color LightCaution = Color.FromArgb(255, 235, 140);
+  private static readonly Color LightCautionText = Color.FromArgb(55, 42, 0);
 
   /// <summary>
   /// Gets whether the effective theme is dark.
@@ -149,10 +155,14 @@ internal static class ThemeManager
     comboBox.ForeColor = foreground;
     comboBox.DrawItem -= DrawComboBoxItem;
 
-    if (dark)
+    bool voiceSelector = string.Equals(
+      comboBox.Tag as string,
+      VoiceSelectorTag,
+      StringComparison.Ordinal);
+    if (dark || voiceSelector)
     {
       comboBox.DrawMode = DrawMode.OwnerDrawFixed;
-      comboBox.FlatStyle = FlatStyle.Flat;
+      comboBox.FlatStyle = dark ? FlatStyle.Flat : FlatStyle.Standard;
       comboBox.DrawItem += DrawComboBoxItem;
       return;
     }
@@ -174,24 +184,37 @@ internal static class ThemeManager
     }
 
     bool selected = (eventArgs.State & DrawItemState.Selected) != 0;
-    Color background = selected
-      ? SystemColors.Highlight
-      : comboBox.BackColor;
+    string text = (eventArgs.Index >= 0 &&
+      eventArgs.Index < comboBox.Items.Count
+        ? comboBox.GetItemText(comboBox.Items[eventArgs.Index])
+        : comboBox.GetItemText(comboBox.SelectedItem)) ?? string.Empty;
+    bool voiceSelector = string.Equals(
+      comboBox.Tag as string,
+      VoiceSelectorTag,
+      StringComparison.Ordinal);
+    bool caution = voiceSelector && string.Equals(
+      text,
+      SpeechProfileSettings.NotSpoken,
+      StringComparison.Ordinal);
+    bool dark = comboBox.BackColor.GetBrightness() < 0.35f;
+    Color background = caution
+      ? dark ? DarkCaution : LightCaution
+      : selected
+        ? SystemColors.Highlight
+        : comboBox.BackColor;
     Color foreground = !comboBox.Enabled
       ? DarkDisabled
-      : selected
-        ? SystemColors.HighlightText
-        : comboBox.ForeColor;
+      : caution
+        ? dark ? DarkCautionText : LightCautionText
+        : selected
+          ? SystemColors.HighlightText
+          : comboBox.ForeColor;
 
     using (var brush = new SolidBrush(background))
     {
       eventArgs.Graphics.FillRectangle(brush, eventArgs.Bounds);
     }
 
-    string text = (eventArgs.Index >= 0 &&
-      eventArgs.Index < comboBox.Items.Count
-        ? comboBox.GetItemText(comboBox.Items[eventArgs.Index])
-        : comboBox.GetItemText(comboBox.SelectedItem)) ?? string.Empty;
     var textBounds = new Rectangle(
       eventArgs.Bounds.X + 2,
       eventArgs.Bounds.Y,

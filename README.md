@@ -1,7 +1,20 @@
-# Agent Panel Speaker v146
+# Agent Panel Speaker v148
 
 
 
+
+## v148 master speech and voice-state defaults
+
+- Adds a Master speech profile using the same compact rate/pitch/volume editor.
+- Master rate and pitch are additive offsets clipped to the supported range.
+- Master volume scales each role volume, with 100 as neutral.
+- Reset defaults choose the first, second, and third enumerated installed voices
+  for Assistant, Subagent, and User, falling back cyclically when fewer voices
+  are installed.
+- Main defaults are rate 0, pitch 0, volume 100. Thoughts/Quote defaults are
+  rate 0, pitch -10, volume 100.
+- Voice selectors use a theme-aware caution-yellow background when set to
+  Not Spoken while remaining enabled for reconfiguration.
 
 ## v146 click-only selective-save dropdown
 

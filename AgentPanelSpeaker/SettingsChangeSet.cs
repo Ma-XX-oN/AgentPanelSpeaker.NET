@@ -23,6 +23,12 @@ internal static class SettingsChangeSet
     AddScalar("Session/FollowNewest", ["Session", "Auto-follow newest session"], saved.FollowNewestSession, working.FollowNewestSession);
     AddScalar("Session/Path", ["Session", "Selected session path"], saved.ManualSessionPath, working.ManualSessionPath);
 
+    AddMasterAdjustments(
+      "Speech/Master",
+      ["Speech", "Master"],
+      saved.MasterSpeech,
+      working.MasterSpeech);
+
     AddSpeechRole(
       "Speech/Assistant",
       ["Speech", "Assistant"],
@@ -117,6 +123,17 @@ internal static class SettingsChangeSet
       IReadOnlyList<string> pathPrefix,
       SpeechProfileSettings oldValue,
       SpeechProfileSettings newValue)
+    {
+      AddScalar($"{keyPrefix}/Rate", [.. pathPrefix, "Rate"], oldValue.Rate, newValue.Rate);
+      AddScalar($"{keyPrefix}/Pitch", [.. pathPrefix, "Pitch"], oldValue.Pitch, newValue.Pitch);
+      AddScalar($"{keyPrefix}/Volume", [.. pathPrefix, "Volume"], oldValue.Volume, newValue.Volume);
+    }
+
+    void AddMasterAdjustments(
+      string keyPrefix,
+      IReadOnlyList<string> pathPrefix,
+      SpeechMasterSettings oldValue,
+      SpeechMasterSettings newValue)
     {
       AddScalar($"{keyPrefix}/Rate", [.. pathPrefix, "Rate"], oldValue.Rate, newValue.Rate);
       AddScalar($"{keyPrefix}/Pitch", [.. pathPrefix, "Pitch"], oldValue.Pitch, newValue.Pitch);
@@ -256,6 +273,12 @@ internal static class SettingsChangeSet
       Source = Pick("Session/Source", saved.Source, working.Source),
       FollowNewestSession = Pick("Session/FollowNewest", saved.FollowNewestSession, working.FollowNewestSession),
       ManualSessionPath = Pick("Session/Path", saved.ManualSessionPath, working.ManualSessionPath),
+      MasterSpeech = saved.MasterSpeech with
+      {
+        Rate = Pick("Speech/Master/Rate", saved.MasterSpeech.Rate, working.MasterSpeech.Rate),
+        Pitch = Pick("Speech/Master/Pitch", saved.MasterSpeech.Pitch, working.MasterSpeech.Pitch),
+        Volume = Pick("Speech/Master/Volume", saved.MasterSpeech.Volume, working.MasterSpeech.Volume)
+      },
       Assistant = MergeAdjustments("Speech/Assistant/Main", assistantVoice, saved.Assistant, working.Assistant),
       Reasoning = MergeAdjustments("Speech/Assistant/Secondary", assistantVoice, saved.Reasoning, working.Reasoning),
       SubagentAssistant = MergeAdjustments("Speech/Subagent/Main", subagentVoice, saved.SubagentAssistant, working.SubagentAssistant),

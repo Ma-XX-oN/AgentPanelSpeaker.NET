@@ -20,7 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 15;
+  public const int CurrentVersion = 16;
 
   /// <summary>
   /// Gets the main speech profile used for background-agent results.
@@ -64,29 +64,39 @@ internal sealed record UserSettings(
 
   public HotkeySettings Hotkeys { get; init; } = HotkeySettings.Default;
 
+  /// <summary>Gets global speech adjustments.</summary>
+  public SpeechMasterSettings MasterSpeech { get; init; } =
+    SpeechMasterSettings.Default;
+
   /// <summary>
   /// Creates defaults using the first installed voice for assistant output.
   /// </summary>
-  public static UserSettings CreateDefault(string? defaultVoice)
+  public static UserSettings CreateDefault(IReadOnlyList<string> voices)
   {
-    string voice = string.IsNullOrWhiteSpace(defaultVoice)
-      ? SpeechProfileSettings.NotSpoken
-      : defaultVoice;
-    var userProfile = new SpeechProfileSettings(
-      SpeechProfileSettings.NotSpoken,
-      0,
-      0)
+    static string SelectVoice(IReadOnlyList<string> values, int index)
     {
-      Volume = 100
-    };
+      if (values.Count == 0)
+      {
+        return SpeechProfileSettings.NotSpoken;
+      }
+      return values[index % values.Count];
+    }
+
+    string assistantVoice = SelectVoice(voices, 0);
+    string subagentVoice = SelectVoice(voices, 1);
+    string userVoice = SelectVoice(voices, 2);
+    static SpeechProfileSettings Profile(
+      string voice,
+      int pitch) => new(voice, 0, pitch) { Volume = 100 };
+
     return new UserSettings(
       CurrentVersion,
       AgentSource.Auto,
       FollowNewestSession: true,
       ManualSessionPath: null,
-      new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },
-      new SpeechProfileSettings(voice, 0, 0) { Volume = 100 },
-      userProfile,
+      Profile(assistantVoice, 0),
+      Profile(assistantVoice, -10),
+      Profile(userVoice, 0),
       SpokenFencedCodeTypes: string.Empty,
       SpeakLastExistingEnabledMessage: false,
       PollIntervalMilliseconds: 150,
@@ -101,15 +111,10 @@ internal sealed record UserSettings(
       AudioWake = AudioWakeSettings.Default,
       Theme = AppTheme.System,
       Hotkeys = HotkeySettings.Default,
-      SubagentAssistant = new SpeechProfileSettings(voice, 0, 0)
-      {
-        Volume = 100
-      },
-      SubagentReasoning = new SpeechProfileSettings(voice, 0, 0)
-      {
-        Volume = 100
-      },
-      UserContext = userProfile,
+      MasterSpeech = SpeechMasterSettings.Default,
+      SubagentAssistant = Profile(subagentVoice, 0),
+      SubagentReasoning = Profile(subagentVoice, -10),
+      UserContext = Profile(userVoice, -10),
       KeepDisplayOnWhileSpeaking = false,
       Transcript = TranscriptSettings.Default
     };
@@ -132,7 +137,7 @@ internal sealed record UserSettings(
   /// </summary>
   public SpeechProfileSettings GetProfile(ContentCategory category)
   {
-    return category switch
+    SpeechProfileSettings profile = category switch
     {
       ContentCategory.Assistant => Assistant,
       ContentCategory.Reasoning => Reasoning,
@@ -145,5 +150,6 @@ internal sealed record UserSettings(
         category,
         null)
     };
+    return MasterSpeech.Apply(profile);
   }
 }

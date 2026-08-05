@@ -89,6 +89,8 @@ internal sealed class MainForm : Form, IMessageFilter
     new();
   private readonly TableLayoutPanel _mainLayout = new();
   private readonly Dictionary<SpeechRole, VoiceRowControls> _voiceRows = new();
+  private readonly SpeechProfileCompactControl _masterSpeechProfile =
+    new("Master Speech Profile");
   private readonly VoiceDisplayField[] _voiceDisplayOrder =
   {
     VoiceDisplayField.Location,
@@ -203,7 +205,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v146";
+    Text = "Agent Panel Speaker v148";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -356,7 +358,7 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       AutoSize = true,
       ColumnCount = 4,
-      RowCount = 4,
+      RowCount = 5,
       Dock = DockStyle.Fill,
       CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
     };
@@ -366,9 +368,10 @@ internal sealed class MainForm : Form, IMessageFilter
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     AddSpeechHeader(speechTable);
-    AddVoiceRow(speechTable, 1, SpeechRole.Agent, "AI agent");
-    AddVoiceRow(speechTable, 2, SpeechRole.Subagent, "AI subagent");
-    AddVoiceRow(speechTable, 3, SpeechRole.User, "User");
+    AddMasterSpeechRow(speechTable, 1);
+    AddVoiceRow(speechTable, 2, SpeechRole.Agent, "AI agent");
+    AddVoiceRow(speechTable, 3, SpeechRole.Subagent, "AI subagent");
+    AddVoiceRow(speechTable, 4, SpeechRole.User, "User");
 
     var options = new FlowLayoutPanel
     {
@@ -670,6 +673,26 @@ internal sealed class MainForm : Form, IMessageFilter
       0);
   }
 
+
+  /// <summary>
+  /// Adds the global speech adjustment control shared by every role profile.
+  /// </summary>
+  private void AddMasterSpeechRow(TableLayoutPanel table, int row)
+  {
+    _masterSpeechProfile.Width = SpeechProfileWidth * 2 + 6;
+    _masterSpeechProfile.TabIndex = 0;
+    _masterSpeechProfile.ProfileChanged += (_, _) =>
+      SaveControlsToSettings();
+    table.Controls.Add(MakeInlineLabel("Master"), 0, row);
+    table.Controls.Add(MakeInlineLabel("All voices"), 1, row);
+    table.Controls.Add(_masterSpeechProfile, 2, row);
+    table.SetColumnSpan(_masterSpeechProfile, 2);
+    _toolTip.SetToolTip(
+      _masterSpeechProfile,
+      "Adds rate and pitch to every profile and scales every volume. " +
+      "Neutral values are rate 0, pitch 0, and volume 100.");
+  }
+
   /// <summary>
   /// Adds one shared-voice role row with independent Main and Context
   /// profiles.
@@ -684,7 +707,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
       DropDownStyle = ComboBoxStyle.DropDownList,
-      Dock = DockStyle.Top
+      Dock = DockStyle.Top,
+      Tag = ThemeManager.VoiceSelectorTag
     };
     voice.FormattingEnabled = true;
     voice.Format += VoiceComboBoxFormat;
@@ -932,6 +956,10 @@ internal sealed class MainForm : Form, IMessageFilter
       _playbackMailbox.SetCapacity(
         settings.Transcript.HighlightQueueCapacity);
       _diagnosticsMaximized = settings.Transcript.Maximized;
+      _masterSpeechProfile.SetProfile(
+        settings.MasterSpeech.Rate,
+        settings.MasterSpeech.Pitch,
+        settings.MasterSpeech.Volume);
       LoadVoiceRow(
         SpeechRole.Agent,
         settings.Assistant,
@@ -980,6 +1008,7 @@ internal sealed class MainForm : Form, IMessageFilter
       contextProfile.Pitch,
       contextProfile.Volume);
     UpdateVoiceRowState(role);
+    row.Voice.Invalidate();
   }
 
   /// <summary>
@@ -1122,7 +1151,9 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       return;
     }
+    VoiceRowControls row = _voiceRows[role];
     UpdateVoiceRowState(role);
+    row.Voice.Invalidate();
     SaveControlsToSettings();
     ScheduleVoiceSettingsPreview(role, context);
   }
@@ -1190,9 +1221,11 @@ internal sealed class MainForm : Form, IMessageFilter
     try
     {
       bool context = row.PreviewContext;
-      SpeechProfileSettings profile = ReadRoleProfile(
-        role,
-        context).Normalize();
+      SpeechProfileSettings profile = new SpeechMasterSettings(
+        _masterSpeechProfile.Rate,
+        _masterSpeechProfile.Pitch,
+        _masterSpeechProfile.Volume).Apply(
+          ReadRoleProfile(role, context));
       if (!profile.IsSpoken)
       {
         return;
@@ -2081,6 +2114,10 @@ internal sealed class MainForm : Form, IMessageFilter
       Source = GetSelectedSource(),
       FollowNewestSession = _followLatestCheckBox.Checked,
       ManualSessionPath = _pathIsManual ? _sessionPathTextBox.Text : null,
+      MasterSpeech = new SpeechMasterSettings(
+        _masterSpeechProfile.Rate,
+        _masterSpeechProfile.Pitch,
+        _masterSpeechProfile.Volume),
       Assistant = ReadVoiceProfile(ContentCategory.Assistant),
       Reasoning = ReadVoiceProfile(ContentCategory.Reasoning),
       SubagentAssistant = ReadVoiceProfile(
@@ -2314,6 +2351,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
   private IEnumerable<SpeechProfileCompactControl> GetProfileControls()
   {
+    yield return _masterSpeechProfile;
     foreach (VoiceRowControls row in _voiceRows.Values)
     {
       yield return row.MainProfile;
