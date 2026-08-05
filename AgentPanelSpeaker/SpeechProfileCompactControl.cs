@@ -3,6 +3,11 @@ using System.Drawing.Drawing2D;
 namespace AgentPanelSpeaker;
 
 /// <summary>
+/// Defines one optional test action shown in a speech-profile editor.
+/// </summary>
+internal sealed record SpeechProfileTestAction(string Text, Action Invoke);
+
+/// <summary>
 /// Draws and edits one rate, pitch, and volume speech profile.
 /// </summary>
 internal sealed class SpeechProfileCompactControl : Control
@@ -18,6 +23,8 @@ internal sealed class SpeechProfileCompactControl : Control
   private int _rate;
   private int _pitch;
   private int _volume = 100;
+  private IReadOnlyList<SpeechProfileTestAction> _testActions =
+    Array.Empty<SpeechProfileTestAction>();
 
   /// <summary>
   /// Initializes a compact profile control.
@@ -151,6 +158,26 @@ internal sealed class SpeechProfileCompactControl : Control
     Invalidate();
     ProfileChanged?.Invoke(this, EventArgs.Empty);
   }
+
+  /// <summary>
+  /// Sets optional test actions displayed below this profile's sliders.
+  /// </summary>
+  public void SetTestActions(params SpeechProfileTestAction[] actions)
+  {
+    ArgumentNullException.ThrowIfNull(actions);
+    if (_popup is { IsDisposed: false })
+    {
+      throw new InvalidOperationException(
+        "Test actions must be configured before the editor is created.");
+    }
+
+    _testActions = actions.ToArray();
+  }
+
+  /// <summary>
+  /// Gets optional test actions displayed by the profile editor.
+  /// </summary>
+  internal IReadOnlyList<SpeechProfileTestAction> TestActions => _testActions;
 
   /// <summary>
   /// Opens the editor and focuses its first active slider.

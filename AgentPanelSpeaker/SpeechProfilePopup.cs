@@ -16,6 +16,7 @@ internal sealed class SpeechProfilePopup : UserControl
   private readonly TrackBar _rateSlider;
   private readonly TrackBar _pitchSlider;
   private readonly TrackBar _volumeSlider;
+  private readonly List<Button> _testButtons = new();
   private bool _updating;
 
   /// <summary>
@@ -27,7 +28,7 @@ internal sealed class SpeechProfilePopup : UserControl
       throw new ArgumentNullException(nameof(ownerControl));
 
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(344, 164);
+    Size = new Size(344, ownerControl.TestActions.Count > 0 ? 286 : 164);
     TabStop = false;
     Visible = false;
 
@@ -162,10 +163,11 @@ internal sealed class SpeechProfilePopup : UserControl
 
   private Control CreateLayout()
   {
+    bool hasTests = _ownerControl.TestActions.Count > 0;
     var layout = new TableLayoutPanel
     {
       ColumnCount = 3,
-      RowCount = 4,
+      RowCount = hasTests ? 7 : 4,
       Dock = DockStyle.Fill,
       Padding = new Padding(8),
       Margin = Padding.Empty
@@ -174,16 +176,64 @@ internal sealed class SpeechProfilePopup : UserControl
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 33.333f));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 33.333f));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 33.334f));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+    if (hasTests)
+    {
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+    }
 
     layout.Controls.Add(_titleLabel, 0, 0);
     layout.SetColumnSpan(_titleLabel, 3);
     AddSliderRow(layout, 1, _rateLabel, _rateSlider, _rateValue);
     AddSliderRow(layout, 2, _pitchLabel, _pitchSlider, _pitchValue);
     AddSliderRow(layout, 3, _volumeLabel, _volumeSlider, _volumeValue);
+    if (hasTests)
+    {
+      AddTestButtons(layout);
+    }
     return layout;
+  }
+
+  private void AddTestButtons(TableLayoutPanel layout)
+  {
+    var tests = new TableLayoutPanel
+    {
+      ColumnCount = 2,
+      RowCount = 3,
+      Dock = DockStyle.Fill,
+      Margin = Padding.Empty,
+      Padding = Padding.Empty
+    };
+    tests.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+    tests.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+    tests.RowStyles.Add(new RowStyle(SizeType.Percent, 33.333f));
+    tests.RowStyles.Add(new RowStyle(SizeType.Percent, 33.333f));
+    tests.RowStyles.Add(new RowStyle(SizeType.Percent, 33.334f));
+
+    IReadOnlyList<SpeechProfileTestAction> actions = _ownerControl.TestActions;
+    for (int index = 0; index < actions.Count; ++index)
+    {
+      SpeechProfileTestAction action = actions[index];
+      var button = new Button
+      {
+        Dock = DockStyle.Fill,
+        Margin = new Padding(3),
+        Text = action.Text,
+        AutoEllipsis = true,
+        TabStop = true
+      };
+      button.Click += (_, _) => action.Invoke();
+      _testButtons.Add(button);
+      tests.Controls.Add(button, index % 2, index / 2);
+    }
+
+    layout.Controls.Add(tests, 0, 4);
+    layout.SetColumnSpan(tests, 3);
+    layout.SetRowSpan(tests, 3);
   }
 
   private static void AddSliderRow(
@@ -308,21 +358,28 @@ internal sealed class SpeechProfilePopup : UserControl
 
   private void MoveForward()
   {
-    if (_ownerControl.Volume == 0)
-    {
-      _ownerControl.MoveOutsideEditor(forward: true);
-      return;
-    }
-
-    if (_rateSlider.ContainsFocus)
+    if (_ownerControl.Volume > 0 && _rateSlider.ContainsFocus)
     {
       _pitchSlider.Focus();
       return;
     }
 
-    if (_pitchSlider.ContainsFocus)
+    if (_ownerControl.Volume > 0 && _pitchSlider.ContainsFocus)
     {
       _volumeSlider.Focus();
+      return;
+    }
+
+    if (_volumeSlider.ContainsFocus && _testButtons.Count > 0)
+    {
+      _testButtons[0].Focus();
+      return;
+    }
+
+    int buttonIndex = _testButtons.FindIndex(button => button.ContainsFocus);
+    if (buttonIndex >= 0 && buttonIndex + 1 < _testButtons.Count)
+    {
+      _testButtons[buttonIndex + 1].Focus();
       return;
     }
 
@@ -331,19 +388,26 @@ internal sealed class SpeechProfilePopup : UserControl
 
   private void MoveBackward()
   {
-    if (_ownerControl.Volume == 0)
+    int buttonIndex = _testButtons.FindIndex(button => button.ContainsFocus);
+    if (buttonIndex > 0)
     {
-      _ownerControl.MoveOutsideEditor(forward: false);
+      _testButtons[buttonIndex - 1].Focus();
       return;
     }
 
-    if (_volumeSlider.ContainsFocus)
+    if (buttonIndex == 0)
+    {
+      _volumeSlider.Focus();
+      return;
+    }
+
+    if (_ownerControl.Volume > 0 && _volumeSlider.ContainsFocus)
     {
       _pitchSlider.Focus();
       return;
     }
 
-    if (_pitchSlider.ContainsFocus)
+    if (_ownerControl.Volume > 0 && _pitchSlider.ContainsFocus)
     {
       _rateSlider.Focus();
       return;

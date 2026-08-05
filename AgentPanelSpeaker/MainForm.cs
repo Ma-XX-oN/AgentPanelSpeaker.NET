@@ -205,7 +205,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v149";
+    Text = "Agent Panel Speaker v150";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -369,7 +369,6 @@ internal sealed class MainForm : Form, IMessageFilter
     speechTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     AddSpeechHeader(speechTable);
     AddMasterSpeechRow(speechTable, 1);
-    AddMasterSpeechTestRow(speechTable, 2);
     AddVoiceRow(speechTable, 3, SpeechRole.Agent, "AI agent");
     AddVoiceRow(speechTable, 4, SpeechRole.Subagent, "AI subagent");
     AddVoiceRow(speechTable, 5, SpeechRole.User, "User");
@@ -684,6 +683,19 @@ internal sealed class MainForm : Form, IMessageFilter
     _masterSpeechProfile.TabIndex = 0;
     _masterSpeechProfile.ProfileChanged += (_, _) =>
       SaveControlsToSettings();
+    _masterSpeechProfile.SetTestActions(
+      new SpeechProfileTestAction("Agent Main", () =>
+        PreviewVoiceSettings(SpeechRole.Agent, context: false)),
+      new SpeechProfileTestAction("Agent Context", () =>
+        PreviewVoiceSettings(SpeechRole.Agent, context: true)),
+      new SpeechProfileTestAction("Subagent Main", () =>
+        PreviewVoiceSettings(SpeechRole.Subagent, context: false)),
+      new SpeechProfileTestAction("Subagent Context", () =>
+        PreviewVoiceSettings(SpeechRole.Subagent, context: true)),
+      new SpeechProfileTestAction("User Main", () =>
+        PreviewVoiceSettings(SpeechRole.User, context: false)),
+      new SpeechProfileTestAction("User Quote", () =>
+        PreviewVoiceSettings(SpeechRole.User, context: true)));
     table.Controls.Add(MakeInlineLabel("Master"), 0, row);
     table.Controls.Add(MakeInlineLabel("All voices"), 1, row);
     table.Controls.Add(_masterSpeechProfile, 2, row);
@@ -694,75 +706,6 @@ internal sealed class MainForm : Form, IMessageFilter
       "Neutral values are rate 0, pitch 0, and volume 100.");
   }
 
-
-  /// <summary>
-  /// Adds test buttons that speak every role/profile combination using the
-  /// current master adjustments.
-  /// </summary>
-  private void AddMasterSpeechTestRow(TableLayoutPanel table, int row)
-  {
-    var tests = new FlowLayoutPanel
-    {
-      AutoSize = true,
-      Dock = DockStyle.Fill,
-      Margin = new Padding(3),
-      WrapContents = true
-    };
-
-    AddMasterSpeechTestButton(
-      tests,
-      "Agent Main",
-      SpeechRole.Agent,
-      context: false);
-    AddMasterSpeechTestButton(
-      tests,
-      "Agent Context",
-      SpeechRole.Agent,
-      context: true);
-    AddMasterSpeechTestButton(
-      tests,
-      "Subagent Main",
-      SpeechRole.Subagent,
-      context: false);
-    AddMasterSpeechTestButton(
-      tests,
-      "Subagent Context",
-      SpeechRole.Subagent,
-      context: true);
-    AddMasterSpeechTestButton(
-      tests,
-      "User Main",
-      SpeechRole.User,
-      context: false);
-    AddMasterSpeechTestButton(
-      tests,
-      "User Quote",
-      SpeechRole.User,
-      context: true);
-
-    table.Controls.Add(MakeInlineLabel("Test"), 0, row);
-    table.Controls.Add(tests, 1, row);
-    table.SetColumnSpan(tests, 3);
-  }
-
-  /// <summary>
-  /// Adds one immediate master-adjusted speech test button.
-  /// </summary>
-  private void AddMasterSpeechTestButton(
-    FlowLayoutPanel tests,
-    string text,
-    SpeechRole role,
-    bool context)
-  {
-    var button = new Button
-    {
-      AutoSize = true,
-      Text = text,
-      Margin = new Padding(3)
-    };
-    button.Click += (_, _) => PreviewVoiceSettings(role, context);
-    tests.Controls.Add(button);
-  }
 
   /// <summary>
   /// Adds one shared-voice role row with independent Main and Context
