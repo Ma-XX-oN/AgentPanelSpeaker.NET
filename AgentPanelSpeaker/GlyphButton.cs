@@ -392,43 +392,90 @@ internal sealed class GlyphButton : Button
 
   private void DrawResetIcon(Graphics graphics, Color glyphColor)
   {
-    RectangleF b = GetCompactIconBounds();
-    using var pen = new Pen(glyphColor, 1.8f)
+    RectangleF b = GetCompactIconBounds(padding: 6.0f);
+    using var pen = new Pen(glyphColor, Math.Max(1.8f, b.Width * 0.12f))
     {
       StartCap = LineCap.Round,
-      EndCap = LineCap.Round
+      EndCap = LineCap.Round,
+      LineJoin = LineJoin.Round
     };
-    graphics.DrawArc(pen, b, 35.0f, 285.0f);
+
+    RectangleF arc = new(
+      b.Left + b.Width * 0.18f,
+      b.Top + b.Height * 0.18f,
+      b.Width * 0.62f,
+      b.Height * 0.62f);
+    graphics.DrawArc(pen, arc, 35.0f, 250.0f);
+    graphics.DrawLine(
+      pen,
+      b.Left + b.Width * 0.30f,
+      b.Top + b.Height * 0.18f,
+      b.Left + b.Width * 0.56f,
+      b.Top + b.Height * 0.18f);
+
     using var path = new GraphicsPath();
     path.AddPolygon(new[]
     {
-      new PointF(b.Left + b.Width * 0.08f, b.Top + b.Height * 0.38f),
-      new PointF(b.Left + b.Width * 0.38f, b.Top + b.Height * 0.33f),
-      new PointF(b.Left + b.Width * 0.22f, b.Top + b.Height * 0.62f)
+      new PointF(b.Left + b.Width * 0.12f, b.Top + b.Height * 0.30f),
+      new PointF(b.Left + b.Width * 0.34f, b.Top + b.Height * 0.18f),
+      new PointF(b.Left + b.Width * 0.34f, b.Top + b.Height * 0.42f)
     });
     FillIconPath(graphics, glyphColor, path);
   }
 
   private void DrawKeyboardIcon(Graphics graphics, Color glyphColor)
   {
-    RectangleF b = GetCompactIconBounds();
-    using var pen = new Pen(glyphColor, 1.5f);
-    graphics.DrawRectangle(pen, b.X, b.Y + b.Height * 0.12f,
-      b.Width, b.Height * 0.76f);
-    float key = b.Width / 6.0f;
+    RectangleF b = GetWideIconBounds(
+      horizontalPadding: 4.5f,
+      verticalPadding: 7.0f,
+      widthRatio: 0.94f,
+      heightRatio: 0.58f);
+    using var pen = new Pen(glyphColor, Math.Max(1.4f, b.Height * 0.11f))
+    {
+      LineJoin = LineJoin.Round
+    };
+
+    graphics.DrawRectangle(pen, b.X, b.Y, b.Width, b.Height);
+
+    float keyWidth = b.Width * 0.075f;
+    float keyHeight = b.Height * 0.14f;
+    float columnGap = b.Width * 0.032f;
+    float rowGap = b.Height * 0.11f;
+    float left = b.Left + b.Width * 0.08f;
+    float top = b.Top + b.Height * 0.16f;
+
     for (int row = 0; row < 2; row++)
     {
-      for (int column = 0; column < 5; column++)
+      for (int column = 0; column < 8; column++)
       {
-        graphics.DrawRectangle(pen,
-          b.Left + key * (0.35f + column),
-          b.Top + b.Height * (0.27f + row * 0.23f),
-          key * 0.48f, b.Height * 0.1f);
+        graphics.DrawRectangle(
+          pen,
+          left + column * (keyWidth + columnGap),
+          top + row * (keyHeight + rowGap),
+          keyWidth,
+          keyHeight);
       }
     }
-    graphics.DrawLine(pen, b.Left + b.Width * 0.28f,
-      b.Bottom - b.Height * 0.2f, b.Right - b.Width * 0.28f,
-      b.Bottom - b.Height * 0.2f);
+
+    float thirdRowY = top + 2.0f * (keyHeight + rowGap);
+    graphics.DrawRectangle(
+      pen,
+      left,
+      thirdRowY,
+      keyWidth * 1.35f,
+      keyHeight);
+    graphics.DrawRectangle(
+      pen,
+      left + (keyWidth + columnGap) * 1.55f,
+      thirdRowY,
+      b.Width * 0.42f,
+      keyHeight);
+    graphics.DrawRectangle(
+      pen,
+      b.Right - b.Width * 0.17f,
+      thirdRowY,
+      keyWidth * 1.05f,
+      keyHeight);
   }
 
   private void DrawDiagnosticLogIcon(Graphics graphics, Color glyphColor)
@@ -460,6 +507,38 @@ internal sealed class GlyphButton : Button
       (ClientSize.Height - side) / 2.0f,
       side,
       side);
+  }
+
+  private RectangleF GetWideIconBounds(
+    float horizontalPadding,
+    float verticalPadding,
+    float widthRatio,
+    float heightRatio)
+  {
+    float availableWidth = Math.Max(
+      1.0f,
+      ClientSize.Width - horizontalPadding * 2.0f);
+    float availableHeight = Math.Max(
+      1.0f,
+      ClientSize.Height - verticalPadding * 2.0f);
+    float width = availableWidth * widthRatio;
+    float height = availableHeight * heightRatio;
+
+    if (height > availableHeight)
+    {
+      height = availableHeight;
+    }
+
+    if (width > availableWidth)
+    {
+      width = availableWidth;
+    }
+
+    return new RectangleF(
+      (ClientSize.Width - width) / 2.0f,
+      (ClientSize.Height - height) / 2.0f,
+      width,
+      height);
   }
 
   private static void AddTriangle(
