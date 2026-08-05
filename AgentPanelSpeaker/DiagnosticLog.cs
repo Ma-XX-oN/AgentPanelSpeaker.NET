@@ -104,6 +104,49 @@ internal static class DiagnosticLog
     }
   }
 
+
+  /// <summary>
+  /// Writes complete exception diagnostics synchronously.
+  /// </summary>
+  public static void WriteException(
+    string eventName,
+    Exception? exception,
+    string source,
+    bool isTerminating,
+    object? rawException = null)
+  {
+    Write(eventName, new
+    {
+      source,
+      isTerminating,
+      exceptionType = exception?.GetType().FullName,
+      exception?.Message,
+      stackTrace = exception?.StackTrace,
+      exceptionText = exception?.ToString(),
+      innerExceptions = EnumerateInnerExceptions(exception),
+      rawExceptionType = rawException?.GetType().FullName,
+      rawExceptionText = rawException?.ToString()
+    });
+  }
+
+  private static object[] EnumerateInnerExceptions(Exception? exception)
+  {
+    var innerExceptions = new List<object>();
+    for (Exception? current = exception?.InnerException;
+         current is not null;
+         current = current.InnerException)
+    {
+      innerExceptions.Add(new
+      {
+        type = current.GetType().FullName,
+        current.Message,
+        current.StackTrace,
+        text = current.ToString()
+      });
+    }
+    return innerExceptions.ToArray();
+  }
+
   /// <summary>
   /// Opens File Explorer with the current log selected.
   /// </summary>

@@ -63,7 +63,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly GlyphButton _forwardNodeButton = new();
   private readonly GlyphButton _forwardSpeakerButton = new();
   private readonly Button _saveSettingsButton = new();
-  private readonly Button _saveSelectedSettingsButton = new();
+  private readonly ComboBox _saveSelectedSettingsDropDown = new();
   private readonly ChangedSettingsPopup _saveSettingsPopup;
   private readonly HoverPopupController _saveSettingsPopupController;
   private readonly Button _resetSettingsButton = new();
@@ -108,6 +108,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _closing;
   private bool _playPauseTransitioning;
   private bool _voiceSettingPreviewActive;
+  private bool _themeApplicationPending;
   private bool _diagnosticsMaximized;
   private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
@@ -161,7 +162,7 @@ internal sealed class MainForm : Form, IMessageFilter
         GetSelectedTheme(),
         showSaveButton: true);
       _saveSettingsPopupController = new HoverPopupController(
-        _saveSelectedSettingsButton,
+        _saveSelectedSettingsDropDown,
         () => new[] { _saveSettingsPopup },
         ShowSaveSettingsPopup,
         HideSaveSettingsPopup,
@@ -202,7 +203,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v145";
+    Text = "Agent Panel Speaker v146";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -254,12 +255,15 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.ProcessingClock,
       "Speak AI processing time (' or Alt+')");
     ConfigureButton(_saveSettingsButton, "Save settings");
-    ConfigureButton(_saveSelectedSettingsButton, "▼");
     _saveSettingsButton.Margin = new Padding(3, 3, 0, 3);
-    _saveSelectedSettingsButton.Margin = new Padding(0, 3, 3, 3);
-    _saveSelectedSettingsButton.Width = 22;
+    _saveSelectedSettingsDropDown.DropDownStyle = ComboBoxStyle.DropDownList;
+    _saveSelectedSettingsDropDown.IntegralHeight = true;
+    _saveSelectedSettingsDropDown.Margin = new Padding(0, 3, 3, 3);
+    _saveSelectedSettingsDropDown.Width = 30;
+    _saveSelectedSettingsDropDown.Items.Add(string.Empty);
+    _saveSelectedSettingsDropDown.SelectedIndex = 0;
     _toolTip.SetToolTip(
-      _saveSelectedSettingsButton,
+      _saveSelectedSettingsDropDown,
       "Choose which changed settings to save.");
     ConfigureButton(_resetSettingsButton, "Reset defaults");
     ConfigureButton(_openLogButton, "Open diagnostic log");
@@ -401,7 +405,7 @@ internal sealed class MainForm : Form, IMessageFilter
     utility.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Theme:"), _themeComboBox,
-      _saveSettingsButton, _saveSelectedSettingsButton,
+      _saveSettingsButton, _saveSelectedSettingsDropDown,
       _resetSettingsButton, _openLogButton,
       _hotkeysButton
     });
@@ -514,13 +518,20 @@ internal sealed class MainForm : Form, IMessageFilter
       "Next speaker turn",
       "Past end of last speaker turn.");
     _saveSettingsButton.Click += (_, _) => SaveSettingsExplicitly();
-    _saveSelectedSettingsButton.Click += (_, _) =>
-      _saveSettingsPopupController.OpenImmediately(focusPopup: true);
+    _saveSelectedSettingsDropDown.DropDown += (_, _) =>
+    {
+      _saveSelectedSettingsDropDown.BeginInvoke(new Action(() =>
+      {
+        _saveSelectedSettingsDropDown.DroppedDown = false;
+        _saveSettingsPopupController.OpenImmediately(focusPopup: true);
+      }));
+    };
     _resetSettingsButton.Click += (_, _) => ResetSettings();
     _openLogButton.Click += OpenLogButtonClicked;
     _pronunciationsButton.Click += PronunciationsButtonClicked;
     _audioWakeButton.Click += AudioWakeButtonClicked;
     _themeComboBox.SelectedIndexChanged += ThemeSelectionChanged;
+    _themeComboBox.DropDownClosed += ThemeDropDownClosed;
     ResizeEnd += (_, _) => SaveControlsToSettings(includeWindowPlacement: true);
     Shown += MainFormShown;
     FormClosing += MainFormClosing;
@@ -2618,8 +2629,35 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       return;
     }
-    ApplyCurrentTheme();
+
     SaveControlsToSettings();
+    if (_themeComboBox.DroppedDown)
+    {
+      _themeApplicationPending = true;
+      return;
+    }
+
+    ApplyCurrentTheme();
+  }
+
+  /// <summary>
+  /// Applies a theme selection after the native ComboBox dropdown has closed.
+  /// </summary>
+  private void ThemeDropDownClosed(object? sender, EventArgs eventArgs)
+  {
+    if (!_themeApplicationPending || IsDisposed || Disposing)
+    {
+      return;
+    }
+
+    _themeApplicationPending = false;
+    BeginInvoke(new Action(() =>
+    {
+      if (!IsDisposed && !Disposing)
+      {
+        ApplyCurrentTheme();
+      }
+    }));
   }
 
   /// <summary>
@@ -2916,7 +2954,7 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
     _saveSettingsPopup.SetChanges(changes);
-    _saveSettingsPopup.PositionBelow(_saveSelectedSettingsButton);
+    _saveSettingsPopup.PositionBelow(_saveSelectedSettingsDropDown);
     if (!_saveSettingsPopup.Visible)
     {
       _saveSettingsPopup.Show(this);
@@ -2932,7 +2970,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _saveSettingsPopup.Hide();
     if (returnFocus)
     {
-      _saveSelectedSettingsButton.Focus();
+      _saveSelectedSettingsDropDown.Focus();
     }
   }
 
@@ -2954,7 +2992,7 @@ internal sealed class MainForm : Form, IMessageFilter
     IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
     bool dirty = changes.Count > 0;
     _saveSettingsButton.Enabled = dirty;
-    _saveSelectedSettingsButton.Enabled = dirty;
+    _saveSelectedSettingsDropDown.Enabled = dirty;
     DiagnosticLog.Write("settings.dirty_state", new
     {
       dirty,

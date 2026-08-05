@@ -29,23 +29,28 @@ internal static class Program
     };
 
     DiagnosticLog.Initialize();
+    Application.SetUnhandledExceptionMode(
+      UnhandledExceptionMode.CatchException);
     Application.ThreadException += (_, eventArgs) =>
-      DiagnosticLog.Write("app.thread_exception", new
-      {
-        exception = eventArgs.Exception.ToString()
-      });
+      DiagnosticLog.WriteException(
+        "app.thread_exception",
+        eventArgs.Exception,
+        source: "Windows Forms UI thread",
+        isTerminating: false);
     AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
-      DiagnosticLog.Write("app.unhandled_exception", new
-      {
-        exception = eventArgs.ExceptionObject?.ToString(),
-        eventArgs.IsTerminating
-      });
+      DiagnosticLog.WriteException(
+        "app.unhandled_exception",
+        eventArgs.ExceptionObject as Exception,
+        source: "AppDomain",
+        isTerminating: eventArgs.IsTerminating,
+        rawException: eventArgs.ExceptionObject);
     TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
     {
-      DiagnosticLog.Write("app.unobserved_task_exception", new
-      {
-        exception = eventArgs.Exception.ToString()
-      });
+      DiagnosticLog.WriteException(
+        "app.unobserved_task_exception",
+        eventArgs.Exception,
+        source: "TaskScheduler",
+        isTerminating: false);
       eventArgs.SetObserved();
     };
 

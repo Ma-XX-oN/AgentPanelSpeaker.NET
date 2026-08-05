@@ -1,9 +1,9 @@
-# Agent Panel Speaker v145
+# Agent Panel Speaker v146
 
 
 
 
-## v145 click-only selective-save dropdown
+## v146 click-only selective-save dropdown
 
 - Changed the selective-save glyph to `▼` and narrowed its button.
 - The selective-save popup now opens only from an explicit click on that
@@ -1633,3 +1633,10 @@ and closes.  Cancel returns to the application.
   popup forms.  The router now accepts any `Control`, resolves its containing
   form for popup ownership, and retains the popup control as the tab-order
   boundary.
+
+
+### v146
+
+- Replaced the simulated save arrow button with a real ComboBox dropdown affordance.
+- Deferred theme application until the theme dropdown closes.
+- Added synchronous uncaught-exception diagnostics for UI, AppDomain, and task failures.
