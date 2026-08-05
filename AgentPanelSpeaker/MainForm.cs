@@ -62,13 +62,10 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly GlyphButton _rewindNodeButton = new();
   private readonly GlyphButton _forwardNodeButton = new();
   private readonly GlyphButton _forwardSpeakerButton = new();
-  private readonly Button _saveSettingsButton = new();
-  private readonly ComboBox _saveSelectedSettingsDropDown = new();
-  private readonly ChangedSettingsPopup _saveSettingsPopup;
-  private readonly HoverPopupController _saveSettingsPopupController;
-  private readonly Button _resetSettingsButton = new();
-  private readonly Button _openLogButton = new();
-  private readonly Button _hotkeysButton = new();
+  private readonly GlyphButton _saveSettingsButton = new();
+  private readonly GlyphButton _resetSettingsButton = new();
+  private readonly GlyphButton _hotkeysButton = new();
+  private readonly GlyphButton _openLogButton = new();
   private readonly Button _pronunciationsButton = new();
   private readonly Button _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
@@ -159,27 +156,6 @@ internal sealed class MainForm : Form, IMessageFilter
         _transcriptSettingsPopup.FocusInitialControl);
       _transcriptSettingsPopup.RegisterPopupTree(
         _transcriptSettingsHoverController);
-      _saveSettingsPopup = new ChangedSettingsPopup(
-        Array.Empty<SettingsChangeSet.Change>(),
-        GetSelectedTheme(),
-        showSaveButton: true);
-      _saveSettingsPopupController = new HoverPopupController(
-        _saveSelectedSettingsDropDown,
-        () => new[] { _saveSettingsPopup },
-        ShowSaveSettingsPopup,
-        HideSaveSettingsPopup,
-        _saveSettingsPopup.FocusInitialControl,
-        openOnHover: false,
-        openOnFocus: false);
-      _saveSettingsPopup.SaveRequested += (_, _) =>
-      {
-        if (CommitSelectedSettings(
-              _saveSettingsPopup.SelectedKeys,
-              discardUnselected: false))
-        {
-          _saveSettingsPopupController.Close(returnFocus: true);
-        }
-      };
       PopulateSources();
       PopulateVoiceRows();
       LoadSettingsIntoControls(_settingsStore.Current);
@@ -205,7 +181,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v150";
+    Text = "Agent Panel Speaker v151";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -256,20 +232,22 @@ internal sealed class MainForm : Form, IMessageFilter
       _processingTimeButton,
       GlyphButtonDrawing.ProcessingClock,
       "Speak AI processing time (' or Alt+')");
-    ConfigureButton(_saveSettingsButton, "Save settings");
-    _saveSettingsButton.Margin = new Padding(3, 3, 0, 3);
-    _saveSelectedSettingsDropDown.DropDownStyle = ComboBoxStyle.DropDownList;
-    _saveSelectedSettingsDropDown.IntegralHeight = true;
-    _saveSelectedSettingsDropDown.Margin = new Padding(0, 3, 3, 3);
-    _saveSelectedSettingsDropDown.Width = 30;
-    _saveSelectedSettingsDropDown.Items.Add(string.Empty);
-    _saveSelectedSettingsDropDown.SelectedIndex = 0;
-    _toolTip.SetToolTip(
-      _saveSelectedSettingsDropDown,
-      "Choose which changed settings to save.");
-    ConfigureButton(_resetSettingsButton, "Reset defaults");
-    ConfigureButton(_openLogButton, "Open diagnostic log");
-    ConfigureButton(_hotkeysButton, "Hotkeys...");
+    ConfigureUtilityGlyphButton(
+      _saveSettingsButton,
+      GlyphButtonDrawing.Save,
+      "Main.SaveSettings");
+    ConfigureUtilityGlyphButton(
+      _resetSettingsButton,
+      GlyphButtonDrawing.Reset,
+      "Main.ResetDefaults");
+    ConfigureUtilityGlyphButton(
+      _hotkeysButton,
+      GlyphButtonDrawing.Keyboard,
+      "Main.Hotkeys");
+    ConfigureUtilityGlyphButton(
+      _openLogButton,
+      GlyphButtonDrawing.DiagnosticLog,
+      "Main.DiagnosticLog");
     ConfigureButton(_pronunciationsButton, "Pronunciations...");
     ConfigureButton(_audioWakeButton, "Bluetooth wake...");
     _themeComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -408,9 +386,8 @@ internal sealed class MainForm : Form, IMessageFilter
     utility.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Theme:"), _themeComboBox,
-      _saveSettingsButton, _saveSelectedSettingsDropDown,
-      _resetSettingsButton, _openLogButton,
-      _hotkeysButton
+      _saveSettingsButton, _resetSettingsButton,
+      _hotkeysButton, _openLogButton
     });
 
     var controls = new TableLayoutPanel
@@ -444,6 +421,32 @@ internal sealed class MainForm : Form, IMessageFilter
     _mainLayout.Controls.Add(controls, 0, 6);
     _mainLayout.Controls.Add(_diagnosticHost, 0, 7);
     Controls.Add(_mainLayout);
+    ConfigureAccessibility();
+  }
+
+  /// <summary>
+  /// Applies translated accessibility metadata to the main interactive controls.
+  /// </summary>
+  private void ConfigureAccessibility()
+  {
+    UiText.Apply(_sourceComboBox, "Main.Source", _toolTip);
+    UiText.Apply(_sessionTitleTextBox, "Main.SessionTitle", _toolTip);
+    UiText.Apply(_sessionPathTextBox, "Main.SessionPath", _toolTip);
+    UiText.Apply(_detectLatestButton, "Main.DetectLatest", _toolTip);
+    UiText.Apply(_browseButton, "Main.BrowseJsonl", _toolTip);
+    UiText.Apply(_followLatestCheckBox, "Main.FollowNewest", _toolTip);
+    UiText.Apply(_pollNumeric, "Main.PollInterval", _toolTip);
+    UiText.Apply(_fenceTypesTextBox, "Main.FencedCodeTypes", _toolTip);
+    UiText.Apply(_speakExistingCheckBox, "Main.SpeakExisting", _toolTip);
+    UiText.Apply(_keepDisplayOnCheckBox, "Main.KeepDisplayOn", _toolTip);
+    UiText.Apply(_themeComboBox, "Main.Theme", _toolTip);
+    UiText.Apply(_pronunciationsButton, "Main.Pronunciations", _toolTip);
+    UiText.Apply(_audioWakeButton, "Main.BluetoothWake", _toolTip);
+    UiText.Apply(_previewTextBox, "Main.AcceptedText", _toolTip);
+    UiText.Apply(_logTextBox, "Main.ActivityLog", _toolTip);
+    UiText.Apply(_diagnosticTabs, "Main.DiagnosticTabs", _toolTip);
+    UiText.Apply(_transcriptView, "Main.Transcript", _toolTip);
+    AccessibilityAudit.ReportMissing(this);
   }
 
   /// <summary>
@@ -520,16 +523,10 @@ internal sealed class MainForm : Form, IMessageFilter
       _speech.TryForwardSpeaker,
       "Next speaker turn",
       "Past end of last speaker turn.");
-    _saveSettingsButton.Click += (_, _) => SaveSettingsExplicitly();
-    _saveSelectedSettingsDropDown.DropDown += (_, _) =>
-    {
-      _saveSelectedSettingsDropDown.BeginInvoke(new Action(() =>
-      {
-        _saveSelectedSettingsDropDown.DroppedDown = false;
-        _saveSettingsPopupController.OpenImmediately(focusPopup: true);
-      }));
-    };
-    _resetSettingsButton.Click += (_, _) => ResetSettings();
+    _saveSettingsButton.Click += (_, _) => ShowSettingsSelectionDialog(
+      SettingsSelectionMode.Save);
+    _resetSettingsButton.Click += (_, _) => ShowSettingsSelectionDialog(
+      SettingsSelectionMode.Reset);
     _openLogButton.Click += OpenLogButtonClicked;
     _pronunciationsButton.Click += PronunciationsButtonClicked;
     _audioWakeButton.Click += AudioWakeButtonClicked;
@@ -726,6 +723,14 @@ internal sealed class MainForm : Form, IMessageFilter
     };
     voice.FormattingEnabled = true;
     voice.Format += VoiceComboBoxFormat;
+    string voiceResource = role switch
+    {
+      SpeechRole.Agent => "Speech.Agent.Voice",
+      SpeechRole.Subagent => "Speech.Subagent.Voice",
+      SpeechRole.User => "Speech.User.Voice",
+      _ => throw new ArgumentOutOfRangeException(nameof(role), role, null)
+    };
+    UiText.Apply(voice, voiceResource, _toolTip);
     int firstTabIndex = (row - 1) * 3;
     voice.TabIndex = firstTabIndex;
 
@@ -2184,44 +2189,50 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Explicitly applies pending edits and saves all settings.
+  /// Opens the shared selector for saving changes or resetting defaults.
   /// </summary>
-  private void SaveSettingsExplicitly()
+  private void ShowSettingsSelectionDialog(SettingsSelectionMode mode)
   {
     _transcriptSettingsSaveTimer.Stop();
     _fenceDebounceTimer.Stop();
     ApplyFenceTypesImmediately();
     SaveControlsToSettings(includeWindowPlacement: true);
-    try
-    {
-      _settingsStore.Save();
-      UpdateSettingsSaveState();
-      AppendLog("Settings saved.");
-    }
-    catch (Exception exception) when (
-      exception is IOException or UnauthorizedAccessException)
-    {
-      AppendLog($"Settings save failed: {exception.Message}");
-    }
-  }
 
-  /// <summary>
-  /// Restores default settings after confirmation.
-  /// </summary>
-  private void ResetSettings()
-  {
-    if (MessageBox.Show(
-          this,
-          "Reset all Agent Panel Speaker settings?",
-          Text,
-          MessageBoxButtons.YesNo,
-          MessageBoxIcon.Question) != DialogResult.Yes)
+    UserSettings comparison = mode == SettingsSelectionMode.Save
+      ? _settingsStore.Saved
+      : _settingsStore.Defaults;
+    IReadOnlyList<SettingsChangeSet.Change> changes =
+      SettingsChangeSet.GetChanges(comparison, _settingsStore.Current);
+    if (changes.Count == 0)
+    {
+      UpdateSettingsSaveState();
+      return;
+    }
+
+    using var dialog = new SettingsSelectionDialog(
+      changes,
+      GetSelectedTheme(),
+      mode);
+    if (dialog.ShowDialog(this) != DialogResult.OK)
     {
       return;
     }
-    LoadSettingsIntoControls(_settingsStore.ResetDefaults());
+
+    if (mode == SettingsSelectionMode.Save)
+    {
+      CommitSelectedSettings(dialog.SelectedKeys, discardUnselected: false);
+      return;
+    }
+
+    UserSettings working = _settingsStore.Current;
+    UserSettings reset = SettingsChangeSet.MergeSelected(
+      working,
+      _settingsStore.Defaults,
+      dialog.SelectedKeys);
+    _settingsStore.Update(reset);
+    LoadSettingsIntoControls(_settingsStore.Current);
     UpdateSettingsSaveState();
-    AppendLog("Defaults loaded. Press Save settings to keep them.");
+    AppendLog($"Reset {dialog.SelectedKeys.Count} setting(s) to defaults.");
   }
 
   /// <summary>
@@ -3010,37 +3021,6 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Shows the selective-save popup beside the disclosure button.
-  /// </summary>
-  private void ShowSaveSettingsPopup(bool focusPopup)
-  {
-    IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
-    if (changes.Count == 0)
-    {
-      return;
-    }
-    _saveSettingsPopup.SetChanges(changes);
-    _saveSettingsPopup.PositionBelow(_saveSelectedSettingsDropDown);
-    if (!_saveSettingsPopup.Visible)
-    {
-      _saveSettingsPopup.Show(this);
-    }
-    _saveSettingsPopup.BringToFront();
-  }
-
-  /// <summary>
-  /// Hides the selective-save popup.
-  /// </summary>
-  private void HideSaveSettingsPopup(bool returnFocus)
-  {
-    _saveSettingsPopup.Hide();
-    if (returnFocus)
-    {
-      _saveSelectedSettingsDropDown.Focus();
-    }
-  }
-
-  /// <summary>
   /// Gets all settings that differ from the persisted snapshot.
   /// </summary>
   private IReadOnlyList<SettingsChangeSet.Change> GetSettingsChanges()
@@ -3058,16 +3038,15 @@ internal sealed class MainForm : Form, IMessageFilter
     IReadOnlyList<SettingsChangeSet.Change> changes = GetSettingsChanges();
     bool dirty = changes.Count > 0;
     _saveSettingsButton.Enabled = dirty;
-    _saveSelectedSettingsDropDown.Enabled = dirty;
+    bool defaultsDiffer = SettingsChangeSet.GetChanges(
+      _settingsStore.Defaults,
+      _settingsStore.Current).Count > 0;
+    _resetSettingsButton.Enabled = defaultsDiffer;
     DiagnosticLog.Write("settings.dirty_state", new
     {
       dirty,
       changedKeys = changes.Select(change => change.Key).ToArray()
     });
-    if (!dirty && _saveSettingsPopupController.IsOpen)
-    {
-      _saveSettingsPopupController.Close(returnFocus: false);
-    }
   }
 
   /// <summary>
@@ -3159,8 +3138,6 @@ internal sealed class MainForm : Form, IMessageFilter
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
     _transcriptSettingsHoverController.Dispose();
-    _saveSettingsPopupController.Dispose();
-    _saveSettingsPopup.Dispose();
     _transcriptSettingsSaveTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
     {
@@ -3242,6 +3219,23 @@ internal sealed class MainForm : Form, IMessageFilter
     button.UseInkBounds = false;
     button.Text = string.Empty;
     button.AccessibleName = accessibleName;
+  }
+
+  /// <summary>
+  /// Configures an icon-only utility button through the translation layer.
+  /// </summary>
+  private void ConfigureUtilityGlyphButton(
+    GlyphButton button,
+    GlyphButtonDrawing drawing,
+    string resourcePrefix)
+  {
+    button.AutoSize = false;
+    button.Size = new Size(38, 30);
+    button.Drawing = drawing;
+    button.Glyph = string.Empty;
+    button.UseInkBounds = false;
+    button.Text = string.Empty;
+    UiText.Apply(button, resourcePrefix, _toolTip);
   }
 
   /// <summary>

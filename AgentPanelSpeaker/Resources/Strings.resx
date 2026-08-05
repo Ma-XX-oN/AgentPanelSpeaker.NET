@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
+  <data name="Main.SaveSettings.Name" xml:space="preserve"><value>Save settings</value></data>
+  <data name="Main.SaveSettings.Description" xml:space="preserve"><value>Choose which changed settings to save.</value></data>
+  <data name="Main.SaveSettings.Tooltip" xml:space="preserve"><value>Save settings</value></data>
+  <data name="Main.ResetDefaults.Name" xml:space="preserve"><value>Reset settings to defaults</value></data>
+  <data name="Main.ResetDefaults.Description" xml:space="preserve"><value>Choose which settings to reset to their default values.</value></data>
+  <data name="Main.ResetDefaults.Tooltip" xml:space="preserve"><value>Reset settings to defaults</value></data>
+  <data name="Main.Hotkeys.Name" xml:space="preserve"><value>Configure hotkeys</value></data>
+  <data name="Main.Hotkeys.Description" xml:space="preserve"><value>Open the keyboard shortcut settings.</value></data>
+  <data name="Main.Hotkeys.Tooltip" xml:space="preserve"><value>Configure hotkeys</value></data>
+  <data name="Main.DiagnosticLog.Name" xml:space="preserve"><value>Open diagnostic log</value></data>
+  <data name="Main.DiagnosticLog.Description" xml:space="preserve"><value>Open the application diagnostic log.</value></data>
+  <data name="Main.DiagnosticLog.Tooltip" xml:space="preserve"><value>Open diagnostic log</value></data>
+  <data name="Main.Source.Name" xml:space="preserve"><value>Session source</value></data>
+  <data name="Main.SessionTitle.Name" xml:space="preserve"><value>Selected session title</value></data>
+  <data name="Main.SessionPath.Name" xml:space="preserve"><value>Selected session path</value></data>
+  <data name="Main.DetectLatest.Name" xml:space="preserve"><value>Detect latest session</value></data>
+  <data name="Main.BrowseJsonl.Name" xml:space="preserve"><value>Browse for JSONL session</value></data>
+  <data name="Main.FollowNewest.Name" xml:space="preserve"><value>Auto-follow newest session</value></data>
+  <data name="Main.PollInterval.Name" xml:space="preserve"><value>Polling interval in milliseconds</value></data>
+  <data name="Main.FencedCodeTypes.Name" xml:space="preserve"><value>Spoken fenced-code types</value></data>
+  <data name="Main.SpeakExisting.Name" xml:space="preserve"><value>Speak latest existing message on startup</value></data>
+  <data name="Main.KeepDisplayOn.Name" xml:space="preserve"><value>Keep display on while speaking</value></data>
+  <data name="Main.Theme.Name" xml:space="preserve"><value>Application theme</value></data>
+  <data name="Main.Pronunciations.Name" xml:space="preserve"><value>Pronunciations</value></data>
+  <data name="Main.BluetoothWake.Name" xml:space="preserve"><value>Bluetooth audio wake settings</value></data>
+  <data name="Main.AcceptedText.Name" xml:space="preserve"><value>Accepted text preview</value></data>
+  <data name="Main.ActivityLog.Name" xml:space="preserve"><value>Activity log</value></data>
+  <data name="Main.DiagnosticTabs.Name" xml:space="preserve"><value>Transcript and diagnostic tabs</value></data>
+  <data name="Main.Transcript.Name" xml:space="preserve"><value>Speech transcript</value></data>
+  <data name="SettingsSelection.All" xml:space="preserve"><value>All</value></data>
+  <data name="SettingsSelection.Save.Title" xml:space="preserve"><value>Select settings to save</value></data>
+  <data name="SettingsSelection.Save.Explanation" xml:space="preserve"><value>Choose which changed settings to save. Unselected changes will remain unsaved.</value></data>
+  <data name="SettingsSelection.Save.Tree.Name" xml:space="preserve"><value>Changed settings</value></data>
+  <data name="SettingsSelection.Save.Tree.Description" xml:space="preserve"><value>Select the changed settings that should be saved. Parent items select or clear their descendants.</value></data>
+  <data name="SettingsSelection.Save.Apply.Name" xml:space="preserve"><value>Save selected settings</value></data>
+  <data name="SettingsSelection.Save.Apply.Description" xml:space="preserve"><value>Save the selected changed settings and close this dialog.</value></data>
+  <data name="SettingsSelection.Save.Apply.Text" xml:space="preserve"><value>Save selected</value></data>
+  <data name="SettingsSelection.Reset.Title" xml:space="preserve"><value>Select settings to reset</value></data>
+  <data name="SettingsSelection.Reset.Explanation" xml:space="preserve"><value>Choose which settings to reset to defaults. Reset values remain unsaved until they are saved separately.</value></data>
+  <data name="SettingsSelection.Reset.Tree.Name" xml:space="preserve"><value>Settings differing from defaults</value></data>
+  <data name="SettingsSelection.Reset.Tree.Description" xml:space="preserve"><value>Select the settings that should be reset to their default values. Parent items select or clear their descendants.</value></data>
+  <data name="SettingsSelection.Reset.Apply.Name" xml:space="preserve"><value>Reset selected settings</value></data>
+  <data name="SettingsSelection.Reset.Apply.Description" xml:space="preserve"><value>Reset the selected settings to defaults and close this dialog.</value></data>
+  <data name="SettingsSelection.Reset.Apply.Text" xml:space="preserve"><value>Reset selected</value></data>
+  <data name="Speech.Agent.Voice.Name" xml:space="preserve"><value>AI Agent voice</value></data>
+  <data name="Speech.Agent.Voice.Description" xml:space="preserve"><value>Selects the voice used for AI Agent Main and Context speech.</value></data>
+  <data name="Speech.Subagent.Voice.Name" xml:space="preserve"><value>AI Subagent voice</value></data>
+  <data name="Speech.Subagent.Voice.Description" xml:space="preserve"><value>Selects the voice used for AI Subagent Main and Context speech.</value></data>
+  <data name="Speech.User.Voice.Name" xml:space="preserve"><value>User voice</value></data>
+  <data name="Speech.User.Voice.Description" xml:space="preserve"><value>Selects the voice used for User Main and Quote speech.</value></data>
+</root>

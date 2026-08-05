@@ -19,7 +19,11 @@ internal enum GlyphButtonDrawing
   ProcessingClock,
   SettingsGear,
   Expand,
-  Restore
+  Restore,
+  Save,
+  Reset,
+  Keyboard,
+  DiagnosticLog
 }
 
 /// <summary>
@@ -128,6 +132,18 @@ internal sealed class GlyphButton : Button
           break;
         case GlyphButtonDrawing.Restore:
           DrawChevronIcon(eventArgs.Graphics, glyphColor, pointsUp: false);
+          break;
+        case GlyphButtonDrawing.Save:
+          DrawSaveIcon(eventArgs.Graphics, glyphColor);
+          break;
+        case GlyphButtonDrawing.Reset:
+          DrawResetIcon(eventArgs.Graphics, glyphColor);
+          break;
+        case GlyphButtonDrawing.Keyboard:
+          DrawKeyboardIcon(eventArgs.Graphics, glyphColor);
+          break;
+        case GlyphButtonDrawing.DiagnosticLog:
+          DrawDiagnosticLogIcon(eventArgs.Graphics, glyphColor);
           break;
       }
       return;
@@ -361,6 +377,77 @@ internal sealed class GlyphButton : Button
       new PointF(centreX, tipY),
       new PointF(bounds.Right, armY)
     });
+  }
+
+  private void DrawSaveIcon(Graphics graphics, Color glyphColor)
+  {
+    RectangleF b = GetCompactIconBounds();
+    using var pen = new Pen(glyphColor, 1.7f);
+    graphics.DrawRectangle(pen, b.X, b.Y, b.Width, b.Height);
+    graphics.DrawRectangle(pen, b.X + b.Width * 0.22f, b.Y,
+      b.Width * 0.52f, b.Height * 0.34f);
+    graphics.DrawRectangle(pen, b.X + b.Width * 0.2f,
+      b.Y + b.Height * 0.58f, b.Width * 0.6f, b.Height * 0.42f);
+  }
+
+  private void DrawResetIcon(Graphics graphics, Color glyphColor)
+  {
+    RectangleF b = GetCompactIconBounds();
+    using var pen = new Pen(glyphColor, 1.8f)
+    {
+      StartCap = LineCap.Round,
+      EndCap = LineCap.Round
+    };
+    graphics.DrawArc(pen, b, 35.0f, 285.0f);
+    using var path = new GraphicsPath();
+    path.AddPolygon(new[]
+    {
+      new PointF(b.Left + b.Width * 0.08f, b.Top + b.Height * 0.38f),
+      new PointF(b.Left + b.Width * 0.38f, b.Top + b.Height * 0.33f),
+      new PointF(b.Left + b.Width * 0.22f, b.Top + b.Height * 0.62f)
+    });
+    FillIconPath(graphics, glyphColor, path);
+  }
+
+  private void DrawKeyboardIcon(Graphics graphics, Color glyphColor)
+  {
+    RectangleF b = GetCompactIconBounds();
+    using var pen = new Pen(glyphColor, 1.5f);
+    graphics.DrawRectangle(pen, b.X, b.Y + b.Height * 0.12f,
+      b.Width, b.Height * 0.76f);
+    float key = b.Width / 6.0f;
+    for (int row = 0; row < 2; row++)
+    {
+      for (int column = 0; column < 5; column++)
+      {
+        graphics.DrawRectangle(pen,
+          b.Left + key * (0.35f + column),
+          b.Top + b.Height * (0.27f + row * 0.23f),
+          key * 0.48f, b.Height * 0.1f);
+      }
+    }
+    graphics.DrawLine(pen, b.Left + b.Width * 0.28f,
+      b.Bottom - b.Height * 0.2f, b.Right - b.Width * 0.28f,
+      b.Bottom - b.Height * 0.2f);
+  }
+
+  private void DrawDiagnosticLogIcon(Graphics graphics, Color glyphColor)
+  {
+    RectangleF b = GetCompactIconBounds();
+    using var pen = new Pen(glyphColor, 1.5f);
+    RectangleF page = new(b.Left, b.Top, b.Width * 0.66f, b.Height * 0.9f);
+    graphics.DrawRectangle(pen, page.X, page.Y, page.Width, page.Height);
+    graphics.DrawLine(pen, page.Left + page.Width * 0.18f,
+      page.Top + page.Height * 0.28f, page.Right - page.Width * 0.16f,
+      page.Top + page.Height * 0.28f);
+    graphics.DrawLine(pen, page.Left + page.Width * 0.18f,
+      page.Top + page.Height * 0.48f, page.Right - page.Width * 0.28f,
+      page.Top + page.Height * 0.48f);
+    RectangleF lens = new(b.Left + b.Width * 0.48f,
+      b.Top + b.Height * 0.48f, b.Width * 0.36f, b.Height * 0.36f);
+    graphics.DrawEllipse(pen, lens);
+    graphics.DrawLine(pen, lens.Right - b.Width * 0.02f,
+      lens.Bottom - b.Height * 0.02f, b.Right, b.Bottom);
   }
 
   private RectangleF GetCompactIconBounds(float padding = 7.0f)

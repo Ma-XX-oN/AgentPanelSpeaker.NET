@@ -83,6 +83,20 @@ internal sealed class UserSettingsStore
   }
 
   /// <summary>
+  /// Gets a fresh normalized default snapshot without changing current state.
+  /// </summary>
+  public UserSettings Defaults
+  {
+    get
+    {
+      lock (_sync)
+      {
+        return Normalize(UserSettings.CreateDefault(_installedVoiceOrder));
+      }
+    }
+  }
+
+  /// <summary>
   /// Gets the last persisted snapshot.
   /// </summary>
   public UserSettings Saved
