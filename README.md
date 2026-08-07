@@ -1666,3 +1666,10 @@ The Save, Reset, Hotkeys, and Diagnostic Log utility buttons now use the icon
 artwork approved in the icon-size test harness.  The PNG alpha masks are tinted
 with the current theme's foreground colour and scaled from their visible bounds,
 so the same artwork remains usable in dark, light, and system themes.
+
+
+## v155
+
+- Increased the utility toolbar icon rendering size.
+- Gave the keyboard icon extra width so it reads larger in the compact toolbar.
+- Kept the approved Save, Reset, Hotkeys, and Diagnostic Log artwork.

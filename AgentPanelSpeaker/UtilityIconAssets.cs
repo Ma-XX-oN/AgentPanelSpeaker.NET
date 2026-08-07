@@ -47,12 +47,12 @@ internal static class UtilityIconAssets
       (name, colour.ToArgb()),
       key => Tint(source, Color.FromArgb(key.Argb)));
 
-    float targetExtent = Math.Max(
-      1.0f,
-      Math.Min(clientBounds.Width, clientBounds.Height) * 0.60f);
+    (float widthFraction, float heightFraction) = GetTargetFractions(drawing);
+    float targetWidth = Math.Max(1.0f, clientBounds.Width * widthFraction);
+    float targetHeight = Math.Max(1.0f, clientBounds.Height * heightFraction);
     float scale = Math.Min(
-      targetExtent / inkBounds.Width,
-      targetExtent / inkBounds.Height);
+      targetWidth / inkBounds.Width,
+      targetHeight / inkBounds.Height);
     float width = inkBounds.Width * scale;
     float height = inkBounds.Height * scale;
     float left = clientBounds.Left + (clientBounds.Width - width) / 2.0f;
@@ -82,6 +82,20 @@ internal static class UtilityIconAssets
       graphics.PixelOffsetMode = oldPixelOffset;
       graphics.CompositingQuality = oldCompositing;
     }
+  }
+
+
+  private static (float WidthFraction, float HeightFraction) GetTargetFractions(
+    GlyphButtonDrawing drawing)
+  {
+    return drawing switch
+    {
+      GlyphButtonDrawing.Save => (0.68f, 0.68f),
+      GlyphButtonDrawing.Reset => (0.68f, 0.68f),
+      GlyphButtonDrawing.Keyboard => (0.78f, 0.68f),
+      GlyphButtonDrawing.DiagnosticLog => (0.70f, 0.70f),
+      _ => (0.68f, 0.68f)
+    };
   }
 
   private static string? GetAssetName(GlyphButtonDrawing drawing)
