@@ -1,3 +1,14 @@
+## v186 native deactivation/Z-order isolation diagnostics
+
+- Adds logging only for the reported case where closing a popup appears to
+  leave Agent Panel Speaker below another application window.
+- Records foreground/active HWNDs, owning process, managed active form,
+  MainForm/popup Z-order ranks, and all process top-level windows at
+  MainForm deactivation, owner-deactivation evaluation, immediately before
+  and after root-popup close, and one UI turn later.
+- No popup activation, focus, close, or Z-order behaviour is intentionally
+  changed in this version.
+
 ## v185 hover-close rollback and focus-open isolation diagnostics
 
 - Reverts v184's keyboard-focus veto on mouse-leave closing, restoring the prior hover-close behaviour.

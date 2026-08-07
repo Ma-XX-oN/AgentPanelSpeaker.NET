@@ -249,6 +249,10 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
 
+    PopupFormBase.WriteActivationDiagnostics(
+      "owner-deactivated-handler-entry",
+      owner);
+
     try
     {
       owner.BeginInvoke((MethodInvoker)(() =>
@@ -258,6 +262,10 @@ internal sealed class HoverPopupController : IDisposable
           return;
         }
 
+        PopupFormBase.WriteActivationDiagnostics(
+          "owner-deactivated-deferred-entry",
+          owner);
+
         Form? activeForm = Form.ActiveForm;
         foreach (HoverPopupController controller in GetLiveControllers())
         {
@@ -266,6 +274,13 @@ internal sealed class HoverPopupController : IDisposable
           {
             continue;
           }
+
+          Form? diagnosticPopup = controller.GetDeepestOpenPopupForm();
+          PopupFormBase.WriteActivationDiagnostics(
+            "owner-deactivated-controller-evaluate",
+            owner,
+            diagnosticPopup);
+
           if (activeForm is not null &&
               controller.ContainsOpenPopupForm(activeForm))
           {
@@ -282,11 +297,29 @@ internal sealed class HoverPopupController : IDisposable
             activeForm = DescribeControl(activeForm),
             rootNodeId = controller._root.Id
           });
+          PopupFormBase.WriteActivationDiagnostics(
+            "owner-deactivated-before-root-close",
+            owner,
+            diagnosticPopup);
           controller.CloseNode(
             controller._root,
             returnFocus: false,
             closeReason: "owner-deactivated");
+          PopupFormBase.WriteActivationDiagnostics(
+            "owner-deactivated-after-root-close",
+            owner,
+            diagnosticPopup);
         }
+
+        owner.BeginInvoke((MethodInvoker)(() =>
+        {
+          if (!owner.IsDisposed)
+          {
+            PopupFormBase.WriteActivationDiagnostics(
+              "owner-deactivated-settled",
+              owner);
+          }
+        }));
       }));
     }
     catch (InvalidOperationException)
@@ -1648,6 +1681,29 @@ internal sealed class HoverPopupController : IDisposable
         yield return popup;
       }
     }
+  }
+
+  private Form? GetDeepestOpenPopupForm()
+  {
+    PopupNode? node = FindDeepestOpenNode(_root);
+    if (node is null)
+    {
+      return null;
+    }
+
+    foreach (Control control in EnumerateVisiblePopupControls(node))
+    {
+      if (control is Form form)
+      {
+        return form;
+      }
+      Form? containingForm = control.FindForm();
+      if (containingForm is not null)
+      {
+        return containingForm;
+      }
+    }
+    return null;
   }
 
   private bool ContainsOpenPopupForm(Form form)

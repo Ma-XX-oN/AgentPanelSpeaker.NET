@@ -60,6 +60,55 @@ internal abstract class PopupFormBase : Form
     }
   }
 
+  /// <summary>
+  /// Records native activation and Z-order state around popup ownership and
+  /// close transitions without changing window activation.
+  /// </summary>
+  internal static void WriteActivationDiagnostics(
+    string stage,
+    Form owner,
+    Form? popup = null)
+  {
+    ArgumentNullException.ThrowIfNull(owner);
+    try
+    {
+      IntPtr ownerHandle = owner.IsHandleCreated ? owner.Handle : IntPtr.Zero;
+      IntPtr popupHandle = popup is { IsHandleCreated: true }
+        ? popup.Handle
+        : IntPtr.Zero;
+      IntPtr foregroundHandle = GetForegroundWindow();
+      IntPtr activeHandle = GetActiveWindow();
+      _ = GetWindowThreadProcessId(foregroundHandle, out uint foregroundProcessId);
+      DiagnosticLog.Write("popup.activation_zorder", new
+      {
+        stage,
+        owner = DescribeWindow(ownerHandle),
+        popup = DescribeWindow(popupHandle),
+        managedActiveForm = Form.ActiveForm is Form activeForm
+          ? DescribeWindow(activeForm.IsHandleCreated ? activeForm.Handle : IntPtr.Zero)
+          : null,
+        foreground = DescribeWindow(foregroundHandle),
+        foregroundProcessId,
+        foregroundIsCurrentProcess =
+          foregroundProcessId == (uint)Environment.ProcessId,
+        active = DescribeWindow(activeHandle),
+        ownerContainsFocus = owner.ContainsFocus,
+        popupContainsFocus = popup?.ContainsFocus ?? false,
+        ownerRank = GetTopLevelRank(ownerHandle),
+        popupRank = GetTopLevelRank(popupHandle),
+        processWindows = GetCurrentProcessTopLevelWindows()
+      });
+    }
+    catch (Exception exception)
+    {
+      DiagnosticLog.WriteException(
+        "popup.activation_zorder.logging_failed",
+        exception,
+        stage,
+        isTerminating: false);
+    }
+  }
+
   private void WriteWindowDiagnostics(string stage, Form owner)
   {
     try

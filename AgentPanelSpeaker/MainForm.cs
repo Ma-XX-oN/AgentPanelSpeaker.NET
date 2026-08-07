@@ -174,7 +174,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v185";
+    Text = "Agent Panel Speaker v186";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -528,7 +528,12 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     Deactivate += (_, _) =>
+    {
+      PopupFormBase.WriteActivationDiagnostics(
+        "mainform-deactivate-event",
+        this);
       HoverPopupController.HandleOwnerDeactivated(this);
+    };
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
       "Previous speaker turn");
