@@ -117,6 +117,46 @@ internal sealed class TranscriptColourPopup : UserControl
     ThemeManager.ApplyPopup(this, dark);
   }
 
+
+  /// <summary>
+  /// Sizes the popup from the actual scaled bounds of every visible editor
+  /// control so that keyboard-focusable fields are never clipped.
+  /// </summary>
+  public void FitToVisibleControls()
+  {
+    PerformLayout();
+    _editor.PerformLayout();
+
+    int editorRight = 0;
+    int editorBottom = 0;
+    foreach (Control control in _editor.Controls)
+    {
+      if (!control.Visible)
+      {
+        continue;
+      }
+      editorRight = Math.Max(editorRight, control.Right);
+      editorBottom = Math.Max(editorBottom, control.Bottom);
+    }
+
+    int editorWidth = Math.Max(_editor.PreferredSize.Width, editorRight + 4);
+    int editorHeight = Math.Max(_editor.PreferredSize.Height, editorBottom + 4);
+    int editorColumnWidth = editorWidth + _editor.Margin.Horizontal;
+    int innerWidth = (int)Math.Ceiling(editorColumnWidth / 0.58);
+    int requiredWidth = 16 + innerWidth;
+
+    int wheelHeight = Math.Max(_wheel.PreferredSize.Height, _wheel.MinimumSize.Height);
+    int contentHeight = Math.Max(
+      editorHeight + _editor.Margin.Vertical,
+      wheelHeight + _wheel.Margin.Vertical);
+    int requiredHeight = 16 + 28 + contentHeight + 30;
+
+    Size = new Size(
+      Math.Max(430, requiredWidth),
+      Math.Max(330, requiredHeight));
+    PerformLayout();
+  }
+
   public void FocusInitialControl()
   {
     _wheel.Focus();

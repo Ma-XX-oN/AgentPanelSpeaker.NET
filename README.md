@@ -1,6 +1,16 @@
 # Agent Panel Speaker v150
 
 
+## v168 colour-editor content sizing
+
+- Sizes the colour-picker popup from the actual DPI/font-scaled bounds of every
+  visible Cyotek `ColorEditor` child instead of assuming its design-time height.
+- Keeps RGB, Hex, HSL, and Alpha visible for evaluation and preserves their
+  individual keyboard tab stops.
+- Recalculates the popup size each time it opens before positioning it, so a
+  focusable editor field cannot remain below the clipped client area.
+
+
 ## v150 master speech test buttons
 
 - Adds six immediate test buttons below the Master Speech Profile.

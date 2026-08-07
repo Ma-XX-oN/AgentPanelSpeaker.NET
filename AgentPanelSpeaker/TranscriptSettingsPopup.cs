@@ -315,6 +315,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     TranscriptColourPopup popup = GetOrCreateColourPopup();
     popup.ApplyTheme(_dark);
     popup.SetColours(_currentColour, _previousColour);
+    popup.FitToVisibleControls();
     PositionColourPopup(popup);
     popup.Visible = true;
     popup.BringToFront();
