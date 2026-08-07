@@ -151,7 +151,7 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
   private const int StateChecked = 1;
   private const int StateMixed = 2;
 
-  private readonly TreeView _tree = new();
+  private readonly ThemedThreeStateTreeView _tree = new();
   private readonly Label _explanation = new();
   private readonly FlowLayoutPanel _buttons = new();
   private bool _updatingChecks;
@@ -181,7 +181,6 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
     _tree.ShowLines = true;
     _tree.ShowPlusMinus = true;
     _tree.ShowRootLines = true;
-    _tree.StateImageList = CreateStateImages();
     _tree.NodeMouseClick += TreeNodeMouseClick;
     _tree.KeyDown += TreeKeyDown;
 
@@ -444,33 +443,5 @@ internal sealed class ChangedSettingsPopup : PopupFormBase
     }
   }
 
-  private static ImageList CreateStateImages()
-  {
-    var images = new ImageList
-    {
-      ImageSize = new Size(16, 16),
-      ColorDepth = ColorDepth.Depth32Bit
-    };
-    images.Images.Add(CreateStateImage(CheckState.Unchecked));
-    images.Images.Add(CreateStateImage(CheckState.Checked));
-    images.Images.Add(CreateStateImage(CheckState.Indeterminate));
-    return images;
-  }
 
-  private static Bitmap CreateStateImage(CheckState state)
-  {
-    var bitmap = new Bitmap(16, 16);
-    using Graphics graphics = Graphics.FromImage(bitmap);
-    graphics.Clear(Color.Transparent);
-    CheckBoxRenderer.DrawCheckBox(
-      graphics,
-      new Point(0, 0),
-      state switch
-      {
-        CheckState.Checked => System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal,
-        CheckState.Indeterminate => System.Windows.Forms.VisualStyles.CheckBoxState.MixedNormal,
-        _ => System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal
-      });
-    return bitmap;
-  }
 }

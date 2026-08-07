@@ -171,8 +171,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
   public void ApplyTheme(bool dark)
   {
     _dark = dark;
-    ApplyThemeRecursive(this);
-    Invalidate(true);
+    ThemeManager.ApplyPopup(this, dark);
   }
 
   public void FocusInitialControl()
@@ -289,28 +288,12 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {
-    using var pen = new Pen(_dark
-      ? Color.FromArgb(105, 105, 110)
-      : Color.FromArgb(110, 110, 110));
+    using var pen = new Pen(ThemeManager.GetBorder(_dark));
     Rectangle bounds = ClientRectangle;
     bounds.Width -= 1;
     bounds.Height -= 1;
     eventArgs.Graphics.DrawRectangle(pen, bounds);
   }
 
-  private void ApplyThemeRecursive(Control control)
-  {
-    Color background = _dark
-      ? Color.FromArgb(47, 47, 50)
-      : Color.FromArgb(250, 250, 250);
-    Color foreground = _dark
-      ? Color.FromArgb(240, 240, 240)
-      : Color.FromArgb(24, 24, 24);
-    control.BackColor = background;
-    control.ForeColor = foreground;
-    foreach (Control child in control.Controls)
-    {
-      ApplyThemeRecursive(child);
-    }
-  }
+
 }

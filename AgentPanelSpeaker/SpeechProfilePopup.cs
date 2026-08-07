@@ -74,14 +74,7 @@ internal sealed class SpeechProfilePopup : UserControl
       return;
     }
 
-    BackColor = dark
-      ? Color.FromArgb(47, 47, 50)
-      : Color.FromArgb(250, 250, 250);
-    ForeColor = dark
-      ? Color.FromArgb(240, 240, 240)
-      : Color.FromArgb(24, 24, 24);
-    ApplyThemeRecursive(this, dark);
-    Invalidate(true);
+    ThemeManager.ApplyPopup(this, dark);
   }
 
   /// <summary>
@@ -419,35 +412,12 @@ internal sealed class SpeechProfilePopup : UserControl
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {
-    Color borderColour = Color.FromArgb(
-      130,
-      ForeColor.R,
-      ForeColor.G,
-      ForeColor.B);
+    Color borderColour = ThemeManager.GetBorder(
+      BackColor.GetBrightness() < 0.35f);
     using var border = new Pen(borderColour, 1.0f);
     Rectangle bounds = Rectangle.Inflate(ClientRectangle, -1, -1);
     eventArgs.Graphics.DrawRectangle(border, bounds);
   }
 
-  private static void ApplyThemeRecursive(Control control, bool dark)
-  {
-    Color background = dark
-      ? Color.FromArgb(47, 47, 50)
-      : Color.FromArgb(250, 250, 250);
-    Color foreground = dark
-      ? Color.FromArgb(240, 240, 240)
-      : Color.FromArgb(24, 24, 24);
 
-    control.BackColor = background;
-    control.ForeColor = foreground;
-    if (control is TrackBar)
-    {
-      control.BackColor = background;
-    }
-
-    foreach (Control child in control.Controls)
-    {
-      ApplyThemeRecursive(child, dark);
-    }
-  }
 }

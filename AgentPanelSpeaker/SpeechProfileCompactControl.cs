@@ -123,12 +123,7 @@ internal sealed class SpeechProfileCompactControl : Control
   public void ApplyTheme(bool dark)
   {
     _dark = dark;
-    BackColor = dark
-      ? Color.FromArgb(38, 38, 40)
-      : Color.FromArgb(248, 248, 248);
-    ForeColor = dark
-      ? Color.FromArgb(238, 238, 238)
-      : Color.FromArgb(28, 28, 28);
+    ThemeManager.ApplyPopup(this, dark);
     if (_popup is { IsDisposed: false })
     {
       _popup.ApplyTheme(dark);

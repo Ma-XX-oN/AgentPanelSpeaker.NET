@@ -203,13 +203,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public void ApplyTheme(bool dark)
   {
     _dark = dark;
-    BackColor = dark
-      ? Color.FromArgb(47, 47, 50)
-      : Color.FromArgb(250, 250, 250);
-    ForeColor = dark
-      ? Color.FromArgb(240, 240, 240)
-      : Color.FromArgb(24, 24, 24);
-    ApplyThemeRecursive(this);
+    ThemeManager.ApplyPopup(this, dark);
     _currentColour = Settings.GetHighlightColour(dark);
     _previousColour = _currentColour;
     if (_colourPopup is { IsDisposed: false } colourPopup)
@@ -635,28 +629,12 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {
-    using var pen = new Pen(_dark
-      ? Color.FromArgb(105, 105, 110)
-      : Color.FromArgb(110, 110, 110));
+    using var pen = new Pen(ThemeManager.GetBorder(_dark));
     Rectangle bounds = ClientRectangle;
     bounds.Width -= 1;
     bounds.Height -= 1;
     eventArgs.Graphics.DrawRectangle(pen, bounds);
   }
 
-  private void ApplyThemeRecursive(Control control)
-  {
-    Color background = _dark
-      ? Color.FromArgb(47, 47, 50)
-      : Color.FromArgb(250, 250, 250);
-    Color foreground = _dark
-      ? Color.FromArgb(240, 240, 240)
-      : Color.FromArgb(24, 24, 24);
-    control.BackColor = background;
-    control.ForeColor = foreground;
-    foreach (Control child in control.Controls)
-    {
-      ApplyThemeRecursive(child);
-    }
-  }
+
 }

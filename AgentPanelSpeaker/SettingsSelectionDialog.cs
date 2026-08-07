@@ -15,7 +15,7 @@ internal sealed class SettingsSelectionDialog : Form
   private const int StateChecked = 1;
   private const int StateMixed = 2;
 
-  private readonly TreeView _tree = new();
+  private readonly ThemedThreeStateTreeView _tree = new();
   private readonly Label _explanation = new();
   private readonly Button _applyButton = new();
   private bool _updatingChecks;
@@ -53,7 +53,6 @@ internal sealed class SettingsSelectionDialog : Form
     _tree.ShowLines = true;
     _tree.ShowPlusMinus = true;
     _tree.ShowRootLines = true;
-    _tree.StateImageList = CreateStateImages();
     _tree.MouseDown += TreeMouseDown;
     _tree.KeyDown += TreeKeyDown;
     UiText.Apply(_tree, $"{prefix}.Tree");
@@ -275,42 +274,5 @@ internal sealed class SettingsSelectionDialog : Form
         yield return child;
       }
     }
-  }
-
-  private static ImageList CreateStateImages()
-  {
-    var images = new ImageList
-    {
-      ImageSize = new Size(16, 16),
-      ColorDepth = ColorDepth.Depth32Bit
-    };
-    images.Images.Add(DrawStateImage(StateUnchecked));
-    images.Images.Add(DrawStateImage(StateChecked));
-    images.Images.Add(DrawStateImage(StateMixed));
-    return images;
-  }
-
-  private static Bitmap DrawStateImage(int state)
-  {
-    var bitmap = new Bitmap(16, 16);
-    using Graphics graphics = Graphics.FromImage(bitmap);
-    graphics.Clear(Color.Transparent);
-    Rectangle box = new(1, 1, 13, 13);
-    using var border = new Pen(SystemColors.ControlText);
-    graphics.DrawRectangle(border, box);
-    if (state == StateChecked)
-    {
-      using var pen = new Pen(SystemColors.ControlText, 2.0f);
-      graphics.DrawLines(pen, new[]
-      {
-        new Point(3, 7), new Point(6, 10), new Point(12, 4)
-      });
-    }
-    else if (state == StateMixed)
-    {
-      using var brush = new SolidBrush(SystemColors.ControlText);
-      graphics.FillRectangle(brush, 4, 6, 8, 3);
-    }
-    return bitmap;
   }
 }

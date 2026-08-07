@@ -1682,3 +1682,12 @@ so the same artwork remains usable in dark, light, and system themes.
 - The dialogs now fit themselves to the current monitor working area.
 - Fixed tree selection so clicking the custom checkbox/state-image area toggles
   the item instead of requiring a label click.
+
+
+## v157
+
+- Centralized light/dark WinForms palette application in `ThemeManager`.
+- Tree selection-state artwork now comes from the active application theme instead
+  of fixed system/visual-style colours.
+- Removed duplicated popup palette recursion from speech/transcript popup controls.
+- Track bars and TreeViews now receive their themed colours through `ThemeManager`.

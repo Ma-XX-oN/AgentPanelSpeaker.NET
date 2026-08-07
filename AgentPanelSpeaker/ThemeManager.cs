@@ -3,8 +3,20 @@ using System.Runtime.InteropServices;
 
 namespace AgentPanelSpeaker;
 
+
 /// <summary>
-/// Applies a consistent light or dark palette to Windows Forms controls.
+/// Tree view whose three-state selection artwork is owned by ThemeManager.
+/// </summary>
+internal sealed class ThemedThreeStateTreeView : TreeView
+{
+  public ThemedThreeStateTreeView()
+  {
+    StateImageList = ThemeManager.CreateTreeStateImages(dark: false);
+  }
+}
+
+/// <summary>
+/// Applies the application light or dark palette to Windows Forms controls.
 /// </summary>
 internal static class ThemeManager
 {
@@ -15,12 +27,17 @@ internal static class ThemeManager
   private static readonly Color DarkWindow = Color.FromArgb(32, 32, 32);
   private static readonly Color DarkControl = Color.FromArgb(45, 45, 48);
   private static readonly Color DarkInput = Color.FromArgb(30, 30, 30);
+  private static readonly Color DarkPopup = Color.FromArgb(47, 47, 50);
   private static readonly Color DarkText = Color.FromArgb(240, 240, 240);
   private static readonly Color DarkDisabled = Color.FromArgb(145, 145, 145);
   private static readonly Color DarkLink = Color.FromArgb(100, 180, 255);
   private static readonly Color DarkActiveLink = Color.FromArgb(160, 210, 255);
+  private static readonly Color DarkBorder = Color.FromArgb(105, 105, 110);
   private static readonly Color DarkCaution = Color.FromArgb(105, 82, 20);
   private static readonly Color DarkCautionText = Color.FromArgb(255, 236, 160);
+  private static readonly Color LightPopup = Color.FromArgb(250, 250, 250);
+  private static readonly Color LightText = Color.FromArgb(24, 24, 24);
+  private static readonly Color LightBorder = Color.FromArgb(110, 110, 110);
   private static readonly Color LightCaution = Color.FromArgb(255, 235, 140);
   private static readonly Color LightCautionText = Color.FromArgb(55, 42, 0);
 
@@ -38,15 +55,76 @@ internal static class ThemeManager
   }
 
   /// <summary>
+  /// Gets the standard popup background for the effective theme.
+  /// </summary>
+  public static Color GetPopupBackground(bool dark)
+  {
+    return dark ? DarkPopup : LightPopup;
+  }
+
+  /// <summary>
+  /// Gets the standard foreground for the effective theme.
+  /// </summary>
+  public static Color GetForeground(bool dark)
+  {
+    return dark ? DarkText : LightText;
+  }
+
+  /// <summary>
+  /// Gets the standard custom-control border colour for the effective theme.
+  /// </summary>
+  public static Color GetBorder(bool dark)
+  {
+    return dark ? DarkBorder : LightBorder;
+  }
+
+  /// <summary>
   /// Applies one theme to a form and all descendants.
   /// </summary>
   public static void Apply(Form form, AppTheme theme)
   {
     ArgumentNullException.ThrowIfNull(form);
     bool dark = IsDark(theme);
-    ApplyControl(form, dark);
+    Apply(form, dark);
     TrySetDarkTitleBar(form.Handle, dark);
-    form.Invalidate(true);
+  }
+
+  /// <summary>
+  /// Applies an already-resolved effective theme to a control tree.
+  /// </summary>
+  public static void Apply(Control control, bool dark)
+  {
+    ArgumentNullException.ThrowIfNull(control);
+    Color surface = dark ? DarkWindow : SystemColors.Control;
+    ApplyControl(control, dark, surface);
+    control.Invalidate(true);
+  }
+
+  /// <summary>
+  /// Applies the centralized popup palette to a control tree.
+  /// </summary>
+  public static void ApplyPopup(Control control, bool dark)
+  {
+    ArgumentNullException.ThrowIfNull(control);
+    ApplyControl(control, dark, GetPopupBackground(dark));
+    control.Invalidate(true);
+  }
+
+  /// <summary>
+  /// Creates the standard three-state tree images using the active palette.
+  /// </summary>
+  public static ImageList CreateTreeStateImages(bool dark)
+  {
+    Color foreground = GetForeground(dark);
+    var images = new ImageList
+    {
+      ImageSize = new Size(16, 16),
+      ColorDepth = ColorDepth.Depth32Bit
+    };
+    images.Images.Add(DrawTreeStateImage(CheckState.Unchecked, foreground));
+    images.Images.Add(DrawTreeStateImage(CheckState.Checked, foreground));
+    images.Images.Add(DrawTreeStateImage(CheckState.Indeterminate, foreground));
+    return images;
   }
 
   /// <summary>
@@ -76,9 +154,9 @@ internal static class ThemeManager
   /// <summary>
   /// Applies palette values recursively.
   /// </summary>
-  private static void ApplyControl(Control control, bool dark)
+  private static void ApplyControl(Control control, bool dark, Color surface)
   {
-    Color window = dark ? DarkWindow : SystemColors.Control;
+    Color window = surface;
     Color foreground = dark ? DarkText : SystemColors.ControlText;
     Color input = dark ? DarkInput : SystemColors.Window;
     Color inputText = dark ? DarkText : SystemColors.WindowText;
@@ -123,6 +201,22 @@ internal static class ThemeManager
         listBox.ForeColor = inputText;
         break;
 
+      case ThemedThreeStateTreeView threeStateTree:
+        threeStateTree.BackColor = input;
+        threeStateTree.ForeColor = inputText;
+        ReplaceTreeStateImages(threeStateTree, dark);
+        break;
+
+      case TreeView treeView:
+        treeView.BackColor = input;
+        treeView.ForeColor = inputText;
+        break;
+
+      case TrackBar trackBar:
+        trackBar.BackColor = surface;
+        trackBar.ForeColor = GetForeground(dark);
+        break;
+
       case LinkLabel linkLabel:
         linkLabel.LinkColor = dark ? DarkLink : SystemColors.HotTrack;
         linkLabel.ActiveLinkColor = dark
@@ -138,8 +232,47 @@ internal static class ThemeManager
 
     foreach (Control child in control.Controls)
     {
-      ApplyControl(child, dark);
+      ApplyControl(child, dark, surface);
     }
+  }
+
+  private static void ReplaceTreeStateImages(
+    ThemedThreeStateTreeView treeView,
+    bool dark)
+  {
+    ImageList? previous = treeView.StateImageList;
+    treeView.StateImageList = CreateTreeStateImages(dark);
+    previous?.Dispose();
+  }
+
+  private static Bitmap DrawTreeStateImage(CheckState state, Color foreground)
+  {
+    var bitmap = new Bitmap(16, 16);
+    using Graphics graphics = Graphics.FromImage(bitmap);
+    graphics.Clear(Color.Transparent);
+    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+    Rectangle box = new(1, 1, 13, 13);
+    using var border = new Pen(foreground, 1.5f);
+    graphics.DrawRectangle(border, box);
+    if (state == CheckState.Checked)
+    {
+      using var pen = new Pen(foreground, 2.0f)
+      {
+        StartCap = System.Drawing.Drawing2D.LineCap.Round,
+        EndCap = System.Drawing.Drawing2D.LineCap.Round,
+        LineJoin = System.Drawing.Drawing2D.LineJoin.Round
+      };
+      graphics.DrawLines(pen, new[]
+      {
+        new Point(3, 7), new Point(6, 10), new Point(12, 4)
+      });
+    }
+    else if (state == CheckState.Indeterminate)
+    {
+      using var brush = new SolidBrush(foreground);
+      graphics.FillRectangle(brush, 4, 6, 8, 3);
+    }
+    return bitmap;
   }
 
   /// <summary>
