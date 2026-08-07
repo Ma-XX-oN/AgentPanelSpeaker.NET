@@ -864,9 +864,33 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
 
+    bool backward = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+    DiagnosticLog.Write("popup.anchor_focus_entered", new
+    {
+      node.Id,
+      nodeState = node.State.ToString(),
+      node.OpenOnFocus,
+      node.Anchor.Enabled,
+      node.Anchor.ContainsFocus,
+      node.SuppressNextAnchorFocusOpen,
+      node.FocusOpenQueued,
+      node.Generation,
+      backward,
+      activeForm = DescribeControl(Form.ActiveForm),
+      anchor = DescribeControl(node.Anchor)
+    });
+
     node.CloseTimer.Stop();
     if (node.SuppressNextAnchorFocusOpen)
     {
+      DiagnosticLog.Write("popup.anchor_focus_open_suppressed", new
+      {
+        node.Id,
+        reason = "SuppressNextAnchorFocusOpen",
+        node.Generation,
+        backward,
+        anchor = DescribeControl(node.Anchor)
+      });
       node.SuppressNextAnchorFocusOpen = false;
       return;
     }
@@ -874,9 +898,21 @@ internal sealed class HoverPopupController : IDisposable
         node.State == PopupState.Closed &&
         node.Anchor.Enabled)
     {
-      bool backward = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
       QueueFocusOpen(node, backward);
+      return;
     }
+
+    DiagnosticLog.Write("popup.anchor_focus_open_not_queued", new
+    {
+      node.Id,
+      nodeState = node.State.ToString(),
+      node.OpenOnFocus,
+      node.Anchor.Enabled,
+      node.Anchor.ContainsFocus,
+      node.FocusOpenQueued,
+      node.Generation,
+      backward
+    });
   }
 
   private void QueueFocusOpen(PopupNode node, bool backward)
@@ -884,23 +920,72 @@ internal sealed class HoverPopupController : IDisposable
     if (node.FocusOpenQueued || node.Anchor.IsDisposed ||
         !node.Anchor.IsHandleCreated)
     {
+      DiagnosticLog.Write("popup.focus_open_queue_rejected", new
+      {
+        node.Id,
+        node.FocusOpenQueued,
+        node.Anchor.IsDisposed,
+        node.Anchor.IsHandleCreated,
+        nodeState = node.State.ToString(),
+        node.Generation,
+        backward,
+        anchor = DescribeControl(node.Anchor)
+      });
       return;
     }
 
     node.FocusOpenQueued = true;
     long generation = node.Generation;
+    DiagnosticLog.Write("popup.focus_open_queued", new
+    {
+      node.Id,
+      generation,
+      backward,
+      nodeState = node.State.ToString(),
+      anchor = DescribeControl(node.Anchor),
+      activeForm = DescribeControl(Form.ActiveForm)
+    });
     try
     {
       node.Anchor.BeginInvoke((MethodInvoker)(() =>
       {
         node.FocusOpenQueued = false;
-        if (_disposed || node.Generation != generation ||
-            node.State != PopupState.Closed || !node.Anchor.Enabled ||
-            !node.Anchor.ContainsFocus)
+        string? abortReason = _disposed
+          ? "controller-disposed"
+          : node.Generation != generation
+            ? "generation-changed"
+            : node.State != PopupState.Closed
+              ? "node-not-closed"
+              : !node.Anchor.Enabled
+                ? "anchor-disabled"
+                : !node.Anchor.ContainsFocus
+                  ? "anchor-lost-focus"
+                  : null;
+        DiagnosticLog.Write("popup.focus_open_deferred_evaluate", new
+        {
+          node.Id,
+          queuedGeneration = generation,
+          currentGeneration = node.Generation,
+          backward,
+          nodeState = node.State.ToString(),
+          node.Anchor.Enabled,
+          node.Anchor.ContainsFocus,
+          abortReason,
+          anchor = DescribeControl(node.Anchor),
+          activeForm = DescribeControl(Form.ActiveForm)
+        });
+        if (abortReason is not null)
         {
           return;
         }
 
+        DiagnosticLog.Write("popup.focus_open_deferred_execute", new
+        {
+          node.Id,
+          generation,
+          backward,
+          anchor = DescribeControl(node.Anchor)
+        });
         OpenNode(
           node,
           focusPopup: true,
@@ -908,9 +993,17 @@ internal sealed class HoverPopupController : IDisposable
           deferFocus: true);
       }));
     }
-    catch (InvalidOperationException)
+    catch (InvalidOperationException exception)
     {
       node.FocusOpenQueued = false;
+      DiagnosticLog.Write("popup.focus_open_begin_invoke_failed", new
+      {
+        node.Id,
+        generation,
+        backward,
+        exception = exception.ToString(),
+        anchor = DescribeControl(node.Anchor)
+      });
     }
   }
 
@@ -1275,7 +1368,6 @@ internal sealed class HoverPopupController : IDisposable
     bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
     bool pointerInsideLeaf = IsPointerInsideLeaf(node);
     bool keepOpen = node.KeepOpen?.Invoke() ?? false;
-    bool nodeContainsFocus = NodeContainsFocus(node);
     DiagnosticLog.Write("popup.close_timer_tick", new
     {
       node.Id,
@@ -1287,14 +1379,13 @@ internal sealed class HoverPopupController : IDisposable
       pointerInsideLeaf,
       keepOpen,
       activeForm = DescribeControl(Form.ActiveForm),
-      nodeContainsFocus,
+      nodeContainsFocus = NodeContainsFocus(node),
       anchorContainsFocus = node.Anchor.ContainsFocus
     });
     if (!isDeepest ||
         !entered ||
         !pointerEnteredAsLeaf ||
         pointerInsideLeaf ||
-        nodeContainsFocus ||
         keepOpen)
     {
       return;
@@ -1313,7 +1404,6 @@ internal sealed class HoverPopupController : IDisposable
     bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
     bool pointerInsideLeaf = IsPointerInsideLeaf(node);
     bool keepOpen = node.KeepOpen?.Invoke() ?? false;
-    bool nodeContainsFocus = NodeContainsFocus(node);
     DiagnosticLog.Write("popup.close_schedule_evaluate", new
     {
       node.Id,
@@ -1327,25 +1417,21 @@ internal sealed class HoverPopupController : IDisposable
       keepOpen,
       timerEnabledBefore = node.CloseTimer.Enabled,
       activeForm = DescribeControl(Form.ActiveForm),
-      nodeContainsFocus,
+      nodeContainsFocus = NodeContainsFocus(node),
       anchorContainsFocus = node.Anchor.ContainsFocus
     });
     if (!isDeepest || !entered || !pointerEnteredAsLeaf)
     {
       return;
     }
-    if (pointerInsideLeaf || nodeContainsFocus || keepOpen)
+    if (pointerInsideLeaf || keepOpen)
     {
       node.CloseTimer.Stop();
       DiagnosticLog.Write("popup.close_timer_cancelled", new
       {
         node.Id,
         triggerReason,
-        reason = pointerInsideLeaf
-          ? "pointer-inside-leaf"
-          : nodeContainsFocus
-            ? "keyboard-focus-inside-node"
-            : "keep-open"
+        reason = pointerInsideLeaf ? "pointer-inside-leaf" : "keep-open"
       });
       return;
     }

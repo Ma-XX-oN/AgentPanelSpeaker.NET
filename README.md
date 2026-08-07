@@ -1,3 +1,9 @@
+## v185 hover-close rollback and focus-open isolation diagnostics
+
+- Reverts v184's keyboard-focus veto on mouse-leave closing, restoring the prior hover-close behaviour.
+- Adds explicit diagnostics for anchor focus entry, focus-open suppression, queueing, deferred-open validation/abort reasons, and execution.
+- No new focus/open behavioural workaround is introduced for the reported failure to reopen on Tab; the added logging is intended to isolate that path.
+
 ## v184 focused-popup hover-close fix
 
 - A hover-close timer is no longer started while the deepest popup or its anchor still has keyboard focus.
