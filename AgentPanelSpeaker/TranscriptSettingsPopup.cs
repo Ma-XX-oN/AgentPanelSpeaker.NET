@@ -265,42 +265,6 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
 
   protected override bool ShowWithoutActivation => true;
 
-  protected override void OnActivated(EventArgs eventArgs)
-  {
-    base.OnActivated(eventArgs);
-
-    Form? child = _colourPopupHandle?.IsOpen == true
-      ? _colourPopup
-      : _advancedPopupHandle?.IsOpen == true
-        ? _advancedPopup
-        : null;
-    if (child is not { IsDisposed: false, Visible: true })
-    {
-      return;
-    }
-
-    try
-    {
-      BeginInvoke((MethodInvoker)(() =>
-      {
-        if (child.IsDisposed || !child.Visible)
-        {
-          return;
-        }
-        child.Activate();
-        DiagnosticLog.Write("popup.parent_activation_redirect", new
-        {
-          parent = GetType().FullName,
-          child = child.GetType().FullName,
-          childContainsFocus = child.ContainsFocus
-        });
-      }));
-    }
-    catch (InvalidOperationException)
-    {
-    }
-  }
-
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
     if (HoverPopupController.HandleGlobalPopupKey(keyData, this))
@@ -432,6 +396,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     FlushPendingColourChange();
     if (returnFocus && _currentSwatch.CanFocus)
     {
+      Activate();
       _currentSwatch.Focus();
     }
   }
@@ -503,6 +468,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     }
     if (returnFocus && _advancedButton.CanFocus)
     {
+      Activate();
       _advancedButton.Focus();
     }
   }
@@ -522,21 +488,6 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
       throw new InvalidOperationException(
         "Nested transcript popups must derive from PopupFormBase.");
     }
-
-    // An inactive owner Form can retain ActiveControl even after keyboard
-    // focus has moved into an owned popup.  That leaves a focus cue painted
-    // in the parent while the child is active, which makes the logical popup
-    // hierarchy look as though two controls have focus.  The anchor is
-    // restored explicitly when the child closes, so clear the owner's stale
-    // active-control state while the child is open.
-    Control? previousActiveControl = ActiveControl;
-    ActiveControl = null;
-    DiagnosticLog.Write("popup.owner_focus_cleared", new
-    {
-      ownerType = GetType().FullName,
-      popupType = popup.GetType().FullName,
-      previousActiveControl = previousActiveControl?.GetType().FullName
-    });
 
     popupForm.ShowAboveOwner(this);
   }

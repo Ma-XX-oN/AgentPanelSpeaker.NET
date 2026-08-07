@@ -1,3 +1,11 @@
+## v180 popup focus restoration
+
+Version 180 removes the focus-containment workarounds introduced in v178 and
+v179.  When a child popup closes, its parent form is explicitly activated
+before focus is restored to the anchor or advanced to the next/previous parent
+control.  This keeps the established popup tab traversal while fixing the
+missing parent-form activation at child close.
+
 ## v177 colour popup layout and placement
 
 Version 179 keeps keyboard focus inside the deepest open popup: if a parent

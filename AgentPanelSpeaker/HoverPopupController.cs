@@ -318,27 +318,7 @@ internal sealed class HoverPopupController : IDisposable
 
     if (!controller!.NodeOwnsForm(leaf, contextForm))
     {
-      if (!controller.IsFormInOpenPopupPath(leaf, contextForm))
-      {
-        return false;
-      }
-
-      Form? leafForm = controller.GetNodeForm(leaf);
-      if (leafForm is { IsDisposed: false, Visible: true } &&
-          !ReferenceEquals(Form.ActiveForm, leafForm))
-      {
-        leafForm.Activate();
-      }
-      controller.FocusBoundaryControl(leaf, backward);
-      DiagnosticLog.Write("popup.tab_redirect_to_leaf", new
-      {
-        leaf.Id,
-        backward,
-        contextForm = DescribeControl(contextForm),
-        leafForm = DescribeControl(leafForm),
-        focusedControl = DescribeControl(FindFocusedControl(leafForm))
-      });
-      return true;
+      return false;
     }
 
     Control[] controls = GetTabControls(context).ToArray();
@@ -628,7 +608,9 @@ internal sealed class HoverPopupController : IDisposable
         int targetIndex = forward ? anchorIndex + 1 : anchorIndex - 1;
         if (targetIndex >= 0 && targetIndex < parentControls.Length)
         {
-          parentControls[targetIndex].Focus();
+          Control target = parentControls[targetIndex];
+          ActivateContainingForm(target);
+          target.Focus();
           return;
         }
       }
@@ -1396,24 +1378,14 @@ internal sealed class HoverPopupController : IDisposable
       ReferenceEquals(control.FindForm(), form));
   }
 
-  private Form? GetNodeForm(PopupNode node)
+  private static void ActivateContainingForm(Control control)
   {
-    return EnumerateVisiblePopupControls(node)
-      .Select(control => control.FindForm())
-      .FirstOrDefault(form => form is not null);
-  }
-
-  private bool IsFormInOpenPopupPath(PopupNode leaf, Form form)
-  {
-    for (PopupNode? current = leaf; current is not null; current = current.Parent)
+    Form? form = control.FindForm();
+    if (form is { IsDisposed: false, Visible: true } &&
+        !ReferenceEquals(Form.ActiveForm, form))
     {
-      if (ReferenceEquals(current.Anchor.FindForm(), form) ||
-          (current.State != PopupState.Closed && NodeOwnsForm(current, form)))
-      {
-        return true;
-      }
+      form.Activate();
     }
-    return false;
   }
 
   private static IEnumerable<Control> GetTabControls(Control root)
