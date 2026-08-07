@@ -1,3 +1,11 @@
+## v169 tabbed colour editor
+
+- Transcript highlight colour popup now keeps the shared colour wheel on the left.
+- RGB and six-digit Hex editing share one tab; HSL has its own tab.
+- Alpha remains a shared editor below the tabs.
+- Colour changes are synchronized across the wheel, both tab editors, Alpha, and the current-colour swatch.
+- Popup sizing measures both tab pages plus Alpha so active controls are not clipped.
+
 # Agent Panel Speaker v150
 
 

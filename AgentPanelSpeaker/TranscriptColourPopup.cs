@@ -9,16 +9,21 @@ namespace AgentPanelSpeaker;
 internal sealed class TranscriptColourPopup : UserControl
 {
   private readonly ColorWheel _wheel = new();
-  private readonly ColorEditor _editor = new();
+  private readonly ColorEditor _rgbEditor = new();
+  private readonly ColorEditor _hslEditor = new();
+  private readonly ColorEditor _alphaEditor = new();
+  private readonly TabControl _modeTabs = new();
+  private readonly TableLayoutPanel _editorStack = new();
   private readonly Button _previousSwatch = new();
   private readonly Button _currentSwatch = new();
+  private Color _colour = Color.Black;
   private bool _updating;
   private bool _dark;
 
   public TranscriptColourPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(430, 330);
+    Size = new Size(500, 330);
     TabStop = false;
     Visible = false;
 
@@ -36,18 +41,56 @@ internal sealed class TranscriptColourPopup : UserControl
     _wheel.Dock = DockStyle.Fill;
     _wheel.Margin = new Padding(6, 2, 8, 2);
     _wheel.TabIndex = 0;
-    _editor.Dock = DockStyle.Fill;
-    _editor.Margin = new Padding(8, 2, 2, 2);
-    _editor.Orientation = Orientation.Vertical;
-    _editor.TabIndex = 1;
+
+    ConfigureEditor(_rgbEditor, showRgb: true, showHex: true,
+      showHsl: false, showAlpha: false);
+    ConfigureEditor(_hslEditor, showRgb: false, showHex: false,
+      showHsl: true, showAlpha: false);
+    ConfigureEditor(_alphaEditor, showRgb: false, showHex: false,
+      showHsl: false, showAlpha: true);
+
+    var rgbPage = new TabPage("RGB / Hex")
+    {
+      Padding = new Padding(6)
+    };
+    var hslPage = new TabPage("HSL")
+    {
+      Padding = new Padding(6)
+    };
+    rgbPage.Controls.Add(_rgbEditor);
+    hslPage.Controls.Add(_hslEditor);
+
+    _modeTabs.Dock = DockStyle.Fill;
+    _modeTabs.Margin = Padding.Empty;
+    _modeTabs.TabIndex = 1;
+    _modeTabs.TabPages.Add(rgbPage);
+    _modeTabs.TabPages.Add(hslPage);
+
+    _alphaEditor.Dock = DockStyle.Fill;
+    _alphaEditor.Margin = new Padding(0, 4, 0, 0);
+    _alphaEditor.TabIndex = 2;
+
     ConfigureSwatch(_previousSwatch, "Previous highlight colour");
     ConfigureSwatch(_currentSwatch, "Current highlight colour");
-    _previousSwatch.TabIndex = 2;
+    _previousSwatch.TabIndex = 3;
     _currentSwatch.TabStop = false;
     _previousSwatch.Cursor = Cursors.Hand;
     _previousSwatch.Click += (_, _) => RestorePrevious();
+
     _wheel.ColorChanged += WheelColorChanged;
-    _editor.ColorChanged += EditorColorChanged;
+    _rgbEditor.ColorChanged += RgbEditorColorChanged;
+    _hslEditor.ColorChanged += HslEditorColorChanged;
+    _alphaEditor.ColorChanged += AlphaEditorColorChanged;
+
+    _editorStack.ColumnCount = 1;
+    _editorStack.RowCount = 2;
+    _editorStack.Dock = DockStyle.Fill;
+    _editorStack.Margin = new Padding(8, 2, 2, 2);
+    _editorStack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    _editorStack.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+    _editorStack.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+    _editorStack.Controls.Add(_modeTabs, 0, 0);
+    _editorStack.Controls.Add(_alphaEditor, 0, 1);
 
     var swatches = new FlowLayoutPanel
     {
@@ -70,15 +113,15 @@ internal sealed class TranscriptColourPopup : UserControl
       Dock = DockStyle.Fill,
       Padding = new Padding(8)
     };
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
     layout.Controls.Add(title, 0, 0);
     layout.SetColumnSpan(title, 2);
     layout.Controls.Add(_wheel, 0, 1);
-    layout.Controls.Add(_editor, 1, 1);
+    layout.Controls.Add(_editorStack, 1, 1);
     layout.Controls.Add(swatches, 0, 2);
     layout.SetColumnSpan(swatches, 2);
     Controls.Add(layout);
@@ -90,7 +133,7 @@ internal sealed class TranscriptColourPopup : UserControl
   public event EventHandler? DismissRequested;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-  public Color Colour => _editor.Color;
+  public Color Colour => _colour;
 
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public Color PreviousColour => _previousSwatch.BackColor;
@@ -100,8 +143,8 @@ internal sealed class TranscriptColourPopup : UserControl
     _updating = true;
     try
     {
-      _wheel.Color = current;
-      _editor.Color = current;
+      _colour = current;
+      SynchronizeControls(current);
       SetSwatchColour(_currentSwatch, current);
       SetSwatchColour(_previousSwatch, previous);
     }
@@ -117,43 +160,50 @@ internal sealed class TranscriptColourPopup : UserControl
     ThemeManager.ApplyPopup(this, dark);
   }
 
-
   /// <summary>
-  /// Sizes the popup from the actual scaled bounds of every visible editor
-  /// control so that keyboard-focusable fields are never clipped.
+  /// Sizes the popup from the actual scaled bounds of both tabbed editors and
+  /// the shared alpha editor so no active colour control can be clipped.
   /// </summary>
   public void FitToVisibleControls()
   {
     PerformLayout();
-    _editor.PerformLayout();
 
-    int editorRight = 0;
-    int editorBottom = 0;
-    foreach (Control control in _editor.Controls)
+    int selectedIndex = _modeTabs.SelectedIndex;
+    int editorWidth = 0;
+    int editorHeight = 0;
+    for (int index = 0; index < _modeTabs.TabPages.Count; index++)
     {
-      if (!control.Visible)
-      {
-        continue;
-      }
-      editorRight = Math.Max(editorRight, control.Right);
-      editorBottom = Math.Max(editorBottom, control.Bottom);
+      _modeTabs.SelectedIndex = index;
+      _modeTabs.PerformLayout();
+      ColorEditor editor = index == 0 ? _rgbEditor : _hslEditor;
+      editor.PerformLayout();
+      Size extent = GetVisibleEditorExtent(editor);
+      editorWidth = Math.Max(editorWidth, extent.Width);
+      editorHeight = Math.Max(editorHeight, extent.Height);
     }
+    _modeTabs.SelectedIndex = Math.Max(0, selectedIndex);
 
-    int editorWidth = Math.Max(_editor.PreferredSize.Width, editorRight + 4);
-    int editorHeight = Math.Max(_editor.PreferredSize.Height, editorBottom + 4);
-    int editorColumnWidth = editorWidth + _editor.Margin.Horizontal;
-    int innerWidth = (int)Math.Ceiling(editorColumnWidth / 0.58);
-    int requiredWidth = 16 + innerWidth;
+    _alphaEditor.PerformLayout();
+    Size alphaExtent = GetVisibleEditorExtent(_alphaEditor);
+    editorWidth = Math.Max(editorWidth, alphaExtent.Width);
 
+    int tabHeaderAllowance = ScaleLogical(30);
+    int alphaRowHeight = alphaExtent.Height + ScaleLogical(8);
+    _editorStack.RowStyles[1].SizeType = SizeType.Absolute;
+    _editorStack.RowStyles[1].Height = alphaRowHeight;
+
+    int editorColumnWidth = editorWidth + ScaleLogical(24);
+    int innerWidth = (int)Math.Ceiling(editorColumnWidth / 0.60);
+    int requiredWidth = ScaleLogical(16) + innerWidth;
+
+    int modeHeight = editorHeight + tabHeaderAllowance + ScaleLogical(16);
     int wheelHeight = Math.Max(_wheel.PreferredSize.Height, _wheel.MinimumSize.Height);
-    int contentHeight = Math.Max(
-      editorHeight + _editor.Margin.Vertical,
-      wheelHeight + _wheel.Margin.Vertical);
-    int requiredHeight = 16 + 28 + contentHeight + 30;
+    int contentHeight = Math.Max(modeHeight + alphaRowHeight, wheelHeight);
+    int requiredHeight = ScaleLogical(16 + 28 + 30) + contentHeight;
 
     Size = new Size(
-      Math.Max(430, requiredWidth),
-      Math.Max(330, requiredHeight));
+      Math.Max(ScaleLogical(500), requiredWidth),
+      Math.Max(ScaleLogical(300), requiredHeight));
     PerformLayout();
   }
 
@@ -194,15 +244,36 @@ internal sealed class TranscriptColourPopup : UserControl
 
   private void WheelColorChanged(object? sender, EventArgs eventArgs)
   {
-    SynchronizeColour(_wheel.Color, updateWheel: false);
+    Color wheelColour = _wheel.Color;
+    SetColour(Color.FromArgb(
+      _colour.A,
+      wheelColour.R,
+      wheelColour.G,
+      wheelColour.B));
   }
 
-  private void EditorColorChanged(object? sender, EventArgs eventArgs)
+  private void RgbEditorColorChanged(object? sender, EventArgs eventArgs)
   {
-    SynchronizeColour(_editor.Color, updateWheel: true);
+    Color edited = _rgbEditor.Color;
+    SetColour(Color.FromArgb(_colour.A, edited.R, edited.G, edited.B));
   }
 
-  private void SynchronizeColour(Color colour, bool updateWheel)
+  private void HslEditorColorChanged(object? sender, EventArgs eventArgs)
+  {
+    Color edited = _hslEditor.Color;
+    SetColour(Color.FromArgb(_colour.A, edited.R, edited.G, edited.B));
+  }
+
+  private void AlphaEditorColorChanged(object? sender, EventArgs eventArgs)
+  {
+    SetColour(Color.FromArgb(
+      _alphaEditor.Color.A,
+      _colour.R,
+      _colour.G,
+      _colour.B));
+  }
+
+  private void SetColour(Color colour)
   {
     if (_updating)
     {
@@ -212,14 +283,8 @@ internal sealed class TranscriptColourPopup : UserControl
     _updating = true;
     try
     {
-      if (updateWheel)
-      {
-        _wheel.Color = colour;
-      }
-      if (_editor.Color != colour)
-      {
-        _editor.Color = colour;
-      }
+      _colour = colour;
+      SynchronizeControls(colour);
       SetSwatchColour(_currentSwatch, colour);
     }
     finally
@@ -229,12 +294,61 @@ internal sealed class TranscriptColourPopup : UserControl
     ColourChanged?.Invoke(this, EventArgs.Empty);
   }
 
+  private void SynchronizeControls(Color colour)
+  {
+    _wheel.Alpha = colour.A;
+    _wheel.Color = colour;
+    _rgbEditor.Color = colour;
+    _hslEditor.Color = colour;
+    _alphaEditor.Color = colour;
+  }
+
   private void RestorePrevious()
   {
     Color previous = _previousSwatch.BackColor;
-    Color current = _editor.Color;
+    Color current = _colour;
     SetSwatchColour(_previousSwatch, current);
-    SynchronizeColour(previous, updateWheel: true);
+    SetColour(previous);
+  }
+
+  private static void ConfigureEditor(
+    ColorEditor editor,
+    bool showRgb,
+    bool showHex,
+    bool showHsl,
+    bool showAlpha)
+  {
+    editor.Dock = DockStyle.Fill;
+    editor.Margin = Padding.Empty;
+    editor.Orientation = Orientation.Vertical;
+    editor.ShowRgb = showRgb;
+    editor.ShowHex = showHex;
+    editor.ShowHsl = showHsl;
+    editor.ShowAlphaChannel = showAlpha;
+    editor.PreserveAlphaChannel = true;
+  }
+
+  private static Size GetVisibleEditorExtent(ColorEditor editor)
+  {
+    int right = 0;
+    int bottom = 0;
+    foreach (Control control in editor.Controls)
+    {
+      if (!control.Visible)
+      {
+        continue;
+      }
+      right = Math.Max(right, control.Right);
+      bottom = Math.Max(bottom, control.Bottom);
+    }
+    return new Size(
+      Math.Max(1, right + 4),
+      Math.Max(1, bottom + 4));
+  }
+
+  private int ScaleLogical(int value)
+  {
+    return (int)Math.Ceiling(value * DeviceDpi / 96.0);
   }
 
   private static void ConfigureSwatch(Button swatch, string name)
@@ -274,6 +388,4 @@ internal sealed class TranscriptColourPopup : UserControl
     bounds.Height -= 1;
     eventArgs.Graphics.DrawRectangle(pen, bounds);
   }
-
-
 }
