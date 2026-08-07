@@ -18,7 +18,7 @@ internal sealed class TranscriptColourPopup : UserControl
   public TranscriptColourPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
-    Size = new Size(390, 240);
+    Size = new Size(430, 330);
     TabStop = false;
     Visible = false;
 

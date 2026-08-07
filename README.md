@@ -1766,3 +1766,22 @@ so the same artwork remains usable in dark, light, and system themes.
 - Keyboard-entry focus is deferred by one UI turn at each popup level so nested
   popup traversal does not recursively re-enter popup creation/focus on the same
   synchronous event stack.
+
+
+## v166
+
+- Fixed tab traversal out of nested popup controls such as the transcript colour picker.
+- A selectable composite control now counts as one logical active tab stop; its internal child controls are not also inserted into the popup boundary list.
+- Tab from the colour picker's last logical active control now closes that popup and continues to the next logical active control in the parent popup; Shift+Tab does the symmetric operation from the first control.
+
+
+## v167
+
+- Expanded the transcript highlight colour popup so the complete Cyotek
+  `ColorEditor` is visible instead of clipping its Hex, HSL, and Alpha controls.
+- Restored recursive logical tab traversal through composite popup controls so
+  the visible RGB/Hex/HSL/Alpha editor controls remain individually keyboard
+  accessible rather than treating the entire colour editor as one tab stop.
+- This version intentionally leaves all of the Cyotek colour editor fields
+  visible so their usefulness can be evaluated before deciding whether to hide
+  any of them.
