@@ -1,3 +1,12 @@
+## v182 child-popup tab-exit focus restoration
+
+- Tab/Shift+Tab past a child popup boundary now closes the child with focus
+  restoration enabled before continuing traversal to the adjacent active parent
+  control.
+- This uses the existing close-path suppression that prevents restoring focus to
+  the child anchor from immediately reopening the child.
+- v181 close-path diagnostics are retained.
+
 ## v181 popup-close focus diagnostics
 
 - Adds detailed diagnostics around nested popup hide, parent activation, target focus, and the next UI-message turn.

@@ -334,7 +334,7 @@ internal sealed class HoverPopupController : IDisposable
     {
       return false;
     }
-    controller.CloseNode(leaf, returnFocus: false, keyboardClose: true);
+    controller.CloseNode(leaf, returnFocus: true, keyboardClose: true);
     controller.MoveFocusBeyondAnchor(leaf, forward: !backward);
     return true;
   }
