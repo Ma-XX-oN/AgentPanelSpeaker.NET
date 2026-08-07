@@ -1,3 +1,8 @@
+## v170 colour-wheel alpha fix
+
+- Fixes the colour picker failing to open after the v169 tabbed editor change.
+- Converts WinForms `Color.A` (`0..255`) to the Cyotek `ColorWheel.Alpha` range (`0.0..1.0`) before synchronizing the wheel.
+
 ## v169 tabbed colour editor
 
 - Transcript highlight colour popup now keeps the shared colour wheel on the left.

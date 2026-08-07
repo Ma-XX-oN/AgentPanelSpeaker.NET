@@ -296,7 +296,7 @@ internal sealed class TranscriptColourPopup : UserControl
 
   private void SynchronizeControls(Color colour)
   {
-    _wheel.Alpha = colour.A;
+    _wheel.Alpha = colour.A / 255.0;
     _wheel.Color = colour;
     _rgbEditor.Color = colour;
     _hslEditor.Color = colour;
