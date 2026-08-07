@@ -1716,3 +1716,10 @@ so the same artwork remains usable in dark, light, and system themes.
 - Right-aligned the Theme-and-utility control group.
 - Reduced and centred the themed three-state tree checkbox artwork so it fits
   without clipping.
+
+
+## v160
+
+- Matched the Detect latest and Browse JSONL button heights to the Source dropdown.
+- Widened the Theme dropdown so System is not clipped.
+- Matched the Pronunciations button height to the fenced-code-types textbox.

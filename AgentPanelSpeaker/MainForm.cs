@@ -181,7 +181,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v159";
+    Text = "Agent Panel Speaker v160";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -254,7 +254,7 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.Bluetooth,
       "Main.BluetoothWake");
     _themeComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
-    _themeComboBox.Width = 95;
+    _themeComboBox.Width = 120;
     _themeComboBox.Items.AddRange(new object[]
     {
       AppTheme.System,
@@ -426,6 +426,27 @@ internal sealed class MainForm : Form, IMessageFilter
     _mainLayout.Controls.Add(_diagnosticHost, 0, 7);
     Controls.Add(_mainLayout);
     ConfigureAccessibility();
+    NormalizeInlineControlHeights();
+  }
+
+  /// <summary>
+  /// Keeps inline controls in a row visually aligned to the adjacent input.
+  /// </summary>
+  private void NormalizeInlineControlHeights()
+  {
+    MatchButtonHeight(_detectLatestButton, _sourceComboBox.PreferredHeight);
+    MatchButtonHeight(_browseButton, _sourceComboBox.PreferredHeight);
+    MatchButtonHeight(_pronunciationsButton, _fenceTypesTextBox.PreferredHeight);
+  }
+
+  /// <summary>
+  /// Preserves a button's preferred width while matching a target control height.
+  /// </summary>
+  private static void MatchButtonHeight(Button button, int height)
+  {
+    int width = button.GetPreferredSize(Size.Empty).Width;
+    button.AutoSize = false;
+    button.Size = new Size(width, height);
   }
 
   /// <summary>
