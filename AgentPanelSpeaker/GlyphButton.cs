@@ -134,16 +134,14 @@ internal sealed class GlyphButton : Button
           DrawChevronIcon(eventArgs.Graphics, glyphColor, pointsUp: false);
           break;
         case GlyphButtonDrawing.Save:
-          DrawSaveIcon(eventArgs.Graphics, glyphColor);
-          break;
         case GlyphButtonDrawing.Reset:
-          DrawResetIcon(eventArgs.Graphics, glyphColor);
-          break;
         case GlyphButtonDrawing.Keyboard:
-          DrawKeyboardIcon(eventArgs.Graphics, glyphColor);
-          break;
         case GlyphButtonDrawing.DiagnosticLog:
-          DrawDiagnosticLogIcon(eventArgs.Graphics, glyphColor);
+          UtilityIconAssets.Draw(
+            eventArgs.Graphics,
+            ClientRectangle,
+            _drawing,
+            glyphColor);
           break;
       }
       return;

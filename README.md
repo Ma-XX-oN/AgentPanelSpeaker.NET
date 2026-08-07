@@ -1659,3 +1659,10 @@ and closes.  Cancel returns to the application.
 - Replaced the simulated save arrow button with a real ComboBox dropdown affordance.
 - Deferred theme application until the theme dropdown closes.
 - Added synchronous uncaught-exception diagnostics for UI, AppDomain, and task failures.
+
+## v154
+
+The Save, Reset, Hotkeys, and Diagnostic Log utility buttons now use the icon
+artwork approved in the icon-size test harness.  The PNG alpha masks are tinted
+with the current theme's foreground colour and scaled from their visible bounds,
+so the same artwork remains usable in dark, light, and system themes.
