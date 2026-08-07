@@ -53,7 +53,10 @@ internal sealed class HoverPopupController : IDisposable
 
     public void Close(bool returnFocus)
     {
-      _owner.CloseNode(_owner.GetNode(_nodeId), returnFocus);
+      _owner.CloseNode(
+        _owner.GetNode(_nodeId),
+        returnFocus,
+        closeReason: "popup-handle-close");
     }
 
     public void ReevaluateClose()
@@ -175,7 +178,7 @@ internal sealed class HoverPopupController : IDisposable
   /// </summary>
   public void Close(bool returnFocus)
   {
-    CloseNode(_root, returnFocus);
+    CloseNode(_root, returnFocus, closeReason: "controller-close");
   }
 
   /// <summary>
@@ -189,7 +192,11 @@ internal sealed class HoverPopupController : IDisposable
       return false;
     }
 
-    CloseNode(node, returnFocus, keyboardClose);
+    CloseNode(
+      node,
+      returnFocus,
+      keyboardClose,
+      closeReason: "close-deepest");
     return true;
   }
 
@@ -262,9 +269,23 @@ internal sealed class HoverPopupController : IDisposable
           if (activeForm is not null &&
               controller.ContainsOpenPopupForm(activeForm))
           {
+            DiagnosticLog.Write("popup.owner_deactivate_keep_open", new
+            {
+              owner = DescribeControl(owner),
+              activeForm = DescribeControl(activeForm)
+            });
             continue;
           }
-          controller.Close(returnFocus: false);
+          DiagnosticLog.Write("popup.owner_deactivate_close", new
+          {
+            owner = DescribeControl(owner),
+            activeForm = DescribeControl(activeForm),
+            rootNodeId = controller._root.Id
+          });
+          controller.CloseNode(
+            controller._root,
+            returnFocus: false,
+            closeReason: "owner-deactivated");
         }
       }));
     }
@@ -334,7 +355,11 @@ internal sealed class HoverPopupController : IDisposable
     {
       return false;
     }
-    controller.CloseNode(leaf, returnFocus: true, keyboardClose: true);
+    controller.CloseNode(
+      leaf,
+      returnFocus: true,
+      keyboardClose: true,
+      closeReason: backward ? "shift-tab-boundary" : "tab-boundary");
     controller.MoveFocusBeyondAnchor(leaf, forward: !backward);
     return true;
   }
@@ -539,7 +564,9 @@ internal sealed class HoverPopupController : IDisposable
   private void CloseNode(
     PopupNode node,
     bool returnFocus,
-    bool keyboardClose = false)
+    bool keyboardClose = false,
+    string closeReason = "unspecified",
+    [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
   {
     if (_disposed)
     {
@@ -550,7 +577,10 @@ internal sealed class HoverPopupController : IDisposable
     node.FocusOpenQueued = false;
     foreach (PopupNode child in node.Children.ToArray())
     {
-      CloseNode(child, returnFocus: false);
+      CloseNode(
+        child,
+        returnFocus: false,
+        closeReason: $"ancestor-close:{closeReason}");
     }
     node.OpenTimer.Stop();
     node.CloseTimer.Stop();
@@ -569,6 +599,8 @@ internal sealed class HoverPopupController : IDisposable
       node.Id,
       returnFocus,
       keyboardClose,
+      closeReason,
+      caller,
       anchor = DescribeControl(node.Anchor),
       activeForm = DescribeControl(Form.ActiveForm),
       anchorForm = DescribeControl(node.Anchor.FindForm()),
@@ -582,6 +614,8 @@ internal sealed class HoverPopupController : IDisposable
       node.Id,
       returnFocus,
       keyboardClose,
+      closeReason,
+      caller,
       anchor = DescribeControl(node.Anchor),
       activeForm = DescribeControl(Form.ActiveForm),
       anchorForm = DescribeControl(node.Anchor.FindForm()),
@@ -607,7 +641,10 @@ internal sealed class HoverPopupController : IDisposable
       if (!ReferenceEquals(sibling, node) &&
           sibling.State != PopupState.Closed)
       {
-        CloseNode(sibling, returnFocus: false);
+        CloseNode(
+          sibling,
+          returnFocus: false,
+          closeReason: "open-sibling-replacement");
       }
     }
   }
@@ -664,7 +701,13 @@ internal sealed class HoverPopupController : IDisposable
         }
       }
 
-      CloseNode(node.Parent, returnFocus: false, keyboardClose: true);
+      CloseNode(
+        node.Parent,
+        returnFocus: false,
+        keyboardClose: true,
+        closeReason: forward
+          ? "tab-exit-parent-exhausted"
+          : "shift-tab-exit-parent-exhausted");
       MoveFocusBeyondAnchor(node.Parent, forward);
       return;
     }
@@ -692,7 +735,7 @@ internal sealed class HoverPopupController : IDisposable
   {
     if (node.State == PopupState.OpenEntered)
     {
-      ScheduleCloseIfOutside(node);
+      ScheduleCloseIfOutside(node, "explicit-reevaluate-close");
     }
   }
 
@@ -810,7 +853,7 @@ internal sealed class HoverPopupController : IDisposable
     }
     node.OpenTimer.Stop();
     node.SuppressHoverUntilAnchorExit = false;
-    ScheduleCloseIfOutside(node);
+    ScheduleCloseIfOutside(node, "anchor-mouse-leave");
   }
 
   private void AnchorFocusEntered(object? sender, EventArgs eventArgs)
@@ -873,10 +916,20 @@ internal sealed class HoverPopupController : IDisposable
 
   private void AnchorFocusLeft(object? sender, EventArgs eventArgs)
   {
-    PopupNode? node = FindNodeByAnchor(sender as Control);
+    Control? source = sender as Control;
+    PopupNode? node = FindNodeByAnchor(source);
     if (node is not null)
     {
-      ScheduleCloseIfOutside(node);
+      DiagnosticLog.Write("popup.anchor_focus_left", new
+      {
+        node.Id,
+        source = DescribeControl(source),
+        activeForm = DescribeControl(Form.ActiveForm),
+        nodeState = node.State.ToString(),
+        nodeContainsFocus = NodeContainsFocus(node),
+        pointerInsideLeaf = IsPointerInsideLeaf(node)
+      });
+      ScheduleCloseIfOutside(node, "anchor-focus-left");
     }
   }
 
@@ -1150,10 +1203,21 @@ internal sealed class HoverPopupController : IDisposable
 
   private void PopupMouseLeft(object? sender, EventArgs eventArgs)
   {
-    PopupNode? node = FindNodeForPopupControl(sender as Control);
+    Control? source = sender as Control;
+    PopupNode? node = FindNodeForPopupControl(source);
     if (node is not null)
     {
-      ScheduleCloseIfOutside(node);
+      DiagnosticLog.Write("popup.mouse_left", new
+      {
+        node.Id,
+        source = DescribeControl(source),
+        nodeState = node.State.ToString(),
+        node.PointerEnteredAsLeaf,
+        nodeContainsFocus = NodeContainsFocus(node),
+        nodeContainsPointer = NodeContainsPointer(node),
+        pointerInsideLeaf = IsPointerInsideLeaf(node)
+      });
+      ScheduleCloseIfOutside(node, "popup-mouse-leave");
     }
   }
 
@@ -1171,10 +1235,23 @@ internal sealed class HoverPopupController : IDisposable
 
   private void PopupFocusLeft(object? sender, EventArgs eventArgs)
   {
-    PopupNode? node = FindNodeForPopupControl(sender as Control);
+    Control? source = sender as Control;
+    PopupNode? node = FindNodeForPopupControl(source);
     if (node is not null)
     {
-      ScheduleCloseIfOutside(node);
+      DiagnosticLog.Write("popup.focus_left", new
+      {
+        node.Id,
+        source = DescribeControl(source),
+        nodeState = node.State.ToString(),
+        node.PointerEnteredAsLeaf,
+        activeForm = DescribeControl(Form.ActiveForm),
+        nodeContainsFocus = NodeContainsFocus(node),
+        nodeContainsPointer = NodeContainsPointer(node),
+        pointerInsideLeaf = IsPointerInsideLeaf(node),
+        keepOpen = node.KeepOpen?.Invoke() ?? false
+      });
+      ScheduleCloseIfOutside(node, "popup-focus-left");
     }
   }
 
@@ -1192,32 +1269,87 @@ internal sealed class HoverPopupController : IDisposable
   private void CloseTimerTick(PopupNode node)
   {
     node.CloseTimer.Stop();
-    if (!ReferenceEquals(node, FindDeepestOpenNode(_root)) ||
-        node.State != PopupState.OpenEntered ||
-        !node.PointerEnteredAsLeaf ||
-        IsPointerInsideLeaf(node) ||
-        (node.KeepOpen?.Invoke() ?? false))
+    PopupNode? deepest = FindDeepestOpenNode(_root);
+    bool isDeepest = ReferenceEquals(node, deepest);
+    bool entered = node.State == PopupState.OpenEntered;
+    bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
+    bool pointerInsideLeaf = IsPointerInsideLeaf(node);
+    bool keepOpen = node.KeepOpen?.Invoke() ?? false;
+    DiagnosticLog.Write("popup.close_timer_tick", new
+    {
+      node.Id,
+      nodeState = node.State.ToString(),
+      isDeepest,
+      deepestNodeId = deepest?.Id,
+      entered,
+      pointerEnteredAsLeaf,
+      pointerInsideLeaf,
+      keepOpen,
+      activeForm = DescribeControl(Form.ActiveForm),
+      nodeContainsFocus = NodeContainsFocus(node),
+      anchorContainsFocus = node.Anchor.ContainsFocus
+    });
+    if (!isDeepest ||
+        !entered ||
+        !pointerEnteredAsLeaf ||
+        pointerInsideLeaf ||
+        keepOpen)
     {
       return;
     }
-    CloseNode(node, returnFocus: false);
+    CloseNode(
+      node,
+      returnFocus: false,
+      closeReason: "close-timer-expired");
   }
 
-  private void ScheduleCloseIfOutside(PopupNode node)
+  private void ScheduleCloseIfOutside(PopupNode node, string triggerReason)
   {
-    if (!ReferenceEquals(node, FindDeepestOpenNode(_root)) ||
-        node.State != PopupState.OpenEntered ||
-        !node.PointerEnteredAsLeaf)
+    PopupNode? deepest = FindDeepestOpenNode(_root);
+    bool isDeepest = ReferenceEquals(node, deepest);
+    bool entered = node.State == PopupState.OpenEntered;
+    bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
+    bool pointerInsideLeaf = IsPointerInsideLeaf(node);
+    bool keepOpen = node.KeepOpen?.Invoke() ?? false;
+    DiagnosticLog.Write("popup.close_schedule_evaluate", new
+    {
+      node.Id,
+      triggerReason,
+      nodeState = node.State.ToString(),
+      isDeepest,
+      deepestNodeId = deepest?.Id,
+      entered,
+      pointerEnteredAsLeaf,
+      pointerInsideLeaf,
+      keepOpen,
+      timerEnabledBefore = node.CloseTimer.Enabled,
+      activeForm = DescribeControl(Form.ActiveForm),
+      nodeContainsFocus = NodeContainsFocus(node),
+      anchorContainsFocus = node.Anchor.ContainsFocus
+    });
+    if (!isDeepest || !entered || !pointerEnteredAsLeaf)
     {
       return;
     }
-    if (IsPointerInsideLeaf(node) || (node.KeepOpen?.Invoke() ?? false))
+    if (pointerInsideLeaf || keepOpen)
     {
       node.CloseTimer.Stop();
+      DiagnosticLog.Write("popup.close_timer_cancelled", new
+      {
+        node.Id,
+        triggerReason,
+        reason = pointerInsideLeaf ? "pointer-inside-leaf" : "keep-open"
+      });
       return;
     }
     node.CloseTimer.Stop();
     node.CloseTimer.Start();
+    DiagnosticLog.Write("popup.close_timer_started", new
+    {
+      node.Id,
+      triggerReason,
+      intervalMilliseconds = node.CloseTimer.Interval
+    });
   }
 
   private bool IsPointerInsideLeaf(PopupNode node)
@@ -1271,10 +1403,20 @@ internal sealed class HoverPopupController : IDisposable
 
     PopupNode? containing = FindDeepestOpenContaining(clickedControl);
     PopupNode? leaf = FindDeepestOpenNode(_root);
+    DiagnosticLog.Write("popup.pointer_down_route", new
+    {
+      clickedControl = DescribeControl(clickedControl),
+      containingNodeId = containing?.Id,
+      deepestNodeId = leaf?.Id,
+      activeForm = DescribeControl(Form.ActiveForm)
+    });
     while (leaf is not null && !ReferenceEquals(leaf, containing))
     {
       PopupNode? parent = leaf.Parent;
-      CloseNode(leaf, returnFocus: false);
+      CloseNode(
+        leaf,
+        returnFocus: false,
+        closeReason: "pointer-down-outside-leaf");
       leaf = parent is null ? null : FindDeepestOpenNode(parent);
     }
   }

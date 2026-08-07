@@ -1,3 +1,12 @@
+## v183 popup-close isolation diagnostics
+
+This version intentionally changes popup-close diagnostics rather than popup
+focus behaviour. Every `CloseNode` path now records a concrete `closeReason`
+and caller, and the delayed-close path logs the event that scheduled the timer,
+the timer decision state, pointer/focus state, owner deactivation decisions,
+and outside-pointer routing. This is intended to isolate exactly which path
+removes focus or closes a nested popup before another focus change is made.
+
 ## v182 child-popup tab-exit focus restoration
 
 - Tab/Shift+Tab past a child popup boundary now closes the child with focus
