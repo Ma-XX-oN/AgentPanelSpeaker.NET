@@ -37,14 +37,14 @@ internal sealed class SettingsSelectionDialog : Form
     MinimizeBox = false;
     MaximizeBox = false;
     ShowInTaskbar = false;
-    MinimumSize = new Size(520, 380);
-    Size = new Size(680, 620);
+    MinimumSize = new Size(620, 480);
+    Size = new Size(780, 720);
     Padding = new Padding(12);
     KeyPreview = true;
 
     _explanation.AutoSize = true;
-    _explanation.Dock = DockStyle.Fill;
-    _explanation.MaximumSize = new Size(900, 0);
+    _explanation.Dock = DockStyle.Top;
+    _explanation.MaximumSize = new Size(720, 0);
     _explanation.Text = UiText.Get($"{prefix}.Explanation");
 
     _tree.Dock = DockStyle.Fill;
@@ -54,7 +54,7 @@ internal sealed class SettingsSelectionDialog : Form
     _tree.ShowPlusMinus = true;
     _tree.ShowRootLines = true;
     _tree.StateImageList = CreateStateImages();
-    _tree.NodeMouseClick += TreeNodeMouseClick;
+    _tree.MouseDown += TreeMouseDown;
     _tree.KeyDown += TreeKeyDown;
     UiText.Apply(_tree, $"{prefix}.Tree");
 
@@ -64,10 +64,11 @@ internal sealed class SettingsSelectionDialog : Form
 
     var buttons = new FlowLayoutPanel
     {
-      AutoSize = true,
+      AutoSize = false,
       Dock = DockStyle.Fill,
       FlowDirection = FlowDirection.RightToLeft,
-      WrapContents = false
+      WrapContents = false,
+      Padding = new Padding(0, 4, 0, 0)
     };
     buttons.Controls.Add(_applyButton);
 
@@ -79,7 +80,7 @@ internal sealed class SettingsSelectionDialog : Form
     };
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100.0f));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42.0f));
     layout.Controls.Add(_explanation, 0, 0);
     layout.Controls.Add(_tree, 0, 1);
     layout.Controls.Add(buttons, 0, 2);
@@ -87,6 +88,8 @@ internal sealed class SettingsSelectionDialog : Form
 
     AcceptButton = _applyButton;
     SetChanges(changes);
+    Shown += (_, _) => FitToWorkingArea();
+    Resize += (_, _) => UpdateExplanationWidth();
     ThemeManager.Apply(this, theme);
     AccessibilityAudit.ReportMissing(this);
   }
@@ -155,14 +158,47 @@ internal sealed class SettingsSelectionDialog : Form
     UpdateApplyState();
   }
 
-  private void TreeNodeMouseClick(object? sender, TreeNodeMouseClickEventArgs e)
+  private void TreeMouseDown(object? sender, MouseEventArgs e)
   {
-    if (e.Node is not TreeNode node)
+    if (e.Button != MouseButtons.Left)
     {
       return;
     }
+
+    TreeViewHitTestInfo hit = _tree.HitTest(e.Location);
+    if (hit.Node is not TreeNode node ||
+        (hit.Location & TreeViewHitTestLocations.PlusMinus) != 0)
+    {
+      return;
+    }
+
     _tree.SelectedNode = node;
     ToggleNode(node);
+  }
+
+  private void FitToWorkingArea()
+  {
+    Rectangle workingArea = Screen.FromControl(Owner ?? this).WorkingArea;
+    int margin = 24;
+    int availableWidth = Math.Max(1, workingArea.Width - margin * 2);
+    int availableHeight = Math.Max(1, workingArea.Height - margin * 2);
+    Size = new Size(
+      Math.Min(780, availableWidth),
+      Math.Min(720, availableHeight));
+
+    Rectangle ownerBounds = Owner?.Bounds ?? workingArea;
+    int x = ownerBounds.Left + (ownerBounds.Width - Width) / 2;
+    int y = ownerBounds.Top + (ownerBounds.Height - Height) / 2;
+    x = Math.Clamp(x, workingArea.Left, workingArea.Right - Width);
+    y = Math.Clamp(y, workingArea.Top, workingArea.Bottom - Height);
+    Location = new Point(x, y);
+    UpdateExplanationWidth();
+  }
+
+  private void UpdateExplanationWidth()
+  {
+    int width = Math.Max(200, ClientSize.Width - Padding.Horizontal);
+    _explanation.MaximumSize = new Size(width, 0);
   }
 
   private void TreeKeyDown(object? sender, KeyEventArgs e)

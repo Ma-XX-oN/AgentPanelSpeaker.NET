@@ -1673,3 +1673,12 @@ so the same artwork remains usable in dark, light, and system themes.
 - Increased the utility toolbar icon rendering size.
 - Gave the keyboard icon extra width so it reads larger in the compact toolbar.
 - Kept the approved Save, Reset, Hotkeys, and Diagnostic Log artwork.
+
+
+## v156
+
+- Fixed the Save/Reset settings-selection dialogs so their explanation and action
+  button remain inside the client area.
+- The dialogs now fit themselves to the current monitor working area.
+- Fixed tree selection so clicking the custom checkbox/state-image area toggles
+  the item instead of requiring a label click.
