@@ -453,7 +453,10 @@ internal sealed class HoverPopupController : IDisposable
     return node;
   }
 
-  private void OpenNode(PopupNode node, bool focusPopup)
+  private void OpenNode(
+    PopupNode node,
+    bool focusPopup,
+    bool focusLastControl = false)
   {
     ThrowIfDisposed();
     node.OpenTimer.Stop();
@@ -466,7 +469,12 @@ internal sealed class HoverPopupController : IDisposable
       if (focusPopup)
       {
         node.State = PopupState.OpenEntered;
-        FocusInitialControlWithDiagnostics(node, "open-existing");
+        FocusInitialControlWithDiagnostics(
+          node,
+          focusLastControl ? "open-existing-backward" : "open-existing",
+          focusAction: focusLastControl
+            ? () => FocusLastControl(node)
+            : null);
       }
       return;
     }
@@ -502,7 +510,12 @@ internal sealed class HoverPopupController : IDisposable
 
     if (focusPopup)
     {
-      FocusInitialControlWithDiagnostics(node, "open-new");
+      FocusInitialControlWithDiagnostics(
+        node,
+        focusLastControl ? "open-new-backward" : "open-new",
+        focusAction: focusLastControl
+          ? () => FocusLastControl(node)
+          : null);
     }
   }
 
@@ -709,7 +722,8 @@ internal sealed class HoverPopupController : IDisposable
         node.State == PopupState.Closed &&
         node.Anchor.Enabled)
     {
-      OpenNode(node, focusPopup: true);
+      bool backward = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+      OpenNode(node, focusPopup: true, focusLastControl: backward);
     }
   }
 
@@ -761,10 +775,25 @@ internal sealed class HoverPopupController : IDisposable
     }
   }
 
+  private void FocusLastControl(PopupNode node)
+  {
+    Control? last = EnumerateVisiblePopupControls(node)
+      .SelectMany(GetTabControls)
+      .LastOrDefault();
+    if (last is not null && last.CanFocus)
+    {
+      last.Focus();
+      return;
+    }
+
+    node.FocusInitialControl();
+  }
+
   private void FocusInitialControlWithDiagnostics(
     PopupNode node,
     string reason,
-    Control? triggerControl = null)
+    Control? triggerControl = null,
+    Action? focusAction = null)
   {
     long generation = node.Generation;
     Control? popup = EnumerateVisiblePopupControls(node).FirstOrDefault();
@@ -790,7 +819,7 @@ internal sealed class HoverPopupController : IDisposable
     {
       form.Activate();
     }
-    node.FocusInitialControl();
+    (focusAction ?? node.FocusInitialControl)();
     ShowKeyboardFocusCue(form, node, reason);
 
     DiagnosticLog.Write("popup.focus_attempt_immediate", new
@@ -846,7 +875,7 @@ internal sealed class HoverPopupController : IDisposable
         }
         if (!currentPopup.ContainsFocus)
         {
-          node.FocusInitialControl();
+          (focusAction ?? node.FocusInitialControl)();
           ShowKeyboardFocusCue(currentForm, node, reason);
         }
         DiagnosticLog.Write("popup.focus_attempt_settled", new

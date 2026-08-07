@@ -1749,3 +1749,9 @@ so the same artwork remains usable in dark, light, and system themes.
 - Disabled standard buttons now keep a readable border and label in dark mode.
 - Disabled `GlyphButton` icons now use the theme-managed disabled foreground instead
   of `SystemColors.GrayText`.
+
+
+## v164
+
+- Shift+Tab into a focus-opened popup now enters at the popup's last selectable
+  control; Tab continues to enter at the first/initial control.
