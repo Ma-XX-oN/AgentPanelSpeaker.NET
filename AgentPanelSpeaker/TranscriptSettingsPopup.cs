@@ -265,6 +265,42 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
 
   protected override bool ShowWithoutActivation => true;
 
+  protected override void OnActivated(EventArgs eventArgs)
+  {
+    base.OnActivated(eventArgs);
+
+    Form? child = _colourPopupHandle?.IsOpen == true
+      ? _colourPopup
+      : _advancedPopupHandle?.IsOpen == true
+        ? _advancedPopup
+        : null;
+    if (child is not { IsDisposed: false, Visible: true })
+    {
+      return;
+    }
+
+    try
+    {
+      BeginInvoke((MethodInvoker)(() =>
+      {
+        if (child.IsDisposed || !child.Visible)
+        {
+          return;
+        }
+        child.Activate();
+        DiagnosticLog.Write("popup.parent_activation_redirect", new
+        {
+          parent = GetType().FullName,
+          child = child.GetType().FullName,
+          childContainsFocus = child.ContainsFocus
+        });
+      }));
+    }
+    catch (InvalidOperationException)
+    {
+    }
+  }
+
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
     if (HoverPopupController.HandleGlobalPopupKey(keyData, this))

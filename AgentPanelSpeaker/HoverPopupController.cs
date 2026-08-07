@@ -311,10 +311,34 @@ internal sealed class HoverPopupController : IDisposable
       ? null
       : controller.FindDeepestOpenNode(controller._root);
     Form? contextForm = context.FindForm();
-    if (leaf is null || contextForm is null ||
-      !controller!.NodeOwnsForm(leaf, contextForm))
+    if (leaf is null || contextForm is null)
     {
       return false;
+    }
+
+    if (!controller!.NodeOwnsForm(leaf, contextForm))
+    {
+      if (!controller.IsFormInOpenPopupPath(leaf, contextForm))
+      {
+        return false;
+      }
+
+      Form? leafForm = controller.GetNodeForm(leaf);
+      if (leafForm is { IsDisposed: false, Visible: true } &&
+          !ReferenceEquals(Form.ActiveForm, leafForm))
+      {
+        leafForm.Activate();
+      }
+      controller.FocusBoundaryControl(leaf, backward);
+      DiagnosticLog.Write("popup.tab_redirect_to_leaf", new
+      {
+        leaf.Id,
+        backward,
+        contextForm = DescribeControl(contextForm),
+        leafForm = DescribeControl(leafForm),
+        focusedControl = DescribeControl(FindFocusedControl(leafForm))
+      });
+      return true;
     }
 
     Control[] controls = GetTabControls(context).ToArray();
@@ -1370,6 +1394,26 @@ internal sealed class HoverPopupController : IDisposable
   {
     return EnumerateVisiblePopupControls(node).Any(control =>
       ReferenceEquals(control.FindForm(), form));
+  }
+
+  private Form? GetNodeForm(PopupNode node)
+  {
+    return EnumerateVisiblePopupControls(node)
+      .Select(control => control.FindForm())
+      .FirstOrDefault(form => form is not null);
+  }
+
+  private bool IsFormInOpenPopupPath(PopupNode leaf, Form form)
+  {
+    for (PopupNode? current = leaf; current is not null; current = current.Parent)
+    {
+      if (ReferenceEquals(current.Anchor.FindForm(), form) ||
+          (current.State != PopupState.Closed && NodeOwnsForm(current, form)))
+      {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static IEnumerable<Control> GetTabControls(Control root)

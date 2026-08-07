@@ -57,6 +57,8 @@ internal sealed class TranscriptColourPopup : PopupFormBase
 
     _rgbPage.Padding = new Padding(6);
     _hslPage.Padding = new Padding(6);
+    _rgbEditor.Dock = DockStyle.Fill;
+    _hslEditor.Dock = DockStyle.Fill;
     _rgbPage.Controls.Add(_rgbEditor);
     _hslPage.Controls.Add(_hslEditor);
 
@@ -69,6 +71,7 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     _alphaViewport.Dock = DockStyle.Fill;
     _alphaViewport.Margin = new Padding(0, 4, 0, 0);
     _alphaViewport.TabStop = false;
+    _alphaEditor.Dock = DockStyle.Fill;
     _alphaViewport.Controls.Add(_alphaEditor);
     _alphaEditor.TabIndex = 2;
 
@@ -160,22 +163,16 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   }
 
   /// <summary>
-  /// Sizes each editor from an unconstrained probe layout, then crops its
-  /// viewport to the known Cyotek controls for that editor group.  The popup is
-  /// still hidden when this runs, so Control.Visible cannot be used: WinForms
-  /// reports descendants of a hidden Form as not visible even when their local
-  /// Visible state is enabled.
+  /// Sizes the colour editor from the non-stretching vertical dimensions of
+  /// the enabled Cyotek editor groups.  Horizontal colour bars intentionally
+  /// stretch, so their measured width is not used to size the popup.
   /// </summary>
   public void FitToVisibleControls()
   {
-    // Width is a design constraint, not something to infer from ColorEditor
-    // child bounds: the Cyotek colour bars stretch to whatever probe width we
-    // give them, so measuring their right edge would simply feed the probe
-    // width back into the popup width.
-    int editorColumnWidth = ScaleLogical(300);
+    int editorColumnWidth = ScaleLogical(260);
     int probeWidth = Math.Max(
-      ScaleLogical(260),
-      editorColumnWidth - ScaleLogical(18));
+      ScaleLogical(220),
+      editorColumnWidth - ScaleLogical(24));
     int probeHeight = ScaleLogical(300);
 
     Rectangle rgbBounds = ProbeEditorGroupBounds(
@@ -199,13 +196,10 @@ internal sealed class TranscriptColourPopup : PopupFormBase
       probeHeight,
       "aLabel", "aNumericUpDown", "aColorBar");
 
-    int measuredEditorWidth = Math.Max(
-      Math.Max(rgbBounds.Width, hslBounds.Width),
-      alphaBounds.Width);
-    int tabContentHeight = Math.Max(rgbBounds.Height, hslBounds.Height);
-    int tabChrome = ScaleLogical(38);
+    int tabContentHeight = Math.Max(rgbBounds.Bottom, hslBounds.Bottom);
+    int tabChrome = ScaleLogical(34);
     int tabHeight = tabContentHeight + tabChrome;
-    int alphaHeight = alphaBounds.Height + ScaleLogical(8);
+    int alphaHeight = alphaBounds.Bottom + ScaleLogical(8);
     int editorHeight = tabHeight + alphaHeight;
 
     _editorStack.RowStyles[0].SizeType = SizeType.Absolute;
@@ -213,27 +207,27 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     _editorStack.RowStyles[1].SizeType = SizeType.Absolute;
     _editorStack.RowStyles[1].Height = alphaHeight;
 
-    int rightWidth = editorColumnWidth;
-    int leftWidth = ScaleLogical(235);
-    int contentHeight = Math.Max(ScaleLogical(240), editorHeight);
+    // The wheel should visually balance the complete editor stack, not force
+    // the stack to inherit a larger arbitrary minimum height.
+    int contentHeight = editorHeight;
+    int leftWidth = contentHeight;
     _layout.ColumnStyles[0].SizeType = SizeType.Absolute;
     _layout.ColumnStyles[0].Width = leftWidth;
+    _layout.ColumnStyles[1].SizeType = SizeType.Absolute;
+    _layout.ColumnStyles[1].Width = editorColumnWidth;
     _layout.RowStyles[1].SizeType = SizeType.Absolute;
     _layout.RowStyles[1].Height = contentHeight;
 
-    int requiredWidth = ScaleLogical(16) + leftWidth + rightWidth;
+    int requiredWidth = ScaleLogical(16) + leftWidth + editorColumnWidth;
     int requiredHeight = ScaleLogical(16 + 28 + 30) + contentHeight;
     Size = new Size(requiredWidth, requiredHeight);
     PerformLayout();
 
-    PlaceEditorInViewport(_rgbEditor, _rgbPage, rgbBounds, probeWidth, probeHeight);
-    PlaceEditorInViewport(_hslEditor, _hslPage, hslBounds, probeWidth, probeHeight);
-    PlaceEditorInViewport(
-      _alphaEditor,
-      _alphaViewport,
-      alphaBounds,
-      probeWidth,
-      probeHeight);
+    // Re-layout at the final viewport width.  Dock=Fill keeps the right-side
+    // numeric/spinner controls inside the tab page instead of cropping them.
+    _rgbEditor.PerformLayout();
+    _hslEditor.PerformLayout();
+    _alphaEditor.PerformLayout();
 
     DiagnosticLog.Write("popup.colour_layout", new
     {
@@ -243,9 +237,12 @@ internal sealed class TranscriptColourPopup : PopupFormBase
       alphaBounds,
       tabHeight,
       alphaHeight,
-      measuredEditorWidth,
       editorColumnWidth,
       contentHeight,
+      leftWidth,
+      rgbViewport = _rgbPage.ClientSize,
+      hslViewport = _hslPage.ClientSize,
+      alphaViewport = _alphaViewport.ClientSize,
       rgbEditor = new { _rgbEditor.Location, _rgbEditor.Size },
       hslEditor = new { _hslEditor.Location, _hslEditor.Size },
       alphaEditor = new { _alphaEditor.Location, _alphaEditor.Size }
@@ -410,23 +407,6 @@ internal sealed class TranscriptColourPopup : PopupFormBase
         "The Cyotek ColorEditor layout did not contain the expected controls.");
     }
     return Rectangle.FromLTRB(left, top, right, bottom);
-  }
-
-  private static void PlaceEditorInViewport(
-    ColorEditor editor,
-    Control viewport,
-    Rectangle contentBounds,
-    int probeWidth,
-    int probeHeight)
-  {
-    int inset = viewport is TabPage ? 6 : 0;
-    editor.Size = new Size(
-      Math.Max(probeWidth, viewport.ClientSize.Width + contentBounds.Left),
-      probeHeight);
-    editor.Location = new Point(
-      inset - contentBounds.Left,
-      inset - contentBounds.Top);
-    editor.BringToFront();
   }
 
   private int ScaleLogical(int value)

@@ -1,5 +1,13 @@
 ## v177 colour popup layout and placement
 
+Version 179 keeps keyboard focus inside the deepest open popup: if a parent
+popup receives Tab or Shift+Tab while one of its child popups is still open,
+focus is redirected back to the child instead of traversing the parent.  The
+colour editor is also compacted so the wheel height matches the RGB/HSL tabs
+plus Alpha, the editor column is narrower, and the Cyotek editors fill their
+final viewports so the right-side spinner controls are not cropped.
+
+
 - Measures each Cyotek editor from an unconstrained probe size and the known controls in each RGB/Hex, HSL, and Alpha group.  It does not use Control.Visible while the popup Form is hidden, because WinForms reports hidden-form descendants as invisible.
 - Removes the circular Dock=Fill/hidden-visibility measurement that collapsed the tab contents in v175/v176.
 - Places the colour popup immediately above or below Transcript Settings when possible so the two owned windows do not overlap.
