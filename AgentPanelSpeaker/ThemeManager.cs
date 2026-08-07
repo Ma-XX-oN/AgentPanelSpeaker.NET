@@ -118,7 +118,7 @@ internal static class ThemeManager
     Color foreground = GetForeground(dark);
     var images = new ImageList
     {
-      ImageSize = new Size(16, 16),
+      ImageSize = new Size(14, 14),
       ColorDepth = ColorDepth.Depth32Bit
     };
     images.Images.Add(DrawTreeStateImage(CheckState.Unchecked, foreground));
@@ -247,16 +247,58 @@ internal static class ThemeManager
 
   private static Bitmap DrawTreeStateImage(CheckState state, Color foreground)
   {
-    var bitmap = new Bitmap(16, 16);
+    const int canvasSize = 14;
+    const int targetGlyphSize = 12;
+    var bitmap = new Bitmap(canvasSize, canvasSize);
     using Graphics graphics = Graphics.FromImage(bitmap);
     graphics.Clear(Color.Transparent);
+
+    if (System.Windows.Forms.VisualStyles.VisualStyleRenderer.IsSupported)
+    {
+      System.Windows.Forms.VisualStyles.CheckBoxState rendererState = state switch
+      {
+        CheckState.Checked =>
+          System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal,
+        CheckState.Indeterminate =>
+          System.Windows.Forms.VisualStyles.CheckBoxState.MixedNormal,
+        _ => System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal
+      };
+      Size glyphSize = CheckBoxRenderer.GetGlyphSize(graphics, rendererState);
+      if (glyphSize.Width > 0 && glyphSize.Height > 0)
+      {
+        using var nativeGlyph = new Bitmap(glyphSize.Width, glyphSize.Height);
+        using (Graphics nativeGraphics = Graphics.FromImage(nativeGlyph))
+        {
+          nativeGraphics.Clear(Color.Transparent);
+          CheckBoxRenderer.DrawCheckBox(
+            nativeGraphics,
+            Point.Empty,
+            rendererState);
+        }
+
+        float scale = Math.Min(
+          (float)targetGlyphSize / glyphSize.Width,
+          (float)targetGlyphSize / glyphSize.Height);
+        int width = Math.Max(1, (int)Math.Round(glyphSize.Width * scale));
+        int height = Math.Max(1, (int)Math.Round(glyphSize.Height * scale));
+        int left = (canvasSize - width) / 2;
+        int top = (canvasSize - height) / 2;
+        graphics.InterpolationMode =
+          System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        graphics.PixelOffsetMode =
+          System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+        graphics.DrawImage(nativeGlyph, new Rectangle(left, top, width, height));
+        return bitmap;
+      }
+    }
+
     graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-    Rectangle box = new(1, 1, 13, 13);
-    using var border = new Pen(foreground, 1.5f);
+    Rectangle box = new(1, 1, 11, 11);
+    using var border = new Pen(foreground, 1.3f);
     graphics.DrawRectangle(border, box);
     if (state == CheckState.Checked)
     {
-      using var pen = new Pen(foreground, 2.0f)
+      using var pen = new Pen(foreground, 1.8f)
       {
         StartCap = System.Drawing.Drawing2D.LineCap.Round,
         EndCap = System.Drawing.Drawing2D.LineCap.Round,
@@ -264,13 +306,13 @@ internal static class ThemeManager
       };
       graphics.DrawLines(pen, new[]
       {
-        new Point(3, 7), new Point(6, 10), new Point(12, 4)
+        new Point(3, 6), new Point(5, 9), new Point(10, 3)
       });
     }
     else if (state == CheckState.Indeterminate)
     {
       using var brush = new SolidBrush(foreground);
-      graphics.FillRectangle(brush, 4, 6, 8, 3);
+      graphics.FillRectangle(brush, 3, 5, 7, 3);
     }
     return bitmap;
   }

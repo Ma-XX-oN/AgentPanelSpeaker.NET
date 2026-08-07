@@ -1691,3 +1691,28 @@ so the same artwork remains usable in dark, light, and system themes.
   of fixed system/visual-style colours.
 - Removed duplicated popup palette recursion from speech/transcript popup controls.
 - Track bars and TreeViews now receive their themed colours through `ThemeManager`.
+
+
+## v158
+
+- Made three-state tree checkboxes use the same Windows checkbox renderer as
+  ordinary application checkboxes, with ThemeManager remaining the single owner
+  of their state-image generation.
+- Changed the settings-selection action row to auto-size so Save selected and
+  Reset selected are not clipped.
+- Removed the post-show unscaled 780 x 720 size reset; the autoscaled dialog size
+  is now preserved and only constrained when it exceeds the monitor working area.
+- Switched the selection dialogs from the cramped tool-window caption to the
+  normal resizable dialog caption so the native close button has standard spacing.
+
+
+## v159
+
+- Matched the Save, Reset, Hotkeys, Diagnostic Log, and Bluetooth utility-button
+  height to the seek/play transport buttons.
+- Replaced the Bluetooth wake text button with an icon-only Bluetooth button and
+  placed it immediately to the right of the Theme control.
+- Moved JSONL polling interval controls to the top JSONL/session control row.
+- Right-aligned the Theme-and-utility control group.
+- Reduced and centred the themed three-state tree checkbox artwork so it fits
+  without clipping.

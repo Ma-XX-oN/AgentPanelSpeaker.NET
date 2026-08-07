@@ -23,7 +23,8 @@ internal enum GlyphButtonDrawing
   Save,
   Reset,
   Keyboard,
-  DiagnosticLog
+  DiagnosticLog,
+  Bluetooth
 }
 
 /// <summary>
@@ -142,6 +143,9 @@ internal sealed class GlyphButton : Button
             ClientRectangle,
             _drawing,
             glyphColor);
+          break;
+        case GlyphButtonDrawing.Bluetooth:
+          DrawBluetoothIcon(eventArgs.Graphics, glyphColor);
           break;
       }
       return;
@@ -375,6 +379,51 @@ internal sealed class GlyphButton : Button
       new PointF(centreX, tipY),
       new PointF(bounds.Right, armY)
     });
+  }
+
+  /// <summary>
+  /// Draws the standard Bluetooth rune without a surrounding frame.
+  /// </summary>
+  private void DrawBluetoothIcon(Graphics graphics, Color glyphColor)
+  {
+    RectangleF b = GetCompactIconBounds(padding: 6.0f);
+    float centerX = b.Left + b.Width * 0.50f;
+    float top = b.Top + b.Height * 0.05f;
+    float middleY = b.Top + b.Height * 0.50f;
+    float bottom = b.Bottom - b.Height * 0.05f;
+    float right = b.Right - b.Width * 0.12f;
+    float upperInnerY = b.Top + b.Height * 0.30f;
+    float lowerInnerY = b.Bottom - b.Height * 0.30f;
+    using var pen = new Pen(
+      glyphColor,
+      Math.Max(1.7f, b.Width * 0.11f))
+    {
+      StartCap = LineCap.Round,
+      EndCap = LineCap.Round,
+      LineJoin = LineJoin.Round
+    };
+
+    graphics.DrawLine(pen, centerX, top, centerX, bottom);
+    graphics.DrawLines(pen, new[]
+    {
+      new PointF(centerX, top),
+      new PointF(right, upperInnerY),
+      new PointF(centerX, middleY),
+      new PointF(right, lowerInnerY),
+      new PointF(centerX, bottom)
+    });
+    graphics.DrawLine(
+      pen,
+      b.Left + b.Width * 0.15f,
+      b.Top + b.Height * 0.22f,
+      right,
+      lowerInnerY);
+    graphics.DrawLine(
+      pen,
+      b.Left + b.Width * 0.15f,
+      b.Bottom - b.Height * 0.22f,
+      right,
+      upperInnerY);
   }
 
   private void DrawSaveIcon(Graphics graphics, Color glyphColor)

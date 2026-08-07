@@ -67,7 +67,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly GlyphButton _hotkeysButton = new();
   private readonly GlyphButton _openLogButton = new();
   private readonly Button _pronunciationsButton = new();
-  private readonly Button _audioWakeButton = new();
+  private readonly GlyphButton _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
   private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
@@ -181,7 +181,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v157";
+    Text = "Agent Panel Speaker v159";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -249,7 +249,10 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.DiagnosticLog,
       "Main.DiagnosticLog");
     ConfigureButton(_pronunciationsButton, "Pronunciations...");
-    ConfigureButton(_audioWakeButton, "Bluetooth wake...");
+    ConfigureUtilityGlyphButton(
+      _audioWakeButton,
+      GlyphButtonDrawing.Bluetooth,
+      "Main.BluetoothWake");
     _themeComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
     _themeComboBox.Width = 95;
     _themeComboBox.Items.AddRange(new object[]
@@ -329,7 +332,8 @@ internal sealed class MainForm : Form, IMessageFilter
     sessionControls.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Source:"), _sourceComboBox, _detectLatestButton,
-      _browseButton, _followLatestCheckBox
+      _browseButton, MakeInlineLabel("Poll ms:"), _pollNumeric,
+      _followLatestCheckBox
     });
 
     var speechTable = new TableLayoutPanel
@@ -360,8 +364,7 @@ internal sealed class MainForm : Form, IMessageFilter
     options.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
-      _pronunciationsButton, _audioWakeButton,
-      MakeInlineLabel("Poll ms:"), _pollNumeric,
+      _pronunciationsButton,
       _speakExistingCheckBox, _keepDisplayOnCheckBox
     });
 
@@ -381,13 +384,14 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       AutoSize = true,
       Dock = DockStyle.Fill,
+      FlowDirection = FlowDirection.RightToLeft,
       WrapContents = false
     };
     utility.Controls.AddRange(new Control[]
     {
-      MakeInlineLabel("Theme:"), _themeComboBox,
-      _saveSettingsButton, _resetSettingsButton,
-      _hotkeysButton, _openLogButton
+      _openLogButton, _hotkeysButton, _resetSettingsButton,
+      _saveSettingsButton, _audioWakeButton, _themeComboBox,
+      MakeInlineLabel("Theme:")
     });
 
     var controls = new TableLayoutPanel
@@ -3230,7 +3234,7 @@ internal sealed class MainForm : Form, IMessageFilter
     string resourcePrefix)
   {
     button.AutoSize = false;
-    button.Size = new Size(38, 30);
+    button.Size = new Size(38, TransportButtonHeight);
     button.Drawing = drawing;
     button.Glyph = string.Empty;
     button.UseInkBounds = false;
