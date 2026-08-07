@@ -452,14 +452,12 @@ internal sealed class TranscriptSettingsPopup : UserControl
   {
     Form owner = FindForm() ?? throw new InvalidOperationException(
       "Transcript settings are not attached to a form.");
-    if (!popup.Visible)
+    if (popup is not PopupFormBase popupForm)
     {
-      popup.Show(owner);
+      throw new InvalidOperationException(
+        "Nested transcript popups must derive from PopupFormBase.");
     }
-    else
-    {
-      popup.BringToFront();
-    }
+    popupForm.ShowAboveOwner(owner);
   }
 
   private void RestorePreviousColour()

@@ -1,3 +1,8 @@
+## v174 nested popup Z-order and tab-exit fix
+
+- Nested colour/advanced popup forms explicitly remain above their owner.
+- Leaving a nested popup by Tab/Shift+Tab resumes from the nested popup anchor in the parent popup, rather than re-entering the parent at its first control.
+
 ## v173 nested popup windows and re-entrant focus fix
 
 Version 173 makes the transcript colour and advanced editors real borderless
