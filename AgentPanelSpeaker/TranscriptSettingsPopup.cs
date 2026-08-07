@@ -317,8 +317,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.SetColours(_currentColour, _previousColour);
     popup.FitToVisibleControls();
     PositionColourPopup(popup);
-    popup.Visible = true;
-    popup.BringToFront();
+    ShowOwnedPopup(popup);
   }
 
   private TranscriptColourPopup GetOrCreateColourPopup()
@@ -328,7 +327,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
       return existing;
     }
 
-    Control host = GetPopupHost();
     var popup = new TranscriptColourPopup();
     popup.ColourChanged += (_, _) =>
     {
@@ -339,32 +337,30 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.DismissRequested += (_, _) =>
       _colourPopupHandle?.Close(returnFocus: true);
     _colourPopup = popup;
-    host.Controls.Add(popup);
     return popup;
   }
 
   private void PositionColourPopup(TranscriptColourPopup popup)
   {
-    Control host = GetPopupHost();
     Point below = _currentSwatch.PointToScreen(
       new Point(_currentSwatch.Width - popup.Width, _currentSwatch.Height + 2));
-    Rectangle hostBounds = host.RectangleToScreen(host.ClientRectangle);
-    int maxX = Math.Max(hostBounds.Left, hostBounds.Right - popup.Width);
-    int maxY = Math.Max(hostBounds.Top, hostBounds.Bottom - popup.Height);
-    int x = Math.Clamp(below.X, hostBounds.Left, maxX);
-    int y = below.Y + popup.Height <= hostBounds.Bottom
+    Rectangle workArea = Screen.FromControl(_currentSwatch).WorkingArea;
+    int maxX = Math.Max(workArea.Left, workArea.Right - popup.Width);
+    int maxY = Math.Max(workArea.Top, workArea.Bottom - popup.Height);
+    int x = Math.Clamp(below.X, workArea.Left, maxX);
+    int y = below.Y + popup.Height <= workArea.Bottom
       ? below.Y
       : _currentSwatch.PointToScreen(Point.Empty).Y - popup.Height - 2;
-    popup.Location = host.PointToClient(new Point(
+    popup.Location = new Point(
       x,
-      Math.Clamp(y, hostBounds.Top, maxY)));
+      Math.Clamp(y, workArea.Top, maxY));
   }
 
   private void CloseColourPopupCore(bool returnFocus)
   {
     if (_colourPopup is { IsDisposed: false } popup)
     {
-      popup.Visible = false;
+      popup.Hide();
     }
     FlushPendingColourChange();
     if (returnFocus && _currentSwatch.CanFocus)
@@ -387,8 +383,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.ApplyTheme(_dark);
     popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
     PositionAdvancedPopup(popup);
-    popup.Visible = true;
-    popup.BringToFront();
+    ShowOwnedPopup(popup);
   }
 
   private TranscriptAdvancedSettingsPopup GetOrCreateAdvancedPopup()
@@ -398,7 +393,6 @@ internal sealed class TranscriptSettingsPopup : UserControl
       return existing;
     }
 
-    Control host = GetPopupHost();
     var popup = new TranscriptAdvancedSettingsPopup();
     popup.ValueChanged += (_, _) =>
     {
@@ -411,37 +405,34 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.DismissRequested += (_, _) =>
       _advancedPopupHandle?.Close(returnFocus: true);
     _advancedPopup = popup;
-    host.Controls.Add(popup);
     return popup;
   }
 
   private void PositionAdvancedPopup(TranscriptAdvancedSettingsPopup popup)
   {
-    Control host = GetPopupHost();
-
     Point anchorScreen = _advancedButton.PointToScreen(Point.Empty);
-    Rectangle hostBounds = host.RectangleToScreen(host.ClientRectangle);
+    Rectangle workArea = Screen.FromControl(_advancedButton).WorkingArea;
     int x = Math.Clamp(
       anchorScreen.X,
-      hostBounds.Left,
-      Math.Max(hostBounds.Left, hostBounds.Right - popup.Width));
+      workArea.Left,
+      Math.Max(workArea.Left, workArea.Right - popup.Width));
     int preferredY = _advancedButton.PointToScreen(
       new Point(0, _advancedButton.Height + 2)).Y;
-    int y = preferredY + popup.Height <= hostBounds.Bottom
+    int y = preferredY + popup.Height <= workArea.Bottom
       ? preferredY
       : anchorScreen.Y - popup.Height - 2;
     y = Math.Clamp(
       y,
-      hostBounds.Top,
-      Math.Max(hostBounds.Top, hostBounds.Bottom - popup.Height));
-    popup.Location = host.PointToClient(new Point(x, y));
+      workArea.Top,
+      Math.Max(workArea.Top, workArea.Bottom - popup.Height));
+    popup.Location = new Point(x, y);
   }
 
   private void CloseAdvancedPopupCore(bool returnFocus)
   {
     if (_advancedPopup is { IsDisposed: false } popup)
     {
-      popup.Visible = false;
+      popup.Hide();
     }
     if (returnFocus && _advancedButton.CanFocus)
     {
@@ -457,15 +448,18 @@ internal sealed class TranscriptSettingsPopup : UserControl
     }
   }
 
-  private Control GetPopupHost()
+  private void ShowOwnedPopup(Form popup)
   {
-    if (Parent is Control parent)
+    Form owner = FindForm() ?? throw new InvalidOperationException(
+      "Transcript settings are not attached to a form.");
+    if (!popup.Visible)
     {
-      return parent;
+      popup.Show(owner);
     }
-
-    return FindForm() ?? throw new InvalidOperationException(
-      "Transcript settings are not attached to a visible parent host.");
+    else
+    {
+      popup.BringToFront();
+    }
   }
 
   private void RestorePreviousColour()

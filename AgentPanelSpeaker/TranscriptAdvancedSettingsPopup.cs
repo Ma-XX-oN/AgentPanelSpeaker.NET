@@ -3,7 +3,7 @@ namespace AgentPanelSpeaker;
 /// <summary>
 /// Edits advanced transcript playback-display settings.
 /// </summary>
-internal sealed class TranscriptAdvancedSettingsPopup : UserControl
+internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
 {
   private const string BufferingDescription =
     "Controls how many pending word-highlight positions are retained when " +
@@ -26,9 +26,11 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
   public TranscriptAdvancedSettingsPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
+    FormBorderStyle = FormBorderStyle.None;
+    ShowInTaskbar = false;
+    StartPosition = FormStartPosition.Manual;
     Width = 540;
     TabStop = false;
-    Visible = false;
 
     var title = new Label
     {
@@ -178,6 +180,9 @@ internal sealed class TranscriptAdvancedSettingsPopup : UserControl
   {
     _queueCapacitySlider.Focus();
   }
+
+
+  protected override bool ShowWithoutActivation => true;
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {

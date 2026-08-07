@@ -6,7 +6,7 @@ namespace AgentPanelSpeaker;
 /// <summary>
 /// Edits one transcript highlight colour in a compact nested overlay.
 /// </summary>
-internal sealed class TranscriptColourPopup : UserControl
+internal sealed class TranscriptColourPopup : PopupFormBase
 {
   private readonly ColorWheel _wheel = new();
   private readonly ColorEditor _rgbEditor = new();
@@ -23,9 +23,11 @@ internal sealed class TranscriptColourPopup : UserControl
   public TranscriptColourPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
+    FormBorderStyle = FormBorderStyle.None;
+    ShowInTaskbar = false;
+    StartPosition = FormStartPosition.Manual;
     Size = new Size(500, 330);
     TabStop = false;
-    Visible = false;
 
     var title = new Label
     {
@@ -216,6 +218,9 @@ internal sealed class TranscriptColourPopup : UserControl
   {
     return ClientRectangle.Contains(PointToClient(Cursor.Position));
   }
+
+
+  protected override bool ShowWithoutActivation => true;
 
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {

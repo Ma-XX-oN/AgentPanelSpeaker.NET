@@ -84,6 +84,7 @@ internal sealed class HoverPopupController : IDisposable
     public bool SuppressNextAnchorFocusOpen { get; set; }
     public bool SuppressHoverUntilAnchorExit { get; set; }
     public bool PointerEnteredAsLeaf { get; set; }
+    public bool FocusOpenQueued { get; set; }
     public long Generation { get; set; }
   }
 
@@ -542,6 +543,7 @@ internal sealed class HoverPopupController : IDisposable
     }
 
     node.Generation++;
+    node.FocusOpenQueued = false;
     foreach (PopupNode child in node.Children.ToArray())
     {
       CloseNode(child, returnFocus: false);
@@ -752,11 +754,42 @@ internal sealed class HoverPopupController : IDisposable
         node.Anchor.Enabled)
     {
       bool backward = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
-      OpenNode(
-        node,
-        focusPopup: true,
-        focusLastControl: backward,
-        deferFocus: true);
+      QueueFocusOpen(node, backward);
+    }
+  }
+
+  private void QueueFocusOpen(PopupNode node, bool backward)
+  {
+    if (node.FocusOpenQueued || node.Anchor.IsDisposed ||
+        !node.Anchor.IsHandleCreated)
+    {
+      return;
+    }
+
+    node.FocusOpenQueued = true;
+    long generation = node.Generation;
+    try
+    {
+      node.Anchor.BeginInvoke((MethodInvoker)(() =>
+      {
+        node.FocusOpenQueued = false;
+        if (_disposed || node.Generation != generation ||
+            node.State != PopupState.Closed || !node.Anchor.Enabled ||
+            !node.Anchor.ContainsFocus)
+        {
+          return;
+        }
+
+        OpenNode(
+          node,
+          focusPopup: true,
+          focusLastControl: backward,
+          deferFocus: true);
+      }));
+    }
+    catch (InvalidOperationException)
+    {
+      node.FocusOpenQueued = false;
     }
   }
 

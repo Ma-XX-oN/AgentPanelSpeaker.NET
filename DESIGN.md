@@ -1077,3 +1077,20 @@ adjustments.  The secondary branch is presented as Thoughts for Assistant and
 Subagent, and Quote for User.  Selective saving uses the same ownership model:
 selecting a role Voice applies that voice to both profiles, while Rate, Pitch,
 and Volume remain independently selectable under Main and Thoughts/Quote.
+
+## v173 nested transcript popup hosting
+
+`TranscriptSettingsPopup` remains an in-window overlay, but its nested colour
+and advanced editors are borderless owned `PopupFormBase` windows.  Owned popup
+windows are positioned in screen working-area coordinates so they are not
+clipped by the transcript/diagnostic host and always remain above the main
+window while open.  They are shown without activation for hover-only opening;
+keyboard entry explicitly activates the popup before moving focus.
+
+Focus-triggered popup creation is deferred as a complete transition by
+`HoverPopupController`.  An anchor `Enter` event queues the popup open for the
+next UI turn and revalidates the anchor, generation, enabled state, and focus
+before opening.  This prevents a child popup from being synchronously created
+inside the focus callback that entered its anchor.  Forward and backward tab
+navigation still recursively enters the first or last active control of nested
+popups.

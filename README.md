@@ -1,3 +1,14 @@
+## v173 nested popup windows and re-entrant focus fix
+
+Version 173 makes the transcript colour and advanced editors real borderless
+owned popup windows.  They are positioned in screen working-area coordinates,
+so they can extend beyond the transcript host without being clipped and remain
+above the Transcript Settings overlay.  Focus-triggered popup opening is now
+queued as a complete UI transition instead of synchronously creating a child
+popup from another popup's focus event.  This preserves recursive forward and
+backward tab traversal while preventing re-entrant popup creation during focus
+changes.
+
 ## v171 colour popup sizing and sibling-popup stability
 
 - Colour-popup sizing now measures visible descendants inside each Cyotek
