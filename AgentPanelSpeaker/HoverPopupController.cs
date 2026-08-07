@@ -456,7 +456,8 @@ internal sealed class HoverPopupController : IDisposable
   private void OpenNode(
     PopupNode node,
     bool focusPopup,
-    bool focusLastControl = false)
+    bool focusLastControl = false,
+    bool deferFocus = false)
   {
     ThrowIfDisposed();
     node.OpenTimer.Stop();
@@ -472,9 +473,12 @@ internal sealed class HoverPopupController : IDisposable
         FocusInitialControlWithDiagnostics(
           node,
           focusLastControl ? "open-existing-backward" : "open-existing",
-          focusAction: focusLastControl
-            ? () => FocusLastControl(node)
-            : null);
+          focusAction: deferFocus
+            ? () => FocusBoundaryControl(node, focusLastControl)
+            : focusLastControl
+              ? () => FocusBoundaryControl(node, backward: true)
+              : null,
+          deferInitialFocus: deferFocus);
       }
       return;
     }
@@ -513,9 +517,12 @@ internal sealed class HoverPopupController : IDisposable
       FocusInitialControlWithDiagnostics(
         node,
         focusLastControl ? "open-new-backward" : "open-new",
-        focusAction: focusLastControl
-          ? () => FocusLastControl(node)
-          : null);
+        focusAction: deferFocus
+          ? () => FocusBoundaryControl(node, focusLastControl)
+          : focusLastControl
+            ? () => FocusBoundaryControl(node, backward: true)
+            : null,
+        deferInitialFocus: deferFocus);
     }
   }
 
@@ -723,7 +730,11 @@ internal sealed class HoverPopupController : IDisposable
         node.Anchor.Enabled)
     {
       bool backward = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
-      OpenNode(node, focusPopup: true, focusLastControl: backward);
+      OpenNode(
+        node,
+        focusPopup: true,
+        focusLastControl: backward,
+        deferFocus: true);
     }
   }
 
@@ -775,14 +786,19 @@ internal sealed class HoverPopupController : IDisposable
     }
   }
 
-  private void FocusLastControl(PopupNode node)
+  private void FocusBoundaryControl(PopupNode node, bool backward)
   {
-    Control? last = EnumerateVisiblePopupControls(node)
+    Control[] activeControls = EnumerateVisiblePopupControls(node)
       .SelectMany(GetTabControls)
-      .LastOrDefault();
-    if (last is not null && last.CanFocus)
+      .ToArray();
+    Control? target = activeControls.Length == 0
+      ? null
+      : backward
+        ? activeControls[^1]
+        : activeControls[0];
+    if (target is not null && target.CanFocus)
     {
-      last.Focus();
+      target.Focus();
       return;
     }
 
@@ -793,7 +809,8 @@ internal sealed class HoverPopupController : IDisposable
     PopupNode node,
     string reason,
     Control? triggerControl = null,
-    Action? focusAction = null)
+    Action? focusAction = null,
+    bool deferInitialFocus = false)
   {
     long generation = node.Generation;
     Control? popup = EnumerateVisiblePopupControls(node).FirstOrDefault();
@@ -819,8 +836,11 @@ internal sealed class HoverPopupController : IDisposable
     {
       form.Activate();
     }
-    (focusAction ?? node.FocusInitialControl)();
-    ShowKeyboardFocusCue(form, node, reason);
+    if (!deferInitialFocus)
+    {
+      (focusAction ?? node.FocusInitialControl)();
+      ShowKeyboardFocusCue(form, node, reason);
+    }
 
     DiagnosticLog.Write("popup.focus_attempt_immediate", new
     {
@@ -873,7 +893,7 @@ internal sealed class HoverPopupController : IDisposable
         {
           currentForm.Activate();
         }
-        if (!currentPopup.ContainsFocus)
+        if (deferInitialFocus || !currentPopup.ContainsFocus)
         {
           (focusAction ?? node.FocusInitialControl)();
           ShowKeyboardFocusCue(currentForm, node, reason);

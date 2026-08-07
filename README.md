@@ -1755,3 +1755,14 @@ so the same artwork remains usable in dark, light, and system themes.
 
 - Shift+Tab into a focus-opened popup now enters at the popup's last selectable
   control; Tab continues to enter at the first/initial control.
+
+
+## v165
+
+- Popup keyboard entry now targets the first active logical control for Tab and
+  the last active logical control for Shift+Tab.
+- If that boundary control opens a nested popup, traversal continues recursively
+  in the same direction.
+- Keyboard-entry focus is deferred by one UI turn at each popup level so nested
+  popup traversal does not recursively re-enter popup creation/focus on the same
+  synchronous event stack.
