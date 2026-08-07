@@ -464,6 +464,11 @@ internal sealed class HoverPopupController : IDisposable
     node.CloseTimer.Stop();
     MarkActive();
 
+    if (node.Parent is not null)
+    {
+      CloseOpenSiblings(node);
+    }
+
     if (node.State != PopupState.Closed)
     {
       CancelCloseForAncestors(node);
@@ -557,6 +562,23 @@ internal sealed class HoverPopupController : IDisposable
     if (!node.Anchor.ContainsFocus)
     {
       node.SuppressNextAnchorFocusOpen = false;
+    }
+  }
+
+  private void CloseOpenSiblings(PopupNode node)
+  {
+    if (node.Parent is null)
+    {
+      return;
+    }
+
+    foreach (PopupNode sibling in node.Parent.Children.ToArray())
+    {
+      if (!ReferenceEquals(sibling, node) &&
+          sibling.State != PopupState.Closed)
+      {
+        CloseNode(sibling, returnFocus: false);
+      }
     }
   }
 

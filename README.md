@@ -1,3 +1,12 @@
+## v171 colour popup sizing and sibling-popup stability
+
+- Colour-popup sizing now measures visible descendants inside each Cyotek
+  editor, not only the editor's immediate children. This includes nested
+  alpha/HSL/RGB controls when determining the required popup height.
+- Opening one nested popup now closes any open sibling popup first, matching
+  the controller's documented mutually-exclusive sibling policy and cancelling
+  stale deferred-focus work from the sibling.
+
 ## v170 colour-wheel alpha fix
 
 - Fixes the colour picker failing to open after the v169 tabbed editor change.

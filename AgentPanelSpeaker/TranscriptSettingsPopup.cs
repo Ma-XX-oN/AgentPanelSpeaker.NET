@@ -328,8 +328,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       return existing;
     }
 
-    Form owner = FindForm() ?? throw new InvalidOperationException(
-      "Transcript settings are not attached to a form.");
+    Control host = GetPopupHost();
     var popup = new TranscriptColourPopup();
     popup.ColourChanged += (_, _) =>
     {
@@ -340,29 +339,25 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.DismissRequested += (_, _) =>
       _colourPopupHandle?.Close(returnFocus: true);
     _colourPopup = popup;
-    owner.Controls.Add(popup);
+    host.Controls.Add(popup);
     return popup;
   }
 
   private void PositionColourPopup(TranscriptColourPopup popup)
   {
-    Form? owner = FindForm();
-    if (owner is null)
-    {
-      return;
-    }
+    Control host = GetPopupHost();
     Point below = _currentSwatch.PointToScreen(
       new Point(_currentSwatch.Width - popup.Width, _currentSwatch.Height + 2));
-    Rectangle ownerBounds = owner.RectangleToScreen(owner.ClientRectangle);
-    int maxX = Math.Max(ownerBounds.Left, ownerBounds.Right - popup.Width);
-    int maxY = Math.Max(ownerBounds.Top, ownerBounds.Bottom - popup.Height);
-    int x = Math.Clamp(below.X, ownerBounds.Left, maxX);
-    int y = below.Y + popup.Height <= ownerBounds.Bottom
+    Rectangle hostBounds = host.RectangleToScreen(host.ClientRectangle);
+    int maxX = Math.Max(hostBounds.Left, hostBounds.Right - popup.Width);
+    int maxY = Math.Max(hostBounds.Top, hostBounds.Bottom - popup.Height);
+    int x = Math.Clamp(below.X, hostBounds.Left, maxX);
+    int y = below.Y + popup.Height <= hostBounds.Bottom
       ? below.Y
       : _currentSwatch.PointToScreen(Point.Empty).Y - popup.Height - 2;
-    popup.Location = owner.PointToClient(new Point(
+    popup.Location = host.PointToClient(new Point(
       x,
-      Math.Clamp(y, ownerBounds.Top, maxY)));
+      Math.Clamp(y, hostBounds.Top, maxY)));
   }
 
   private void CloseColourPopupCore(bool returnFocus)
@@ -403,8 +398,7 @@ internal sealed class TranscriptSettingsPopup : UserControl
       return existing;
     }
 
-    Form owner = FindForm() ?? throw new InvalidOperationException(
-      "Transcript settings are not attached to a form.");
+    Control host = GetPopupHost();
     var popup = new TranscriptAdvancedSettingsPopup();
     popup.ValueChanged += (_, _) =>
     {
@@ -417,34 +411,30 @@ internal sealed class TranscriptSettingsPopup : UserControl
     popup.DismissRequested += (_, _) =>
       _advancedPopupHandle?.Close(returnFocus: true);
     _advancedPopup = popup;
-    owner.Controls.Add(popup);
+    host.Controls.Add(popup);
     return popup;
   }
 
   private void PositionAdvancedPopup(TranscriptAdvancedSettingsPopup popup)
   {
-    Form? owner = FindForm();
-    if (owner is null)
-    {
-      return;
-    }
+    Control host = GetPopupHost();
 
     Point anchorScreen = _advancedButton.PointToScreen(Point.Empty);
-    Rectangle ownerBounds = owner.RectangleToScreen(owner.ClientRectangle);
+    Rectangle hostBounds = host.RectangleToScreen(host.ClientRectangle);
     int x = Math.Clamp(
       anchorScreen.X,
-      ownerBounds.Left,
-      Math.Max(ownerBounds.Left, ownerBounds.Right - popup.Width));
+      hostBounds.Left,
+      Math.Max(hostBounds.Left, hostBounds.Right - popup.Width));
     int preferredY = _advancedButton.PointToScreen(
       new Point(0, _advancedButton.Height + 2)).Y;
-    int y = preferredY + popup.Height <= ownerBounds.Bottom
+    int y = preferredY + popup.Height <= hostBounds.Bottom
       ? preferredY
       : anchorScreen.Y - popup.Height - 2;
     y = Math.Clamp(
       y,
-      ownerBounds.Top,
-      Math.Max(ownerBounds.Top, ownerBounds.Bottom - popup.Height));
-    popup.Location = owner.PointToClient(new Point(x, y));
+      hostBounds.Top,
+      Math.Max(hostBounds.Top, hostBounds.Bottom - popup.Height));
+    popup.Location = host.PointToClient(new Point(x, y));
   }
 
   private void CloseAdvancedPopupCore(bool returnFocus)
@@ -465,6 +455,17 @@ internal sealed class TranscriptSettingsPopup : UserControl
     {
       yield return popup;
     }
+  }
+
+  private Control GetPopupHost()
+  {
+    if (Parent is Control parent)
+    {
+      return parent;
+    }
+
+    return FindForm() ?? throw new InvalidOperationException(
+      "Transcript settings are not attached to a visible parent host.");
   }
 
   private void RestorePreviousColour()

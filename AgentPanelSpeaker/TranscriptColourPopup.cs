@@ -332,18 +332,39 @@ internal sealed class TranscriptColourPopup : UserControl
   {
     int right = 0;
     int bottom = 0;
-    foreach (Control control in editor.Controls)
+    MeasureVisibleDescendants(editor, editor, ref right, ref bottom);
+    return new Size(
+      Math.Max(1, right + 4),
+      Math.Max(1, bottom + 4));
+  }
+
+  private static void MeasureVisibleDescendants(
+    Control root,
+    Control parent,
+    ref int right,
+    ref int bottom)
+  {
+    foreach (Control control in parent.Controls)
     {
       if (!control.Visible)
       {
         continue;
       }
-      right = Math.Max(right, control.Right);
-      bottom = Math.Max(bottom, control.Bottom);
+
+      int x = control.Left;
+      int y = control.Top;
+      for (Control? ancestor = control.Parent;
+           ancestor is not null && !ReferenceEquals(ancestor, root);
+           ancestor = ancestor.Parent)
+      {
+        x += ancestor.Left;
+        y += ancestor.Top;
+      }
+
+      right = Math.Max(right, x + control.Width);
+      bottom = Math.Max(bottom, y + control.Height);
+      MeasureVisibleDescendants(root, control, ref right, ref bottom);
     }
-    return new Size(
-      Math.Max(1, right + 4),
-      Math.Max(1, bottom + 4));
   }
 
   private int ScaleLogical(int value)
