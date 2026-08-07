@@ -564,7 +564,31 @@ internal sealed class HoverPopupController : IDisposable
     node.SuppressHoverUntilAnchorExit = keyboardClose &&
       IsPointerInside(node.Anchor);
     node.SuppressNextAnchorFocusOpen = returnFocus && !node.Anchor.ContainsFocus;
+    DiagnosticLog.Write("popup.close_before_hide", new
+    {
+      node.Id,
+      returnFocus,
+      keyboardClose,
+      anchor = DescribeControl(node.Anchor),
+      activeForm = DescribeControl(Form.ActiveForm),
+      anchorForm = DescribeControl(node.Anchor.FindForm()),
+      anchorFormActiveControl = DescribeControl(node.Anchor.FindForm()?.ActiveControl),
+      anchorFormFocusedControl = DescribeControl(
+        FindFocusedControl(node.Anchor.FindForm()))
+    });
     node.HidePopup(returnFocus);
+    DiagnosticLog.Write("popup.close_after_hide", new
+    {
+      node.Id,
+      returnFocus,
+      keyboardClose,
+      anchor = DescribeControl(node.Anchor),
+      activeForm = DescribeControl(Form.ActiveForm),
+      anchorForm = DescribeControl(node.Anchor.FindForm()),
+      anchorFormActiveControl = DescribeControl(node.Anchor.FindForm()?.ActiveControl),
+      anchorFormFocusedControl = DescribeControl(
+        FindFocusedControl(node.Anchor.FindForm()))
+    });
     if (!node.Anchor.ContainsFocus)
     {
       node.SuppressNextAnchorFocusOpen = false;
@@ -609,8 +633,33 @@ internal sealed class HoverPopupController : IDisposable
         if (targetIndex >= 0 && targetIndex < parentControls.Length)
         {
           Control target = parentControls[targetIndex];
+          DiagnosticLog.Write("popup.exit_focus_before", new
+          {
+            node.Id,
+            forward,
+            anchor = DescribeControl(node.Anchor),
+            target = DescribeControl(target),
+            activeForm = DescribeControl(Form.ActiveForm),
+            targetForm = DescribeControl(target.FindForm()),
+            targetFormActiveControl = DescribeControl(target.FindForm()?.ActiveControl),
+            targetFormFocusedControl = DescribeControl(
+              FindFocusedControl(target.FindForm()))
+          });
           ActivateContainingForm(target);
-          target.Focus();
+          bool focused = target.Focus();
+          DiagnosticLog.Write("popup.exit_focus_after", new
+          {
+            node.Id,
+            forward,
+            focused,
+            anchor = DescribeControl(node.Anchor),
+            target = DescribeControl(target),
+            activeForm = DescribeControl(Form.ActiveForm),
+            targetForm = DescribeControl(target.FindForm()),
+            targetFormActiveControl = DescribeControl(target.FindForm()?.ActiveControl),
+            targetFormFocusedControl = DescribeControl(
+              FindFocusedControl(target.FindForm()))
+          });
           return;
         }
       }

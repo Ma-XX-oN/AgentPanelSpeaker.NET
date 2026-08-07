@@ -1,3 +1,9 @@
+## v181 popup-close focus diagnostics
+
+- Adds detailed diagnostics around nested popup hide, parent activation, target focus, and the next UI-message turn.
+- Logs the controller path used when Tab/Shift+Tab exits a child popup into its parent.
+- No focus behaviour is intentionally changed in this version.
+
 ## v180 popup focus restoration
 
 Version 180 removes the focus-containment workarounds introduced in v178 and

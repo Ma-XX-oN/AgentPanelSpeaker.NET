@@ -389,15 +389,43 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
 
   private void CloseColourPopupCore(bool returnFocus)
   {
+    WriteNestedCloseFocusDiagnostics(
+      "colour.before-hide",
+      _colourPopup,
+      _currentSwatch,
+      returnFocus);
     if (_colourPopup is { IsDisposed: false } popup)
     {
       popup.Hide();
     }
+    WriteNestedCloseFocusDiagnostics(
+      "colour.after-hide",
+      _colourPopup,
+      _currentSwatch,
+      returnFocus);
     FlushPendingColourChange();
     if (returnFocus && _currentSwatch.CanFocus)
     {
+      bool wasActive = ReferenceEquals(Form.ActiveForm, this);
       Activate();
-      _currentSwatch.Focus();
+      WriteNestedCloseFocusDiagnostics(
+        "colour.after-activate",
+        _colourPopup,
+        _currentSwatch,
+        returnFocus,
+        wasActive: wasActive);
+      bool focused = _currentSwatch.Focus();
+      WriteNestedCloseFocusDiagnostics(
+        "colour.after-target-focus",
+        _colourPopup,
+        _currentSwatch,
+        returnFocus,
+        focusResult: focused);
+      QueueNestedCloseFocusSettledDiagnostics(
+        "colour.settled",
+        _colourPopup,
+        _currentSwatch,
+        returnFocus);
     }
   }
 
@@ -462,14 +490,42 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
 
   private void CloseAdvancedPopupCore(bool returnFocus)
   {
+    WriteNestedCloseFocusDiagnostics(
+      "advanced.before-hide",
+      _advancedPopup,
+      _advancedButton,
+      returnFocus);
     if (_advancedPopup is { IsDisposed: false } popup)
     {
       popup.Hide();
     }
+    WriteNestedCloseFocusDiagnostics(
+      "advanced.after-hide",
+      _advancedPopup,
+      _advancedButton,
+      returnFocus);
     if (returnFocus && _advancedButton.CanFocus)
     {
+      bool wasActive = ReferenceEquals(Form.ActiveForm, this);
       Activate();
-      _advancedButton.Focus();
+      WriteNestedCloseFocusDiagnostics(
+        "advanced.after-activate",
+        _advancedPopup,
+        _advancedButton,
+        returnFocus,
+        wasActive: wasActive);
+      bool focused = _advancedButton.Focus();
+      WriteNestedCloseFocusDiagnostics(
+        "advanced.after-target-focus",
+        _advancedPopup,
+        _advancedButton,
+        returnFocus,
+        focusResult: focused);
+      QueueNestedCloseFocusSettledDiagnostics(
+        "advanced.settled",
+        _advancedPopup,
+        _advancedButton,
+        returnFocus);
     }
   }
 
@@ -479,6 +535,90 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     {
       yield return popup;
     }
+  }
+
+  private void WriteNestedCloseFocusDiagnostics(
+    string stage,
+    Form? child,
+    Control target,
+    bool returnFocus,
+    bool? wasActive = null,
+    bool? focusResult = null)
+  {
+    DiagnosticLog.Write("popup.nested_close_focus", new
+    {
+      stage,
+      returnFocus,
+      wasActive,
+      focusResult,
+      parentType = GetType().FullName,
+      parentVisible = Visible,
+      parentContainsFocus = ContainsFocus,
+      parentActiveControl = DescribeFocusControl(ActiveControl),
+      parentFocusedControl = DescribeFocusControl(FindFocusedControl(this)),
+      activeForm = DescribeFocusControl(Form.ActiveForm),
+      child = DescribeFocusControl(child),
+      childVisible = child?.Visible,
+      childContainsFocus = child?.ContainsFocus,
+      childActiveControl = DescribeFocusControl(child?.ActiveControl),
+      childFocusedControl = DescribeFocusControl(FindFocusedControl(child)),
+      target = DescribeFocusControl(target)
+    });
+  }
+
+  private void QueueNestedCloseFocusSettledDiagnostics(
+    string stage,
+    Form? child,
+    Control target,
+    bool returnFocus)
+  {
+    if (!IsHandleCreated)
+    {
+      return;
+    }
+    BeginInvoke((MethodInvoker)(() =>
+      WriteNestedCloseFocusDiagnostics(stage, child, target, returnFocus)));
+  }
+
+  private static Control? FindFocusedControl(Control? root)
+  {
+    if (root is null)
+    {
+      return null;
+    }
+    if (root.Focused)
+    {
+      return root;
+    }
+    foreach (Control child in root.Controls)
+    {
+      Control? focused = FindFocusedControl(child);
+      if (focused is not null)
+      {
+        return focused;
+      }
+    }
+    return null;
+  }
+
+  private static object? DescribeFocusControl(Control? control)
+  {
+    return control is null
+      ? null
+      : new
+      {
+        type = control.GetType().FullName,
+        control.Name,
+        control.Text,
+        control.Visible,
+        control.Enabled,
+        control.CanFocus,
+        control.Focused,
+        control.ContainsFocus,
+        control.IsHandleCreated,
+        control.IsDisposed,
+        bounds = control.Bounds.ToString()
+      };
   }
 
   private void ShowOwnedPopup(Form popup)
