@@ -1275,6 +1275,7 @@ internal sealed class HoverPopupController : IDisposable
     bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
     bool pointerInsideLeaf = IsPointerInsideLeaf(node);
     bool keepOpen = node.KeepOpen?.Invoke() ?? false;
+    bool nodeContainsFocus = NodeContainsFocus(node);
     DiagnosticLog.Write("popup.close_timer_tick", new
     {
       node.Id,
@@ -1286,13 +1287,14 @@ internal sealed class HoverPopupController : IDisposable
       pointerInsideLeaf,
       keepOpen,
       activeForm = DescribeControl(Form.ActiveForm),
-      nodeContainsFocus = NodeContainsFocus(node),
+      nodeContainsFocus,
       anchorContainsFocus = node.Anchor.ContainsFocus
     });
     if (!isDeepest ||
         !entered ||
         !pointerEnteredAsLeaf ||
         pointerInsideLeaf ||
+        nodeContainsFocus ||
         keepOpen)
     {
       return;
@@ -1311,6 +1313,7 @@ internal sealed class HoverPopupController : IDisposable
     bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
     bool pointerInsideLeaf = IsPointerInsideLeaf(node);
     bool keepOpen = node.KeepOpen?.Invoke() ?? false;
+    bool nodeContainsFocus = NodeContainsFocus(node);
     DiagnosticLog.Write("popup.close_schedule_evaluate", new
     {
       node.Id,
@@ -1324,21 +1327,25 @@ internal sealed class HoverPopupController : IDisposable
       keepOpen,
       timerEnabledBefore = node.CloseTimer.Enabled,
       activeForm = DescribeControl(Form.ActiveForm),
-      nodeContainsFocus = NodeContainsFocus(node),
+      nodeContainsFocus,
       anchorContainsFocus = node.Anchor.ContainsFocus
     });
     if (!isDeepest || !entered || !pointerEnteredAsLeaf)
     {
       return;
     }
-    if (pointerInsideLeaf || keepOpen)
+    if (pointerInsideLeaf || nodeContainsFocus || keepOpen)
     {
       node.CloseTimer.Stop();
       DiagnosticLog.Write("popup.close_timer_cancelled", new
       {
         node.Id,
         triggerReason,
-        reason = pointerInsideLeaf ? "pointer-inside-leaf" : "keep-open"
+        reason = pointerInsideLeaf
+          ? "pointer-inside-leaf"
+          : nodeContainsFocus
+            ? "keyboard-focus-inside-node"
+            : "keep-open"
       });
       return;
     }

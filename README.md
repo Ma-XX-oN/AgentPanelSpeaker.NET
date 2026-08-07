@@ -1,3 +1,9 @@
+## v184 focused-popup hover-close fix
+
+- A hover-close timer is no longer started while the deepest popup or its anchor still has keyboard focus.
+- A close timer that was already pending rechecks keyboard focus before closing, so a focused popup cannot disappear merely because the pointer left it.
+- v183 close-path diagnostics are retained.
+
 ## v183 popup-close isolation diagnostics
 
 This version intentionally changes popup-close diagnostics rather than popup
