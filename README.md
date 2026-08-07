@@ -1731,3 +1731,13 @@ so the same artwork remains usable in dark, light, and system themes.
   parent control hierarchy, so focus advances to the next or previous control
   in the parent UI instead of stopping at the popup boundary.
 - The Poll ms numeric control now matches the Source dropdown height.
+
+
+## v162
+
+- Omits the Natural voice sort field when no installed voice contains Natural
+  metadata.
+- Keeps disabled checkboxes and their labels readable in dark mode through the
+  centralized ThemeManager disabled-state rendering.
+- Refreshes dark-theme disabled foreground colours whenever controls are enabled
+  or disabled during playback.

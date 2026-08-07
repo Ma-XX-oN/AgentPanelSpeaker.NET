@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 
 namespace AgentPanelSpeaker;
 
@@ -40,6 +41,8 @@ internal static class ThemeManager
   private static readonly Color LightBorder = Color.FromArgb(110, 110, 110);
   private static readonly Color LightCaution = Color.FromArgb(255, 235, 140);
   private static readonly Color LightCautionText = Color.FromArgb(55, 42, 0);
+  private static readonly ConditionalWeakTable<Control, AppliedThemeState>
+    AppliedThemeStates = new();
 
   /// <summary>
   /// Gets whether the effective theme is dark.
@@ -180,6 +183,11 @@ internal static class ThemeManager
         numeric.ForeColor = inputText;
         break;
 
+      case CheckBox checkBox:
+        checkBox.Paint -= DrawDarkDisabledCheckBox;
+        checkBox.Paint += DrawDarkDisabledCheckBox;
+        break;
+
       case Button button:
         button.UseVisualStyleBackColor = !dark;
         button.FlatStyle = dark ? FlatStyle.Flat : FlatStyle.Standard;
@@ -230,10 +238,117 @@ internal static class ThemeManager
         break;
     }
 
+    SetThemeState(control, dark);
+    ApplyEnabledAppearance(control, dark);
+
     foreach (Control child in control.Controls)
     {
       ApplyControl(child, dark, surface);
     }
+  }
+
+  private static void SetThemeState(Control control, bool dark)
+  {
+    AppliedThemeState state = AppliedThemeStates.GetValue(
+      control,
+      _ => new AppliedThemeState());
+    state.Dark = dark;
+    control.EnabledChanged -= ControlEnabledChanged;
+    control.EnabledChanged += ControlEnabledChanged;
+  }
+
+  private static void ControlEnabledChanged(object? sender, EventArgs eventArgs)
+  {
+    if (sender is not Control control ||
+        !AppliedThemeStates.TryGetValue(control, out AppliedThemeState? state))
+    {
+      return;
+    }
+    ApplyEnabledAppearance(control, state.Dark);
+    control.Invalidate();
+  }
+
+  private static void ApplyEnabledAppearance(Control control, bool dark)
+  {
+    if (!dark)
+    {
+      return;
+    }
+    Color foreground = control.Enabled ? DarkText : DarkDisabled;
+    switch (control)
+    {
+      case TextBoxBase:
+      case ComboBox:
+      case NumericUpDown:
+      case Button:
+      case CheckBox:
+      case Label:
+        control.ForeColor = foreground;
+        break;
+    }
+  }
+
+  private static void DrawDarkDisabledCheckBox(
+    object? sender,
+    PaintEventArgs eventArgs)
+  {
+    if (sender is not CheckBox checkBox || checkBox.Enabled ||
+        checkBox.BackColor.GetBrightness() >= 0.35f)
+    {
+      return;
+    }
+
+    eventArgs.Graphics.Clear(checkBox.BackColor);
+    int boxSize = Math.Max(
+      12,
+      (int)Math.Round(14.0 * checkBox.DeviceDpi / 96.0));
+    int top = Math.Max(0, (checkBox.ClientSize.Height - boxSize) / 2);
+    var box = new Rectangle(0, top, boxSize - 1, boxSize - 1);
+    using var border = new Pen(DarkDisabled, 1.2f);
+    eventArgs.Graphics.DrawRectangle(border, box);
+
+    if (checkBox.CheckState == CheckState.Checked)
+    {
+      using var pen = new Pen(DarkDisabled, 1.8f)
+      {
+        StartCap = System.Drawing.Drawing2D.LineCap.Round,
+        EndCap = System.Drawing.Drawing2D.LineCap.Round,
+        LineJoin = System.Drawing.Drawing2D.LineJoin.Round
+      };
+      eventArgs.Graphics.DrawLines(pen, new[]
+      {
+        new Point(boxSize * 2 / 10, top + boxSize * 5 / 10),
+        new Point(boxSize * 4 / 10, top + boxSize * 7 / 10),
+        new Point(boxSize * 8 / 10, top + boxSize * 3 / 10)
+      });
+    }
+    else if (checkBox.CheckState == CheckState.Indeterminate)
+    {
+      using var brush = new SolidBrush(DarkDisabled);
+      eventArgs.Graphics.FillRectangle(
+        brush,
+        boxSize * 2 / 10,
+        top + boxSize * 4 / 10,
+        boxSize * 6 / 10,
+        Math.Max(2, boxSize * 2 / 10));
+    }
+
+    var textBounds = new Rectangle(
+      boxSize + 5,
+      0,
+      Math.Max(0, checkBox.ClientSize.Width - boxSize - 5),
+      checkBox.ClientSize.Height);
+    TextRenderer.DrawText(
+      eventArgs.Graphics,
+      checkBox.Text,
+      checkBox.Font,
+      textBounds,
+      DarkDisabled,
+      checkBox.BackColor,
+      TextFormatFlags.Left |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.SingleLine |
+      TextFormatFlags.NoPrefix);
   }
 
   private static void ReplaceTreeStateImages(
@@ -411,6 +526,11 @@ internal static class ThemeManager
     {
       eventArgs.DrawFocusRectangle();
     }
+  }
+
+  private sealed class AppliedThemeState
+  {
+    public bool Dark { get; set; }
   }
 
   /// <summary>

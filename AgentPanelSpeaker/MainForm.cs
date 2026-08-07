@@ -88,15 +88,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly Dictionary<SpeechRole, VoiceRowControls> _voiceRows = new();
   private readonly SpeechProfileCompactControl _masterSpeechProfile =
     new("Master Speech Profile");
-  private readonly VoiceDisplayField[] _voiceDisplayOrder =
-  {
-    VoiceDisplayField.Location,
-    VoiceDisplayField.Language,
-    VoiceDisplayField.VoiceName,
-    VoiceDisplayField.Natural,
-    VoiceDisplayField.Maker,
-    VoiceDisplayField.Provider
-  };
+  private readonly VoiceDisplayField[] _voiceDisplayOrder;
   private readonly IReadOnlyList<InstalledSpeechVoice> _installedVoices;
   private readonly UserSettingsStore _settingsStore;
   private readonly DisplayAwakeController _displayAwake = new();
@@ -139,6 +131,7 @@ internal sealed class MainForm : Form, IMessageFilter
     try
     {
       _installedVoices = _speech.GetInstalledVoices();
+      _voiceDisplayOrder = BuildVoiceDisplayOrder(_installedVoices);
       _settingsStore = new UserSettingsStore(
         _installedVoices.Select(voice => voice.Name).ToArray());
       _speech.SetPolicyProviders(
@@ -181,7 +174,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v161";
+    Text = "Agent Panel Speaker v162";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -898,6 +891,35 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Builds the voice display order from fields that actually exist in the
+  /// installed catalogue.  Natural is omitted when every installed voice has
+  /// an empty Natural value.
+  /// </summary>
+  private static VoiceDisplayField[] BuildVoiceDisplayOrder(
+    IReadOnlyList<InstalledSpeechVoice> voices)
+  {
+    bool hasNatural = voices.Any(voice => voice.Natural.Length != 0);
+    return hasNatural
+      ? new[]
+      {
+        VoiceDisplayField.Location,
+        VoiceDisplayField.Language,
+        VoiceDisplayField.VoiceName,
+        VoiceDisplayField.Natural,
+        VoiceDisplayField.Maker,
+        VoiceDisplayField.Provider
+      }
+      : new[]
+      {
+        VoiceDisplayField.Location,
+        VoiceDisplayField.Language,
+        VoiceDisplayField.VoiceName,
+        VoiceDisplayField.Maker,
+        VoiceDisplayField.Provider
+      };
+  }
+
+  /// <summary>
   /// Rebuilds all voice lists in current field order without changing profiles.
   /// </summary>
   private void RepopulateVoiceRows(bool preserveSelections)
@@ -911,29 +933,10 @@ internal sealed class MainForm : Form, IMessageFilter
       }
     }
 
-    InstalledSpeechVoice[] sortedVoices = _installedVoices
-      .OrderBy(
-        voice => voice.GetDisplayField(_voiceDisplayOrder[0]),
-        StringComparer.CurrentCultureIgnoreCase)
-      .ThenBy(
-        voice => voice.GetDisplayField(_voiceDisplayOrder[1]),
-        StringComparer.CurrentCultureIgnoreCase)
-      .ThenBy(
-        voice => voice.GetDisplayField(_voiceDisplayOrder[2]),
-        StringComparer.CurrentCultureIgnoreCase)
-      .ThenBy(
-        voice => voice.GetDisplayField(_voiceDisplayOrder[3]),
-        StringComparer.CurrentCultureIgnoreCase)
-      .ThenBy(
-        voice => voice.GetDisplayField(_voiceDisplayOrder[4]),
-        StringComparer.CurrentCultureIgnoreCase)
-      .ThenBy(
-        voice => voice.GetDisplayField(_voiceDisplayOrder[5]),
-        StringComparer.CurrentCultureIgnoreCase)
-      .ThenBy(
-        voice => voice.Name,
-        StringComparer.CurrentCultureIgnoreCase)
-      .ToArray();
+    InstalledSpeechVoice[] sortedVoices = _installedVoices.ToArray();
+    Array.Sort(
+      sortedVoices,
+      (left, right) => CompareVoiceDisplay(left, right, _voiceDisplayOrder));
 
     bool wasLoading = _loadingSettings;
     _loadingSettings = true;
@@ -964,6 +967,24 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       _loadingSettings = wasLoading;
     }
+  }
+
+  private static int CompareVoiceDisplay(
+    InstalledSpeechVoice left,
+    InstalledSpeechVoice right,
+    IReadOnlyList<VoiceDisplayField> order)
+  {
+    foreach (VoiceDisplayField field in order)
+    {
+      int comparison = StringComparer.CurrentCultureIgnoreCase.Compare(
+        left.GetDisplayField(field),
+        right.GetDisplayField(field));
+      if (comparison != 0)
+      {
+        return comparison;
+      }
+    }
+    return StringComparer.CurrentCultureIgnoreCase.Compare(left.Name, right.Name);
   }
 
   private static string GetVoiceDisplayFieldLabel(VoiceDisplayField field)
