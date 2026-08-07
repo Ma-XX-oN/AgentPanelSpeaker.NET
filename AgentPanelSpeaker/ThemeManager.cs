@@ -82,6 +82,23 @@ internal static class ThemeManager
   }
 
   /// <summary>
+  /// Gets the foreground a custom-painted control should use for its state.
+  /// </summary>
+  public static Color GetControlForeground(Control control)
+  {
+    ArgumentNullException.ThrowIfNull(control);
+    if (control.Enabled)
+    {
+      return control.ForeColor;
+    }
+    return AppliedThemeStates.TryGetValue(
+      control,
+      out AppliedThemeState? state) && state.Dark
+        ? DarkDisabled
+        : SystemColors.GrayText;
+  }
+
+  /// <summary>
   /// Applies one theme to a form and all descendants.
   /// </summary>
   public static void Apply(Form form, AppTheme theme)
@@ -189,6 +206,8 @@ internal static class ThemeManager
         break;
 
       case Button button:
+        button.Paint -= DrawDarkDisabledButton;
+        button.Paint += DrawDarkDisabledButton;
         button.UseVisualStyleBackColor = !dark;
         button.FlatStyle = dark ? FlatStyle.Flat : FlatStyle.Standard;
         button.BackColor = dark ? DarkControl : SystemColors.Control;
@@ -286,6 +305,56 @@ internal static class ThemeManager
         control.ForeColor = foreground;
         break;
     }
+  }
+
+  private static void DrawDarkDisabledButton(
+    object? sender,
+    PaintEventArgs eventArgs)
+  {
+    if (sender is not Button button || button.Enabled ||
+        !AppliedThemeStates.TryGetValue(button, out AppliedThemeState? state) ||
+        !state.Dark)
+    {
+      return;
+    }
+
+    Rectangle bounds = button.ClientRectangle;
+    if (bounds.Width <= 0 || bounds.Height <= 0)
+    {
+      return;
+    }
+
+    using (var background = new SolidBrush(DarkControl))
+    {
+      eventArgs.Graphics.FillRectangle(background, bounds);
+    }
+
+    var borderBounds = new Rectangle(
+      bounds.Left,
+      bounds.Top,
+      Math.Max(0, bounds.Width - 1),
+      Math.Max(0, bounds.Height - 1));
+    using (var border = new Pen(DarkBorder))
+    {
+      eventArgs.Graphics.DrawRectangle(border, borderBounds);
+    }
+
+    if (button.Text.Length == 0)
+    {
+      return;
+    }
+
+    TextRenderer.DrawText(
+      eventArgs.Graphics,
+      button.Text,
+      button.Font,
+      bounds,
+      DarkDisabled,
+      DarkControl,
+      TextFormatFlags.HorizontalCenter |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.SingleLine |
+      TextFormatFlags.NoPrefix);
   }
 
   private static void DrawDarkDisabledCheckBox(

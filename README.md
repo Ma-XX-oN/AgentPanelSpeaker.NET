@@ -1741,3 +1741,11 @@ so the same artwork remains usable in dark, light, and system themes.
   centralized ThemeManager disabled-state rendering.
 - Refreshes dark-theme disabled foreground colours whenever controls are enabled
   or disabled during playback.
+
+
+## v163
+
+- Centralized the dark-theme disabled-button appearance in `ThemeManager`.
+- Disabled standard buttons now keep a readable border and label in dark mode.
+- Disabled `GlyphButton` icons now use the theme-managed disabled foreground instead
+  of `SystemColors.GrayText`.

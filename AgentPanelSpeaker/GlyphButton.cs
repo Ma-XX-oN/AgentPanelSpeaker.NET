@@ -89,7 +89,7 @@ internal sealed class GlyphButton : Button
   protected override void OnPaint(PaintEventArgs eventArgs)
   {
     base.OnPaint(eventArgs);
-    Color glyphColor = Enabled ? ForeColor : SystemColors.GrayText;
+    Color glyphColor = ThemeManager.GetControlForeground(this);
     if (_drawing != GlyphButtonDrawing.Text)
     {
       switch (_drawing)
