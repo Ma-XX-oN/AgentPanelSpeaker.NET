@@ -486,6 +486,22 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
       throw new InvalidOperationException(
         "Nested transcript popups must derive from PopupFormBase.");
     }
+
+    // An inactive owner Form can retain ActiveControl even after keyboard
+    // focus has moved into an owned popup.  That leaves a focus cue painted
+    // in the parent while the child is active, which makes the logical popup
+    // hierarchy look as though two controls have focus.  The anchor is
+    // restored explicitly when the child closes, so clear the owner's stale
+    // active-control state while the child is open.
+    Control? previousActiveControl = ActiveControl;
+    ActiveControl = null;
+    DiagnosticLog.Write("popup.owner_focus_cleared", new
+    {
+      ownerType = GetType().FullName,
+      popupType = popup.GetType().FullName,
+      previousActiveControl = previousActiveControl?.GetType().FullName
+    });
+
     popupForm.ShowAboveOwner(this);
   }
 

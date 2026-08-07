@@ -168,7 +168,14 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   /// </summary>
   public void FitToVisibleControls()
   {
-    int probeWidth = ScaleLogical(420);
+    // Width is a design constraint, not something to infer from ColorEditor
+    // child bounds: the Cyotek colour bars stretch to whatever probe width we
+    // give them, so measuring their right edge would simply feed the probe
+    // width back into the popup width.
+    int editorColumnWidth = ScaleLogical(300);
+    int probeWidth = Math.Max(
+      ScaleLogical(260),
+      editorColumnWidth - ScaleLogical(18));
     int probeHeight = ScaleLogical(300);
 
     Rectangle rgbBounds = ProbeEditorGroupBounds(
@@ -192,7 +199,7 @@ internal sealed class TranscriptColourPopup : PopupFormBase
       probeHeight,
       "aLabel", "aNumericUpDown", "aColorBar");
 
-    int editorWidth = Math.Max(
+    int measuredEditorWidth = Math.Max(
       Math.Max(rgbBounds.Width, hslBounds.Width),
       alphaBounds.Width);
     int tabContentHeight = Math.Max(rgbBounds.Height, hslBounds.Height);
@@ -206,8 +213,8 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     _editorStack.RowStyles[1].SizeType = SizeType.Absolute;
     _editorStack.RowStyles[1].Height = alphaHeight;
 
-    int rightWidth = editorWidth + ScaleLogical(34);
-    int leftWidth = Math.Max(ScaleLogical(250), rightWidth * 2 / 3);
+    int rightWidth = editorColumnWidth;
+    int leftWidth = ScaleLogical(235);
     int contentHeight = Math.Max(ScaleLogical(240), editorHeight);
     _layout.ColumnStyles[0].SizeType = SizeType.Absolute;
     _layout.ColumnStyles[0].Width = leftWidth;
@@ -236,7 +243,8 @@ internal sealed class TranscriptColourPopup : PopupFormBase
       alphaBounds,
       tabHeight,
       alphaHeight,
-      editorWidth,
+      measuredEditorWidth,
+      editorColumnWidth,
       contentHeight,
       rgbEditor = new { _rgbEditor.Location, _rgbEditor.Size },
       hslEditor = new { _hslEditor.Location, _hslEditor.Size },
