@@ -199,6 +199,9 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     int requiredWidth = ScaleLogical(16) + innerWidth;
 
     int modeHeight = editorHeight + tabHeaderAllowance + ScaleLogical(16);
+    _editorStack.RowStyles[0].SizeType = SizeType.Absolute;
+    _editorStack.RowStyles[0].Height = modeHeight;
+
     int wheelHeight = Math.Max(_wheel.PreferredSize.Height, _wheel.MinimumSize.Height);
     int contentHeight = Math.Max(modeHeight + alphaRowHeight, wheelHeight);
     int requiredHeight = ScaleLogical(16 + 28 + 30) + contentHeight;

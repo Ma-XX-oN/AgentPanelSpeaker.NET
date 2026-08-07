@@ -1,3 +1,14 @@
+## v175 popup Z-order diagnostics and compact colour tabs
+
+Version 175 does not guess at another Z-order fix.  It adds native HWND
+diagnostics around nested popup ownership/show/Z-order operations, including
+managed and native owner handles, window styles, neighbouring Z-order handles,
+foreground/active windows, top-level Z-order ranks, and all same-process
+top-level windows before/after showing and after the UI settles.
+
+The RGB/Hex and HSL tab area is also sized to the measured editor content
+instead of consuming the remaining height forced by the colour wheel.
+
 ## v174 nested popup Z-order and tab-exit fix
 
 - Nested colour/advanced popup forms explicitly remain above their owner.
