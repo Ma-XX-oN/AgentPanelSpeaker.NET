@@ -346,18 +346,45 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
 
   private void PositionColourPopup(TranscriptColourPopup popup)
   {
-    Point below = _currentSwatch.PointToScreen(
-      new Point(_currentSwatch.Width - popup.Width, _currentSwatch.Height + 2));
+    const int gap = 2;
     Rectangle workArea = Screen.FromControl(_currentSwatch).WorkingArea;
+    Rectangle ownerBounds = Bounds;
+    Point anchor = _currentSwatch.PointToScreen(Point.Empty);
     int maxX = Math.Max(workArea.Left, workArea.Right - popup.Width);
-    int maxY = Math.Max(workArea.Top, workArea.Bottom - popup.Height);
-    int x = Math.Clamp(below.X, workArea.Left, maxX);
-    int y = below.Y + popup.Height <= workArea.Bottom
-      ? below.Y
-      : _currentSwatch.PointToScreen(Point.Empty).Y - popup.Height - 2;
-    popup.Location = new Point(
-      x,
-      Math.Clamp(y, workArea.Top, maxY));
+    int x = Math.Clamp(
+      anchor.X + _currentSwatch.Width - popup.Width,
+      workArea.Left,
+      maxX);
+
+    int above = ownerBounds.Top - popup.Height - gap;
+    int below = ownerBounds.Bottom + gap;
+    int y;
+    if (above >= workArea.Top)
+    {
+      y = above;
+    }
+    else if (below + popup.Height <= workArea.Bottom)
+    {
+      y = below;
+    }
+    else
+    {
+      y = Math.Clamp(
+        anchor.Y - popup.Height - gap,
+        workArea.Top,
+        Math.Max(workArea.Top, workArea.Bottom - popup.Height));
+    }
+
+    popup.Location = new Point(x, y);
+    DiagnosticLog.Write("popup.colour_position", new
+    {
+      popupBounds = new Rectangle(popup.Location, popup.Size),
+      ownerBounds,
+      workArea,
+      anchor,
+      overlapsOwner = new Rectangle(popup.Location, popup.Size)
+        .IntersectsWith(ownerBounds)
+    });
   }
 
   private void CloseColourPopupCore(bool returnFocus)

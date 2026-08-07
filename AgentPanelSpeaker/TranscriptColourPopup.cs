@@ -13,10 +13,13 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   private readonly ColorEditor _hslEditor = new();
   private readonly ColorEditor _alphaEditor = new();
   private readonly TabControl _modeTabs = new();
+  private readonly TabPage _rgbPage = new("RGB / Hex");
+  private readonly TabPage _hslPage = new("HSL");
+  private readonly Panel _alphaViewport = new();
   private readonly TableLayoutPanel _editorStack = new();
+  private readonly TableLayoutPanel _layout = new();
   private readonly Button _previousSwatch = new();
   private readonly Button _currentSwatch = new();
-  private readonly int _editorProbeHeight;
   private Color _colour = Color.Black;
   private bool _updating;
   private bool _dark;
@@ -45,13 +48,6 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     _wheel.Margin = new Padding(6, 2, 8, 2);
     _wheel.TabIndex = 0;
 
-    // ColorEditor constructs at the height its own internal layout expects.
-    // Preserve that independent size as a measurement probe before Dock=Fill
-    // makes its bounds depend on our tab row and creates a circular measurement.
-    _editorProbeHeight = Math.Max(
-      _rgbEditor.Height,
-      Math.Max(_hslEditor.Height, _alphaEditor.Height));
-
     ConfigureEditor(_rgbEditor, showRgb: true, showHex: true,
       showHsl: false, showAlpha: false);
     ConfigureEditor(_hslEditor, showRgb: false, showHex: false,
@@ -59,25 +55,21 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     ConfigureEditor(_alphaEditor, showRgb: false, showHex: false,
       showHsl: false, showAlpha: true);
 
-    var rgbPage = new TabPage("RGB / Hex")
-    {
-      Padding = new Padding(6)
-    };
-    var hslPage = new TabPage("HSL")
-    {
-      Padding = new Padding(6)
-    };
-    rgbPage.Controls.Add(_rgbEditor);
-    hslPage.Controls.Add(_hslEditor);
+    _rgbPage.Padding = new Padding(6);
+    _hslPage.Padding = new Padding(6);
+    _rgbPage.Controls.Add(_rgbEditor);
+    _hslPage.Controls.Add(_hslEditor);
 
     _modeTabs.Dock = DockStyle.Fill;
     _modeTabs.Margin = Padding.Empty;
     _modeTabs.TabIndex = 1;
-    _modeTabs.TabPages.Add(rgbPage);
-    _modeTabs.TabPages.Add(hslPage);
+    _modeTabs.TabPages.Add(_rgbPage);
+    _modeTabs.TabPages.Add(_hslPage);
 
-    _alphaEditor.Dock = DockStyle.Fill;
-    _alphaEditor.Margin = new Padding(0, 4, 0, 0);
+    _alphaViewport.Dock = DockStyle.Fill;
+    _alphaViewport.Margin = new Padding(0, 4, 0, 0);
+    _alphaViewport.TabStop = false;
+    _alphaViewport.Controls.Add(_alphaEditor);
     _alphaEditor.TabIndex = 2;
 
     ConfigureSwatch(_previousSwatch, "Previous highlight colour");
@@ -97,10 +89,10 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     _editorStack.Dock = DockStyle.Fill;
     _editorStack.Margin = new Padding(8, 2, 2, 2);
     _editorStack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    _editorStack.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-    _editorStack.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+    _editorStack.RowStyles.Add(new RowStyle(SizeType.Absolute, 160));
+    _editorStack.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
     _editorStack.Controls.Add(_modeTabs, 0, 0);
-    _editorStack.Controls.Add(_alphaEditor, 0, 1);
+    _editorStack.Controls.Add(_alphaViewport, 0, 1);
 
     var swatches = new FlowLayoutPanel
     {
@@ -116,25 +108,22 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     swatches.Controls.Add(CreateInlineLabel("Current"));
     swatches.Controls.Add(_currentSwatch);
 
-    var layout = new TableLayoutPanel
-    {
-      ColumnCount = 2,
-      RowCount = 3,
-      Dock = DockStyle.Fill,
-      Padding = new Padding(8)
-    };
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-    layout.Controls.Add(title, 0, 0);
-    layout.SetColumnSpan(title, 2);
-    layout.Controls.Add(_wheel, 0, 1);
-    layout.Controls.Add(_editorStack, 1, 1);
-    layout.Controls.Add(swatches, 0, 2);
-    layout.SetColumnSpan(swatches, 2);
-    Controls.Add(layout);
+    _layout.ColumnCount = 2;
+    _layout.RowCount = 3;
+    _layout.Dock = DockStyle.Fill;
+    _layout.Padding = new Padding(8);
+    _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
+    _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 240));
+    _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+    _layout.Controls.Add(title, 0, 0);
+    _layout.SetColumnSpan(title, 2);
+    _layout.Controls.Add(_wheel, 0, 1);
+    _layout.Controls.Add(_editorStack, 1, 1);
+    _layout.Controls.Add(swatches, 0, 2);
+    _layout.SetColumnSpan(swatches, 2);
+    Controls.Add(_layout);
 
     Paint += PaintBorder;
   }
@@ -171,63 +160,88 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   }
 
   /// <summary>
-  /// Sizes the popup from the actual scaled bounds of both tabbed editors and
-  /// the shared alpha editor so no active colour control can be clipped.
+  /// Sizes each editor from an unconstrained probe layout, then crops its
+  /// viewport to the known Cyotek controls for that editor group.  The popup is
+  /// still hidden when this runs, so Control.Visible cannot be used: WinForms
+  /// reports descendants of a hidden Form as not visible even when their local
+  /// Visible state is enabled.
   /// </summary>
   public void FitToVisibleControls()
   {
-    int probeHeight = ScaleLogical(_editorProbeHeight);
-    int tabHeaderAllowance = ScaleLogical(30);
-    int tabPadding = ScaleLogical(16);
+    int probeWidth = ScaleLogical(420);
+    int probeHeight = ScaleLogical(300);
 
-    // Give the tabbed editors enough independent room to lay themselves out
-    // before measuring them.  Measuring while the tab row is already Dock=Fill
-    // makes the editor height depend on the value we are trying to calculate.
+    Rectangle rgbBounds = ProbeEditorGroupBounds(
+      _rgbEditor,
+      probeWidth,
+      probeHeight,
+      "rgbHeaderLabel", "rLabel", "rNumericUpDown", "rColorBar",
+      "gLabel", "gNumericUpDown", "gColorBar",
+      "bLabel", "bNumericUpDown", "bColorBar",
+      "hexLabel", "hexTextBox");
+    Rectangle hslBounds = ProbeEditorGroupBounds(
+      _hslEditor,
+      probeWidth,
+      probeHeight,
+      "hslLabel", "hLabel", "hNumericUpDown", "hColorBar",
+      "sLabel", "sNumericUpDown", "sColorBar",
+      "lLabel", "lNumericUpDown", "lColorBar");
+    Rectangle alphaBounds = ProbeEditorGroupBounds(
+      _alphaEditor,
+      probeWidth,
+      probeHeight,
+      "aLabel", "aNumericUpDown", "aColorBar");
+
+    int editorWidth = Math.Max(
+      Math.Max(rgbBounds.Width, hslBounds.Width),
+      alphaBounds.Width);
+    int tabContentHeight = Math.Max(rgbBounds.Height, hslBounds.Height);
+    int tabChrome = ScaleLogical(38);
+    int tabHeight = tabContentHeight + tabChrome;
+    int alphaHeight = alphaBounds.Height + ScaleLogical(8);
+    int editorHeight = tabHeight + alphaHeight;
+
     _editorStack.RowStyles[0].SizeType = SizeType.Absolute;
-    _editorStack.RowStyles[0].Height = probeHeight + tabHeaderAllowance + tabPadding;
+    _editorStack.RowStyles[0].Height = tabHeight;
     _editorStack.RowStyles[1].SizeType = SizeType.Absolute;
-    _editorStack.RowStyles[1].Height = probeHeight;
-    Height = Math.Max(Height, ScaleLogical(520));
-    PerformLayout();
+    _editorStack.RowStyles[1].Height = alphaHeight;
 
-    int selectedIndex = _modeTabs.SelectedIndex;
-    int editorWidth = 0;
-    int editorHeight = 0;
-    for (int index = 0; index < _modeTabs.TabPages.Count; index++)
-    {
-      _modeTabs.SelectedIndex = index;
-      _modeTabs.PerformLayout();
-      ColorEditor editor = index == 0 ? _rgbEditor : _hslEditor;
-      editor.PerformLayout();
-      Size extent = GetVisibleEditorExtent(editor);
-      editorWidth = Math.Max(editorWidth, extent.Width);
-      editorHeight = Math.Max(editorHeight, extent.Height);
-    }
-    _modeTabs.SelectedIndex = Math.Max(0, selectedIndex);
+    int rightWidth = editorWidth + ScaleLogical(34);
+    int leftWidth = Math.Max(ScaleLogical(250), rightWidth * 2 / 3);
+    int contentHeight = Math.Max(ScaleLogical(240), editorHeight);
+    _layout.ColumnStyles[0].SizeType = SizeType.Absolute;
+    _layout.ColumnStyles[0].Width = leftWidth;
+    _layout.RowStyles[1].SizeType = SizeType.Absolute;
+    _layout.RowStyles[1].Height = contentHeight;
 
-    _alphaEditor.PerformLayout();
-    Size alphaExtent = GetVisibleEditorExtent(_alphaEditor);
-    editorWidth = Math.Max(editorWidth, alphaExtent.Width);
-
-    int alphaRowHeight = alphaExtent.Height + ScaleLogical(8);
-    int modeHeight = editorHeight + tabHeaderAllowance + tabPadding;
-    _editorStack.RowStyles[0].Height = modeHeight;
-    _editorStack.RowStyles[1].Height = alphaRowHeight;
-
-    int editorColumnWidth = editorWidth + ScaleLogical(24);
-    int innerWidth = (int)Math.Ceiling(editorColumnWidth / 0.60);
-    int requiredWidth = ScaleLogical(16) + innerWidth;
-
-    int wheelHeight = Math.Max(
-      _wheel.PreferredSize.Height,
-      _wheel.MinimumSize.Height);
-    int contentHeight = Math.Max(modeHeight + alphaRowHeight, wheelHeight);
+    int requiredWidth = ScaleLogical(16) + leftWidth + rightWidth;
     int requiredHeight = ScaleLogical(16 + 28 + 30) + contentHeight;
-
-    Size = new Size(
-      Math.Max(ScaleLogical(500), requiredWidth),
-      Math.Max(ScaleLogical(300), requiredHeight));
+    Size = new Size(requiredWidth, requiredHeight);
     PerformLayout();
+
+    PlaceEditorInViewport(_rgbEditor, _rgbPage, rgbBounds, probeWidth, probeHeight);
+    PlaceEditorInViewport(_hslEditor, _hslPage, hslBounds, probeWidth, probeHeight);
+    PlaceEditorInViewport(
+      _alphaEditor,
+      _alphaViewport,
+      alphaBounds,
+      probeWidth,
+      probeHeight);
+
+    DiagnosticLog.Write("popup.colour_layout", new
+    {
+      popupSize = Size,
+      rgbBounds,
+      hslBounds,
+      alphaBounds,
+      tabHeight,
+      alphaHeight,
+      editorWidth,
+      contentHeight,
+      rgbEditor = new { _rgbEditor.Location, _rgbEditor.Size },
+      hslEditor = new { _hslEditor.Location, _hslEditor.Size },
+      alphaEditor = new { _alphaEditor.Location, _alphaEditor.Size }
+    });
   }
 
   public void FocusInitialControl()
@@ -344,8 +358,9 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     bool showHsl,
     bool showAlpha)
   {
-    editor.Dock = DockStyle.Fill;
+    editor.Dock = DockStyle.None;
     editor.Margin = Padding.Empty;
+    editor.AutoSize = false;
     editor.Orientation = Orientation.Vertical;
     editor.ShowRgb = showRgb;
     editor.ShowHex = showHex;
@@ -354,43 +369,56 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     editor.PreserveAlphaChannel = true;
   }
 
-  private static Size GetVisibleEditorExtent(ColorEditor editor)
+  private static Rectangle ProbeEditorGroupBounds(
+    ColorEditor editor,
+    int width,
+    int height,
+    params string[] controlNames)
   {
-    int right = 0;
-    int bottom = 0;
-    MeasureVisibleDescendants(editor, editor, ref right, ref bottom);
-    return new Size(
-      Math.Max(1, right + 4),
-      Math.Max(1, bottom + 4));
-  }
+    editor.Size = new Size(width, height);
+    editor.PerformLayout();
 
-  private static void MeasureVisibleDescendants(
-    Control root,
-    Control parent,
-    ref int right,
-    ref int bottom)
-  {
-    foreach (Control control in parent.Controls)
+    var names = new HashSet<string>(controlNames, StringComparer.Ordinal);
+    int left = int.MaxValue;
+    int top = int.MaxValue;
+    int right = int.MinValue;
+    int bottom = int.MinValue;
+    foreach (Control control in editor.Controls)
     {
-      if (!control.Visible)
+      if (!names.Contains(control.Name))
       {
         continue;
       }
 
-      int x = control.Left;
-      int y = control.Top;
-      for (Control? ancestor = control.Parent;
-           ancestor is not null && !ReferenceEquals(ancestor, root);
-           ancestor = ancestor.Parent)
-      {
-        x += ancestor.Left;
-        y += ancestor.Top;
-      }
-
-      right = Math.Max(right, x + control.Width);
-      bottom = Math.Max(bottom, y + control.Height);
-      MeasureVisibleDescendants(root, control, ref right, ref bottom);
+      left = Math.Min(left, control.Left);
+      top = Math.Min(top, control.Top);
+      right = Math.Max(right, control.Right);
+      bottom = Math.Max(bottom, control.Bottom);
     }
+
+    if (left == int.MaxValue)
+    {
+      throw new InvalidOperationException(
+        "The Cyotek ColorEditor layout did not contain the expected controls.");
+    }
+    return Rectangle.FromLTRB(left, top, right, bottom);
+  }
+
+  private static void PlaceEditorInViewport(
+    ColorEditor editor,
+    Control viewport,
+    Rectangle contentBounds,
+    int probeWidth,
+    int probeHeight)
+  {
+    int inset = viewport is TabPage ? 6 : 0;
+    editor.Size = new Size(
+      Math.Max(probeWidth, viewport.ClientSize.Width + contentBounds.Left),
+      probeHeight);
+    editor.Location = new Point(
+      inset - contentBounds.Left,
+      inset - contentBounds.Top);
+    editor.BringToFront();
   }
 
   private int ScaleLogical(int value)

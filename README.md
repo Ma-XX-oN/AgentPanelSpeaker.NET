@@ -1,3 +1,10 @@
+## v177 colour popup layout and placement
+
+- Measures each Cyotek editor from an unconstrained probe size and the known controls in each RGB/Hex, HSL, and Alpha group.  It does not use Control.Visible while the popup Form is hidden, because WinForms reports hidden-form descendants as invisible.
+- Removes the circular Dock=Fill/hidden-visibility measurement that collapsed the tab contents in v175/v176.
+- Places the colour popup immediately above or below Transcript Settings when possible so the two owned windows do not overlap.
+- Logs the measured colour-editor bounds and final popup placement for runtime verification.
+
 ## v176 popup ownership hierarchy and colour-layout measurement
 
 Version 176 makes Transcript Settings a real owned popup Form.  The colour and
