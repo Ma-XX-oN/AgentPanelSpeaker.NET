@@ -542,19 +542,28 @@ internal sealed class HoverPopupController : IDisposable
 
   private void MoveFocusBeyondAnchor(PopupNode node, bool forward)
   {
-    Control anchor = node.Anchor;
-    Form? form = anchor.FindForm();
-    if (form is null || form.IsDisposed || anchor.IsDisposed)
+    Control current = node.Anchor;
+    if (current.IsDisposed)
     {
       return;
     }
 
-    _ = form.SelectNextControl(
-      anchor,
-      forward,
-      tabStopOnly: true,
-      nested: true,
-      wrap: false);
+    Control? parent = current.Parent;
+    while (parent is not null && !parent.IsDisposed)
+    {
+      if (parent.SelectNextControl(
+          current,
+          forward,
+          tabStopOnly: true,
+          nested: true,
+          wrap: false))
+      {
+        return;
+      }
+
+      current = parent;
+      parent = parent.Parent;
+    }
   }
 
   private void ReevaluateClose(PopupNode node)

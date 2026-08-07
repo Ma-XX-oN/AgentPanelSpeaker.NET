@@ -1723,3 +1723,11 @@ so the same artwork remains usable in dark, light, and system themes.
 - Matched the Detect latest and Browse JSONL button heights to the Source dropdown.
 - Widened the Theme dropdown so System is not clipped.
 - Matched the Pronunciations button height to the fenced-code-types textbox.
+
+
+## v161
+
+- Tab and Shift+Tab leaving a popup now continue through the popup anchor's
+  parent control hierarchy, so focus advances to the next or previous control
+  in the parent UI instead of stopping at the popup boundary.
+- The Poll ms numeric control now matches the Source dropdown height.

@@ -181,7 +181,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v160";
+    Text = "Agent Panel Speaker v161";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -434,8 +434,10 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void NormalizeInlineControlHeights()
   {
-    MatchButtonHeight(_detectLatestButton, _sourceComboBox.PreferredHeight);
-    MatchButtonHeight(_browseButton, _sourceComboBox.PreferredHeight);
+    int sourceHeight = _sourceComboBox.PreferredHeight;
+    MatchButtonHeight(_detectLatestButton, sourceHeight);
+    MatchButtonHeight(_browseButton, sourceHeight);
+    MatchNumericHeight(_pollNumeric, sourceHeight);
     MatchButtonHeight(_pronunciationsButton, _fenceTypesTextBox.PreferredHeight);
   }
 
@@ -447,6 +449,15 @@ internal sealed class MainForm : Form, IMessageFilter
     int width = button.GetPreferredSize(Size.Empty).Width;
     button.AutoSize = false;
     button.Size = new Size(width, height);
+  }
+
+  /// <summary>
+  /// Preserves a numeric input's width while matching an adjacent control.
+  /// </summary>
+  private static void MatchNumericHeight(NumericUpDown numeric, int height)
+  {
+    numeric.AutoSize = false;
+    numeric.Height = height;
   }
 
   /// <summary>
