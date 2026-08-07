@@ -1,3 +1,13 @@
+## v176 popup ownership hierarchy and colour-layout measurement
+
+Version 176 makes Transcript Settings a real owned popup Form.  The colour and
+Advanced popups are owned directly by Transcript Settings, giving Windows an
+explicit MainForm -> Transcript Settings -> nested popup ownership/Z-order
+hierarchy.  The colour-tab sizing also removes the circular Dock=Fill
+measurement: ColorEditor is first laid out using its own constructed height,
+then the visible descendants are measured and the final tab row is fitted to
+those measured controls.
+
 ## v175 popup Z-order diagnostics and compact colour tabs
 
 Version 175 does not guess at another Z-order fix.  It adds native HWND

@@ -16,6 +16,7 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   private readonly TableLayoutPanel _editorStack = new();
   private readonly Button _previousSwatch = new();
   private readonly Button _currentSwatch = new();
+  private readonly int _editorProbeHeight;
   private Color _colour = Color.Black;
   private bool _updating;
   private bool _dark;
@@ -43,6 +44,13 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     _wheel.Dock = DockStyle.Fill;
     _wheel.Margin = new Padding(6, 2, 8, 2);
     _wheel.TabIndex = 0;
+
+    // ColorEditor constructs at the height its own internal layout expects.
+    // Preserve that independent size as a measurement probe before Dock=Fill
+    // makes its bounds depend on our tab row and creates a circular measurement.
+    _editorProbeHeight = Math.Max(
+      _rgbEditor.Height,
+      Math.Max(_hslEditor.Height, _alphaEditor.Height));
 
     ConfigureEditor(_rgbEditor, showRgb: true, showHex: true,
       showHsl: false, showAlpha: false);
@@ -168,6 +176,18 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   /// </summary>
   public void FitToVisibleControls()
   {
+    int probeHeight = ScaleLogical(_editorProbeHeight);
+    int tabHeaderAllowance = ScaleLogical(30);
+    int tabPadding = ScaleLogical(16);
+
+    // Give the tabbed editors enough independent room to lay themselves out
+    // before measuring them.  Measuring while the tab row is already Dock=Fill
+    // makes the editor height depend on the value we are trying to calculate.
+    _editorStack.RowStyles[0].SizeType = SizeType.Absolute;
+    _editorStack.RowStyles[0].Height = probeHeight + tabHeaderAllowance + tabPadding;
+    _editorStack.RowStyles[1].SizeType = SizeType.Absolute;
+    _editorStack.RowStyles[1].Height = probeHeight;
+    Height = Math.Max(Height, ScaleLogical(520));
     PerformLayout();
 
     int selectedIndex = _modeTabs.SelectedIndex;
@@ -189,20 +209,18 @@ internal sealed class TranscriptColourPopup : PopupFormBase
     Size alphaExtent = GetVisibleEditorExtent(_alphaEditor);
     editorWidth = Math.Max(editorWidth, alphaExtent.Width);
 
-    int tabHeaderAllowance = ScaleLogical(30);
     int alphaRowHeight = alphaExtent.Height + ScaleLogical(8);
-    _editorStack.RowStyles[1].SizeType = SizeType.Absolute;
+    int modeHeight = editorHeight + tabHeaderAllowance + tabPadding;
+    _editorStack.RowStyles[0].Height = modeHeight;
     _editorStack.RowStyles[1].Height = alphaRowHeight;
 
     int editorColumnWidth = editorWidth + ScaleLogical(24);
     int innerWidth = (int)Math.Ceiling(editorColumnWidth / 0.60);
     int requiredWidth = ScaleLogical(16) + innerWidth;
 
-    int modeHeight = editorHeight + tabHeaderAllowance + ScaleLogical(16);
-    _editorStack.RowStyles[0].SizeType = SizeType.Absolute;
-    _editorStack.RowStyles[0].Height = modeHeight;
-
-    int wheelHeight = Math.Max(_wheel.PreferredSize.Height, _wheel.MinimumSize.Height);
+    int wheelHeight = Math.Max(
+      _wheel.PreferredSize.Height,
+      _wheel.MinimumSize.Height);
     int contentHeight = Math.Max(modeHeight + alphaRowHeight, wheelHeight);
     int requiredHeight = ScaleLogical(16 + 28 + 30) + contentHeight;
 

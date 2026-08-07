@@ -5,7 +5,7 @@ namespace AgentPanelSpeaker;
 /// <summary>
 /// Edits common and advanced transcript display settings.
 /// </summary>
-internal sealed class TranscriptSettingsPopup : UserControl
+internal sealed class TranscriptSettingsPopup : PopupFormBase
 {
   private readonly Button _previousSwatch = new();
   private readonly Button _currentSwatch = new();
@@ -28,9 +28,11 @@ internal sealed class TranscriptSettingsPopup : UserControl
   public TranscriptSettingsPopup()
   {
     AutoScaleMode = AutoScaleMode.Dpi;
+    FormBorderStyle = FormBorderStyle.None;
+    ShowInTaskbar = false;
+    StartPosition = FormStartPosition.Manual;
     Size = new Size(430, 196);
     TabStop = false;
-    Visible = false;
 
     var title = new Label
     {
@@ -261,6 +263,8 @@ internal sealed class TranscriptSettingsPopup : UserControl
     base.Dispose(disposing);
   }
 
+  protected override bool ShowWithoutActivation => true;
+
   protected override bool ProcessCmdKey(ref Message message, Keys keyData)
   {
     if (HoverPopupController.HandleGlobalPopupKey(keyData, this))
@@ -450,14 +454,12 @@ internal sealed class TranscriptSettingsPopup : UserControl
 
   private void ShowOwnedPopup(Form popup)
   {
-    Form owner = FindForm() ?? throw new InvalidOperationException(
-      "Transcript settings are not attached to a form.");
     if (popup is not PopupFormBase popupForm)
     {
       throw new InvalidOperationException(
         "Nested transcript popups must derive from PopupFormBase.");
     }
-    popupForm.ShowAboveOwner(owner);
+    popupForm.ShowAboveOwner(this);
   }
 
   private void RestorePreviousColour()

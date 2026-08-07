@@ -174,7 +174,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v175";
+    Text = "Agent Panel Speaker v176";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -294,12 +294,10 @@ internal sealed class MainForm : Form, IMessageFilter
       _maximizeTranscriptButton,
       "Maximize or restore the bottom tab area");
     _diagnosticHost.Controls.Add(_diagnosticTabs);
-    _diagnosticHost.Controls.Add(_transcriptSettingsPopup);
     _diagnosticHost.Controls.Add(_maximizeTranscriptButton);
     _diagnosticHost.Controls.Add(_transcriptSettingsButton);
     _transcriptSettingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _maximizeTranscriptButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-    _transcriptSettingsPopup.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _transcriptSettingsSaveTimer.Interval = 250;
     _diagnosticHost.Resize += (_, _) => PositionTranscriptControls();
     UpdateDiagnosticTabTitles();
@@ -1926,12 +1924,38 @@ internal sealed class MainForm : Form, IMessageFilter
       Math.Max(0,
         _maximizeTranscriptButton.Left - _transcriptSettingsButton.Width - 3),
       3);
-    _transcriptSettingsPopup.Location = new Point(
-      Math.Max(0, right - _transcriptSettingsPopup.Width),
-      _transcriptSettingsButton.Bottom + 2);
     _transcriptSettingsButton.BringToFront();
     _maximizeTranscriptButton.BringToFront();
-    _transcriptSettingsPopup.BringToFront();
+
+    if (!IsHandleCreated ||
+        !_diagnosticHost.IsHandleCreated ||
+        !_transcriptSettingsButton.IsHandleCreated)
+    {
+      return;
+    }
+
+    Point settingsButtonScreen = _transcriptSettingsButton.PointToScreen(
+      Point.Empty);
+    Rectangle workArea =
+      Screen.FromControl(_transcriptSettingsButton).WorkingArea;
+    int x = Math.Clamp(
+      _diagnosticHost.PointToScreen(
+        new Point(right - _transcriptSettingsPopup.Width, 0)).X,
+      workArea.Left,
+      Math.Max(workArea.Left, workArea.Right - _transcriptSettingsPopup.Width));
+    int preferredY = settingsButtonScreen.Y +
+      _transcriptSettingsButton.Height + 2;
+    int y = preferredY + _transcriptSettingsPopup.Height <= workArea.Bottom
+      ? preferredY
+      : settingsButtonScreen.Y - _transcriptSettingsPopup.Height - 2;
+    _transcriptSettingsPopup.Location = new Point(
+      x,
+      Math.Clamp(
+        y,
+        workArea.Top,
+        Math.Max(
+          workArea.Top,
+          workArea.Bottom - _transcriptSettingsPopup.Height)));
   }
 
   private void ToggleTranscriptSettingsPopup(bool focusPopup)
@@ -1958,14 +1982,13 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     PositionTranscriptControls();
     _transcriptSettingsPopup.PrepareForDisplay();
-    _transcriptSettingsPopup.Visible = true;
-    _transcriptSettingsPopup.BringToFront();
+    _transcriptSettingsPopup.ShowAboveOwner(this);
   }
 
   private void HideTranscriptSettingsPopupCore(bool returnFocus)
   {
     _transcriptSettingsPopup.PrepareForHide();
-    _transcriptSettingsPopup.Visible = false;
+    _transcriptSettingsPopup.Hide();
     if (returnFocus && _transcriptSettingsButton.CanFocus)
     {
       _transcriptSettingsButton.Focus();
