@@ -88,6 +88,7 @@ internal sealed class HoverPopupController : IDisposable
     public bool SuppressHoverUntilAnchorExit { get; set; }
     public bool PointerEnteredAsLeaf { get; set; }
     public bool FocusOpenQueued { get; set; }
+    public bool CloseScheduledWithKeyboardFocus { get; set; }
     public long Generation { get; set; }
   }
 
@@ -525,6 +526,7 @@ internal sealed class HoverPopupController : IDisposable
     ThrowIfDisposed();
     node.OpenTimer.Stop();
     node.CloseTimer.Stop();
+    node.CloseScheduledWithKeyboardFocus = false;
     MarkActive();
 
     if (node.Parent is not null)
@@ -1401,6 +1403,7 @@ internal sealed class HoverPopupController : IDisposable
     bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
     bool pointerInsideLeaf = IsPointerInsideLeaf(node);
     bool keepOpen = node.KeepOpen?.Invoke() ?? false;
+    bool nodeContainsFocus = NodeContainsFocus(node);
     DiagnosticLog.Write("popup.close_timer_tick", new
     {
       node.Id,
@@ -1412,7 +1415,7 @@ internal sealed class HoverPopupController : IDisposable
       pointerInsideLeaf,
       keepOpen,
       activeForm = DescribeControl(Form.ActiveForm),
-      nodeContainsFocus = NodeContainsFocus(node),
+      nodeContainsFocus,
       anchorContainsFocus = node.Anchor.ContainsFocus
     });
     if (!isDeepest ||
@@ -1423,9 +1426,21 @@ internal sealed class HoverPopupController : IDisposable
     {
       return;
     }
+    bool restoreFocus = node.CloseScheduledWithKeyboardFocus ||
+      nodeContainsFocus;
+    DiagnosticLog.Write("popup.close_timer_close_decision", new
+    {
+      node.Id,
+      restoreFocus,
+      closeScheduledWithKeyboardFocus = node.CloseScheduledWithKeyboardFocus,
+      activeForm = DescribeControl(Form.ActiveForm),
+      nodeContainsFocus,
+      anchorContainsFocus = node.Anchor.ContainsFocus
+    });
+    node.CloseScheduledWithKeyboardFocus = false;
     CloseNode(
       node,
-      returnFocus: false,
+      returnFocus: restoreFocus,
       closeReason: "close-timer-expired");
   }
 
@@ -1437,6 +1452,7 @@ internal sealed class HoverPopupController : IDisposable
     bool pointerEnteredAsLeaf = node.PointerEnteredAsLeaf;
     bool pointerInsideLeaf = IsPointerInsideLeaf(node);
     bool keepOpen = node.KeepOpen?.Invoke() ?? false;
+    bool nodeContainsFocus = NodeContainsFocus(node);
     DiagnosticLog.Write("popup.close_schedule_evaluate", new
     {
       node.Id,
@@ -1450,7 +1466,7 @@ internal sealed class HoverPopupController : IDisposable
       keepOpen,
       timerEnabledBefore = node.CloseTimer.Enabled,
       activeForm = DescribeControl(Form.ActiveForm),
-      nodeContainsFocus = NodeContainsFocus(node),
+      nodeContainsFocus,
       anchorContainsFocus = node.Anchor.ContainsFocus
     });
     if (!isDeepest || !entered || !pointerEnteredAsLeaf)
@@ -1460,6 +1476,7 @@ internal sealed class HoverPopupController : IDisposable
     if (pointerInsideLeaf || keepOpen)
     {
       node.CloseTimer.Stop();
+      node.CloseScheduledWithKeyboardFocus = false;
       DiagnosticLog.Write("popup.close_timer_cancelled", new
       {
         node.Id,
@@ -1469,11 +1486,13 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
     node.CloseTimer.Stop();
+    node.CloseScheduledWithKeyboardFocus = nodeContainsFocus;
     node.CloseTimer.Start();
     DiagnosticLog.Write("popup.close_timer_started", new
     {
       node.Id,
       triggerReason,
+      closeScheduledWithKeyboardFocus = node.CloseScheduledWithKeyboardFocus,
       intervalMilliseconds = node.CloseTimer.Interval
     });
   }

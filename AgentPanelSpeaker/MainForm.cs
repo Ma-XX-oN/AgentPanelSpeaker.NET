@@ -174,7 +174,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v186";
+    Text = "Agent Panel Speaker v187";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -499,14 +499,18 @@ internal sealed class MainForm : Form, IMessageFilter
     _playPauseButton.Click += PlayPauseButtonClicked;
     _diagnosticTabs.SelectedIndexChanged += (_, _) =>
     {
-      HideTranscriptSettingsPopup(returnFocus: false);
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
+        reason: "diagnostic-tab-selected-index-changed");
       UpdateDiagnosticTabTitles();
     };
     _transcriptSettingsButton.Click += (_, _) =>
       _transcriptSettingsHoverController.OpenImmediately(focusPopup: true);
     _maximizeTranscriptButton.Click += (_, _) =>
     {
-      HideTranscriptSettingsPopup(returnFocus: false);
+      HideTranscriptSettingsPopup(
+        returnFocus: false,
+        reason: "maximize-transcript-click");
       SetDiagnosticsMaximized(!_diagnosticsMaximized);
     };
     _transcriptSettingsPopup.SettingsChanged += (_, _) =>
@@ -521,7 +525,9 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsPopup.FocusTraversalRequested +=
       TranscriptSettingsFocusTraversalRequested;
     _transcriptSettingsPopup.DismissRequested += (_, _) =>
-      HideTranscriptSettingsPopup(returnFocus: true);
+      HideTranscriptSettingsPopup(
+        returnFocus: true,
+        reason: "transcript-settings-dismiss-requested");
     _transcriptView.TransportKeyPressed += TranscriptTransportKeyPressed;
     _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
@@ -1967,6 +1973,9 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     if (_transcriptSettingsHoverController.IsOpen)
     {
+      LogTranscriptSettingsCloseRequest(
+        returnFocus: false,
+        reason: "toggle-transcript-settings-close");
       _transcriptSettingsHoverController.Close(returnFocus: false);
       return;
     }
@@ -1978,9 +1987,28 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptSettingsHoverController.OpenImmediately(focusPopup);
   }
 
-  private void HideTranscriptSettingsPopup(bool returnFocus)
+  private void HideTranscriptSettingsPopup(
+    bool returnFocus,
+    string reason)
   {
+    LogTranscriptSettingsCloseRequest(returnFocus, reason);
     _transcriptSettingsHoverController.Close(returnFocus);
+  }
+
+  private void LogTranscriptSettingsCloseRequest(
+    bool returnFocus,
+    string reason)
+  {
+    DiagnosticLog.Write("popup.root_close_request", new
+    {
+      reason,
+      returnFocus,
+      controllerOpen = _transcriptSettingsHoverController.IsOpen,
+      settingsVisible = _transcriptSettingsPopup.Visible,
+      settingsContainsFocus = _transcriptSettingsPopup.ContainsFocus,
+      activeForm = Form.ActiveForm?.GetType().FullName,
+      mainContainsFocus = ContainsFocus
+    });
   }
 
   private void ShowTranscriptSettingsPopupCore(bool focusPopup)
@@ -2004,7 +2032,11 @@ internal sealed class MainForm : Form, IMessageFilter
     object? sender,
     FocusTraversalRequestedEventArgs eventArgs)
   {
-    HideTranscriptSettingsPopup(returnFocus: false);
+    HideTranscriptSettingsPopup(
+      returnFocus: false,
+      reason: eventArgs.Forward
+        ? "focus-traversal-requested-forward"
+        : "focus-traversal-requested-backward");
     Control target = eventArgs.Forward
       ? _maximizeTranscriptButton
       : _diagnosticTabs;

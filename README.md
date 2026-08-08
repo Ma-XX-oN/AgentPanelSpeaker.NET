@@ -1,4 +1,6 @@
-## v186 native deactivation/Z-order isolation diagnostics
+## v187 native deactivation/Z-order isolation diagnostics
+
+> v187: restores focus to a keyboard-active parent when a nested popup hover-closes, and logs every MainForm root Transcript Settings close request with an explicit reason.
 
 - Adds logging only for the reported case where closing a popup appears to
   leave Agent Panel Speaker below another application window.
