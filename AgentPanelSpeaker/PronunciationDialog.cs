@@ -81,7 +81,7 @@ internal sealed class PronunciationDialog : Form
     KeyPreview = true;
     KeyDown += PronunciationDialogKeyDown;
 
-    var tabs = new TabControl
+    var tabs = new ThemedTabControl
     {
       Dock = DockStyle.Fill
     };

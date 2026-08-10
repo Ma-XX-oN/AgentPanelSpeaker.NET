@@ -12,7 +12,7 @@ internal sealed class TranscriptColourPopup : PopupFormBase
   private readonly ColorEditor _rgbEditor = new();
   private readonly ColorEditor _hslEditor = new();
   private readonly ColorEditor _alphaEditor = new();
-  private readonly TabControl _modeTabs = new();
+  private readonly ThemedTabControl _modeTabs = new();
   private readonly TabPage _rgbPage = new("RGB / Hex");
   private readonly TabPage _hslPage = new("HSL");
   private readonly Panel _alphaViewport = new();

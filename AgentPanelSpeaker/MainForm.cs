@@ -72,7 +72,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly Label _voiceHeaderLabel = new();
   private readonly TextBox _logTextBox = new();
   private readonly Panel _diagnosticHost = new();
-  private readonly TabControl _diagnosticTabs = new();
+  private readonly ThemedTabControl _diagnosticTabs = new();
   private readonly TabPage _transcriptTab = new("Transcript");
   private readonly TabPage _activityTab = new("Activity");
   private readonly TabPage _acceptedTextTab = new("Accepted Text");
@@ -174,7 +174,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v187";
+    Text = "Agent Panel Speaker v189";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);

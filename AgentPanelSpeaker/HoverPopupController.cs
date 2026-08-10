@@ -193,9 +193,10 @@ internal sealed class HoverPopupController : IDisposable
       return false;
     }
 
+    bool restoreFocus = returnFocus || (keyboardClose && node.Parent is null);
     CloseNode(
       node,
-      returnFocus,
+      restoreFocus,
       keyboardClose,
       closeReason: "close-deepest");
     return true;
@@ -628,7 +629,7 @@ internal sealed class HoverPopupController : IDisposable
     node.PointerEnteredAsLeaf = false;
     node.SuppressHoverUntilAnchorExit = keyboardClose &&
       IsPointerInside(node.Anchor);
-    node.SuppressNextAnchorFocusOpen = returnFocus && !node.Anchor.ContainsFocus;
+    node.SuppressNextAnchorFocusOpen = false;
     DiagnosticLog.Write("popup.close_before_hide", new
     {
       node.Id,
@@ -643,7 +644,10 @@ internal sealed class HoverPopupController : IDisposable
       anchorFormFocusedControl = DescribeControl(
         FindFocusedControl(node.Anchor.FindForm()))
     });
-    node.HidePopup(returnFocus);
+
+    // Popup-specific hide callbacks only hide/flush state. Focus restoration is
+    // owned here so every popup tree gets identical semantics.
+    node.HidePopup(false);
     DiagnosticLog.Write("popup.close_after_hide", new
     {
       node.Id,
@@ -658,10 +662,60 @@ internal sealed class HoverPopupController : IDisposable
       anchorFormFocusedControl = DescribeControl(
         FindFocusedControl(node.Anchor.FindForm()))
     });
-    if (!node.Anchor.ContainsFocus)
+
+    if (returnFocus)
+    {
+      RestoreAnchorFocusOnce(node, closeReason);
+    }
+  }
+
+  private void RestoreAnchorFocusOnce(PopupNode node, string closeReason)
+  {
+    Control anchor = node.Anchor;
+    if (anchor.IsDisposed || !anchor.Visible || !anchor.Enabled ||
+        !anchor.CanFocus)
+    {
+      node.SuppressNextAnchorFocusOpen = false;
+      DiagnosticLog.Write("popup.anchor_focus_restore_skipped", new
+      {
+        node.Id,
+        closeReason,
+        anchor = DescribeControl(anchor),
+        anchorIsDisposed = anchor.IsDisposed,
+        anchorVisible = anchor.Visible,
+        anchorEnabled = anchor.Enabled,
+        anchorCanFocus = anchor.CanFocus
+      });
+      return;
+    }
+
+    ActivateContainingForm(anchor);
+
+    // Suppress exactly the Enter raised by this controller-owned Focus().
+    // Clear unconditionally when Focus() returns so a later real Tab/Shift+Tab
+    // can never inherit stale suppression state.
+    node.SuppressNextAnchorFocusOpen = !anchor.ContainsFocus;
+    bool focused;
+    try
+    {
+      focused = anchor.Focus();
+    }
+    finally
     {
       node.SuppressNextAnchorFocusOpen = false;
     }
+
+    DiagnosticLog.Write("popup.anchor_focus_restored", new
+    {
+      node.Id,
+      closeReason,
+      focused,
+      anchor = DescribeControl(anchor),
+      activeForm = DescribeControl(Form.ActiveForm),
+      anchorForm = DescribeControl(anchor.FindForm()),
+      anchorContainsFocus = anchor.ContainsFocus,
+      suppressNextAnchorFocusOpen = node.SuppressNextAnchorFocusOpen
+    });
   }
 
   private void CloseOpenSiblings(PopupNode node)

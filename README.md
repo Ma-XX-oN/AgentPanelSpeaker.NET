@@ -1,3 +1,14 @@
+## v189 centralized dark tab chrome
+
+> v189 themes all application tab controls through `ThemedTabControl`: light
+> text on dark tabs, a modestly lighter selected tab, and a muted border that
+> replaces the bright native frame in dark mode. Light mode retains the native
+> Windows tab rendering.
+
+## v188 shared popup focus restoration fix
+
+> v188 moves popup-close focus restoration into `HoverPopupController`: suppression of focus-triggered reopening is now strictly one-shot around the controller-owned `Focus()` call, and keyboard-closing the root popup restores focus to its anchor/owner instead of leaving no active application form.
+
 ## v187 native deactivation/Z-order isolation diagnostics
 
 > v187: restores focus to a keyboard-active parent when a nested popup hover-closes, and logs every MainForm root Transcript Settings close request with an explicit reason.

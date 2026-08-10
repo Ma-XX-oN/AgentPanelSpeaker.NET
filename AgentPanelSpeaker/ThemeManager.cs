@@ -16,6 +16,122 @@ internal sealed class ThemedThreeStateTreeView : TreeView
   }
 }
 
+
+/// <summary>
+/// Tab control whose dark-mode chrome is rendered by the application theme.
+/// </summary>
+internal sealed class ThemedTabControl : TabControl
+{
+  private const int WmPaint = 0x000F;
+  private const int WmPrintClient = 0x0318;
+  private bool _dark;
+
+  public ThemedTabControl()
+  {
+    DrawMode = TabDrawMode.Normal;
+  }
+
+  /// <summary>
+  /// Applies the resolved application theme to the tab headers and border.
+  /// </summary>
+  public void ApplyTheme(bool dark)
+  {
+    _dark = dark;
+    DrawMode = dark ? TabDrawMode.OwnerDrawFixed : TabDrawMode.Normal;
+    Invalidate();
+  }
+
+  protected override void OnDrawItem(DrawItemEventArgs e)
+  {
+    if (!_dark)
+    {
+      base.OnDrawItem(e);
+      return;
+    }
+
+    bool selected = e.Index == SelectedIndex;
+    Rectangle bounds = GetTabRect(e.Index);
+    Color background = selected
+      ? ThemeManager.GetSelectedTabBackground()
+      : ThemeManager.GetUnselectedTabBackground();
+    Color border = ThemeManager.GetTabBorder();
+    Color foreground = ThemeManager.GetForeground(dark: true);
+
+    using (var brush = new SolidBrush(background))
+    {
+      e.Graphics.FillRectangle(brush, bounds);
+    }
+    using (var pen = new Pen(border))
+    {
+      e.Graphics.DrawRectangle(
+        pen,
+        bounds.Left,
+        bounds.Top,
+        Math.Max(0, bounds.Width - 1),
+        Math.Max(0, bounds.Height - 1));
+    }
+
+    TextRenderer.DrawText(
+      e.Graphics,
+      TabPages[e.Index].Text,
+      Font,
+      bounds,
+      foreground,
+      background,
+      TextFormatFlags.HorizontalCenter |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.SingleLine |
+      TextFormatFlags.NoPrefix |
+      TextFormatFlags.EndEllipsis);
+  }
+
+  protected override void WndProc(ref Message m)
+  {
+    base.WndProc(ref m);
+    if (!_dark || (m.Msg != WmPaint && m.Msg != WmPrintClient) ||
+        !IsHandleCreated)
+    {
+      return;
+    }
+
+    DrawDarkPageBorder();
+  }
+
+  private void DrawDarkPageBorder()
+  {
+    Rectangle page = DisplayRectangle;
+    if (page.Width <= 0 || page.Height <= 0)
+    {
+      return;
+    }
+
+    using Graphics graphics = Graphics.FromHwnd(Handle);
+    Color border = ThemeManager.GetTabBorder();
+    Color background = BackColor;
+
+    // Cover the native bright frame before drawing the subtler app border.
+    using (var erase = new SolidBrush(background))
+    {
+      graphics.FillRectangle(
+        erase, page.Left - 2, page.Top - 2, 2, page.Height + 4);
+      graphics.FillRectangle(
+        erase, page.Right, page.Top - 2, 2, page.Height + 4);
+      graphics.FillRectangle(
+        erase, page.Left - 2, page.Top - 2, page.Width + 4, 2);
+      graphics.FillRectangle(
+        erase, page.Left - 2, page.Bottom, page.Width + 4, 2);
+    }
+
+    using var pen = new Pen(border);
+    graphics.DrawRectangle(
+      pen,
+      page.Left - 1,
+      page.Top - 1,
+      page.Width + 1,
+      page.Height + 1);
+  }
+}
+
 /// <summary>
 /// Applies the application light or dark palette to Windows Forms controls.
 /// </summary>
@@ -34,6 +150,9 @@ internal static class ThemeManager
   private static readonly Color DarkLink = Color.FromArgb(100, 180, 255);
   private static readonly Color DarkActiveLink = Color.FromArgb(160, 210, 255);
   private static readonly Color DarkBorder = Color.FromArgb(105, 105, 110);
+  private static readonly Color DarkTabUnselected = Color.FromArgb(48, 48, 51);
+  private static readonly Color DarkTabSelected = Color.FromArgb(62, 62, 66);
+  private static readonly Color DarkTabBorder = Color.FromArgb(72, 72, 76);
   private static readonly Color DarkCaution = Color.FromArgb(105, 82, 20);
   private static readonly Color DarkCautionText = Color.FromArgb(255, 236, 160);
   private static readonly Color LightPopup = Color.FromArgb(250, 250, 250);
@@ -79,6 +198,21 @@ internal static class ThemeManager
   public static Color GetBorder(bool dark)
   {
     return dark ? DarkBorder : LightBorder;
+  }
+
+  internal static Color GetUnselectedTabBackground()
+  {
+    return DarkTabUnselected;
+  }
+
+  internal static Color GetSelectedTabBackground()
+  {
+    return DarkTabSelected;
+  }
+
+  internal static Color GetTabBorder()
+  {
+    return DarkTabBorder;
   }
 
   /// <summary>
@@ -216,6 +350,12 @@ internal static class ThemeManager
         {
           button.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
         }
+        break;
+
+      case ThemedTabControl tabControl:
+        tabControl.BackColor = window;
+        tabControl.ForeColor = foreground;
+        tabControl.ApplyTheme(dark);
         break;
 
       case TabPage tabPage:
