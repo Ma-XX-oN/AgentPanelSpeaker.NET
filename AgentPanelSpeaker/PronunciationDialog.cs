@@ -139,6 +139,7 @@ internal sealed class PronunciationDialog : Form
     Deactivate += (_, _) => CaptureToolbarScrollPosition();
     Activated += (_, _) => QueueToolbarScrollRestore();
     ThemeManager.Apply(this, theme);
+    ThemeManager.ApplyToolTip(_toolTip, ThemeManager.IsDark(theme));
     RefreshIdleInformationText();
     UpdateIpaButtonState();
   }

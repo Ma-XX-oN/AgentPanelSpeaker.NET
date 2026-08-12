@@ -224,7 +224,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v193";
+    Text = "Agent Panel Speaker v194";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3304,6 +3304,7 @@ internal sealed class MainForm : Form, IMessageFilter
     AppTheme theme = GetSelectedTheme();
     ThemeManager.Apply(this, theme);
     bool dark = ThemeManager.IsDark(theme);
+    ThemeManager.ApplyToolTip(_toolTip, dark);
     foreach (SpeechProfileCompactControl profile in GetProfileControls())
     {
       profile.ApplyTheme(dark);

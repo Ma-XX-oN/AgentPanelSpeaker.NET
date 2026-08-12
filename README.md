@@ -1,3 +1,11 @@
+## v194 shared dark borders and theme-correct tooltips
+
+> v194 uses the shared dark-theme border colour for tab chrome and standard
+> flat-button borders, removing the separate tab-border shade.  Application
+> tooltips now reapply their colours whenever the effective theme changes:
+> dark mode owner-draws a dark tooltip with the shared border, while light
+> mode restores native tooltip drawing and system tooltip colours.
+
 ## v193 comprehensive WinForms tab-order correction
 
 > v193 audits the MainForm control hierarchy and assigns explicit TabIndex

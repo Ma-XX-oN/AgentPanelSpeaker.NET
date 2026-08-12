@@ -214,7 +214,6 @@ internal static class ThemeManager
   private static readonly Color DarkBorder = Color.FromArgb(105, 105, 110);
   private static readonly Color DarkTabUnselected = Color.FromArgb(48, 48, 51);
   private static readonly Color DarkTabSelected = Color.FromArgb(62, 62, 66);
-  private static readonly Color DarkTabBorder = Color.FromArgb(72, 72, 76);
   private static readonly Color DarkCaution = Color.FromArgb(105, 82, 20);
   private static readonly Color DarkCautionText = Color.FromArgb(255, 236, 160);
   private static readonly Color LightPopup = Color.FromArgb(250, 250, 250);
@@ -274,7 +273,7 @@ internal static class ThemeManager
 
   internal static Color GetTabBorder()
   {
-    return DarkTabBorder;
+    return DarkBorder;
   }
 
   /// <summary>
@@ -324,6 +323,23 @@ internal static class ThemeManager
     ArgumentNullException.ThrowIfNull(control);
     ApplyControl(control, dark, GetPopupBackground(dark));
     control.Invalidate(true);
+  }
+
+  /// <summary>
+  /// Applies the active palette to a tooltip, including after theme changes.
+  /// </summary>
+  public static void ApplyToolTip(ToolTip toolTip, bool dark)
+  {
+    ArgumentNullException.ThrowIfNull(toolTip);
+
+    toolTip.Draw -= DrawToolTip;
+    toolTip.OwnerDraw = dark;
+    toolTip.BackColor = dark ? DarkPopup : SystemColors.Info;
+    toolTip.ForeColor = dark ? DarkText : SystemColors.InfoText;
+    if (dark)
+    {
+      toolTip.Draw += DrawToolTip;
+    }
   }
 
   /// <summary>
@@ -410,7 +426,7 @@ internal static class ThemeManager
         button.ForeColor = foreground;
         if (dark)
         {
-          button.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+          button.FlatAppearance.BorderColor = DarkBorder;
         }
         break;
 
@@ -507,6 +523,45 @@ internal static class ThemeManager
         control.ForeColor = foreground;
         break;
     }
+  }
+
+  private static void DrawToolTip(
+    object? sender,
+    DrawToolTipEventArgs eventArgs)
+  {
+    if (sender is not ToolTip toolTip)
+    {
+      return;
+    }
+
+    Rectangle bounds = eventArgs.Bounds;
+    using (var background = new SolidBrush(toolTip.BackColor))
+    {
+      eventArgs.Graphics.FillRectangle(background, bounds);
+    }
+
+    var borderBounds = new Rectangle(
+      bounds.Left,
+      bounds.Top,
+      Math.Max(0, bounds.Width - 1),
+      Math.Max(0, bounds.Height - 1));
+    using (var border = new Pen(DarkBorder))
+    {
+      eventArgs.Graphics.DrawRectangle(border, borderBounds);
+    }
+
+    Rectangle textBounds = Rectangle.Inflate(bounds, -4, -2);
+    TextRenderer.DrawText(
+      eventArgs.Graphics,
+      eventArgs.ToolTipText,
+      eventArgs.Font,
+      textBounds,
+      toolTip.ForeColor,
+      toolTip.BackColor,
+      TextFormatFlags.Left |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.NoPrefix |
+      TextFormatFlags.WordBreak);
   }
 
   private static void DrawDarkDisabledButton(
