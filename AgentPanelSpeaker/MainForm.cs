@@ -18,6 +18,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmGetFirstVisibleLine = 0x00CE;
   private const int EmGetLineCount = 0x00BA;
   private const int EmLineScroll = 0x00B6;
+  private const int WmSetRedraw = 0x000B;
   private const int WmKeyDown = 0x0100;
   private const int WmLButtonDown = 0x0201;
   private const int WmNcLButtonDown = 0x00A1;
@@ -30,6 +31,11 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int WmSystemKeyDown = 0x0104;
   private const uint GaRoot = 2;
   private const uint GwHwndNext = 2;
+  private const uint RdwInvalidate = 0x0001;
+  private const uint RdwErase = 0x0004;
+  private const uint RdwAllChildren = 0x0080;
+  private const uint RdwUpdateNow = 0x0100;
+  private const uint RdwFrame = 0x0400;
 
   [DllImport("user32.dll", CharSet = CharSet.Auto)]
   private static extern IntPtr SendMessage(
@@ -37,6 +43,14 @@ internal sealed class MainForm : Form, IMessageFilter
     int message,
     IntPtr wordParameter,
     IntPtr longParameter);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool RedrawWindow(
+    IntPtr window,
+    IntPtr updateRectangle,
+    IntPtr updateRegion,
+    uint flags);
 
   [DllImport("user32.dll")]
   private static extern IntPtr GetAncestor(IntPtr window, uint flags);
@@ -150,6 +164,10 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _playPauseTransitioning;
   private bool _voiceSettingPreviewActive;
   private bool _themeApplicationPending;
+  private bool _themeTransitionQueued;
+  private bool _themeTransitionActive;
+  private AppTheme? _pendingThemeRequest;
+  private string? _pendingThemeReason;
   private int _themeApplyGeneration;
   private int _themeApplyDepth;
   private int _lastCompletedThemeGeneration;
@@ -232,7 +250,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v199";
+    Text = "Agent Panel Speaker v200";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3270,7 +3288,7 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
 
-    ApplyCurrentTheme();
+    QueueThemeApplication(GetSelectedTheme(), "selection-changed");
   }
 
   /// <summary>
@@ -3309,7 +3327,7 @@ internal sealed class MainForm : Form, IMessageFilter
       });
       if (!IsDisposed && !Disposing)
       {
-        ApplyCurrentTheme();
+        QueueThemeApplication(GetSelectedTheme(), "dropdown-closed");
       }
     }));
   }
@@ -3325,9 +3343,128 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       if (GetSelectedTheme() == AppTheme.System)
       {
-        ApplyCurrentTheme();
+        QueueThemeApplication(AppTheme.System, "windows-preference-changed");
       }
     });
+  }
+
+  /// <summary>
+  /// Queues a serialized theme transition after the current WinForms/native
+  /// message callback has unwound.  Repeated requests are coalesced to the
+  /// latest requested theme.
+  /// </summary>
+  private void QueueThemeApplication(AppTheme theme, string reason)
+  {
+    _pendingThemeRequest = theme;
+    _pendingThemeReason = reason;
+
+    DiagnosticLog.Write("theme.transition_requested", new
+    {
+      theme = theme.ToString(),
+      reason,
+      queued = _themeTransitionQueued,
+      active = _themeTransitionActive,
+      applyDepth = _themeApplyDepth
+    });
+
+    if (_themeTransitionQueued || _themeTransitionActive || IsDisposed || Disposing)
+    {
+      return;
+    }
+
+    _themeTransitionQueued = true;
+    BeginInvoke(new Action(ProcessQueuedThemeTransition));
+  }
+
+  /// <summary>
+  /// Executes the latest queued theme request as one redraw-suppressed
+  /// transaction, then synchronously repaints the resulting HWND hierarchy.
+  /// </summary>
+  private void ProcessQueuedThemeTransition()
+  {
+    _themeTransitionQueued = false;
+    if (IsDisposed || Disposing || _themeTransitionActive ||
+        _pendingThemeRequest is not AppTheme requestedTheme)
+    {
+      return;
+    }
+
+    string reason = _pendingThemeReason ?? "unknown";
+    _pendingThemeRequest = null;
+    _pendingThemeReason = null;
+    _themeTransitionActive = true;
+
+    bool redrawSuppressed = IsHandleCreated;
+    IntPtr redrawHandle = redrawSuppressed ? Handle : IntPtr.Zero;
+    DiagnosticLog.Write("theme.transition_begin", new
+    {
+      theme = requestedTheme.ToString(),
+      reason,
+      redrawSuppressed,
+      handle = redrawHandle.ToInt64()
+    });
+
+    try
+    {
+      if (redrawSuppressed)
+      {
+        _ = SendMessage(
+          redrawHandle,
+          WmSetRedraw,
+          IntPtr.Zero,
+          IntPtr.Zero);
+      }
+
+      _themeComboBox.Enabled = false;
+      ApplyCurrentTheme(requestedTheme);
+    }
+    finally
+    {
+      if (!IsDisposed && !Disposing)
+      {
+        _themeComboBox.Enabled = true;
+      }
+
+      if (redrawSuppressed && IsHandleCreated && Handle == redrawHandle)
+      {
+        _ = SendMessage(
+          redrawHandle,
+          WmSetRedraw,
+          new IntPtr(1),
+          IntPtr.Zero);
+
+        bool redrawSucceeded = RedrawWindow(
+          redrawHandle,
+          IntPtr.Zero,
+          IntPtr.Zero,
+          RdwInvalidate | RdwErase | RdwFrame |
+          RdwAllChildren | RdwUpdateNow);
+        DiagnosticLog.Write("theme.transition_redraw", new
+        {
+          theme = requestedTheme.ToString(),
+          handle = redrawHandle.ToInt64(),
+          redrawSucceeded,
+          win32Error = redrawSucceeded ? 0 : Marshal.GetLastWin32Error()
+        });
+      }
+
+      _themeTransitionActive = false;
+      DiagnosticLog.Write("theme.transition_end", new
+      {
+        theme = requestedTheme.ToString(),
+        reason,
+        pendingTheme = _pendingThemeRequest?.ToString(),
+        isDisposed = IsDisposed,
+        disposing = Disposing
+      });
+    }
+
+    if (_pendingThemeRequest is not null && !IsDisposed && !Disposing)
+    {
+      QueueThemeApplication(
+        _pendingThemeRequest.Value,
+        _pendingThemeReason ?? "coalesced");
+    }
   }
 
   /// <summary>
@@ -3343,12 +3480,12 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Applies the currently selected effective theme.
   /// </summary>
-  private void ApplyCurrentTheme()
+  private void ApplyCurrentTheme(AppTheme? requestedTheme = null)
   {
     int generation = ++_themeApplyGeneration;
     int entryDepth = _themeApplyDepth;
     _themeApplyDepth++;
-    AppTheme theme = GetSelectedTheme();
+    AppTheme theme = requestedTheme ?? GetSelectedTheme();
     bool dark = ThemeManager.IsDark(theme);
     DiagnosticLog.Write("theme.apply_begin", new
     {

@@ -1,3 +1,16 @@
+## v200 serialized flicker-free theme transitions
+
+- Theme changes requested from the selector are deferred until the current
+  ComboBox/native notification has unwound.
+- Theme transitions are serialized and repeated requests are coalesced to the
+  latest requested theme.
+- Main-window redraw is suppressed with `WM_SETREDRAW` while the theme is
+  applied, and the theme selector is disabled for the transaction.
+- Redraw is restored in `finally`, then `RedrawWindow` with
+  `RDW_ALLCHILDREN | RDW_UPDATENOW` synchronously repaints the completed
+  hierarchy in one pass.
+- Existing theme/native diagnostics remain enabled for verification.
+
 ## v199 native message diagnostics
 
 - Adds diagnostic-only tracing of all MainForm native messages for 1.5 seconds after each theme application.
