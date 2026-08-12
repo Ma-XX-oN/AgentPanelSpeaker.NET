@@ -1,3 +1,9 @@
+## v203 low-opacity theme transition
+
+- The MainForm now drops to 1/255 opacity while a serialized theme transition is being applied.
+- Child HWND redraw remains suppressed during the mutation and is synchronously redrawn before the previous opacity is restored.
+- The previous opacity value is preserved and restored, rather than assuming full opacity.
+
 ## v202 child-only redraw suppression during theme transitions
 
 - Theme transitions no longer send `WM_SETREDRAW(FALSE)` to the MainForm HWND.

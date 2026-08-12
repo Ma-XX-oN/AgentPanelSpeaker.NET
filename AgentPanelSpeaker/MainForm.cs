@@ -250,7 +250,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v202";
+    Text = "Agent Panel Speaker v203";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3398,6 +3398,9 @@ internal sealed class MainForm : Form, IMessageFilter
     IntPtr redrawHandle = redrawAvailable ? Handle : IntPtr.Zero;
     Control? focusedBefore = FindFocusedDescendant(this);
     bool mainContainedFocusBefore = ContainsFocus;
+    double opacityBefore = Opacity;
+    const double TransitionOpacity = 1.0 / 255.0;
+    bool opacityLowered = false;
     var redrawControls = new List<Control>();
     EventHandler recreatedHandleSuppressor = (sender, eventArgs) =>
     {
@@ -3438,20 +3441,29 @@ internal sealed class MainForm : Form, IMessageFilter
       }
     }
 
-    DiagnosticLog.Write("theme.transition_begin", new
-    {
-      theme = requestedTheme.ToString(),
-      reason,
-      redrawSuppressed = redrawAvailable,
-      redrawScope = "children-only",
-      childCount = redrawControls.Count,
-      handle = redrawHandle.ToInt64(),
-      focusedBefore = DescribeControlForTabDiagnostics(focusedBefore),
-      mainContainedFocusBefore
-    });
-
     try
     {
+      if (Visible && opacityBefore > TransitionOpacity)
+      {
+        Opacity = TransitionOpacity;
+        opacityLowered = true;
+      }
+
+      DiagnosticLog.Write("theme.transition_begin", new
+      {
+        theme = requestedTheme.ToString(),
+        reason,
+        redrawSuppressed = redrawAvailable,
+        redrawScope = "children-only",
+        childCount = redrawControls.Count,
+        handle = redrawHandle.ToInt64(),
+        focusedBefore = DescribeControlForTabDiagnostics(focusedBefore),
+        mainContainedFocusBefore,
+        opacityBefore,
+        transitionOpacity = Opacity,
+        opacityLowered
+      });
+
       ApplyCurrentTheme(requestedTheme);
     }
     finally
@@ -3494,6 +3506,16 @@ internal sealed class MainForm : Form, IMessageFilter
           childCount = currentRedrawControls.Count,
           redrawSucceeded,
           win32Error = redrawSucceeded ? 0 : Marshal.GetLastWin32Error()
+        });
+      }
+
+      if (opacityLowered && !IsDisposed && !Disposing)
+      {
+        Opacity = opacityBefore;
+        DiagnosticLog.Write("theme.transition_opacity_restored", new
+        {
+          theme = requestedTheme.ToString(),
+          opacity = Opacity
         });
       }
 
