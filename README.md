@@ -1,3 +1,15 @@
+## v208 preserve hidden controls during theme redraw suppression
+
+- Theme transitions now send `WM_SETREDRAW` only to child HWNDs that are
+  actually visible when the transition begins.
+- Redraw suppression is tracked by managed `Control` identity so a recreated
+  HWND can be handled without re-enabling redraw on an obsolete handle.
+- Hidden controls are never put through the `WM_SETREDRAW(FALSE/TRUE)` pair,
+  avoiding the Win32 behavior where `WM_SETREDRAW(TRUE)` adds `WS_VISIBLE`.
+- If a control that was initially visible becomes hidden while its current
+  HWND is redraw-suppressed, redraw is re-enabled and the HWND is explicitly
+  hidden again before the final synchronous repaint.
+
 ## v207 stable TabControl HWND theming
 
 - Keeps `ThemedTabControl.DrawMode` at `OwnerDrawFixed` for the lifetime of each tab control.

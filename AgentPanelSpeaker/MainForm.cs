@@ -36,6 +36,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const uint RdwAllChildren = 0x0080;
   private const uint RdwUpdateNow = 0x0100;
   private const uint RdwFrame = 0x0400;
+  private const int SwHide = 0;
 
   [DllImport("user32.dll", CharSet = CharSet.Auto)]
   private static extern IntPtr SendMessage(
@@ -51,6 +52,14 @@ internal sealed class MainForm : Form, IMessageFilter
     IntPtr updateRectangle,
     IntPtr updateRegion,
     uint flags);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool IsWindowVisible(IntPtr window);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool ShowWindow(IntPtr window, int command);
 
   [DllImport("user32.dll")]
   private static extern IntPtr GetAncestor(IntPtr window, uint flags);
@@ -250,7 +259,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v207";
+    Text = "Agent Panel Speaker v208";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3403,10 +3412,12 @@ internal sealed class MainForm : Form, IMessageFilter
     bool opacityLowered = false;
     ThemeTransitionSnapshotForm? transitionSnapshot = null;
     var redrawControls = new List<Control>();
+    var suppressedRedrawHandles = new Dictionary<Control, IntPtr>();
     EventHandler recreatedHandleSuppressor = (sender, eventArgs) =>
     {
       if (!_themeTransitionActive ||
           sender is not Control control ||
+          !suppressedRedrawHandles.ContainsKey(control) ||
           control.IsDisposed ||
           control.Disposing ||
           !control.IsHandleCreated)
@@ -3415,7 +3426,23 @@ internal sealed class MainForm : Form, IMessageFilter
       }
 
       IntPtr handle = control.Handle;
+      if (!control.Visible || !IsWindowVisible(handle))
+      {
+        suppressedRedrawHandles.Remove(control);
+        DiagnosticLog.Write("theme.child_redraw_recreate_not_suppressed", new
+        {
+          theme = requestedTheme.ToString(),
+          controlType = control.GetType().FullName,
+          control.Name,
+          handle = handle.ToInt64(),
+          managedVisible = control.Visible,
+          nativeVisible = IsWindowVisible(handle)
+        });
+        return;
+      }
+
       _ = SendMessage(handle, WmSetRedraw, IntPtr.Zero, IntPtr.Zero);
+      suppressedRedrawHandles[control] = handle;
       DiagnosticLog.Write("theme.child_redraw_suppressed_after_recreate", new
       {
         theme = requestedTheme.ToString(),
@@ -3430,15 +3457,21 @@ internal sealed class MainForm : Form, IMessageFilter
       CollectRedrawControls(this, redrawControls);
       foreach (Control control in redrawControls)
       {
-        control.HandleCreated += recreatedHandleSuppressor;
-        if (control.IsHandleCreated)
+        if (!control.IsHandleCreated ||
+            !control.Visible ||
+            !IsWindowVisible(control.Handle))
         {
-          _ = SendMessage(
-            control.Handle,
-            WmSetRedraw,
-            IntPtr.Zero,
-            IntPtr.Zero);
+          continue;
         }
+
+        control.HandleCreated += recreatedHandleSuppressor;
+        IntPtr handle = control.Handle;
+        suppressedRedrawHandles[control] = handle;
+        _ = SendMessage(
+          handle,
+          WmSetRedraw,
+          IntPtr.Zero,
+          IntPtr.Zero);
       }
     }
 
@@ -3525,17 +3558,32 @@ internal sealed class MainForm : Form, IMessageFilter
 
       if (redrawAvailable && IsHandleCreated && Handle == redrawHandle)
       {
-        var currentRedrawControls = new List<Control>();
-        CollectRedrawControls(this, currentRedrawControls);
-        foreach (Control control in currentRedrawControls)
+        int redrawReenabledCount = 0;
+        int hiddenAfterReenableCount = 0;
+        foreach (KeyValuePair<Control, IntPtr> entry in
+                 suppressedRedrawHandles.ToArray())
         {
-          if (control.IsHandleCreated && !control.IsDisposed)
+          Control control = entry.Key;
+          IntPtr suppressedHandle = entry.Value;
+          if (control.IsDisposed ||
+              control.Disposing ||
+              !control.IsHandleCreated ||
+              control.Handle != suppressedHandle)
           {
-            _ = SendMessage(
-              control.Handle,
-              WmSetRedraw,
-              new IntPtr(1),
-              IntPtr.Zero);
+            continue;
+          }
+
+          _ = SendMessage(
+            suppressedHandle,
+            WmSetRedraw,
+            new IntPtr(1),
+            IntPtr.Zero);
+          redrawReenabledCount++;
+
+          if (!control.Visible)
+          {
+            _ = ShowWindow(suppressedHandle, SwHide);
+            hiddenAfterReenableCount++;
           }
         }
 
@@ -3549,8 +3597,11 @@ internal sealed class MainForm : Form, IMessageFilter
         {
           theme = requestedTheme.ToString(),
           handle = redrawHandle.ToInt64(),
-          redrawScope = "children-only",
-          childCount = currentRedrawControls.Count,
+          redrawScope = "visible-children-only",
+          childCount = redrawControls.Count,
+          suppressedCount = suppressedRedrawHandles.Count,
+          redrawReenabledCount,
+          hiddenAfterReenableCount,
           redrawSucceeded,
           win32Error = redrawSucceeded ? 0 : Marshal.GetLastWin32Error()
         });
