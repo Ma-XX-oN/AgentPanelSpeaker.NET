@@ -1,3 +1,10 @@
+## v192 nested tab traversal and dark tab-strip fix
+
+> v192 fixes forward/backward popup-exit traversal so an exhausted nested
+> container is not re-entered while climbing the MainForm control tree. The
+> entire dark-mode tab header strip is now repainted, including unused header
+> space to the right of the tabs, so native light system colour does not show.
+
 ## v191 MainForm Tab/Shift+Tab activation diagnostics
 
 > v191 adds diagnostics only for MainForm-level Tab and Shift+Tab traversal.

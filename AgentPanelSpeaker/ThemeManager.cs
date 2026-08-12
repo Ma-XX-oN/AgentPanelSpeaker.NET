@@ -49,40 +49,7 @@ internal sealed class ThemedTabControl : TabControl
       return;
     }
 
-    bool selected = e.Index == SelectedIndex;
-    Rectangle bounds = GetTabRect(e.Index);
-    Color background = selected
-      ? ThemeManager.GetSelectedTabBackground()
-      : ThemeManager.GetUnselectedTabBackground();
-    Color border = ThemeManager.GetTabBorder();
-    Color foreground = ThemeManager.GetForeground(dark: true);
-
-    using (var brush = new SolidBrush(background))
-    {
-      e.Graphics.FillRectangle(brush, bounds);
-    }
-    using (var pen = new Pen(border))
-    {
-      e.Graphics.DrawRectangle(
-        pen,
-        bounds.Left,
-        bounds.Top,
-        Math.Max(0, bounds.Width - 1),
-        Math.Max(0, bounds.Height - 1));
-    }
-
-    TextRenderer.DrawText(
-      e.Graphics,
-      TabPages[e.Index].Text,
-      Font,
-      bounds,
-      foreground,
-      background,
-      TextFormatFlags.HorizontalCenter |
-      TextFormatFlags.VerticalCenter |
-      TextFormatFlags.SingleLine |
-      TextFormatFlags.NoPrefix |
-      TextFormatFlags.EndEllipsis);
+    DrawDarkTab(e.Graphics, e.Index);
   }
 
   protected override void WndProc(ref Message m)
@@ -94,7 +61,78 @@ internal sealed class ThemedTabControl : TabControl
       return;
     }
 
+    DrawDarkTabStrip();
     DrawDarkPageBorder();
+  }
+
+  private void DrawDarkTabStrip()
+  {
+    Rectangle page = DisplayRectangle;
+    int stripHeight = Math.Max(0, Math.Min(Height, page.Top));
+    if (stripHeight <= 0)
+    {
+      return;
+    }
+
+    using Graphics graphics = Graphics.FromHwnd(Handle);
+    Color stripBackground = ThemeManager.GetUnselectedTabBackground();
+    using (var brush = new SolidBrush(stripBackground))
+    {
+      graphics.FillRectangle(brush, 0, 0, Width, stripHeight);
+    }
+
+    // Native WinForms leaves the unused part of the header strip in a system
+    // colour even with owner-drawn tabs. Repaint every tab after covering the
+    // whole strip so no light system-colour band remains in dark mode.
+    for (int index = 0; index < TabCount; ++index)
+    {
+      if (index != SelectedIndex)
+      {
+        DrawDarkTab(graphics, index);
+      }
+    }
+    if (SelectedIndex >= 0 && SelectedIndex < TabCount)
+    {
+      DrawDarkTab(graphics, SelectedIndex);
+    }
+  }
+
+  private void DrawDarkTab(Graphics graphics, int index)
+  {
+    bool selected = index == SelectedIndex;
+    Rectangle bounds = GetTabRect(index);
+    Color background = selected
+      ? ThemeManager.GetSelectedTabBackground()
+      : ThemeManager.GetUnselectedTabBackground();
+    Color border = ThemeManager.GetTabBorder();
+    Color foreground = ThemeManager.GetForeground(dark: true);
+
+    using (var brush = new SolidBrush(background))
+    {
+      graphics.FillRectangle(brush, bounds);
+    }
+    using (var pen = new Pen(border))
+    {
+      graphics.DrawRectangle(
+        pen,
+        bounds.Left,
+        bounds.Top,
+        Math.Max(0, bounds.Width - 1),
+        Math.Max(0, bounds.Height - 1));
+    }
+
+    TextRenderer.DrawText(
+      graphics,
+      TabPages[index].Text,
+      Font,
+      bounds,
+      foreground,
+      background,
+      TextFormatFlags.HorizontalCenter |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.SingleLine |
+      TextFormatFlags.NoPrefix |
+      TextFormatFlags.EndEllipsis);
   }
 
   private void DrawDarkPageBorder()
@@ -109,12 +147,11 @@ internal sealed class ThemedTabControl : TabControl
     Color border = ThemeManager.GetTabBorder();
     Color background = BackColor;
 
-    // Cover the native bright frame before drawing the subtler app border.
-    // The themed Windows tab renderer can leave a several-pixel highlight at
-    // the page/header seam, so erase a wider band than the final one-pixel
-    // border instead of only painting over the nominal DisplayRectangle edge.
-    int seamTop = Math.Max(0, page.Top - 4);
-    int seamHeight = Math.Min(6, Math.Max(0, Height - seamTop));
+    // Cover the native page frame before drawing the subtler app border.
+    // DrawDarkTabStrip already owns the complete header strip, so only erase
+    // the page seam itself here; do not paint back upward through the tabs.
+    int seamTop = Math.Max(0, page.Top - 1);
+    int seamHeight = Math.Min(3, Math.Max(0, Height - seamTop));
     using (var erase = new SolidBrush(background))
     {
       graphics.FillRectangle(

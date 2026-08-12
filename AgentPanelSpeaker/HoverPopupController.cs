@@ -758,33 +758,33 @@ internal sealed class HoverPopupController : IDisposable
         int targetIndex = forward ? anchorIndex + 1 : anchorIndex - 1;
         if (targetIndex >= 0 && targetIndex < parentControls.Length)
         {
-          Control target = parentControls[targetIndex];
+          Control popupTarget = parentControls[targetIndex];
           DiagnosticLog.Write("popup.exit_focus_before", new
           {
             node.Id,
             forward,
             anchor = DescribeControl(node.Anchor),
-            target = DescribeControl(target),
+            target = DescribeControl(popupTarget),
             activeForm = DescribeControl(Form.ActiveForm),
-            targetForm = DescribeControl(target.FindForm()),
-            targetFormActiveControl = DescribeControl(target.FindForm()?.ActiveControl),
+            targetForm = DescribeControl(popupTarget.FindForm()),
+            targetFormActiveControl = DescribeControl(popupTarget.FindForm()?.ActiveControl),
             targetFormFocusedControl = DescribeControl(
-              FindFocusedControl(target.FindForm()))
+              FindFocusedControl(popupTarget.FindForm()))
           });
-          ActivateContainingForm(target);
-          bool focused = target.Focus();
+          ActivateContainingForm(popupTarget);
+          bool focused = popupTarget.Focus();
           DiagnosticLog.Write("popup.exit_focus_after", new
           {
             node.Id,
             forward,
             focused,
             anchor = DescribeControl(node.Anchor),
-            target = DescribeControl(target),
+            target = DescribeControl(popupTarget),
             activeForm = DescribeControl(Form.ActiveForm),
-            targetForm = DescribeControl(target.FindForm()),
-            targetFormActiveControl = DescribeControl(target.FindForm()?.ActiveControl),
+            targetForm = DescribeControl(popupTarget.FindForm()),
+            targetFormActiveControl = DescribeControl(popupTarget.FindForm()?.ActiveControl),
             targetFormFocusedControl = DescribeControl(
-              FindFocusedControl(target.FindForm()))
+              FindFocusedControl(popupTarget.FindForm()))
           });
           return;
         }
@@ -804,51 +804,138 @@ internal sealed class HoverPopupController : IDisposable
       return;
     }
 
-    Control current = node.Anchor;
-    Control? parent = current.Parent;
     Form? containingForm = node.Anchor.FindForm();
+    Control? target = FindTabTargetBeyond(node.Anchor, forward, containingForm);
+    if (target is not null)
+    {
+      DiagnosticLog.Write("popup.main_window_exit_target", new
+      {
+        node.Id,
+        forward,
+        anchor = DescribeControl(node.Anchor),
+        target = DescribeControl(target)
+      });
+      ActivateContainingForm(target);
+      target.Focus();
+      return;
+    }
+
+    // The whole form is exhausted. Wrap only here, after every ancestor and
+    // subsequent sibling subtree has been considered. This avoids re-entering
+    // the nested container that contains the popup anchor.
+    if (containingForm is not null && !containingForm.IsDisposed)
+    {
+      target = FindBoundaryTabTarget(containingForm, forward, includeRoot: false);
+      if (target is not null)
+      {
+        ActivateContainingForm(target);
+        target.Focus();
+        DiagnosticLog.Write("popup.main_window_tab_wrapped", new
+        {
+          node.Id,
+          forward,
+          target = DescribeControl(target),
+          activeForm = DescribeControl(Form.ActiveForm),
+          focusedControl = DescribeControl(FindFocusedControl(containingForm))
+        });
+        return;
+      }
+    }
+
+    // No selectable control exists anywhere in the form. Keep its activation
+    // rather than yielding to another process.
+    ActivateContainingForm(node.Anchor);
+    node.Anchor.Focus();
+  }
+
+  private static Control? FindTabTargetBeyond(
+    Control start,
+    bool forward,
+    Form? boundaryForm)
+  {
+    Control current = start;
+    Control? parent = current.Parent;
     while (parent is not null && !parent.IsDisposed)
     {
-      if (parent.SelectNextControl(
-          current,
-          forward,
-          tabStopOnly: true,
-          nested: true,
-          wrap: false))
+      Control[] siblings = parent.Controls.Cast<Control>()
+        .OrderBy(control => control.TabIndex)
+        .ThenBy(control => parent.Controls.GetChildIndex(control))
+        .ToArray();
+      int currentIndex = Array.FindIndex(
+        siblings,
+        control => ReferenceEquals(control, current));
+      if (currentIndex >= 0)
       {
-        return;
+        int index = forward ? currentIndex + 1 : currentIndex - 1;
+        while (index >= 0 && index < siblings.Length)
+        {
+          Control? candidate = FindBoundaryTabTarget(
+            siblings[index],
+            forward,
+            includeRoot: true);
+          if (candidate is not null)
+          {
+            return candidate;
+          }
+          index += forward ? 1 : -1;
+        }
+      }
+
+      if (ReferenceEquals(parent, boundaryForm))
+      {
+        break;
       }
 
       current = parent;
       parent = parent.Parent;
     }
 
-    // Match normal WinForms Tab behaviour at the outermost boundary: wrap to
-    // the first/last active control in the containing form rather than letting
-    // keyboard focus fall out of the application.
-    if (containingForm is not null &&
-        !containingForm.IsDisposed &&
-        containingForm.SelectNextControl(
-          null,
-          forward,
-          tabStopOnly: true,
-          nested: true,
-          wrap: true))
+    return null;
+  }
+
+  private static Control? FindBoundaryTabTarget(
+    Control root,
+    bool forward,
+    bool includeRoot)
+  {
+    if (forward && includeRoot && root.Visible && root.Enabled &&
+        root.TabStop && root.CanSelect)
     {
-      DiagnosticLog.Write("popup.main_window_tab_wrapped", new
-      {
-        node.Id,
-        forward,
-        activeForm = DescribeControl(Form.ActiveForm),
-        focusedControl = DescribeControl(FindFocusedControl(containingForm))
-      });
-      return;
+      return root;
     }
 
-    // SelectNextControl can fail if the form currently has no selectable
-    // controls. Keep its activation rather than yielding to another process.
-    ActivateContainingForm(node.Anchor);
-    node.Anchor.Focus();
+    IEnumerable<Control> children = root.Controls.Cast<Control>()
+      .OrderBy(control => control.TabIndex)
+      .ThenBy(control => root.Controls.GetChildIndex(control));
+    if (!forward)
+    {
+      children = children.Reverse();
+    }
+
+    foreach (Control child in children)
+    {
+      if (!child.Visible || !child.Enabled)
+      {
+        continue;
+      }
+
+      Control? candidate = FindBoundaryTabTarget(
+        child,
+        forward,
+        includeRoot: true);
+      if (candidate is not null)
+      {
+        return candidate;
+      }
+    }
+
+    if (!forward && includeRoot && root.Visible && root.Enabled &&
+        root.TabStop && root.CanSelect)
+    {
+      return root;
+    }
+
+    return null;
   }
 
   private void ReevaluateClose(PopupNode node)
