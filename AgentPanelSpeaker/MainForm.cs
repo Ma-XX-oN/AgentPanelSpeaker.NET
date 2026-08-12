@@ -152,6 +152,8 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _themeApplicationPending;
   private int _themeApplyGeneration;
   private int _themeApplyDepth;
+  private int _lastCompletedThemeGeneration;
+  private int _pendingIdleThemeGeneration;
   private bool _diagnosticsMaximized;
   private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
@@ -208,6 +210,7 @@ internal sealed class MainForm : Form, IMessageFilter
       UpdateControlState();
       ApplyCurrentTheme();
       Application.AddMessageFilter(this);
+      Application.Idle += ApplicationIdle;
       SystemEvents.UserPreferenceChanged += WindowsUserPreferenceChanged;
       AppendLog($"Diagnostic log: {DiagnosticLog.FilePath}");
       AppendLog($"Settings: {UserSettingsStore.FilePath}");
@@ -226,7 +229,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v196";
+    Text = "Agent Panel Speaker v197";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3422,7 +3425,101 @@ internal sealed class MainForm : Form, IMessageFilter
         isDisposed = IsDisposed,
         disposing = Disposing
       });
+      _lastCompletedThemeGeneration = generation;
+      QueuePostThemeDiagnostics(generation, theme, dark);
     }
+  }
+
+  /// <summary>
+  /// Queues checkpoints that run only after control returns to the WinForms
+  /// message loop following a theme application.
+  /// </summary>
+  private void QueuePostThemeDiagnostics(
+    int generation,
+    AppTheme theme,
+    bool dark)
+  {
+    _pendingIdleThemeGeneration = generation;
+    DiagnosticLog.Write("theme.post_apply_queued", new
+    {
+      generation,
+      theme = theme.ToString(),
+      dark,
+      isHandleCreated = IsHandleCreated,
+      handle = IsHandleCreated ? Handle.ToInt64() : 0
+    });
+
+    if (IsDisposed || Disposing || !IsHandleCreated)
+    {
+      DiagnosticLog.Write("theme.post_apply_queue_skipped", new
+      {
+        generation,
+        isDisposed = IsDisposed,
+        disposing = Disposing,
+        isHandleCreated = IsHandleCreated
+      });
+      return;
+    }
+
+    BeginInvoke((Action)(() =>
+    {
+      DiagnosticLog.Write("theme.post_apply_begininvoke_1", new
+      {
+        generation,
+        latestGeneration = _lastCompletedThemeGeneration,
+        isDisposed = IsDisposed,
+        disposing = Disposing,
+        isHandleCreated = IsHandleCreated,
+        handle = IsHandleCreated ? Handle.ToInt64() : 0,
+        containsFocus = ContainsFocus,
+        activeForm = Form.ActiveForm?.Text
+      });
+      if (IsDisposed || Disposing || !IsHandleCreated)
+      {
+        return;
+      }
+
+      BeginInvoke((Action)(() =>
+      {
+        DiagnosticLog.Write("theme.post_apply_begininvoke_2", new
+        {
+          generation,
+          latestGeneration = _lastCompletedThemeGeneration,
+          isDisposed = IsDisposed,
+          disposing = Disposing,
+          isHandleCreated = IsHandleCreated,
+          handle = IsHandleCreated ? Handle.ToInt64() : 0,
+          containsFocus = ContainsFocus,
+          activeForm = Form.ActiveForm?.Text
+        });
+      }));
+    }));
+  }
+
+  /// <summary>
+  /// Records the first application-idle checkpoint after the latest theme
+  /// generation has returned to the message loop.
+  /// </summary>
+  private void ApplicationIdle(object? sender, EventArgs eventArgs)
+  {
+    int generation = _pendingIdleThemeGeneration;
+    if (generation <= 0)
+    {
+      return;
+    }
+
+    _pendingIdleThemeGeneration = 0;
+    DiagnosticLog.Write("theme.post_apply_idle", new
+    {
+      generation,
+      latestGeneration = _lastCompletedThemeGeneration,
+      isDisposed = IsDisposed,
+      disposing = Disposing,
+      isHandleCreated = IsHandleCreated,
+      handle = IsHandleCreated ? Handle.ToInt64() : 0,
+      containsFocus = ContainsFocus,
+      activeForm = Form.ActiveForm?.Text
+    });
   }
 
   private static void LogThemeStage(
@@ -3794,6 +3891,7 @@ internal sealed class MainForm : Form, IMessageFilter
     }
 
     Application.RemoveMessageFilter(this);
+    Application.Idle -= ApplicationIdle;
     SystemEvents.UserPreferenceChanged -= WindowsUserPreferenceChanged;
     _closing = true;
     _playbackMailbox.Clear();
@@ -3964,6 +4062,123 @@ internal sealed class MainForm : Form, IMessageFilter
       Margin = new Padding(8, 7, 4, 0),
       Text = text
     };
+  }
+
+  /// <summary>
+  /// Logs MainForm handle creation so a rapid theme switch can be correlated
+  /// with native handle lifetime.
+  /// </summary>
+  protected override void OnHandleCreated(EventArgs eventArgs)
+  {
+    base.OnHandleCreated(eventArgs);
+    DiagnosticLog.Write("theme.main_handle_created", new
+    {
+      generation = _lastCompletedThemeGeneration,
+      handle = Handle.ToInt64(),
+      recreatingHandle = RecreatingHandle,
+      isDisposed = IsDisposed,
+      disposing = Disposing
+    });
+  }
+
+  /// <summary>
+  /// Logs MainForm handle destruction so a rapid theme switch can be
+  /// correlated with native handle lifetime.
+  /// </summary>
+  protected override void OnHandleDestroyed(EventArgs eventArgs)
+  {
+    DiagnosticLog.Write("theme.main_handle_destroyed", new
+    {
+      generation = _lastCompletedThemeGeneration,
+      handle = IsHandleCreated ? Handle.ToInt64() : 0,
+      recreatingHandle = RecreatingHandle,
+      isDisposed = IsDisposed,
+      disposing = Disposing
+    });
+    base.OnHandleDestroyed(eventArgs);
+  }
+
+  /// <summary>
+  /// Logs MainForm paint entry/exit after a theme generation has completed.
+  /// </summary>
+  protected override void OnPaint(PaintEventArgs eventArgs)
+  {
+    int generation = _lastCompletedThemeGeneration;
+    if (generation > 0)
+    {
+      DiagnosticLog.Write("theme.main_paint", new
+      {
+        generation,
+        phase = "begin",
+        clip = eventArgs.ClipRectangle,
+        isHandleCreated = IsHandleCreated,
+        handle = IsHandleCreated ? Handle.ToInt64() : 0
+      });
+    }
+
+    base.OnPaint(eventArgs);
+
+    if (generation > 0)
+    {
+      DiagnosticLog.Write("theme.main_paint", new
+      {
+        generation,
+        phase = "end",
+        clip = eventArgs.ClipRectangle,
+        isHandleCreated = IsHandleCreated,
+        handle = IsHandleCreated ? Handle.ToInt64() : 0
+      });
+    }
+  }
+
+  /// <summary>
+  /// Logs native messages relevant to theme settling and painting.
+  /// </summary>
+  protected override void WndProc(ref Message message)
+  {
+    const int WmPaint = 0x000F;
+    const int WmEraseBkgnd = 0x0014;
+    const int WmSysColorChange = 0x0015;
+    const int WmSettingChange = 0x001A;
+    const int WmNcPaint = 0x0085;
+    const int WmThemeChanged = 0x031A;
+
+    bool trace = message.Msg is
+      WmPaint or
+      WmEraseBkgnd or
+      WmSysColorChange or
+      WmSettingChange or
+      WmNcPaint or
+      WmThemeChanged;
+    int generation = _lastCompletedThemeGeneration;
+    if (trace && generation > 0)
+    {
+      DiagnosticLog.Write("theme.main_wndproc", new
+      {
+        generation,
+        phase = "begin",
+        message = $"0x{message.Msg:X4}",
+        wParam = message.WParam.ToInt64(),
+        lParam = message.LParam.ToInt64(),
+        isHandleCreated = IsHandleCreated,
+        handle = IsHandleCreated ? Handle.ToInt64() : 0
+      });
+    }
+
+    base.WndProc(ref message);
+
+    if (trace && generation > 0)
+    {
+      DiagnosticLog.Write("theme.main_wndproc", new
+      {
+        generation,
+        phase = "end",
+        message = $"0x{message.Msg:X4}",
+        result = message.Result.ToInt64(),
+        isHandleCreated = IsHandleCreated,
+        handle = IsHandleCreated ? Handle.ToInt64() : 0
+      });
+    }
   }
 
   /// <summary>

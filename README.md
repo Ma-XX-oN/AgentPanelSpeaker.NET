@@ -1,3 +1,14 @@
+## v197 post-theme message-loop diagnostics
+
+- Adds diagnostic-only checkpoints after each theme application returns to the
+  WinForms message loop.
+- Logs two deferred `BeginInvoke` checkpoints and the first `Application.Idle`
+  checkpoint for each completed theme generation.
+- Logs MainForm paint entry/exit, handle creation/destruction, and the relevant
+  `WM_PAINT`, `WM_ERASEBKGND`, `WM_NCPAINT`, `WM_THEMECHANGED`,
+  `WM_SYSCOLORCHANGE`, and `WM_SETTINGCHANGE` messages.
+- No intentional theme behaviour change from v196.
+
 ## v196 theme-switch crash diagnostics
 
 > v196 adds diagnostic-only instrumentation around rapid theme changes.  Each
