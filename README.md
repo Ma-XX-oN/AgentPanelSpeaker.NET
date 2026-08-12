@@ -1,3 +1,20 @@
+## v196 theme-switch crash diagnostics
+
+> v196 adds diagnostic-only instrumentation around rapid theme changes.  Each
+> application pass has a generation/depth marker, logs deferred ComboBox theme
+> requests, every MainForm theme stage, recursive per-control theme phases,
+> handle/disposal state, invalidation boundaries, and the native DWM title-bar
+> call.  No intended theme behaviour is changed from v195.
+
+## v195 stable tooltip theme switching
+
+> v195 keeps WinForms ToolTip owner drawing enabled for the lifetime of each
+> tooltip instead of toggling OwnerDraw while switching themes.  The tooltip
+> palette is updated in place for dark/light themes, with theme-appropriate
+> borders, and a diagnostic event records each tooltip palette application.
+> This removes the new v194 native tooltip-mode transition from the theme-change
+> path while preserving theme-correct tooltip colours.
+
 ## v194 shared dark borders and theme-correct tooltips
 
 > v194 uses the shared dark-theme border colour for tab chrome and standard

@@ -150,6 +150,8 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _playPauseTransitioning;
   private bool _voiceSettingPreviewActive;
   private bool _themeApplicationPending;
+  private int _themeApplyGeneration;
+  private int _themeApplyDepth;
   private bool _diagnosticsMaximized;
   private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
@@ -224,7 +226,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v194";
+    Text = "Agent Panel Speaker v196";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3235,6 +3237,15 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void ThemeSelectionChanged(object? sender, EventArgs eventArgs)
   {
+    DiagnosticLog.Write("theme.selection_changed", new
+    {
+      loadingSettings = _loadingSettings,
+      droppedDown = _themeComboBox.DroppedDown,
+      selectedTheme = GetSelectedTheme().ToString(),
+      pending = _themeApplicationPending,
+      applyDepth = _themeApplyDepth
+    });
+
     if (_loadingSettings)
     {
       return;
@@ -3244,6 +3255,12 @@ internal sealed class MainForm : Form, IMessageFilter
     if (_themeComboBox.DroppedDown)
     {
       _themeApplicationPending = true;
+      DiagnosticLog.Write("theme.application_deferred", new
+      {
+        reason = "combo-dropdown-open",
+        selectedTheme = GetSelectedTheme().ToString(),
+        applyDepth = _themeApplyDepth
+      });
       return;
     }
 
@@ -3255,14 +3272,35 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void ThemeDropDownClosed(object? sender, EventArgs eventArgs)
   {
+    DiagnosticLog.Write("theme.dropdown_closed", new
+    {
+      pending = _themeApplicationPending,
+      isDisposed = IsDisposed,
+      disposing = Disposing,
+      selectedTheme = GetSelectedTheme().ToString(),
+      applyDepth = _themeApplyDepth
+    });
+
     if (!_themeApplicationPending || IsDisposed || Disposing)
     {
       return;
     }
 
     _themeApplicationPending = false;
+    DiagnosticLog.Write("theme.begininvoke_queued", new
+    {
+      selectedTheme = GetSelectedTheme().ToString(),
+      applyDepth = _themeApplyDepth
+    });
     BeginInvoke(new Action(() =>
     {
+      DiagnosticLog.Write("theme.begininvoke_executing", new
+      {
+        isDisposed = IsDisposed,
+        disposing = Disposing,
+        selectedTheme = GetSelectedTheme().ToString(),
+        applyDepth = _themeApplyDepth
+      });
       if (!IsDisposed && !Disposing)
       {
         ApplyCurrentTheme();
@@ -3301,18 +3339,111 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void ApplyCurrentTheme()
   {
+    int generation = ++_themeApplyGeneration;
+    int entryDepth = _themeApplyDepth;
+    _themeApplyDepth++;
     AppTheme theme = GetSelectedTheme();
-    ThemeManager.Apply(this, theme);
     bool dark = ThemeManager.IsDark(theme);
-    ThemeManager.ApplyToolTip(_toolTip, dark);
-    foreach (SpeechProfileCompactControl profile in GetProfileControls())
+    DiagnosticLog.Write("theme.apply_begin", new
     {
-      profile.ApplyTheme(dark);
+      generation,
+      entryDepth,
+      theme = theme.ToString(),
+      dark,
+      pending = _themeApplicationPending,
+      isHandleCreated = IsHandleCreated,
+      handle = IsHandleCreated ? Handle.ToInt64() : 0,
+      isDisposed = IsDisposed,
+      disposing = Disposing
+    });
+    if (entryDepth > 0)
+    {
+      DiagnosticLog.Write("theme.apply_reentered", new
+      {
+        generation,
+        entryDepth,
+        theme = theme.ToString(),
+        dark
+      });
     }
-    _transcriptSettingsPopup.ApplyTheme(dark);
-    _transcriptView.ApplyTheme(dark);
-    SynchronizeTransportButtonHeights();
-    PositionTranscriptControls();
+
+    int previousDiagnosticGeneration =
+      ThemeManager.SetDiagnosticGeneration(generation);
+    try
+    {
+      LogThemeStage(generation, "main-form", "begin");
+      ThemeManager.Apply(this, theme);
+      LogThemeStage(generation, "main-form", "end");
+
+      LogThemeStage(generation, "tooltip", "begin");
+      ThemeManager.ApplyToolTip(_toolTip, dark);
+      LogThemeStage(generation, "tooltip", "end");
+
+      int profileIndex = 0;
+      foreach (SpeechProfileCompactControl profile in GetProfileControls())
+      {
+        string stage = $"profile-{profileIndex}";
+        LogThemeStage(generation, stage, "begin", profile);
+        profile.ApplyTheme(dark);
+        LogThemeStage(generation, stage, "end", profile);
+        profileIndex++;
+      }
+
+      LogThemeStage(generation, "transcript-settings-popup", "begin",
+        _transcriptSettingsPopup);
+      _transcriptSettingsPopup.ApplyTheme(dark);
+      LogThemeStage(generation, "transcript-settings-popup", "end",
+        _transcriptSettingsPopup);
+
+      LogThemeStage(generation, "transcript-view", "begin", _transcriptView);
+      _transcriptView.ApplyTheme(dark);
+      LogThemeStage(generation, "transcript-view", "end", _transcriptView);
+
+      LogThemeStage(generation, "transport-heights", "begin");
+      SynchronizeTransportButtonHeights();
+      LogThemeStage(generation, "transport-heights", "end");
+
+      LogThemeStage(generation, "position-transcript-controls", "begin");
+      PositionTranscriptControls();
+      LogThemeStage(generation, "position-transcript-controls", "end");
+    }
+    finally
+    {
+      ThemeManager.SetDiagnosticGeneration(previousDiagnosticGeneration);
+      _themeApplyDepth--;
+      DiagnosticLog.Write("theme.apply_end", new
+      {
+        generation,
+        remainingDepth = _themeApplyDepth,
+        theme = theme.ToString(),
+        dark,
+        isHandleCreated = IsHandleCreated,
+        handle = IsHandleCreated ? Handle.ToInt64() : 0,
+        isDisposed = IsDisposed,
+        disposing = Disposing
+      });
+    }
+  }
+
+  private static void LogThemeStage(
+    int generation,
+    string stage,
+    string phase,
+    Control? control = null)
+  {
+    DiagnosticLog.Write("theme.apply_stage", new
+    {
+      generation,
+      stage,
+      phase,
+      controlType = control?.GetType().FullName,
+      controlName = control?.Name,
+      controlText = control?.Text,
+      isDisposed = control?.IsDisposed,
+      disposing = control?.Disposing,
+      isHandleCreated = control?.IsHandleCreated,
+      handle = control is { IsHandleCreated: true } ? control.Handle.ToInt64() : 0
+    });
   }
 
   /// <summary>

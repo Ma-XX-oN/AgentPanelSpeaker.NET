@@ -199,6 +199,15 @@ internal sealed class ThemedTabControl : TabControl
 /// </summary>
 internal static class ThemeManager
 {
+  private static int _diagnosticGeneration;
+
+  public static int SetDiagnosticGeneration(int generation)
+  {
+    int previous = _diagnosticGeneration;
+    _diagnosticGeneration = generation;
+    return previous;
+  }
+
   private const int DwmUseImmersiveDarkMode = 20;
 
   public const string VoiceSelectorTag = "voice-selector";
@@ -300,8 +309,13 @@ internal static class ThemeManager
   {
     ArgumentNullException.ThrowIfNull(form);
     bool dark = IsDark(theme);
+    LogThemeOperation("form_apply", "begin", form, dark);
     Apply(form, dark);
+    LogThemeOperation("form_apply", "after-control-tree", form, dark);
+    LogThemeOperation("title_bar", "begin", form, dark);
     TrySetDarkTitleBar(form.Handle, dark);
+    LogThemeOperation("title_bar", "end", form, dark);
+    LogThemeOperation("form_apply", "end", form, dark);
   }
 
   /// <summary>
@@ -311,8 +325,11 @@ internal static class ThemeManager
   {
     ArgumentNullException.ThrowIfNull(control);
     Color surface = dark ? DarkWindow : SystemColors.Control;
+    LogThemeOperation("control_tree", "begin", control, dark);
     ApplyControl(control, dark, surface);
+    LogThemeOperation("control_tree", "before-invalidate", control, dark);
     control.Invalidate(true);
+    LogThemeOperation("control_tree", "end", control, dark);
   }
 
   /// <summary>
@@ -321,8 +338,11 @@ internal static class ThemeManager
   public static void ApplyPopup(Control control, bool dark)
   {
     ArgumentNullException.ThrowIfNull(control);
+    LogThemeOperation("popup_tree", "begin", control, dark);
     ApplyControl(control, dark, GetPopupBackground(dark));
+    LogThemeOperation("popup_tree", "before-invalidate", control, dark);
     control.Invalidate(true);
+    LogThemeOperation("popup_tree", "end", control, dark);
   }
 
   /// <summary>
@@ -332,14 +352,25 @@ internal static class ThemeManager
   {
     ArgumentNullException.ThrowIfNull(toolTip);
 
+    // Keep ToolTip owner drawing enabled for the lifetime of the component.
+    // Switching OwnerDraw on an already-created native tooltip during a theme
+    // change can destabilize the underlying tooltip window.  Repaint it using
+    // the current palette instead of changing its drawing mode at runtime.
     toolTip.Draw -= DrawToolTip;
-    toolTip.OwnerDraw = dark;
     toolTip.BackColor = dark ? DarkPopup : SystemColors.Info;
     toolTip.ForeColor = dark ? DarkText : SystemColors.InfoText;
-    if (dark)
+    toolTip.Tag = dark;
+    toolTip.Draw += DrawToolTip;
+    toolTip.OwnerDraw = true;
+
+    DiagnosticLog.Write("theme.tooltip_applied", new
     {
-      toolTip.Draw += DrawToolTip;
-    }
+      generation = _diagnosticGeneration,
+      dark,
+      ownerDraw = toolTip.OwnerDraw,
+      backColor = toolTip.BackColor.ToArgb(),
+      foreColor = toolTip.ForeColor.ToArgb()
+    });
   }
 
   /// <summary>
@@ -388,14 +419,18 @@ internal static class ThemeManager
   /// </summary>
   private static void ApplyControl(Control control, bool dark, Color surface)
   {
+    LogThemeOperation("control", "begin", control, dark);
     Color window = surface;
     Color foreground = dark ? DarkText : SystemColors.ControlText;
     Color input = dark ? DarkInput : SystemColors.Window;
     Color inputText = dark ? DarkText : SystemColors.WindowText;
 
+    LogThemeOperation("control-base-colours", "begin", control, dark);
     control.BackColor = window;
     control.ForeColor = foreground;
+    LogThemeOperation("control-base-colours", "end", control, dark);
 
+    LogThemeOperation("control-specific", "begin", control, dark);
     switch (control)
     {
       case TextBoxBase textBox:
@@ -474,14 +509,20 @@ internal static class ThemeManager
         label.ForeColor = DarkDisabled;
         break;
     }
+    LogThemeOperation("control-specific", "end", control, dark);
 
+    LogThemeOperation("control-state", "begin", control, dark);
     SetThemeState(control, dark);
     ApplyEnabledAppearance(control, dark);
+    LogThemeOperation("control-state", "end", control, dark);
 
+    LogThemeOperation("control-children", "begin", control, dark);
     foreach (Control child in control.Controls)
     {
       ApplyControl(child, dark, surface);
     }
+    LogThemeOperation("control-children", "end", control, dark);
+    LogThemeOperation("control", "end", control, dark);
   }
 
   private static void SetThemeState(Control control, bool dark)
@@ -545,7 +586,9 @@ internal static class ThemeManager
       bounds.Top,
       Math.Max(0, bounds.Width - 1),
       Math.Max(0, bounds.Height - 1));
-    using (var border = new Pen(DarkBorder))
+    bool dark = toolTip.Tag is bool darkTheme && darkTheme;
+    Color borderColor = dark ? DarkBorder : SystemColors.WindowFrame;
+    using (var border = new Pen(borderColor))
     {
       eventArgs.Graphics.DrawRectangle(border, borderBounds);
     }
@@ -854,6 +897,33 @@ internal static class ThemeManager
     }
   }
 
+  private static void LogThemeOperation(
+    string operation,
+    string phase,
+    Control control,
+    bool dark)
+  {
+    DiagnosticLog.Write("theme.operation", new
+    {
+      generation = _diagnosticGeneration,
+      operation,
+      phase,
+      dark,
+      controlType = control.GetType().FullName,
+      control.Name,
+      control.Text,
+      control.Enabled,
+      control.Visible,
+      control.IsDisposed,
+      control.Disposing,
+      control.IsHandleCreated,
+      handle = control.IsHandleCreated ? control.Handle.ToInt64() : 0,
+      childCount = control.Controls.Count,
+      parentType = control.Parent?.GetType().FullName,
+      parentName = control.Parent?.Name
+    });
+  }
+
   private sealed class AppliedThemeState
   {
     public bool Dark { get; set; }
@@ -867,11 +937,28 @@ internal static class ThemeManager
     try
     {
       int enabled = dark ? 1 : 0;
-      _ = DwmSetWindowAttribute(
+      DiagnosticLog.Write("theme.native_titlebar_call", new
+      {
+        generation = _diagnosticGeneration,
+        phase = "before",
+        handle = handle.ToInt64(),
+        dark,
+        enabled
+      });
+      int result = DwmSetWindowAttribute(
         handle,
         DwmUseImmersiveDarkMode,
         ref enabled,
         sizeof(int));
+      DiagnosticLog.Write("theme.native_titlebar_call", new
+      {
+        generation = _diagnosticGeneration,
+        phase = "after",
+        handle = handle.ToInt64(),
+        dark,
+        enabled,
+        result
+      });
     }
     catch (DllNotFoundException)
     {
