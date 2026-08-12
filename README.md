@@ -1,3 +1,10 @@
+## v207 stable TabControl HWND theming
+
+- Keeps `ThemedTabControl.DrawMode` at `OwnerDrawFixed` for the lifetime of each tab control.
+- Theme switches now change only drawing state and invalidate the tab control; they no longer toggle `DrawMode` between native and owner-drawn modes.
+- Adds a light-theme owner-drawn tab header so light mode remains usable without recreating the TabControl HWND.
+- This specifically avoids the `TabControl.RecreateHandleCore()` path observed in the v206 diagnostics, which was recreating descendant HWNDs including the hidden transcript loading label.
+
 ## v206 loading-label HWND recreation diagnostics
 
 - Adds targeted native lifecycle diagnostics for the TranscriptView loading label.

@@ -28,7 +28,11 @@ internal sealed class ThemedTabControl : TabControl
 
   public ThemedTabControl()
   {
-    DrawMode = TabDrawMode.Normal;
+    // Keep owner drawing enabled for the lifetime of the control. Switching
+    // DrawMode at runtime makes WinForms recreate the TabControl HWND, which
+    // also recreates descendant HWNDs. Theme changes should only change paint
+    // state, not native-window lifetime.
+    DrawMode = TabDrawMode.OwnerDrawFixed;
   }
 
   /// <summary>
@@ -37,7 +41,6 @@ internal sealed class ThemedTabControl : TabControl
   public void ApplyTheme(bool dark)
   {
     _dark = dark;
-    DrawMode = dark ? TabDrawMode.OwnerDrawFixed : TabDrawMode.Normal;
     Invalidate();
   }
 
@@ -49,19 +52,14 @@ internal sealed class ThemedTabControl : TabControl
       this,
       e.Bounds,
       $"index={e.Index};dark={_dark}");
-    if (!_dark)
+    if (_dark)
     {
-      base.OnDrawItem(e);
-      ThemeManager.LogCustomPaint(
-        "ThemedTabControl.OnDrawItem",
-        "end",
-        this,
-        e.Bounds,
-        $"index={e.Index};dark={_dark}");
-      return;
+      DrawDarkTab(e.Graphics, e.Index);
     }
-
-    DrawDarkTab(e.Graphics, e.Index);
+    else
+    {
+      DrawLightTab(e.Graphics, e.Index);
+    }
     ThemeManager.LogCustomPaint(
       "ThemedTabControl.OnDrawItem",
       "end",
@@ -143,6 +141,37 @@ internal sealed class ThemedTabControl : TabControl
     {
       DrawDarkTab(graphics, SelectedIndex);
     }
+  }
+
+  private void DrawLightTab(Graphics graphics, int index)
+  {
+    bool selected = index == SelectedIndex;
+    Rectangle bounds = GetTabRect(index);
+    Color background = selected
+      ? SystemColors.Window
+      : SystemColors.Control;
+    Color foreground = SystemColors.ControlText;
+
+    using (var brush = new SolidBrush(background))
+    {
+      graphics.FillRectangle(brush, bounds);
+    }
+    ControlPaint.DrawBorder(
+      graphics,
+      bounds,
+      SystemColors.ControlDark,
+      ButtonBorderStyle.Solid);
+
+    TextRenderer.DrawText(
+      graphics,
+      TabPages[index].Text,
+      Font,
+      bounds,
+      foreground,
+      background,
+      TextFormatFlags.HorizontalCenter |
+      TextFormatFlags.VerticalCenter |
+      TextFormatFlags.EndEllipsis);
   }
 
   private void DrawDarkTab(Graphics graphics, int index)
