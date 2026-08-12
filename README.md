@@ -1,3 +1,10 @@
+## v206 loading-label HWND recreation diagnostics
+
+- Adds targeted native lifecycle diagnostics for the TranscriptView loading label.
+- Logs the old/new loading-label HWND on HandleDestroyed/HandleCreated, native `IsWindowVisible`, `GWL_STYLE`/`WS_VISIBLE`, managed `Visible`, and a stack trace for the recreation path.
+- Logs each theme property step that can affect the loading label, including generic BackColor/ForeColor application, theme-state application, enabled appearance, and TranscriptView-specific settings changes.
+- No intended behaviour change; this version is diagnostic only.
+
 ## v205 TranscriptView state diagnostics
 
 - Adds targeted `transcript.view_state` diagnostics around every TranscriptView path that directly changes the loading label, WebView2 visibility, failure view, or transcript theme.

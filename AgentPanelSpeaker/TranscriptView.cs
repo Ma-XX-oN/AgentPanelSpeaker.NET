@@ -2,6 +2,7 @@ using Markdig;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace AgentPanelSpeaker;
@@ -12,12 +13,15 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class TranscriptView : UserControl
 {
+  private const int GwlStyle = -16;
+  private const int WsVisible = 0x10000000;
   private readonly WebView2 _webView = new();
   private readonly Label _loadingLabel = new();
   private readonly Label _failureLabel = new();
   private readonly System.Windows.Forms.Timer _refreshTimer = new();
   private readonly System.Windows.Forms.Timer _settingsApplyTimer = new();
   private readonly MarkdownPipeline _pipeline;
+  private long _loadingLabelLastHandle;
   private string? _sessionPath;
   private string _sessionDisplayName = string.Empty;
   private bool _restoredFromSettings;
@@ -71,6 +75,7 @@ internal sealed class TranscriptView : UserControl
     Dock = DockStyle.Fill;
     _webView.Dock = DockStyle.Fill;
     _webView.Visible = false;
+    _loadingLabel.Name = "TranscriptLoadingLabel";
     _loadingLabel.Dock = DockStyle.Fill;
     _loadingLabel.Text = "Preparing transcript viewer…";
     _loadingLabel.TextAlign = ContentAlignment.MiddleCenter;
@@ -82,6 +87,18 @@ internal sealed class TranscriptView : UserControl
     Controls.Add(_loadingLabel);
     Controls.Add(_failureLabel);
 
+    _loadingLabel.HandleCreated += (_, _) =>
+    {
+      _loadingLabelLastHandle = _loadingLabel.Handle.ToInt64();
+      LogLoadingLabelHandleLifecycle("handle-created", _loadingLabelLastHandle);
+    };
+    _loadingLabel.HandleDestroyed += (_, _) =>
+    {
+      LogLoadingLabelHandleLifecycle(
+        "handle-destroyed",
+        _loadingLabelLastHandle);
+      _loadingLabelLastHandle = 0;
+    };
     _loadingLabel.VisibleChanged += (_, _) =>
       LogViewState("loading-visible-changed", "VisibleChanged");
     _webView.VisibleChanged += (_, _) =>
@@ -205,8 +222,11 @@ internal sealed class TranscriptView : UserControl
     Color text = dark
       ? Color.FromArgb(217, 220, 225)
       : Color.FromArgb(36, 38, 41);
+    LogLoadingLabelNativeState("apply-settings", "before-back-color");
     _loadingLabel.BackColor = page;
+    LogLoadingLabelNativeState("apply-settings", "after-back-color");
     _loadingLabel.ForeColor = text;
+    LogLoadingLabelNativeState("apply-settings", "after-fore-color");
     _failureLabel.BackColor = page;
     _failureLabel.ForeColor = text;
     if (_initialized)
@@ -1358,7 +1378,8 @@ internal sealed class TranscriptView : UserControl
         childIndex = ChildIndex(_loadingLabel),
         parent = _loadingLabel.Parent?.GetType().FullName,
         handleCreated = _loadingLabel.IsHandleCreated,
-        handle = _loadingLabel.IsHandleCreated ? _loadingLabel.Handle.ToInt64() : 0L
+        handle = _loadingLabel.IsHandleCreated ? _loadingLabel.Handle.ToInt64() : 0L,
+        native = GetNativeWindowState(_loadingLabel)
       },
       webView = new
       {
@@ -1378,6 +1399,92 @@ internal sealed class TranscriptView : UserControl
       }
     });
   }
+
+  private void LogLoadingLabelHandleLifecycle(string phase, long knownHandle)
+  {
+    DiagnosticLog.Write("transcript.loading_label_handle", new
+    {
+      phase,
+      knownHandle,
+      managedVisible = _loadingLabel.Visible,
+      handleCreated = _loadingLabel.IsHandleCreated,
+      currentHandle = _loadingLabel.IsHandleCreated
+        ? _loadingLabel.Handle.ToInt64()
+        : 0L,
+      native = GetNativeWindowState(knownHandle),
+      stack = Environment.StackTrace
+    });
+  }
+
+  private void LogLoadingLabelNativeState(string operation, string phase)
+  {
+    DiagnosticLog.Write("transcript.loading_label_native", new
+    {
+      operation,
+      phase,
+      managedVisible = _loadingLabel.Visible,
+      handleCreated = _loadingLabel.IsHandleCreated,
+      handle = _loadingLabel.IsHandleCreated
+        ? _loadingLabel.Handle.ToInt64()
+        : 0L,
+      native = GetNativeWindowState(_loadingLabel)
+    });
+  }
+
+  private static object GetNativeWindowState(Control control)
+  {
+    return control.IsHandleCreated
+      ? GetNativeWindowState(control.Handle.ToInt64())
+      : new
+      {
+        handle = 0L,
+        isWindow = false,
+        isWindowVisible = false,
+        style = 0U,
+        wsVisible = false
+      };
+  }
+
+  private static object GetNativeWindowState(long handleValue)
+  {
+    if (handleValue == 0)
+    {
+      return new
+      {
+        handle = 0L,
+        isWindow = false,
+        isWindowVisible = false,
+        style = 0U,
+        wsVisible = false
+      };
+    }
+
+    IntPtr handle = new(handleValue);
+    bool isWindow = IsWindow(handle);
+    int styleValue = isWindow ? GetWindowLong(handle, GwlStyle) : 0;
+    uint style = unchecked((uint)styleValue);
+    return new
+    {
+      handle = handleValue,
+      isWindow,
+      isWindowVisible = isWindow && IsWindowVisible(handle),
+      style,
+      wsVisible = (style & unchecked((uint)WsVisible)) != 0
+    };
+  }
+
+  #pragma warning disable SYSLIB1054
+  [DllImport("user32.dll", EntryPoint = "IsWindow")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool IsWindow(IntPtr handle);
+
+  [DllImport("user32.dll", EntryPoint = "IsWindowVisible")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool IsWindowVisible(IntPtr handle);
+
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+  private static extern int GetWindowLong(IntPtr handle, int index);
+  #pragma warning restore SYSLIB1054
 
   private sealed record TranscriptRenderPayload(
     TranscriptVirtualDocument Document,

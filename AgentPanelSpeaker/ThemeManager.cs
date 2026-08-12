@@ -247,6 +247,9 @@ internal sealed class ThemedTabControl : TabControl
 /// </summary>
 internal static class ThemeManager
 {
+  private const int GwlStyle = -16;
+  private const int WsVisible = 0x10000000;
+
   private static int _diagnosticGeneration;
   private static int _nativeTraceGeneration;
   private static long _nativeTraceDeadlineTicks;
@@ -532,8 +535,28 @@ internal static class ThemeManager
     Color inputText = dark ? DarkText : SystemColors.WindowText;
 
     LogThemeOperation("control-base-colours", "begin", control, dark);
+    bool traceTranscriptLoadingLabel =
+      string.Equals(
+        control.Name,
+        "TranscriptLoadingLabel",
+        StringComparison.Ordinal);
+    if (traceTranscriptLoadingLabel)
+    {
+      LogTranscriptLoadingLabelThemeState(
+        "before-back-color", control, dark);
+    }
     control.BackColor = window;
+    if (traceTranscriptLoadingLabel)
+    {
+      LogTranscriptLoadingLabelThemeState(
+        "after-back-color", control, dark);
+    }
     control.ForeColor = foreground;
+    if (traceTranscriptLoadingLabel)
+    {
+      LogTranscriptLoadingLabelThemeState(
+        "after-fore-color", control, dark);
+    }
     LogThemeOperation("control-base-colours", "end", control, dark);
 
     LogThemeOperation("control-specific", "begin", control, dark);
@@ -618,8 +641,23 @@ internal static class ThemeManager
     LogThemeOperation("control-specific", "end", control, dark);
 
     LogThemeOperation("control-state", "begin", control, dark);
+    if (traceTranscriptLoadingLabel)
+    {
+      LogTranscriptLoadingLabelThemeState(
+        "before-set-theme-state", control, dark);
+    }
     SetThemeState(control, dark);
+    if (traceTranscriptLoadingLabel)
+    {
+      LogTranscriptLoadingLabelThemeState(
+        "after-set-theme-state", control, dark);
+    }
     ApplyEnabledAppearance(control, dark);
+    if (traceTranscriptLoadingLabel)
+    {
+      LogTranscriptLoadingLabelThemeState(
+        "after-enabled-appearance", control, dark);
+    }
     LogThemeOperation("control-state", "end", control, dark);
 
     LogThemeOperation("control-children", "begin", control, dark);
@@ -1017,6 +1055,36 @@ internal static class ThemeManager
       $"index={eventArgs.Index};state={eventArgs.State}");
   }
 
+  private static void LogTranscriptLoadingLabelThemeState(
+    string phase,
+    Control control,
+    bool dark)
+  {
+    long handleValue = control.IsHandleCreated
+      ? control.Handle.ToInt64()
+      : 0L;
+    bool isWindow = handleValue != 0 && IsWindow(new IntPtr(handleValue));
+    int styleValue = isWindow
+      ? GetWindowLong(new IntPtr(handleValue), GwlStyle)
+      : 0;
+    uint style = unchecked((uint)styleValue);
+
+    DiagnosticLog.Write("theme.transcript_loading_label", new
+    {
+      generation = _diagnosticGeneration,
+      phase,
+      dark,
+      managedVisible = control.Visible,
+      handleCreated = control.IsHandleCreated,
+      handle = handleValue,
+      isWindow,
+      isWindowVisible =
+        isWindow && IsWindowVisible(new IntPtr(handleValue)),
+      style,
+      wsVisible = (style & unchecked((uint)WsVisible)) != 0
+    });
+  }
+
   private static void LogThemeOperation(
     string operation,
     string phase,
@@ -1089,6 +1157,17 @@ internal static class ThemeManager
   }
 
   #pragma warning disable SYSLIB1054
+  [DllImport("user32.dll", EntryPoint = "IsWindow")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool IsWindow(IntPtr handle);
+
+  [DllImport("user32.dll", EntryPoint = "IsWindowVisible")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool IsWindowVisible(IntPtr handle);
+
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+  private static extern int GetWindowLong(IntPtr handle, int index);
+
   [DllImport("dwmapi.dll")]
   private static extern int DwmSetWindowAttribute(
     IntPtr window,
