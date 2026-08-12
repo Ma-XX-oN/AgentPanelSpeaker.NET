@@ -259,7 +259,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v208";
+    Text = "Agent Panel Speaker v209";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3389,7 +3389,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// Executes the latest queued theme request as one redraw-suppressed
   /// transaction, then synchronously repaints the resulting HWND hierarchy.
   /// </summary>
-  private void ProcessQueuedThemeTransition()
+  private async void ProcessQueuedThemeTransition()
   {
     _themeTransitionQueued = false;
     if (IsDisposed || Disposing || _themeTransitionActive ||
@@ -3411,6 +3411,8 @@ internal sealed class MainForm : Form, IMessageFilter
     const double TransitionOpacity = 1.0 / 255.0;
     bool opacityLowered = false;
     ThemeTransitionSnapshotForm? transitionSnapshot = null;
+    Bitmap? webViewSnapshot = null;
+    Rectangle webViewSnapshotScreenBounds = Rectangle.Empty;
     var redrawControls = new List<Control>();
     var suppressedRedrawHandles = new Dictionary<Control, IntPtr>();
     EventHandler recreatedHandleSuppressor = (sender, eventArgs) =>
@@ -3452,6 +3454,37 @@ internal sealed class MainForm : Form, IMessageFilter
       });
     };
 
+    if (Visible && IsHandleCreated)
+    {
+      try
+      {
+        webViewSnapshot = await _transcriptView.CapturePreviewBitmapAsync();
+        if (webViewSnapshot is not null)
+        {
+          webViewSnapshotScreenBounds = _transcriptView.GetWebViewScreenBounds();
+          DiagnosticLog.Write("theme.transition_webview_snapshot", new
+          {
+            theme = requestedTheme.ToString(),
+            phase = "captured",
+            bounds = webViewSnapshotScreenBounds.ToString(),
+            width = webViewSnapshot.Width,
+            height = webViewSnapshot.Height
+          });
+        }
+      }
+      catch (Exception exception)
+      {
+        webViewSnapshot?.Dispose();
+        webViewSnapshot = null;
+        DiagnosticLog.Write("theme.transition_webview_snapshot", new
+        {
+          theme = requestedTheme.ToString(),
+          phase = "failed",
+          exception = exception.ToString()
+        });
+      }
+    }
+
     if (redrawAvailable)
     {
       CollectRedrawControls(this, redrawControls);
@@ -3492,6 +3525,17 @@ internal sealed class MainForm : Form, IMessageFilter
               0,
               snapshotBitmap.Size,
               CopyPixelOperation.SourceCopy);
+
+            if (webViewSnapshot is not null &&
+                !webViewSnapshotScreenBounds.IsEmpty)
+            {
+              var destination = new Rectangle(
+                webViewSnapshotScreenBounds.Left - Left,
+                webViewSnapshotScreenBounds.Top - Top,
+                webViewSnapshotScreenBounds.Width,
+                webViewSnapshotScreenBounds.Height);
+              snapshotGraphics.DrawImage(webViewSnapshot, destination);
+            }
           }
 
           transitionSnapshot = new ThemeTransitionSnapshotForm(
@@ -3500,6 +3544,8 @@ internal sealed class MainForm : Form, IMessageFilter
           snapshotBitmap = null; // Ownership transferred to the snapshot form.
           transitionSnapshot.Show(this);
           transitionSnapshot.Update();
+          webViewSnapshot?.Dispose();
+          webViewSnapshot = null;
 
           DiagnosticLog.Write("theme.transition_snapshot", new
           {
@@ -3512,6 +3558,8 @@ internal sealed class MainForm : Form, IMessageFilter
         catch (Exception exception)
         {
           snapshotBitmap?.Dispose();
+          webViewSnapshot?.Dispose();
+          webViewSnapshot = null;
           transitionSnapshot?.Dispose();
           transitionSnapshot = null;
           DiagnosticLog.Write("theme.transition_snapshot", new
@@ -3616,6 +3664,9 @@ internal sealed class MainForm : Form, IMessageFilter
           opacity = Opacity
         });
       }
+
+      webViewSnapshot?.Dispose();
+      webViewSnapshot = null;
 
       if (transitionSnapshot is not null)
       {

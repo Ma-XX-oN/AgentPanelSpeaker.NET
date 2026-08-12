@@ -1,3 +1,7 @@
+## v209 WebView2-aware theme transition snapshot
+
+The temporary theme-transition cover now captures the WebView2 compositor surface with `CoreWebView2.CapturePreviewAsync()` and composites it over the GDI screen snapshot before the transition starts. This prevents the cover from showing the loading/status surface or a blank transcript region while switching themes.
+
 ## v208 preserve hidden controls during theme redraw suppression
 
 - Theme transitions now send `WM_SETREDRAW` only to child HWNDs that are

@@ -119,6 +119,41 @@ internal sealed class TranscriptView : UserControl
     _ = InitializeAsync();
   }
 
+
+  /// <summary>
+  /// Captures the currently rendered WebView2 surface for the theme-transition
+  /// cover. Returns null until WebView2 is initialized and visible.
+  /// </summary>
+  internal async Task<Bitmap?> CapturePreviewBitmapAsync()
+  {
+    CoreWebView2? core = _webView.CoreWebView2;
+    if (!_initialized ||
+        _webView.IsDisposed ||
+        !_webView.Visible ||
+        core is null ||
+        _webView.ClientSize.Width <= 0 ||
+        _webView.ClientSize.Height <= 0)
+    {
+      return null;
+    }
+
+    using var stream = new MemoryStream();
+    await core.CapturePreviewAsync(
+      CoreWebView2CapturePreviewImageFormat.Png,
+      stream);
+    stream.Position = 0;
+    using Image captured = Image.FromStream(stream);
+    return new Bitmap(captured);
+  }
+
+  /// <summary>
+  /// Returns the WebView2 client rectangle in screen coordinates.
+  /// </summary>
+  internal Rectangle GetWebViewScreenBounds()
+  {
+    return _webView.RectangleToScreen(_webView.ClientRectangle);
+  }
+
   /// <summary>
   /// Raised when the rendered page receives a transport hotkey.
   /// </summary>
