@@ -88,6 +88,12 @@ internal sealed class GlyphButton : Button
   /// </summary>
   protected override void OnPaint(PaintEventArgs eventArgs)
   {
+    ThemeManager.LogCustomPaint(
+      "GlyphButton.OnPaint",
+      "begin",
+      this,
+      eventArgs.ClipRectangle,
+      _drawing.ToString());
     base.OnPaint(eventArgs);
     Color glyphColor = ThemeManager.GetControlForeground(this);
     if (_drawing != GlyphButtonDrawing.Text)
@@ -148,11 +154,23 @@ internal sealed class GlyphButton : Button
           DrawBluetoothIcon(eventArgs.Graphics, glyphColor);
           break;
       }
+      ThemeManager.LogCustomPaint(
+        "GlyphButton.OnPaint",
+        "end",
+        this,
+        eventArgs.ClipRectangle,
+        _drawing.ToString());
       return;
     }
 
     if (_useInkBounds && DrawUsingInkBounds(eventArgs.Graphics, glyphColor))
     {
+      ThemeManager.LogCustomPaint(
+        "GlyphButton.OnPaint",
+        "end",
+        this,
+        eventArgs.ClipRectangle,
+        _drawing.ToString());
       return;
     }
 
@@ -167,6 +185,12 @@ internal sealed class GlyphButton : Button
       TextFormatFlags.SingleLine |
       TextFormatFlags.NoPadding |
       TextFormatFlags.NoPrefix);
+    ThemeManager.LogCustomPaint(
+      "GlyphButton.OnPaint",
+      "end",
+      this,
+      eventArgs.ClipRectangle,
+      _drawing.ToString());
   }
 
   /// <summary>

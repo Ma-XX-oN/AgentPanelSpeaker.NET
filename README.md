@@ -1,3 +1,9 @@
+## v198 custom-paint theme crash diagnostics
+
+- Adds generation-correlated begin/end diagnostics around custom paint paths used by themed tabs, glyph buttons, speech-profile controls, popup borders, and owner-drawn combo boxes.
+- Keeps the latest completed theme generation active in paint diagnostics so queued paints after `ApplyTheme()` can be tied to the switch that produced them.
+- No intentional theme or focus behaviour changes.
+
 ## v197 post-theme message-loop diagnostics
 
 - Adds diagnostic-only checkpoints after each theme application returns to the

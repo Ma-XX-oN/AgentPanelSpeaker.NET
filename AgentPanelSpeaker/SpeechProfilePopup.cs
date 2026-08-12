@@ -412,11 +412,21 @@ internal sealed class SpeechProfilePopup : UserControl
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {
+    ThemeManager.LogCustomPaint(
+      "SpeechProfilePopup.PaintBorder",
+      "begin",
+      this,
+      eventArgs.ClipRectangle);
     Color borderColour = ThemeManager.GetBorder(
       BackColor.GetBrightness() < 0.35f);
     using var border = new Pen(borderColour, 1.0f);
     Rectangle bounds = Rectangle.Inflate(ClientRectangle, -1, -1);
     eventArgs.Graphics.DrawRectangle(border, bounds);
+    ThemeManager.LogCustomPaint(
+      "SpeechProfilePopup.PaintBorder",
+      "end",
+      this,
+      eventArgs.ClipRectangle);
   }
 
 

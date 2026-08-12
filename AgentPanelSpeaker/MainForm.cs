@@ -229,7 +229,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v197";
+    Text = "Agent Panel Speaker v198";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3370,8 +3370,7 @@ internal sealed class MainForm : Form, IMessageFilter
       });
     }
 
-    int previousDiagnosticGeneration =
-      ThemeManager.SetDiagnosticGeneration(generation);
+    ThemeManager.SetDiagnosticGeneration(generation);
     try
     {
       LogThemeStage(generation, "main-form", "begin");
@@ -3412,7 +3411,7 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     finally
     {
-      ThemeManager.SetDiagnosticGeneration(previousDiagnosticGeneration);
+      ThemeManager.SetDiagnosticGeneration(generation);
       _themeApplyDepth--;
       DiagnosticLog.Write("theme.apply_end", new
       {

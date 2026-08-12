@@ -290,6 +290,11 @@ internal sealed class SpeechProfileCompactControl : Control
   /// <inheritdoc />
   protected override void OnPaint(PaintEventArgs eventArgs)
   {
+    ThemeManager.LogCustomPaint(
+      "SpeechProfileCompactControl.OnPaint",
+      "begin",
+      this,
+      eventArgs.ClipRectangle);
     base.OnPaint(eventArgs);
 
     Graphics graphics = eventArgs.Graphics;
@@ -331,6 +336,11 @@ internal sealed class SpeechProfileCompactControl : Control
       Focused || editorFocused ? 2.0f : 1.0f);
     Rectangle borderBounds = Rectangle.Inflate(bounds, -1, -1);
     graphics.DrawRectangle(border, borderBounds);
+    ThemeManager.LogCustomPaint(
+      "SpeechProfileCompactControl.OnPaint",
+      "end",
+      this,
+      eventArgs.ClipRectangle);
   }
 
   /// <summary>

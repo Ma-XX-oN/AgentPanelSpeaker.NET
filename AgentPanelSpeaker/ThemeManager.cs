@@ -43,26 +43,74 @@ internal sealed class ThemedTabControl : TabControl
 
   protected override void OnDrawItem(DrawItemEventArgs e)
   {
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.OnDrawItem",
+      "begin",
+      this,
+      e.Bounds,
+      $"index={e.Index};dark={_dark}");
     if (!_dark)
     {
       base.OnDrawItem(e);
+      ThemeManager.LogCustomPaint(
+        "ThemedTabControl.OnDrawItem",
+        "end",
+        this,
+        e.Bounds,
+        $"index={e.Index};dark={_dark}");
       return;
     }
 
     DrawDarkTab(e.Graphics, e.Index);
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.OnDrawItem",
+      "end",
+      this,
+      e.Bounds,
+      $"index={e.Index};dark={_dark}");
   }
 
   protected override void WndProc(ref Message m)
   {
-    base.WndProc(ref m);
-    if (!_dark || (m.Msg != WmPaint && m.Msg != WmPrintClient) ||
-        !IsHandleCreated)
+    bool tracePaint = m.Msg == WmPaint || m.Msg == WmPrintClient;
+    if (tracePaint)
     {
+      ThemeManager.LogCustomPaint(
+        "ThemedTabControl.WndProc",
+        "begin",
+        this,
+        detail: $"msg=0x{m.Msg:X4};dark={_dark}");
+    }
+
+    base.WndProc(ref m);
+    if (!_dark || !tracePaint || !IsHandleCreated)
+    {
+      if (tracePaint)
+      {
+        ThemeManager.LogCustomPaint(
+          "ThemedTabControl.WndProc",
+          "end",
+          this,
+          detail: $"msg=0x{m.Msg:X4};dark={_dark};custom=false");
+      }
       return;
     }
 
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.DrawDarkTabStrip", "begin", this);
     DrawDarkTabStrip();
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.DrawDarkTabStrip", "end", this);
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.DrawDarkPageBorder", "begin", this);
     DrawDarkPageBorder();
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.DrawDarkPageBorder", "end", this);
+    ThemeManager.LogCustomPaint(
+      "ThemedTabControl.WndProc",
+      "end",
+      this,
+      detail: $"msg=0x{m.Msg:X4};dark={_dark};custom=true");
   }
 
   private void DrawDarkTabStrip()
@@ -206,6 +254,35 @@ internal static class ThemeManager
     int previous = _diagnosticGeneration;
     _diagnosticGeneration = generation;
     return previous;
+  }
+
+  /// <summary>
+  /// Logs entry and exit from custom paint paths during theme stress tests.
+  /// </summary>
+  public static void LogCustomPaint(
+    string controlKind,
+    string phase,
+    Control control,
+    Rectangle? clip = null,
+    string? detail = null)
+  {
+    DiagnosticLog.Write("theme.custom_paint", new
+    {
+      generation = _diagnosticGeneration,
+      controlKind,
+      phase,
+      detail,
+      controlType = control.GetType().FullName,
+      control.Name,
+      control.Text,
+      control.Enabled,
+      control.Visible,
+      control.IsDisposed,
+      control.Disposing,
+      control.IsHandleCreated,
+      handle = control.IsHandleCreated ? control.Handle.ToInt64() : 0,
+      clip
+    });
   }
 
   private const int DwmUseImmersiveDarkMode = 20;
@@ -842,6 +919,13 @@ internal static class ThemeManager
       return;
     }
 
+    LogCustomPaint(
+      "ComboBox.DrawItem",
+      "begin",
+      comboBox,
+      eventArgs.Bounds,
+      $"index={eventArgs.Index};state={eventArgs.State}");
+
     bool selected = (eventArgs.State & DrawItemState.Selected) != 0;
     string text = (eventArgs.Index >= 0 &&
       eventArgs.Index < comboBox.Items.Count
@@ -895,6 +979,13 @@ internal static class ThemeManager
     {
       eventArgs.DrawFocusRectangle();
     }
+
+    LogCustomPaint(
+      "ComboBox.DrawItem",
+      "end",
+      comboBox,
+      eventArgs.Bounds,
+      $"index={eventArgs.Index};state={eventArgs.State}");
   }
 
   private static void LogThemeOperation(

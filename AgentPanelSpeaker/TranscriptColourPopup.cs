@@ -445,10 +445,20 @@ internal sealed class TranscriptColourPopup : PopupFormBase
 
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {
+    ThemeManager.LogCustomPaint(
+      "TranscriptColourPopup.PaintBorder",
+      "begin",
+      this,
+      eventArgs.ClipRectangle);
     using var pen = new Pen(ThemeManager.GetBorder(_dark));
     Rectangle bounds = ClientRectangle;
     bounds.Width -= 1;
     bounds.Height -= 1;
     eventArgs.Graphics.DrawRectangle(pen, bounds);
+    ThemeManager.LogCustomPaint(
+      "TranscriptColourPopup.PaintBorder",
+      "end",
+      this,
+      eventArgs.ClipRectangle);
   }
 }
