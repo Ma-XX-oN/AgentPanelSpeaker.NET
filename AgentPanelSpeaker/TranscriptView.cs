@@ -82,6 +82,17 @@ internal sealed class TranscriptView : UserControl
     Controls.Add(_loadingLabel);
     Controls.Add(_failureLabel);
 
+    _loadingLabel.VisibleChanged += (_, _) =>
+      LogViewState("loading-visible-changed", "VisibleChanged");
+    _webView.VisibleChanged += (_, _) =>
+      LogViewState("webview-visible-changed", "VisibleChanged");
+    _failureLabel.VisibleChanged += (_, _) =>
+      LogViewState("failure-visible-changed", "VisibleChanged");
+    _loadingLabel.ParentChanged += (_, _) =>
+      LogViewState("loading-parent-changed", "ParentChanged");
+    _webView.ParentChanged += (_, _) =>
+      LogViewState("webview-parent-changed", "ParentChanged");
+
     _webView.CoreWebView2InitializationCompleted +=
       WebViewInitializationCompleted;
     _refreshTimer.Interval = 250;
@@ -185,6 +196,7 @@ internal sealed class TranscriptView : UserControl
   /// </summary>
   public void ApplySettings(TranscriptSettings settings, bool dark)
   {
+    LogViewState("apply-settings", "begin", requestedDark: dark);
     _settings = settings.Normalize();
     _dark = dark;
     Color page = dark
@@ -201,6 +213,7 @@ internal sealed class TranscriptView : UserControl
     {
       QueueSettingsApply(immediate: false);
     }
+    LogViewState("apply-settings", "end", requestedDark: dark);
   }
 
   /// <summary>
@@ -367,7 +380,9 @@ internal sealed class TranscriptView : UserControl
   /// </summary>
   public void ApplyTheme(bool dark)
   {
+    LogViewState("apply-theme", "begin", requestedDark: dark);
     ApplySettings(_settings, dark);
+    LogViewState("apply-theme", "end", requestedDark: dark);
   }
 
   /// <inheritdoc />
@@ -437,8 +452,10 @@ internal sealed class TranscriptView : UserControl
     }
 
     _initialized = true;
+    LogViewState("navigation-completed", "before-visibility-update");
     _failureLabel.Visible = false;
     _webView.Visible = true;
+    LogViewState("navigation-completed", "after-visibility-update");
     ApplySettings(_settings, _dark);
     QueueSettingsApply(immediate: true);
     if (string.IsNullOrWhiteSpace(_sessionPath))
@@ -704,14 +721,18 @@ internal sealed class TranscriptView : UserControl
 
   private void ShowLoading(string text)
   {
+    LogViewState("show-loading", "before", requestedLoadingText: text);
     _loadingLabel.Text = text;
     _loadingLabel.Visible = true;
     _loadingLabel.BringToFront();
+    LogViewState("show-loading", "after", requestedLoadingText: text);
   }
 
   private void HideLoading()
   {
+    LogViewState("hide-loading", "before");
     _loadingLabel.Visible = false;
+    LogViewState("hide-loading", "after");
   }
 
   private static string ToScriptState(TranscriptPlaybackState state)
@@ -1255,6 +1276,7 @@ internal sealed class TranscriptView : UserControl
 
   private void ShowInitializationFailure(Exception exception)
   {
+    LogViewState("initialization-failure", "before");
     DiagnosticLog.Write("transcript.webview_unavailable", new
     {
       exception = exception.ToString()
@@ -1268,6 +1290,93 @@ internal sealed class TranscriptView : UserControl
       "available.";
     _failureLabel.Visible = true;
     _failureLabel.BringToFront();
+    LogViewState("initialization-failure", "after");
+  }
+
+  /// <inheritdoc />
+  protected override void OnLayout(LayoutEventArgs eventArgs)
+  {
+    base.OnLayout(eventArgs);
+    LogViewState("layout", "after-base", affectedProperty: eventArgs.AffectedProperty);
+  }
+
+  /// <inheritdoc />
+  protected override void OnSizeChanged(EventArgs eventArgs)
+  {
+    base.OnSizeChanged(eventArgs);
+    LogViewState("size-changed", "after-base");
+  }
+
+  private void LogViewState(
+    string operation,
+    string phase,
+    bool? requestedDark = null,
+    string? requestedLoadingText = null,
+    string? affectedProperty = null)
+  {
+    if (IsDisposed)
+    {
+      return;
+    }
+
+    int ChildIndex(Control control)
+    {
+      return control.Parent == this && Controls.Contains(control)
+        ? Controls.GetChildIndex(control)
+        : -1;
+    }
+
+    static object BoundsOf(Control control) => new
+    {
+      control.Left,
+      control.Top,
+      control.Width,
+      control.Height
+    };
+
+    DiagnosticLog.Write("transcript.view_state", new
+    {
+      operation,
+      phase,
+      requestedDark,
+      requestedLoadingText,
+      affectedProperty,
+      initialized = _initialized,
+      dark = _dark,
+      refreshInProgress = _refreshInProgress,
+      refreshPending = _refreshPending,
+      renderGeneration = _renderGeneration,
+      activeRenderGeneration = _activeRenderGeneration,
+      sessionPath = _sessionPath,
+      viewVisible = Visible,
+      viewBounds = BoundsOf(this),
+      loading = new
+      {
+        visible = _loadingLabel.Visible,
+        text = _loadingLabel.Text,
+        bounds = BoundsOf(_loadingLabel),
+        childIndex = ChildIndex(_loadingLabel),
+        parent = _loadingLabel.Parent?.GetType().FullName,
+        handleCreated = _loadingLabel.IsHandleCreated,
+        handle = _loadingLabel.IsHandleCreated ? _loadingLabel.Handle.ToInt64() : 0L
+      },
+      webView = new
+      {
+        visible = _webView.Visible,
+        bounds = BoundsOf(_webView),
+        childIndex = ChildIndex(_webView),
+        parent = _webView.Parent?.GetType().FullName,
+        handleCreated = _webView.IsHandleCreated,
+        handle = _webView.IsHandleCreated ? _webView.Handle.ToInt64() : 0L,
+        coreReady = _webView.CoreWebView2 is not null
+      },
+      failure = new
+      {
+        visible = _failureLabel.Visible,
+        bounds = BoundsOf(_failureLabel),
+        childIndex = ChildIndex(_failureLabel)
+      }
+    });
   }
 
   private sealed record TranscriptRenderPayload(

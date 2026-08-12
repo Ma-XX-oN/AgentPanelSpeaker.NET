@@ -1,3 +1,10 @@
+## v205 TranscriptView state diagnostics
+
+- Adds targeted `transcript.view_state` diagnostics around every TranscriptView path that directly changes the loading label, WebView2 visibility, failure view, or transcript theme.
+- Logs loading/WebView2/failure visibility, bounds, child Z-order index, parent, HWND state, render state, and session state before/after those mutations.
+- Adds visibility/parent-change, layout, and size-change diagnostics so a theme switch that resurrects or reorders the loading status view can be attributed to the exact event/path.
+- No intentional TranscriptView behaviour change is made in this version.
+
 ## v204 snapshot-covered theme transition
 
 - Captures the already-rendered MainForm immediately before a theme transition.
