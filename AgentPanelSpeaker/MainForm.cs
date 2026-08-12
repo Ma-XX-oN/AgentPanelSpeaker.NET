@@ -250,7 +250,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v201";
+    Text = "Agent Panel Speaker v202";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3394,38 +3394,91 @@ internal sealed class MainForm : Form, IMessageFilter
     _pendingThemeReason = null;
     _themeTransitionActive = true;
 
-    bool redrawSuppressed = IsHandleCreated;
-    IntPtr redrawHandle = redrawSuppressed ? Handle : IntPtr.Zero;
+    bool redrawAvailable = IsHandleCreated;
+    IntPtr redrawHandle = redrawAvailable ? Handle : IntPtr.Zero;
+    Control? focusedBefore = FindFocusedDescendant(this);
+    bool mainContainedFocusBefore = ContainsFocus;
+    var redrawControls = new List<Control>();
+    EventHandler recreatedHandleSuppressor = (sender, eventArgs) =>
+    {
+      if (!_themeTransitionActive ||
+          sender is not Control control ||
+          control.IsDisposed ||
+          control.Disposing ||
+          !control.IsHandleCreated)
+      {
+        return;
+      }
+
+      IntPtr handle = control.Handle;
+      _ = SendMessage(handle, WmSetRedraw, IntPtr.Zero, IntPtr.Zero);
+      DiagnosticLog.Write("theme.child_redraw_suppressed_after_recreate", new
+      {
+        theme = requestedTheme.ToString(),
+        controlType = control.GetType().FullName,
+        control.Name,
+        handle = handle.ToInt64()
+      });
+    };
+
+    if (redrawAvailable)
+    {
+      CollectRedrawControls(this, redrawControls);
+      foreach (Control control in redrawControls)
+      {
+        control.HandleCreated += recreatedHandleSuppressor;
+        if (control.IsHandleCreated)
+        {
+          _ = SendMessage(
+            control.Handle,
+            WmSetRedraw,
+            IntPtr.Zero,
+            IntPtr.Zero);
+        }
+      }
+    }
+
     DiagnosticLog.Write("theme.transition_begin", new
     {
       theme = requestedTheme.ToString(),
       reason,
-      redrawSuppressed,
-      handle = redrawHandle.ToInt64()
+      redrawSuppressed = redrawAvailable,
+      redrawScope = "children-only",
+      childCount = redrawControls.Count,
+      handle = redrawHandle.ToInt64(),
+      focusedBefore = DescribeControlForTabDiagnostics(focusedBefore),
+      mainContainedFocusBefore
     });
 
     try
     {
-      if (redrawSuppressed)
-      {
-        _ = SendMessage(
-          redrawHandle,
-          WmSetRedraw,
-          IntPtr.Zero,
-          IntPtr.Zero);
-      }
-
       ApplyCurrentTheme(requestedTheme);
     }
     finally
     {
-      if (redrawSuppressed && IsHandleCreated && Handle == redrawHandle)
+      foreach (Control control in redrawControls)
       {
-        _ = SendMessage(
-          redrawHandle,
-          WmSetRedraw,
-          new IntPtr(1),
-          IntPtr.Zero);
+        if (!control.IsDisposed)
+        {
+          control.HandleCreated -= recreatedHandleSuppressor;
+        }
+      }
+
+      if (redrawAvailable && IsHandleCreated && Handle == redrawHandle)
+      {
+        var currentRedrawControls = new List<Control>();
+        CollectRedrawControls(this, currentRedrawControls);
+        foreach (Control control in currentRedrawControls)
+        {
+          if (control.IsHandleCreated && !control.IsDisposed)
+          {
+            _ = SendMessage(
+              control.Handle,
+              WmSetRedraw,
+              new IntPtr(1),
+              IntPtr.Zero);
+          }
+        }
 
         bool redrawSucceeded = RedrawWindow(
           redrawHandle,
@@ -3437,8 +3490,30 @@ internal sealed class MainForm : Form, IMessageFilter
         {
           theme = requestedTheme.ToString(),
           handle = redrawHandle.ToInt64(),
+          redrawScope = "children-only",
+          childCount = currentRedrawControls.Count,
           redrawSucceeded,
           win32Error = redrawSucceeded ? 0 : Marshal.GetLastWin32Error()
+        });
+      }
+
+      if (mainContainedFocusBefore &&
+          ReferenceEquals(Form.ActiveForm, this) &&
+          focusedBefore is not null &&
+          !focusedBefore.IsDisposed &&
+          focusedBefore.Enabled &&
+          focusedBefore.Visible &&
+          focusedBefore.CanSelect &&
+          !focusedBefore.ContainsFocus)
+      {
+        bool restored = focusedBefore.Focus();
+        DiagnosticLog.Write("theme.transition_focus_restore", new
+        {
+          theme = requestedTheme.ToString(),
+          restored,
+          focusedBefore = DescribeControlForTabDiagnostics(focusedBefore),
+          focusedAfter = DescribeControlForTabDiagnostics(
+            FindFocusedDescendant(this))
         });
       }
 
@@ -3458,6 +3533,25 @@ internal sealed class MainForm : Form, IMessageFilter
       QueueThemeApplication(
         _pendingThemeRequest.Value,
         _pendingThemeReason ?? "coalesced");
+    }
+  }
+
+  /// <summary>
+  /// Collects existing managed child controls without forcing HWND creation.
+  /// The MainForm itself is intentionally excluded so redraw suppression does
+  /// not alter top-level activation/visibility semantics.
+  /// </summary>
+  private static void CollectRedrawControls(
+    Control parent,
+    List<Control> destination)
+  {
+    foreach (Control child in parent.Controls)
+    {
+      destination.Add(child);
+      if (child.HasChildren)
+      {
+        CollectRedrawControls(child, destination);
+      }
     }
   }
 

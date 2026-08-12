@@ -1,3 +1,19 @@
+## v202 child-only redraw suppression during theme transitions
+
+- Theme transitions no longer send `WM_SETREDRAW(FALSE)` to the MainForm HWND.
+  The top-level window remains visible/active while its managed child HWNDs are
+  redraw-suppressed.
+- Existing child HWNDs have redraw disabled before the theme mutation.  A
+  temporary `HandleCreated` hook immediately suppresses redraw on replacement
+  HWNDs created by WinForms during the same transition.
+- After the mutation, redraw is re-enabled on the current child HWND hierarchy
+  and `RedrawWindow(... RDW_ALLCHILDREN | RDW_UPDATENOW)` synchronously paints
+  the completed result.
+- The previously focused managed child is restored only as a fallback when the
+  MainForm remains active but that child lost focus during handle recreation.
+- The Theme ComboBox remains enabled and rapid requests remain serialized and
+  coalesced.
+
 ## v201 keep Theme selector enabled during serialized transitions
 
 - The Theme ComboBox is no longer disabled/re-enabled while applying a theme.
