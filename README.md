@@ -1,3 +1,11 @@
+## v191 MainForm Tab/Shift+Tab activation diagnostics
+
+> v191 adds diagnostics only for MainForm-level Tab and Shift+Tab traversal.
+> It records focused/active controls, active tab stops, foreground and active
+> HWNDs, MainForm Z-order rank, cursor position/monitor, the top-level window
+> under the cursor, and immediate/deferred post-traversal state.  No intended
+> keyboard traversal behavior changes are included.
+
 ## v190 tab-boundary focus retention and dark tab seam fix
 
 > v190 fixes the shared popup traversal path that could close an exhausted

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 
 namespace AgentPanelSpeaker;
 
@@ -27,6 +29,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int WmNcXButtonDown = 0x00AB;
   private const int WmSystemKeyDown = 0x0104;
   private const uint GaRoot = 2;
+  private const uint GwHwndNext = 2;
 
   [DllImport("user32.dll", CharSet = CharSet.Auto)]
   private static extern IntPtr SendMessage(
@@ -37,6 +40,53 @@ internal sealed class MainForm : Form, IMessageFilter
 
   [DllImport("user32.dll")]
   private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+
+  [DllImport("user32.dll", EntryPoint = "GetForegroundWindow")]
+  private static extern IntPtr GetForegroundWindowForTabDiagnostics();
+
+  [DllImport("user32.dll", EntryPoint = "GetActiveWindow")]
+  private static extern IntPtr GetActiveWindowForTabDiagnostics();
+
+  [DllImport("user32.dll", EntryPoint = "WindowFromPoint")]
+  private static extern IntPtr WindowFromPointForTabDiagnostics(NativePoint point);
+
+  [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+  private static extern uint GetWindowThreadProcessIdForTabDiagnostics(
+    IntPtr window,
+    out uint processId);
+
+  [DllImport("user32.dll", CharSet = CharSet.Auto, EntryPoint = "GetWindowText")]
+  private static extern int GetWindowTextForTabDiagnostics(
+    IntPtr window,
+    StringBuilder text,
+    int maximumCount);
+
+  [DllImport("user32.dll", CharSet = CharSet.Auto, EntryPoint = "GetClassName")]
+  private static extern int GetClassNameForTabDiagnostics(
+    IntPtr window,
+    StringBuilder className,
+    int maximumCount);
+
+  [DllImport("user32.dll", EntryPoint = "GetTopWindow")]
+  private static extern IntPtr GetTopWindowForTabDiagnostics(IntPtr window);
+
+  [DllImport("user32.dll", EntryPoint = "GetWindow")]
+  private static extern IntPtr GetWindowForTabDiagnostics(
+    IntPtr window,
+    uint command);
+
+  [StructLayout(LayoutKind.Sequential)]
+  private readonly struct NativePoint
+  {
+    public NativePoint(Point point)
+    {
+      X = point.X;
+      Y = point.Y;
+    }
+
+    public readonly int X;
+    public readonly int Y;
+  }
 
   private readonly JsonlSessionMonitor _monitor = new();
   private readonly SpeechService _speech = new();
@@ -174,7 +224,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v190";
+    Text = "Agent Panel Speaker v191";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -2581,22 +2631,340 @@ internal sealed class MainForm : Form, IMessageFilter
 
     Keys modifiers = keyData & Keys.Modifiers;
     Keys keyCode = keyData & Keys.KeyCode;
+    bool logTabTraversal = keyCode == Keys.Tab &&
+      (modifiers == Keys.None || modifiers == Keys.Shift);
+    MainTabSnapshot? tabBefore = logTabTraversal
+      ? CaptureMainTabSnapshot()
+      : null;
+    if (tabBefore is not null)
+    {
+      DiagnosticLog.Write("main.tab_before", new
+      {
+        direction = modifiers == Keys.Shift ? "backward" : "forward",
+        keyData = keyData.ToString(),
+        state = tabBefore,
+        tabStops = DescribeMainTabStops()
+      });
+    }
+
     bool hasAltOnly = modifiers == Keys.Alt;
     bool hasNoModifiers = modifiers == Keys.None;
     if (!hasAltOnly && !hasNoModifiers)
     {
-      return base.ProcessCmdKey(ref message, keyData);
+      bool handled = base.ProcessCmdKey(ref message, keyData);
+      CompleteMainTabDiagnostics(keyData, tabBefore, handled);
+      return handled;
     }
     if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
     {
-      return base.ProcessCmdKey(ref message, keyData);
+      bool handled = base.ProcessCmdKey(ref message, keyData);
+      CompleteMainTabDiagnostics(keyData, tabBefore, handled);
+      return handled;
     }
 
     string shortcut = hasAltOnly
       ? $"Alt+{FormatTransportKey(keyCode)}"
       : FormatTransportKey(keyCode);
-    return ActivateTransportShortcut(keyCode, shortcut) ||
+    bool result = ActivateTransportShortcut(keyCode, shortcut) ||
       base.ProcessCmdKey(ref message, keyData);
+    CompleteMainTabDiagnostics(keyData, tabBefore, result);
+    return result;
+  }
+
+  private sealed record MainTabSnapshot(
+    object? FocusedControl,
+    object? ActiveControl,
+    bool MainFormContainsFocus,
+    string? ManagedActiveForm,
+    string Foreground,
+    string ActiveWindow,
+    int MainFormZOrderRank,
+    Point CursorPosition,
+    string CursorMonitor,
+    Rectangle CursorMonitorBounds,
+    Rectangle CursorMonitorWorkingArea,
+    object WindowUnderCursor);
+
+  private void CompleteMainTabDiagnostics(
+    Keys keyData,
+    MainTabSnapshot? before,
+    bool handled)
+  {
+    if (before is null)
+    {
+      return;
+    }
+
+    string direction = (keyData & Keys.Shift) != 0
+      ? "backward"
+      : "forward";
+    MainTabSnapshot immediate = CaptureMainTabSnapshot();
+    DiagnosticLog.Write("main.tab_after", new
+    {
+      direction,
+      keyData = keyData.ToString(),
+      handled,
+      before,
+      after = immediate,
+      cursorMoved = before.CursorPosition != immediate.CursorPosition,
+      foregroundChanged = before.Foreground != immediate.Foreground,
+      focusLeftMainForm = !immediate.MainFormContainsFocus
+    });
+
+    if (!immediate.MainFormContainsFocus ||
+        immediate.FocusedControl is null)
+    {
+      DiagnosticLog.Write("main.tab_boundary_observed", new
+      {
+        direction,
+        handled,
+        before,
+        after = immediate,
+        tabStops = DescribeMainTabStops()
+      });
+    }
+
+    if (!IsHandleCreated || IsDisposed)
+    {
+      return;
+    }
+
+    try
+    {
+      BeginInvoke((Action)(() =>
+      {
+        MainTabSnapshot settled = CaptureMainTabSnapshot();
+        DiagnosticLog.Write("main.tab_settled", new
+        {
+          direction,
+          keyData = keyData.ToString(),
+          handled,
+          before,
+          immediate,
+          settled,
+          cursorMovedFromBefore =
+            before.CursorPosition != settled.CursorPosition,
+          cursorMovedAfterImmediate =
+            immediate.CursorPosition != settled.CursorPosition,
+          foregroundChangedFromBefore = before.Foreground != settled.Foreground,
+          foregroundChangedAfterImmediate =
+            immediate.Foreground != settled.Foreground,
+          focusLeftMainForm = !settled.MainFormContainsFocus
+        });
+      }));
+    }
+    catch (InvalidOperationException exception)
+    {
+      DiagnosticLog.WriteException(
+        "main.tab_settled_logging_failed",
+        exception,
+        direction,
+        isTerminating: false);
+    }
+  }
+
+  private MainTabSnapshot CaptureMainTabSnapshot()
+  {
+    Control? focused = FindFocusedDescendant(this);
+    Control? active = GetDeepestActiveControl(this);
+    Point cursor = Cursor.Position;
+    Screen screen = Screen.FromPoint(cursor);
+    IntPtr foreground = GetForegroundWindowForTabDiagnostics();
+    IntPtr activeWindow = GetActiveWindowForTabDiagnostics();
+    IntPtr underCursor = GetAncestor(
+      WindowFromPointForTabDiagnostics(new NativePoint(cursor)),
+      GaRoot);
+
+    return new MainTabSnapshot(
+      DescribeControlForTabDiagnostics(focused),
+      DescribeControlForTabDiagnostics(active),
+      ContainsFocus,
+      Form.ActiveForm?.GetType().FullName,
+      DescribeNativeWindowForTabDiagnostics(foreground),
+      DescribeNativeWindowForTabDiagnostics(activeWindow),
+      GetTopLevelZOrderRankForTabDiagnostics(
+        IsHandleCreated ? Handle : IntPtr.Zero),
+      cursor,
+      screen.DeviceName,
+      screen.Bounds,
+      screen.WorkingArea,
+      DescribeNativeWindowObjectForTabDiagnostics(underCursor));
+  }
+
+  private object[] DescribeMainTabStops()
+  {
+    var controls = new List<object>();
+    CollectTabStops(this, GetType().Name, controls);
+    return controls.ToArray();
+  }
+
+  private static void CollectTabStops(
+    Control parent,
+    string parentPath,
+    List<object> destination)
+  {
+    Control[] children = parent.Controls.Cast<Control>()
+      .OrderBy(control => control.TabIndex)
+      .ThenBy(control => control.Name, StringComparer.Ordinal)
+      .ToArray();
+    foreach (Control child in children)
+    {
+      string segment = string.IsNullOrWhiteSpace(child.Name)
+        ? child.GetType().Name
+        : child.Name;
+      string path = $"{parentPath}/{segment}";
+      if (child.TabStop && child.Visible && child.Enabled && child.CanSelect)
+      {
+        destination.Add(new
+        {
+          path,
+          type = child.GetType().FullName,
+          child.Name,
+          text = TruncateTabDiagnosticText(child.Text),
+          child.TabIndex,
+          child.TabStop,
+          child.Enabled,
+          child.Visible,
+          child.CanSelect,
+          child.Focused,
+          child.ContainsFocus,
+          bounds = GetScreenBoundsForTabDiagnostics(child)
+        });
+      }
+      if (child.HasChildren && child.Visible && child.Enabled)
+      {
+        CollectTabStops(child, path, destination);
+      }
+    }
+  }
+
+  private static Control? FindFocusedDescendant(Control parent)
+  {
+    if (parent.Focused)
+    {
+      return parent;
+    }
+    foreach (Control child in parent.Controls)
+    {
+      if (!child.ContainsFocus && !child.Focused)
+      {
+        continue;
+      }
+      return FindFocusedDescendant(child) ?? child;
+    }
+    return null;
+  }
+
+  private static Control? GetDeepestActiveControl(ContainerControl container)
+  {
+    Control? current = container.ActiveControl;
+    while (current is ContainerControl nested && nested.ActiveControl is not null)
+    {
+      current = nested.ActiveControl;
+    }
+    return current;
+  }
+
+  private static object? DescribeControlForTabDiagnostics(Control? control)
+  {
+    if (control is null)
+    {
+      return null;
+    }
+    return new
+    {
+      type = control.GetType().FullName,
+      control.Name,
+      text = TruncateTabDiagnosticText(control.Text),
+      control.TabIndex,
+      control.TabStop,
+      control.Enabled,
+      control.Visible,
+      control.CanSelect,
+      control.Focused,
+      control.ContainsFocus,
+      bounds = GetScreenBoundsForTabDiagnostics(control),
+      path = GetControlPathForTabDiagnostics(control)
+    };
+  }
+
+  private static string GetControlPathForTabDiagnostics(Control control)
+  {
+    var parts = new Stack<string>();
+    for (Control? current = control; current is not null; current = current.Parent)
+    {
+      parts.Push(string.IsNullOrWhiteSpace(current.Name)
+        ? current.GetType().Name
+        : current.Name);
+    }
+    return string.Join("/", parts);
+  }
+
+  private static Rectangle GetScreenBoundsForTabDiagnostics(Control control)
+  {
+    try
+    {
+      return control.RectangleToScreen(control.ClientRectangle);
+    }
+    catch (InvalidOperationException)
+    {
+      return Rectangle.Empty;
+    }
+  }
+
+  private static string TruncateTabDiagnosticText(string? text)
+  {
+    const int MaximumLength = 80;
+    if (string.IsNullOrEmpty(text) || text.Length <= MaximumLength)
+    {
+      return text ?? string.Empty;
+    }
+    return text[..MaximumLength];
+  }
+
+  private static string DescribeNativeWindowForTabDiagnostics(IntPtr window)
+  {
+    object description = DescribeNativeWindowObjectForTabDiagnostics(window);
+    return JsonSerializer.Serialize(description);
+  }
+
+  private static object DescribeNativeWindowObjectForTabDiagnostics(IntPtr window)
+  {
+    if (window == IntPtr.Zero)
+    {
+      return new { hwnd = "0x0" };
+    }
+    _ = GetWindowThreadProcessIdForTabDiagnostics(window, out uint processId);
+    var text = new StringBuilder(256);
+    _ = GetWindowTextForTabDiagnostics(window, text, text.Capacity);
+    var className = new StringBuilder(256);
+    _ = GetClassNameForTabDiagnostics(window, className, className.Capacity);
+    return new
+    {
+      hwnd = $"0x{window.ToInt64():X}",
+      processId,
+      belongsToCurrentProcess = processId == (uint)Environment.ProcessId,
+      className = className.ToString(),
+      text = text.ToString()
+    };
+  }
+
+  private static int GetTopLevelZOrderRankForTabDiagnostics(IntPtr target)
+  {
+    if (target == IntPtr.Zero)
+    {
+      return -1;
+    }
+    IntPtr current = GetTopWindowForTabDiagnostics(IntPtr.Zero);
+    for (int rank = 0; current != IntPtr.Zero && rank < 512; rank++)
+    {
+      if (current == target)
+      {
+        return rank;
+      }
+      current = GetWindowForTabDiagnostics(current, GwHwndNext);
+    }
+    return -1;
   }
 
   /// <summary>
