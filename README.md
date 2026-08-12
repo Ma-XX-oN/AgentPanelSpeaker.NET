@@ -1,3 +1,10 @@
+## v204 snapshot-covered theme transition
+
+- Captures the already-rendered MainForm immediately before a theme transition.
+- Shows that bitmap in a borderless, non-activating, click-through overlay while the real window is at 1/255 opacity.
+- Keeps the snapshot visible through child-HWND theme mutation and the synchronous final redraw, then restores the real window opacity before removing the overlay.
+- The snapshot is visual only; no duplicate application controls or event handlers are created.
+
 ## v203 low-opacity theme transition
 
 - The MainForm now drops to 1/255 opacity while a serialized theme transition is being applied.

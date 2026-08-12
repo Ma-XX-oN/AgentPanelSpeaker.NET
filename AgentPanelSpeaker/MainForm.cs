@@ -250,7 +250,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v203";
+    Text = "Agent Panel Speaker v204";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3401,6 +3401,7 @@ internal sealed class MainForm : Form, IMessageFilter
     double opacityBefore = Opacity;
     const double TransitionOpacity = 1.0 / 255.0;
     bool opacityLowered = false;
+    ThemeTransitionSnapshotForm? transitionSnapshot = null;
     var redrawControls = new List<Control>();
     EventHandler recreatedHandleSuppressor = (sender, eventArgs) =>
     {
@@ -3443,6 +3444,52 @@ internal sealed class MainForm : Form, IMessageFilter
 
     try
     {
+      if (Visible && IsHandleCreated)
+      {
+        Bitmap? snapshotBitmap = null;
+        try
+        {
+          snapshotBitmap = new Bitmap(Width, Height);
+          using (Graphics snapshotGraphics = Graphics.FromImage(snapshotBitmap))
+          {
+            snapshotGraphics.CopyFromScreen(
+              Left,
+              Top,
+              0,
+              0,
+              snapshotBitmap.Size,
+              CopyPixelOperation.SourceCopy);
+          }
+
+          transitionSnapshot = new ThemeTransitionSnapshotForm(
+            snapshotBitmap,
+            Bounds);
+          snapshotBitmap = null; // Ownership transferred to the snapshot form.
+          transitionSnapshot.Show(this);
+          transitionSnapshot.Update();
+
+          DiagnosticLog.Write("theme.transition_snapshot", new
+          {
+            theme = requestedTheme.ToString(),
+            phase = "shown",
+            bounds = Bounds.ToString(),
+            snapshotHandle = transitionSnapshot.Handle.ToInt64()
+          });
+        }
+        catch (Exception exception)
+        {
+          snapshotBitmap?.Dispose();
+          transitionSnapshot?.Dispose();
+          transitionSnapshot = null;
+          DiagnosticLog.Write("theme.transition_snapshot", new
+          {
+            theme = requestedTheme.ToString(),
+            phase = "failed",
+            exception = exception.ToString()
+          });
+        }
+      }
+
       if (Visible && opacityBefore > TransitionOpacity)
       {
         Opacity = TransitionOpacity;
@@ -3516,6 +3563,22 @@ internal sealed class MainForm : Form, IMessageFilter
         {
           theme = requestedTheme.ToString(),
           opacity = Opacity
+        });
+      }
+
+      if (transitionSnapshot is not null)
+      {
+        long snapshotHandle = transitionSnapshot.IsHandleCreated
+          ? transitionSnapshot.Handle.ToInt64()
+          : 0;
+        transitionSnapshot.Close();
+        transitionSnapshot.Dispose();
+        transitionSnapshot = null;
+        DiagnosticLog.Write("theme.transition_snapshot", new
+        {
+          theme = requestedTheme.ToString(),
+          phase = "removed",
+          snapshotHandle
         });
       }
 
