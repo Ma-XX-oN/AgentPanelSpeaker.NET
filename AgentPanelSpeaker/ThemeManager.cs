@@ -110,25 +110,50 @@ internal sealed class ThemedTabControl : TabControl
     Color background = BackColor;
 
     // Cover the native bright frame before drawing the subtler app border.
+    // The themed Windows tab renderer can leave a several-pixel highlight at
+    // the page/header seam, so erase a wider band than the final one-pixel
+    // border instead of only painting over the nominal DisplayRectangle edge.
+    int seamTop = Math.Max(0, page.Top - 4);
+    int seamHeight = Math.Min(6, Math.Max(0, Height - seamTop));
     using (var erase = new SolidBrush(background))
     {
       graphics.FillRectangle(
-        erase, page.Left - 2, page.Top - 2, 2, page.Height + 4);
+        erase, page.Left - 3, page.Top - 3, 3, page.Height + 6);
       graphics.FillRectangle(
-        erase, page.Right, page.Top - 2, 2, page.Height + 4);
+        erase, page.Right, page.Top - 3, 3, page.Height + 6);
+      if (seamHeight > 0)
+      {
+        graphics.FillRectangle(erase, 0, seamTop, Width, seamHeight);
+      }
       graphics.FillRectangle(
-        erase, page.Left - 2, page.Top - 2, page.Width + 4, 2);
-      graphics.FillRectangle(
-        erase, page.Left - 2, page.Bottom, page.Width + 4, 2);
+        erase, page.Left - 3, page.Bottom, page.Width + 6, 3);
     }
 
     using var pen = new Pen(border);
-    graphics.DrawRectangle(
+    graphics.DrawLine(
       pen,
-      page.Left - 1,
-      page.Top - 1,
-      page.Width + 1,
-      page.Height + 1);
+      Math.Max(0, page.Left - 1),
+      Math.Max(0, page.Top - 1),
+      Math.Min(Width - 1, page.Right),
+      Math.Max(0, page.Top - 1));
+    graphics.DrawLine(
+      pen,
+      Math.Max(0, page.Left - 1),
+      Math.Max(0, page.Top - 1),
+      Math.Max(0, page.Left - 1),
+      Math.Min(Height - 1, page.Bottom));
+    graphics.DrawLine(
+      pen,
+      Math.Min(Width - 1, page.Right),
+      Math.Max(0, page.Top - 1),
+      Math.Min(Width - 1, page.Right),
+      Math.Min(Height - 1, page.Bottom));
+    graphics.DrawLine(
+      pen,
+      Math.Max(0, page.Left - 1),
+      Math.Min(Height - 1, page.Bottom),
+      Math.Min(Width - 1, page.Right),
+      Math.Min(Height - 1, page.Bottom));
   }
 }
 

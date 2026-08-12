@@ -1,3 +1,12 @@
+## v190 tab-boundary focus retention and dark tab seam fix
+
+> v190 fixes the shared popup traversal path that could close an exhausted
+> parent popup with `returnFocus: false`, leaving `Form.ActiveForm` null when
+> Tab/Shift+Tab ran past the outermost MainForm control. The shared controller
+> now restores focus while unwinding popup levels and wraps at the containing
+> form boundary. Dark-mode tab painting also explicitly covers the native
+> bright page/header seam with the application dark surface and muted border.
+
 ## v189 centralized dark tab chrome
 
 > v189 themes all application tab controls through `ThemedTabControl`: light

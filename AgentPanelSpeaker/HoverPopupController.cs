@@ -790,9 +790,12 @@ internal sealed class HoverPopupController : IDisposable
         }
       }
 
+      // Restore focus to the parent anchor before unwinding another popup
+      // level. If there is no next control at a higher level, that restored
+      // focus keeps the application active instead of leaving ActiveForm null.
       CloseNode(
         node.Parent,
-        returnFocus: false,
+        returnFocus: true,
         keyboardClose: true,
         closeReason: forward
           ? "tab-exit-parent-exhausted"
@@ -803,6 +806,7 @@ internal sealed class HoverPopupController : IDisposable
 
     Control current = node.Anchor;
     Control? parent = current.Parent;
+    Form? containingForm = node.Anchor.FindForm();
     while (parent is not null && !parent.IsDisposed)
     {
       if (parent.SelectNextControl(
@@ -818,6 +822,33 @@ internal sealed class HoverPopupController : IDisposable
       current = parent;
       parent = parent.Parent;
     }
+
+    // Match normal WinForms Tab behaviour at the outermost boundary: wrap to
+    // the first/last active control in the containing form rather than letting
+    // keyboard focus fall out of the application.
+    if (containingForm is not null &&
+        !containingForm.IsDisposed &&
+        containingForm.SelectNextControl(
+          null,
+          forward,
+          tabStopOnly: true,
+          nested: true,
+          wrap: true))
+    {
+      DiagnosticLog.Write("popup.main_window_tab_wrapped", new
+      {
+        node.Id,
+        forward,
+        activeForm = DescribeControl(Form.ActiveForm),
+        focusedControl = DescribeControl(FindFocusedControl(containingForm))
+      });
+      return;
+    }
+
+    // SelectNextControl can fail if the form currently has no selectable
+    // controls. Keep its activation rather than yielding to another process.
+    ActivateContainingForm(node.Anchor);
+    node.Anchor.Focus();
   }
 
   private void ReevaluateClose(PopupNode node)
