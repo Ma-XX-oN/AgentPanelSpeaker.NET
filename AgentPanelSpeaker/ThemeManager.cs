@@ -248,12 +248,41 @@ internal sealed class ThemedTabControl : TabControl
 internal static class ThemeManager
 {
   private static int _diagnosticGeneration;
+  private static int _nativeTraceGeneration;
+  private static long _nativeTraceDeadlineTicks;
 
   public static int SetDiagnosticGeneration(int generation)
   {
     int previous = _diagnosticGeneration;
     _diagnosticGeneration = generation;
     return previous;
+  }
+
+  /// <summary>
+  /// Starts a short native-message trace window after a theme application.
+  /// </summary>
+  public static void StartNativeMessageTrace(int generation)
+  {
+    _nativeTraceGeneration = generation;
+    _nativeTraceDeadlineTicks = Environment.TickCount64 + 1500;
+    DiagnosticLog.Write("theme.native_trace_started", new
+    {
+      generation,
+      durationMs = 1500
+    });
+  }
+
+  /// <summary>
+  /// Gets the active post-theme native-message trace generation, or zero.
+  /// </summary>
+  public static int GetNativeMessageTraceGeneration()
+  {
+    if (_nativeTraceGeneration <= 0 ||
+        Environment.TickCount64 > _nativeTraceDeadlineTicks)
+    {
+      return 0;
+    }
+    return _nativeTraceGeneration;
   }
 
   /// <summary>

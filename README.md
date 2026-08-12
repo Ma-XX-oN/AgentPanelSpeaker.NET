@@ -1,3 +1,9 @@
+## v199 native message diagnostics
+
+- Adds diagnostic-only tracing of all MainForm native messages for 1.5 seconds after each theme application.
+- Adds native-message and handle-lifetime tracing for theme-sensitive child controls, including combo boxes, text boxes, buttons, check boxes, track bars, tab controls, and WebView2 controls.
+- Does not intentionally change theme-switch behaviour.
+
 ## v198 custom-paint theme crash diagnostics
 
 - Adds generation-correlated begin/end diagnostics around custom paint paths used by themed tabs, glyph buttons, speech-profile controls, popup borders, and owner-drawn combo boxes.

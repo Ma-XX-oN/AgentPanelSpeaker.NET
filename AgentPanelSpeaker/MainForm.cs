@@ -157,6 +157,8 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _diagnosticsMaximized;
   private int _appliedTranscriptTrackingMilliseconds = -1;
   private string? _pendingPlayPauseTrigger;
+  private readonly ThemeNativeMessageTracer _themeNativeMessageTracer = new();
+  private bool _themeNativeMessageTracerStarted;
   private int _monitorSession;
   private int _historyPreviewGeneration;
   private long _pendingMonitorSeekNodeId;
@@ -209,6 +211,7 @@ internal sealed class MainForm : Form, IMessageFilter
       ConnectEvents();
       UpdateControlState();
       ApplyCurrentTheme();
+      _themeNativeMessageTracer.Attach(this);
       Application.AddMessageFilter(this);
       Application.Idle += ApplicationIdle;
       SystemEvents.UserPreferenceChanged += WindowsUserPreferenceChanged;
@@ -229,7 +232,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v198";
+    Text = "Agent Panel Speaker v199";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3425,6 +3428,7 @@ internal sealed class MainForm : Form, IMessageFilter
         disposing = Disposing
       });
       _lastCompletedThemeGeneration = generation;
+      ThemeManager.StartNativeMessageTrace(generation);
       QueuePostThemeDiagnostics(generation, theme, dark);
     }
   }
@@ -3501,6 +3505,12 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void ApplicationIdle(object? sender, EventArgs eventArgs)
   {
+    if (!_themeNativeMessageTracerStarted)
+    {
+      _themeNativeMessageTracerStarted = true;
+      _themeNativeMessageTracer.Start();
+    }
+
     int generation = _pendingIdleThemeGeneration;
     if (generation <= 0)
     {
@@ -3899,6 +3909,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _displayAwake.Dispose();
     _speech.Dispose();
     _fenceDebounceTimer.Dispose();
+    _themeNativeMessageTracer.Dispose();
     _transcriptSettingsHoverController.Dispose();
     _transcriptSettingsSaveTimer.Dispose();
     foreach (VoiceRowControls row in _voiceRows.Values)
@@ -4142,14 +4153,17 @@ internal sealed class MainForm : Form, IMessageFilter
     const int WmNcPaint = 0x0085;
     const int WmThemeChanged = 0x031A;
 
-    bool trace = message.Msg is
+    int nativeTraceGeneration = ThemeManager.GetNativeMessageTraceGeneration();
+    bool trace = nativeTraceGeneration > 0 || message.Msg is
       WmPaint or
       WmEraseBkgnd or
       WmSysColorChange or
       WmSettingChange or
       WmNcPaint or
       WmThemeChanged;
-    int generation = _lastCompletedThemeGeneration;
+    int generation = nativeTraceGeneration > 0
+      ? nativeTraceGeneration
+      : _lastCompletedThemeGeneration;
     if (trace && generation > 0)
     {
       DiagnosticLog.Write("theme.main_wndproc", new
