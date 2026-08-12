@@ -1,3 +1,9 @@
+## v201 keep Theme selector enabled during serialized transitions
+
+- The Theme ComboBox is no longer disabled/re-enabled while applying a theme.
+- Serialized/coalesced theme transitions and redraw suppression remain the mechanism that prevents overlapping theme applications.
+- This preserves focus on the Theme selector instead of causing WinForms to advance focus when the focused ComboBox is temporarily disabled.
+
 ## v200 serialized flicker-free theme transitions
 
 - Theme changes requested from the selector are deferred until the current
