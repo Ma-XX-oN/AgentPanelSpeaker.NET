@@ -224,7 +224,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v192";
+    Text = "Agent Panel Speaker v193";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -346,6 +346,12 @@ internal sealed class MainForm : Form, IMessageFilter
     _diagnosticHost.Controls.Add(_diagnosticTabs);
     _diagnosticHost.Controls.Add(_maximizeTranscriptButton);
     _diagnosticHost.Controls.Add(_transcriptSettingsButton);
+    // The settings button is visually left of maximize even though maximize
+    // is added first for z-order reasons.  Keep z-order and tab order separate.
+    SetTabOrder(
+      _diagnosticTabs,
+      _transcriptSettingsButton,
+      _maximizeTranscriptButton);
     _transcriptSettingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _maximizeTranscriptButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
     _transcriptSettingsSaveTimer.Interval = 250;
@@ -376,6 +382,12 @@ internal sealed class MainForm : Form, IMessageFilter
       _browseButton, MakeInlineLabel("Poll ms:"), _pollNumeric,
       _followLatestCheckBox
     });
+    SetTabOrder(
+      _sourceComboBox,
+      _detectLatestButton,
+      _browseButton,
+      _pollNumeric,
+      _followLatestCheckBox);
 
     var speechTable = new TableLayoutPanel
     {
@@ -408,6 +420,11 @@ internal sealed class MainForm : Form, IMessageFilter
       _pronunciationsButton,
       _speakExistingCheckBox, _keepDisplayOnCheckBox
     });
+    SetTabOrder(
+      _fenceTypesTextBox,
+      _pronunciationsButton,
+      _speakExistingCheckBox,
+      _keepDisplayOnCheckBox);
 
     var transport = new FlowLayoutPanel
     {
@@ -421,6 +438,15 @@ internal sealed class MainForm : Form, IMessageFilter
       _playPauseButton, _forwardSentenceButton,
       _forwardNodeButton, _forwardSpeakerButton, _processingTimeButton
     });
+    SetTabOrder(
+      _rewindSpeakerButton,
+      _rewindNodeButton,
+      _rewindSentenceButton,
+      _playPauseButton,
+      _forwardSentenceButton,
+      _forwardNodeButton,
+      _forwardSpeakerButton,
+      _processingTimeButton);
     var utility = new FlowLayoutPanel
     {
       AutoSize = true,
@@ -434,6 +460,16 @@ internal sealed class MainForm : Form, IMessageFilter
       _saveSettingsButton, _audioWakeButton, _themeComboBox,
       MakeInlineLabel("Theme:")
     });
+    // FlowDirection is RightToLeft so insertion order is the reverse of the
+    // visual left-to-right order.  Keep the visual layout while making the
+    // actual WinForms tab order match what the user sees.
+    SetTabOrder(
+      _themeComboBox,
+      _audioWakeButton,
+      _saveSettingsButton,
+      _resetSettingsButton,
+      _hotkeysButton,
+      _openLogButton);
 
     var controls = new TableLayoutPanel
     {
@@ -445,6 +481,7 @@ internal sealed class MainForm : Form, IMessageFilter
     controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100.0f));
     controls.Controls.Add(transport, 0, 0);
     controls.Controls.Add(utility, 1, 0);
+    SetTabOrder(transport, utility);
 
     _mainLayout.ColumnCount = 1;
     _mainLayout.RowCount = 8;
@@ -457,14 +494,25 @@ internal sealed class MainForm : Form, IMessageFilter
       _mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     }
     _mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100.0f));
+    TableLayoutPanel sessionDetails = CreateSessionDetailsLayout();
+    Label speechSectionLabel = MakeSectionLabel("Speech by content:");
     _mainLayout.Controls.Add(_instructionsLabel, 0, 0);
     _mainLayout.Controls.Add(sessionControls, 0, 1);
-    _mainLayout.Controls.Add(CreateSessionDetailsLayout(), 0, 2);
-    _mainLayout.Controls.Add(MakeSectionLabel("Speech by content:"), 0, 3);
+    _mainLayout.Controls.Add(sessionDetails, 0, 2);
+    _mainLayout.Controls.Add(speechSectionLabel, 0, 3);
     _mainLayout.Controls.Add(speechTable, 0, 4);
     _mainLayout.Controls.Add(options, 0, 5);
     _mainLayout.Controls.Add(controls, 0, 6);
     _mainLayout.Controls.Add(_diagnosticHost, 0, 7);
+    SetTabOrder(
+      _instructionsLabel,
+      sessionControls,
+      sessionDetails,
+      speechSectionLabel,
+      speechTable,
+      options,
+      controls,
+      _diagnosticHost);
     Controls.Add(_mainLayout);
     ConfigureAccessibility();
     NormalizeInlineControlHeights();
@@ -819,7 +867,7 @@ internal sealed class MainForm : Form, IMessageFilter
       _ => throw new ArgumentOutOfRangeException(nameof(role), role, null)
     };
     UiText.Apply(voice, voiceResource, _toolTip);
-    int firstTabIndex = (row - 1) * 3;
+    int firstTabIndex = 1 + (_voiceRows.Count * 3);
     voice.TabIndex = firstTabIndex;
 
     string roleTitle = role switch
@@ -3649,6 +3697,7 @@ internal sealed class MainForm : Form, IMessageFilter
     details.Controls.Add(_sessionTitleTextBox, 1, 0);
     details.Controls.Add(MakeInlineLabel("Path:"), 0, 1);
     details.Controls.Add(_sessionPathTextBox, 1, 1);
+    SetTabOrder(_sessionTitleTextBox, _sessionPathTextBox);
     return details;
   }
 
@@ -3730,6 +3779,19 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     button.AutoSize = true;
     button.Text = text;
+  }
+
+  /// <summary>
+  /// Assigns deterministic WinForms tab indices in the supplied logical
+  /// order.  This keeps normal SelectNextControl traversal aligned with the
+  /// visual control order without introducing a separate traversal policy.
+  /// </summary>
+  private static void SetTabOrder(params Control[] controls)
+  {
+    for (int index = 0; index < controls.Length; index++)
+    {
+      controls[index].TabIndex = index;
+    }
   }
 
   /// <summary>

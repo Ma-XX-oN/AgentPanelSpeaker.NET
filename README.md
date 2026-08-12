@@ -1,3 +1,11 @@
+## v193 comprehensive WinForms tab-order correction
+
+> v193 audits the MainForm control hierarchy and assigns explicit TabIndex
+> values so normal WinForms traversal follows the visual/logical order.  It
+> fixes the reversed right-to-left utility row, the diagnostic-header button
+> ordering, session/options/transport/detail ordering, nested container order,
+> and speech-row indices without adding coordinate-based traversal rules.
+
 ## v192 nested tab traversal and dark tab-strip fix
 
 > v192 fixes forward/backward popup-exit traversal so an exhausted nested
