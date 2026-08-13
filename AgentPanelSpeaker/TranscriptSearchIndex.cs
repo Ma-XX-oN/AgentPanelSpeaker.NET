@@ -18,9 +18,6 @@ internal sealed class TranscriptSearchIndex
   private static readonly Regex HtmlTagRegex = new(
     @"^<\s*(?<close>/)?\s*(?<name>[A-Za-z0-9]+)",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
-  private static readonly Regex TokenRegex = new(
-    @"[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*|[^\s\p{L}\p{N}_]",
-    RegexOptions.Compiled | RegexOptions.CultureInvariant);
   private static readonly Regex RecordRegex = new(
     "class=\\\"record-anchor\\\"[^>]*data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*data-source-id=\\\"(?<source>[^\\\"]*)\\\"",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -121,7 +118,7 @@ internal sealed class TranscriptSearchIndex
 
       int textCursor = 0;
       bool pendingWhitespace = blocksWithPendingWhitespace.Remove(blockId);
-      foreach (Match token in TokenRegex.Matches(text))
+      foreach (Match token in SpeechTokenization.Matches(text))
       {
         string gap = text[textCursor..token.Index];
         bool spaceBefore = blocksWithTokens.Contains(blockId) &&
@@ -411,7 +408,7 @@ internal sealed class TranscriptSearchIndex
       int nodeWordIndex = 0;
       foreach (string segment in identity.Segments)
       {
-        string[] target = TokenRegex.Matches(segment)
+        string[] target = SpeechTokenization.Matches(segment)
           .Cast<Match>()
           .Select(match => match.Value.ToLowerInvariant())
           .ToArray();

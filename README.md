@@ -1,3 +1,9 @@
+## v211 unified Find/speech token indexing
+
+- `TranscriptSearchIndex` now uses `SpeechTokenization` as the single token definition both when indexing rendered transcript text and when assigning `NodeWordIndex` values to voiced nodes.
+- Removes the independent Find-side token regex that could count punctuation, ellipses, decimals, or combining marks differently from speech and cause `Ctrl+Shift+Enter` to seek a correctly found word to the wrong speech token.
+- Find still searches the rendered transcript corpus normally; only the token coordinate system used to map a match to speech is unified.
+
 ## v210 paused-preview policy, SSML fallback, and pause completion guard
 
 - Preview/test audio now uses one shared `SpeechService.CanStartPreviewAudio()`
