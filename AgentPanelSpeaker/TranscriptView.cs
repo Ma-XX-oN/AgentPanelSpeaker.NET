@@ -50,6 +50,8 @@ internal sealed class TranscriptView : UserControl
   private int _windowEndIndex = -1;
   private CancellationTokenSource? _findCancellation;
   private PendingFindRequest? _pendingFindRequest;
+  private long _latestFindWindowNavigationGeneration;
+  private readonly SemaphoreSlim _findWindowRenderGate = new(1, 1);
 
   private sealed record PendingFindRequest(
     long RequestId,
@@ -623,6 +625,7 @@ internal sealed class TranscriptView : UserControl
 
       _virtualDocument = payload.Document;
       _identities = payload.Identities;
+      _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
       TranscriptWindow window = payload.Document.CreateWindow(focalIndex);
       string script = BuildReplaceWindowScript(
@@ -679,7 +682,6 @@ internal sealed class TranscriptView : UserControl
 
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
-      _searchIndex = payload.SearchIndex;
       StartPendingFindRequest();
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
@@ -836,6 +838,16 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
+      if (type == "stable-word-map-failure")
+      {
+        DiagnosticLog.Write("transcript.stable_word_map_failure", new
+        {
+          key = ReadOptionalString(root, "key"),
+          renderedWordCount = ReadOptionalInt32(root, "renderedWordCount"),
+          mappedWordCount = ReadOptionalInt32(root, "mappedWordCount")
+        });
+        return;
+      }
       if (type == "mapping-failure" || type == "playback-unmatched")
       {
         DiagnosticLog.Write($"transcript.{type}", new
@@ -882,7 +894,12 @@ internal sealed class TranscriptView : UserControl
           detailsAncestorCount = ReadOptionalInt32(root, "detailsAncestorCount"),
           detailsAncestors = ReadOptionalString(root, "detailsAncestors"),
           corpusLength = ReadOptionalInt32(root, "corpusLength"),
-          corpusWords = ReadOptionalInt32(root, "corpusWords")
+          corpusWords = ReadOptionalInt32(root, "corpusWords"),
+          firstWordId = ReadOptionalString(root, "firstWordId"),
+          seekWordId = ReadOptionalString(root, "seekWordId"),
+          expectedWordCount = ReadOptionalInt32(root, "expectedWordCount"),
+          resolvedWordCount = ReadOptionalInt32(root, "resolvedWordCount"),
+          navigationGeneration = ReadOptionalInt64(root, "navigationGeneration")
         });
         return;
       }
@@ -937,11 +954,21 @@ internal sealed class TranscriptView : UserControl
         string sourceId = ReadOptionalString(root, "sourceId");
         if (recordNumber is int validRecordNumber)
         {
+          long? navigationGeneration = ReadOptionalInt64(
+            root,
+            "navigationGeneration");
+          if (navigationGeneration is long generation)
+          {
+            _latestFindWindowNavigationGeneration = Math.Max(
+              _latestFindWindowNavigationGeneration,
+              generation);
+          }
           _ = RenderWindowForRecordAsync(
             validRecordNumber,
             sourceId,
             ReadOptionalString(root, "reason"),
-            ReadOptionalInt32(root, "matchIndex"));
+            ReadOptionalInt32(root, "matchIndex"),
+            navigationGeneration);
         }
         return;
       }
@@ -965,12 +992,31 @@ internal sealed class TranscriptView : UserControl
         long? nodeId = ReadOptionalInt64(root, "nodeId");
         int? nodeWordIndex = ReadOptionalInt32(root, "nodeWordIndex");
         if (nodeId is long validNodeId &&
+            validNodeId > 0 &&
             nodeWordIndex is int validNodeWordIndex &&
             validNodeWordIndex >= 0)
         {
           FindSeekRequested?.Invoke(
             this,
             new FindSeekRequestedEventArgs(validNodeId, validNodeWordIndex));
+          return;
+        }
+
+        long? wordId = ReadOptionalInt64(root, "wordId");
+        TranscriptSearchIndex? searchIndex = _searchIndex;
+        if (wordId is long validWordId &&
+            validWordId > 0 &&
+            searchIndex is not null &&
+            searchIndex.TryResolveSpeechWord(
+              validWordId,
+              out long resolvedNodeId,
+              out int resolvedNodeWordIndex))
+        {
+          FindSeekRequested?.Invoke(
+            this,
+            new FindSeekRequestedEventArgs(
+              resolvedNodeId,
+              resolvedNodeWordIndex));
         }
         return;
       }
@@ -1565,10 +1611,13 @@ internal sealed class TranscriptView : UserControl
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
       .Where(identity => keys.Contains(identity.SourceId + "\0" + identity.RecordNumber))
       .ToArray();
+    IReadOnlyList<TranscriptRecordWordMap> wordMaps = _searchIndex?.GetWordMaps(
+      window.Records) ?? Array.Empty<TranscriptRecordWordMap>();
     return "replaceTranscriptWindow(" +
       JsonSerializer.Serialize(window.Html) + "," +
       JsonSerializer.Serialize(preserve) + "," +
       JsonSerializer.Serialize(identities) + "," +
+      JsonSerializer.Serialize(wordMaps) + "," +
       window.StartIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.EndIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.TopSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
@@ -1584,7 +1633,8 @@ internal sealed class TranscriptView : UserControl
     int recordNumber,
     string sourceId,
     string reason,
-    int? matchIndex)
+    int? matchIndex,
+    long? navigationGeneration = null)
   {
     TranscriptVirtualDocument? document = _virtualDocument;
     if (document is null ||
@@ -1592,49 +1642,80 @@ internal sealed class TranscriptView : UserControl
     {
       return;
     }
-    if (focalIndex >= _windowStartIndex && focalIndex <= _windowEndIndex)
+    if (navigationGeneration is long requestedGeneration &&
+        requestedGeneration != _latestFindWindowNavigationGeneration)
     {
-      if (matchIndex is int existingMatch)
+      return;
+    }
+
+    await _findWindowRenderGate.WaitAsync();
+    try
+    {
+      if (navigationGeneration is long currentGeneration &&
+          currentGeneration != _latestFindWindowNavigationGeneration)
       {
-        PostMessage(new { type = "window-ready", matchIndex = existingMatch });
+        return;
       }
-      return;
+      if (focalIndex >= _windowStartIndex && focalIndex <= _windowEndIndex)
+      {
+        if (matchIndex is int existingMatch)
+        {
+          PostMessage(new
+          {
+            type = "window-ready",
+            matchIndex = existingMatch,
+            navigationGeneration
+          });
+        }
+        return;
+      }
+      TranscriptWindow window = document.CreateWindow(focalIndex);
+      var timer = Stopwatch.StartNew();
+      if (!await ExecuteAsync(BuildReplaceWindowScript(
+            window,
+            preserve: false,
+            focusVirtualIndex: string.Equals(
+              reason,
+              "search",
+              StringComparison.OrdinalIgnoreCase)
+                ? null
+                : focalIndex)))
+      {
+        return;
+      }
+      _windowStartIndex = window.StartIndex;
+      _windowEndIndex = window.EndIndex;
+      if (!string.Equals(reason, "search", StringComparison.OrdinalIgnoreCase) &&
+          _pendingPosition is TranscriptPlaybackPosition pending)
+      {
+        PostPlaybackPosition(pending);
+      }
+      if (matchIndex is int currentMatch)
+      {
+        PostMessage(new
+        {
+          type = "window-ready",
+          matchIndex = currentMatch,
+          navigationGeneration
+        });
+      }
+      DiagnosticLog.Write("transcript.window_rendered", new
+      {
+        reason,
+        recordNumber,
+        sourceId,
+        navigationGeneration,
+        window.StartIndex,
+        window.EndIndex,
+        recordCount = window.Records.Count,
+        htmlCharacters = window.Html.Length,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
     }
-    TranscriptWindow window = document.CreateWindow(focalIndex);
-    var timer = Stopwatch.StartNew();
-    if (!await ExecuteAsync(BuildReplaceWindowScript(
-          window,
-          preserve: false,
-          focusVirtualIndex: string.Equals(
-            reason,
-            "search",
-            StringComparison.OrdinalIgnoreCase)
-              ? null
-              : focalIndex)))
+    finally
     {
-      return;
+      _findWindowRenderGate.Release();
     }
-    _windowStartIndex = window.StartIndex;
-    _windowEndIndex = window.EndIndex;
-    if (_pendingPosition is TranscriptPlaybackPosition pending)
-    {
-      PostPlaybackPosition(pending);
-    }
-    if (matchIndex is int currentMatch)
-    {
-      PostMessage(new { type = "window-ready", matchIndex = currentMatch });
-    }
-    DiagnosticLog.Write("transcript.window_rendered", new
-    {
-      reason,
-      recordNumber,
-      sourceId,
-      window.StartIndex,
-      window.EndIndex,
-      recordCount = window.Records.Count,
-      htmlCharacters = window.Html.Length,
-      elapsedMilliseconds = timer.ElapsedMilliseconds
-    });
   }
 
   private async Task RenderWindowForEdgeAsync(string edge)
@@ -1968,6 +2049,7 @@ let latestSettingsSequence = 0;
 const fadingAnimations = new WeakMap();
 let knownNodeIds = new Set();
 let displayWordsByRecord = new Map();
+let displayWordsById = new Map();
 let lexicalWordsByRecord = new Map();
 let segmentRangesByNode = new Map();
 const reportedMappingFailures = new Set();
@@ -1975,6 +2057,7 @@ const reportedPlaybackFailures = new Set();
 let findMatches = [];
 let currentFindMatch = -1;
 let findGeneration = 0;
+let findNavigationGeneration = 0;
 let findSearchPending = false;
 let findSlowTimer = 0;
 let findCaseEnabled = false;
@@ -1985,15 +2068,17 @@ let findCurrentWords = [];
 let findInputTimer = 0;
 
 function tokenize(text) {
-  return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu) || [];
+  return (text || '').toLocaleLowerCase().match(
+    /[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*/gu) || [];
 }
 
 function tokenizeDisplay(text) {
-  return (text || '').toLocaleLowerCase().match(/[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*|[^\s\p{L}\p{N}_]/gu) || [];
+  return (text || '').toLocaleLowerCase().match(
+    /(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)|\.+|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*|[^\s]/gu) || [];
 }
 
 function isLexical(text) {
-  return /^[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*$/u.test(text);
+  return /^[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*$/u.test(text);
 }
 
 function wrapWords() {
@@ -2008,7 +2093,7 @@ function wrapWords() {
   });
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
-  const rx = /[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*|[^\s\p{L}\p{N}_]/gu;
+  const rx = /(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)|\.+|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*|[^\s]/gu;
   for (const node of nodes) {
     const text = node.nodeValue;
     let match;
@@ -2036,6 +2121,7 @@ function replaceTranscriptWindow(
   html,
   preserve,
   nodeMap,
+  wordMap,
   startIndex = -1,
   endIndex = -1,
   topSpacerHeight = 0,
@@ -2066,6 +2152,7 @@ function replaceTranscriptWindow(
   wrapWords();
   assignRecordScopes();
   assignNodeScopes(nodeMap || []);
+  assignStableWordScopes(wordMap || []);
   const measurements = [...transcript.querySelectorAll('.virtual-record')]
     .map(record => ({
       index:Number(record.dataset.virtualIndex || -1),
@@ -2116,8 +2203,9 @@ function replaceTranscriptWindow(
   }
 }
 
-function replaceTranscript(html, preserve, nodeMap) {
-  replaceTranscriptWindow(html, preserve, nodeMap, -1, -1, 0, 0);
+function replaceTranscript(html, preserve, nodeMap, wordMap = []) {
+  replaceTranscriptWindow(
+    html, preserve, nodeMap, wordMap, -1, -1, 0, 0);
 }
 
 function updateFollowToggle() {
@@ -2191,6 +2279,47 @@ function assignRecordScopes() {
     if (element.dataset.lexical === '1') {
       element.dataset.lexicalRecordIndex = String(
         appendRecordWord(lexicalWordsByRecord, key, element));
+    }
+  }
+}
+
+function assignStableWordScopes(wordMap) {
+  displayWordsById = new Map();
+  const mapsByRecord = new Map();
+  for (const record of wordMap || []) {
+    const recordNumber = String(record.RecordNumber ?? record.recordNumber ?? '');
+    const sourceId = String(record.SourceId ?? record.sourceId ?? '');
+    mapsByRecord.set(
+      makeRecordKey(recordNumber, sourceId),
+      record.Words ?? record.words ?? []);
+  }
+
+  for (const [key, recordWords] of displayWordsByRecord) {
+    const mappedWords = mapsByRecord.get(key) || [];
+    if (mappedWords.length !== recordWords.length) {
+      chrome.webview.postMessage({
+        type:'stable-word-map-failure',
+        key,
+        renderedWordCount:recordWords.length,
+        mappedWordCount:mappedWords.length
+      });
+    }
+    const count = Math.min(recordWords.length, mappedWords.length);
+    for (let index = 0; index < count; ++index) {
+      const word = recordWords[index];
+      const mapped = mappedWords[index];
+      const wordId = String(mapped.WordId ?? mapped.wordId ?? '');
+      if (!wordId) continue;
+      word.dataset.wordId = wordId;
+      word.id = 'word-' + wordId;
+      displayWordsById.set(wordId, word);
+      const nodeId = Number(mapped.NodeId ?? mapped.nodeId ?? 0);
+      const nodeWordIndex = Number(
+        mapped.NodeWordIndex ?? mapped.nodeWordIndex ?? -1);
+      if (nodeId > 0 && nodeWordIndex >= 0) {
+        word.dataset.nodeId = String(nodeId);
+        word.dataset.nodeWordIndex = String(nodeWordIndex);
+      }
     }
   }
 }
@@ -2678,6 +2807,7 @@ function updateFindNavigationState() {
 
 function cancelFindSearch(updateStatus) {
   ++findGeneration;
+  ++findNavigationGeneration;
   if (findSearchPending) {
     chrome.webview.postMessage({type:'find-cancel'});
     findSearchPending = false;
@@ -2698,14 +2828,27 @@ function normalizeFindMatch(match) {
     sourceId: String(match.SourceId ?? match.sourceId ?? ''),
     startWordIndex: Number(match.StartWordIndex ?? match.startWordIndex ?? -1),
     endWordIndex: Number(match.EndWordIndex ?? match.endWordIndex ?? -1),
+    wordIds: (match.WordIds ?? match.wordIds ?? []).map(value => String(value)),
+    seekWordId: String(match.SeekWordId ?? match.seekWordId ?? ''),
     nodeId: Number(match.NodeId ?? match.nodeId ?? 0),
     nodeWordIndex: Number(match.NodeWordIndex ?? match.nodeWordIndex ?? -1)
   };
 }
 
-async function showFindMatch(index, trigger = 'unknown') {
+async function showFindMatch(
+  index,
+  trigger = 'unknown',
+  requestedNavigationGeneration = null) {
   if (!findMatches.length || findSearchPending) {
     reportFind('navigation-ignored', {trigger});
+    return;
+  }
+
+  const navigationGeneration = requestedNavigationGeneration === null
+    ? ++findNavigationGeneration
+    : Number(requestedNavigationGeneration);
+  if (navigationGeneration !== findNavigationGeneration) {
+    reportFind('navigation-stale', {trigger, navigationGeneration});
     return;
   }
 
@@ -2713,6 +2856,7 @@ async function showFindMatch(index, trigger = 'unknown') {
   liveEndMarker.style.display = 'none';
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
+  if (followSpeech) setFollowSpeech(false, true);
   const key = makeRecordKey(String(match.recordNumber), match.sourceId);
   const recordWords = displayWordsByRecord.get(key);
   if (!recordWords) {
@@ -2722,31 +2866,32 @@ async function showFindMatch(index, trigger = 'unknown') {
       recordNumber:match.recordNumber,
       sourceId:match.sourceId,
       reason:'search',
-      matchIndex:currentFindMatch
+      matchIndex:currentFindMatch,
+      navigationGeneration
     });
     reportFind('window-requested', {trigger, targetIndex:currentFindMatch});
     return;
   }
-  if (match.startWordIndex < 0 || match.startWordIndex >= recordWords.length) {
-    reportFind('navigation-invalid-index', {
+  const matchedWords = match.wordIds
+    .map(wordId => displayWordsById.get(String(wordId)))
+    .filter(word => !!word);
+  if (!match.wordIds.length || matchedWords.length !== match.wordIds.length) {
+    reportFind('navigation-word-id-missing', {
       trigger,
-      targetIndex: match.startWordIndex,
-      wordCount: recordWords.length
+      expectedWordCount:match.wordIds.length,
+      resolvedWordCount:matchedWords.length,
+      firstWordId:match.wordIds.length ? match.wordIds[0] : ''
     });
     return;
   }
-  const end = Math.min(match.endWordIndex, recordWords.length - 1);
-  for (let wordIndex = match.startWordIndex; wordIndex <= end; ++wordIndex) {
-    const word = recordWords[wordIndex];
-    if (!word) continue;
+  for (const word of matchedWords) {
     word.classList.add('find-current');
     findCurrentWords.push(word);
   }
-  const target = recordWords[match.startWordIndex];
+  const target = matchedWords[0];
   const openedDetailsCount = openAncestors(target);
   programmaticScrollUntil = performance.now() + 1500;
   target.scrollIntoView({block:'center', behavior:'smooth'});
-  if (followSpeech) setFollowSpeech(false, true);
   findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
   reportFind('navigated', {
     trigger,
@@ -2902,19 +3047,21 @@ findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => find
 findVoiced.addEventListener('click', () => toggleFindOption(findVoiced, () => findVoicedEnabled = !findVoicedEnabled));
 
 function isVoicedFindMatch(match) {
-  return !!match && match.nodeId > 0 && match.nodeWordIndex >= 0;
+  return !!match && Number(match.seekWordId || 0) > 0;
 }
 
 function postFindSeek(match, trigger) {
   reportFind('seek-requested', {
     trigger,
     targetMatch: currentFindMatch,
-    fileOrdinal: match.fileOrdinal
+    fileOrdinal: match.fileOrdinal,
+    seekWordId:match.seekWordId
   });
   chrome.webview.postMessage({
     type:'find-seek',
-    nodeId:match.nodeId,
-    nodeWordIndex:match.nodeWordIndex
+    nodeId:Number(match.nodeId),
+    nodeWordIndex:Number(match.nodeWordIndex),
+    wordId:Number(match.seekWordId)
   });
 }
 
@@ -3110,8 +3257,19 @@ chrome.webview.addEventListener('message', event => {
   }
   if (data.type === 'window-ready') {
     const matchIndex = Number(data.matchIndex ?? -1);
+    const navigationGeneration = Number(data.navigationGeneration ?? 0);
+    if (navigationGeneration !== findNavigationGeneration) {
+      reportFind('window-ready-stale', {
+        targetIndex:matchIndex,
+        navigationGeneration
+      });
+      return;
+    }
     if (matchIndex >= 0 && matchIndex < findMatches.length) {
-      void showFindMatch(matchIndex, 'window-ready');
+      void showFindMatch(
+        matchIndex,
+        'window-ready',
+        navigationGeneration);
     }
     return;
   }

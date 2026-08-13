@@ -1,3 +1,22 @@
+## v212 stable transcript word identities and Find navigation
+
+- Assigns every transcript token one stable `WordId` when the full transcript
+  index is built.  The ID is independent of the currently rendered virtual
+  window and is emitted as `id="word-<WordId>"` / `data-word-id` whenever that
+  logical word is present in the DOM.
+- Find results now carry the exact stable word IDs they matched.  Find
+  highlighting resolves those IDs instead of reusing record/window-relative
+  word positions.  Voiced and all-text Find use the same identity mechanism.
+- `Ctrl+Shift+Enter` now sends the matched stable word ID back to C#, which
+  resolves that exact word to its authoritative speech `NodeId` /
+  `NodeWordIndex`.
+- Browser word wrapping now uses the same speech-unit token definition as
+  `SpeechTokenization`, including combining marks, decimal forms, dot runs,
+  and punctuation.
+- Find-driven virtual-window requests now carry a monotonic navigation
+  generation and are serialized so stale asynchronous window completions
+  cannot become the final displayed Find location.
+
 ## v211 unified Find/speech token indexing
 
 - `TranscriptSearchIndex` now uses `SpeechTokenization` as the single token definition both when indexing rendered transcript text and when assigning `NodeWordIndex` values to voiced nodes.
