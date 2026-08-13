@@ -213,18 +213,19 @@ internal sealed class AudioWakeSettingsDialog : Form
   private void UpdateEnabledState()
   {
     bool enabled = _enabledCheckBox.Checked;
+    bool canPreview = _speech.CanStartPreviewAudio();
     _quietNumeric.Enabled = enabled;
     _frequencyNumeric.Enabled = enabled;
     _volumeSlider.Enabled = enabled;
     _volumeValueLabel.Enabled = enabled;
     _playNumeric.Enabled = enabled;
     _settleNumeric.Enabled = enabled;
-    _testButton.Enabled = enabled && !_speech.IsSpeaking;
+    _testButton.Enabled = enabled && canPreview;
     _testProfileComboBox.Enabled = enabled &&
-      !_speech.IsSpeaking &&
+      canPreview &&
       _testProfileComboBox.Items.Count != 0;
     _testPhraseButton.Enabled = enabled &&
-      !_speech.IsSpeaking &&
+      canPreview &&
       SelectedTestProfile is not null;
   }
 
@@ -241,7 +242,7 @@ internal sealed class AudioWakeSettingsDialog : Form
   /// </summary>
   private void TestWakeTone()
   {
-    if (_speech.IsSpeaking)
+    if (!_speech.CanStartPreviewAudio())
     {
       return;
     }
@@ -255,7 +256,7 @@ internal sealed class AudioWakeSettingsDialog : Form
   private void TestWakePhrase()
   {
     AudioWakeTestProfile? testProfile = SelectedTestProfile;
-    if (_speech.IsSpeaking || testProfile is null)
+    if (!_speech.CanStartPreviewAudio() || testProfile is null)
     {
       return;
     }

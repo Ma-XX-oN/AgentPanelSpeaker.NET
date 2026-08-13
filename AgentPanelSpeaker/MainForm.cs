@@ -259,7 +259,7 @@ internal sealed class MainForm : Form, IMessageFilter
   /// </summary>
   private void InitializeControls()
   {
-    Text = "Agent Panel Speaker v209";
+    Text = "Agent Panel Speaker v210";
     AutoScaleMode = AutoScaleMode.Font;
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(900, 720);
@@ -3232,7 +3232,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _pollNumeric.Enabled = !configurationLocked;
     _speakExistingCheckBox.Enabled = !configurationLocked;
     _playPauseButton.Enabled = !_playPauseTransitioning;
-    _pronunciationsButton.Enabled = paused || !_speech.IsSpeaking;
+    _pronunciationsButton.Enabled = true;
     UpdatePlayPauseButton(running);
     _processingTimeButton.Enabled =
       _speech.CanRequestProcessingTimeAnnouncement &&

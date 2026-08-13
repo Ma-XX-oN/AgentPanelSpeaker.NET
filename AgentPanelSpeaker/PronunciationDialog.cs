@@ -646,7 +646,7 @@ internal sealed class PronunciationDialog : Form
     _activeSymbol = definition;
     ShowIpaSymbolInformation(definition);
     _hoverTimer.Stop();
-    if (_speech.IsSpeaking)
+    if (!_speech.CanStartPreviewAudio())
     {
       return;
     }
@@ -1040,7 +1040,7 @@ internal sealed class PronunciationDialog : Form
   private void PreviewActiveSymbol()
   {
     IpaSymbolDefinition? definition = _activeSymbol;
-    if (definition is null || _speech.IsSpeaking)
+    if (definition is null || !_speech.CanStartPreviewAudio())
     {
       return;
     }
@@ -1073,7 +1073,7 @@ internal sealed class PronunciationDialog : Form
     CaptureToolbarScrollPosition();
     try
     {
-      if (_speech.IsSpeaking ||
+      if (!_speech.CanStartPreviewAudio() ||
           !TryGetCurrentPronunciationPreview(
             out string token,
             out string previewText,
@@ -1195,7 +1195,7 @@ internal sealed class PronunciationDialog : Form
   /// </summary>
   private void UpdateAudioPreviewState()
   {
-    if (_speech.IsSpeaking)
+    if (!_speech.CanStartPreviewAudio())
     {
       _hoverTimer.Stop();
     }
@@ -1208,7 +1208,7 @@ internal sealed class PronunciationDialog : Form
   private void UpdatePronounceButtonState()
   {
     bool enabled =
-      !_speech.IsSpeaking &&
+      _speech.CanStartPreviewAudio() &&
       TryGetCurrentPronunciationPreview(out _, out _, out _);
     if (!enabled && _pronounceButton.Focused)
     {

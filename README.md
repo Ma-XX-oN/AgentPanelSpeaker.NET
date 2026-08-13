@@ -1,3 +1,17 @@
+## v210 paused-preview policy, SSML fallback, and pause completion guard
+
+- Preview/test audio now uses one shared `SpeechService.CanStartPreviewAudio()`
+  predicate throughout the UI and service.  Paused monitored playback permits
+  preview audio; active unpaused playback does not.  A preview from pause
+  temporarily cancels the paused engine buffer, preserves the transcript cursor,
+  plays the preview, and returns to paused state.
+- Windows.Media SSML synthesis failures now log the exact rejected SSML and
+  HRESULT.  If bookmark-augmented SSML is rejected, synthesis retries once with
+  the non-bookmark SSML before the fragment is allowed to fail.
+- `EngineCompleted()` no longer clears a user pause merely because the underlying
+  wave output reports completion.  This prevents an audio-endpoint transition
+  from turning an unexpected paused-buffer completion into continuous playback.
+
 ## v209 WebView2-aware theme transition snapshot
 
 The temporary theme-transition cover now captures the WebView2 compositor surface with `CoreWebView2.CapturePreviewAsync()` and composites it over the GDI screen snapshot before the transition starts. This prevents the cover from showing the loading/status surface or a blank transcript region while switching themes.
@@ -1224,9 +1238,10 @@ behaviour is otherwise unchanged from version 30.
 
 - **Pronunciations...** remains available while monitoring, paused, or speaking,
   so spelling and pronunciation rules can be reviewed and edited at any time.
-- Controls that would start preview audio remain unavailable while another
-  utterance is active.  **Pronounce** is disabled, pending IPA hover playback is
-  cancelled, and IPA keys remain usable for symbol insertion.
+- Controls that start preview audio use one shared eligibility test.  They are
+  unavailable while monitored audio is actively sounding, but remain available
+  while monitored playback is paused.  Pending IPA hover playback follows the
+  same rule, and IPA keys remain usable for symbol insertion.
 
 ## v25.6.13
 

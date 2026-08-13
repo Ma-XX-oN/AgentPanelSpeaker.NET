@@ -1317,74 +1317,135 @@ internal sealed class SapiSpeechEngine : IDisposable
     synthesizer.Options.AudioPitch = 1.0;
     synthesizer.Options.AudioVolume = profile.Volume / 100.0;
     bool requestBookmarks = bookmarkMode != WindowsMediaBookmarkMode.Off;
-    string ssml = requestBookmarks && TryBuildBookmarkedSsml(
-        markup,
-        voice.Language,
-        out string bookmarkedSsml)
+    string bookmarkedSsml = string.Empty;
+    bool bookmarkedSsmlBuilt = requestBookmarks && TryBuildBookmarkedSsml(
+      markup,
+      voice.Language,
+      out bookmarkedSsml);
+    string ssml = bookmarkedSsmlBuilt
       ? bookmarkedSsml
       : BuildSsmlDocument(markup.SsmlContent, voice.Language);
 
-    using SpeechSynthesisStream stream = synthesizer
-      .SynthesizeSsmlToStreamAsync(ssml)
-      .AsTask()
-      .GetAwaiter()
-      .GetResult();
-    int byteCount = checked((int)stream.Size);
-    uint size = checked((uint)byteCount);
-    using IInputStream input = stream.GetInputStreamAt(0);
-    using var reader = new DataReader(input);
-    uint loaded = reader.LoadAsync(size)
-      .AsTask()
-      .GetAwaiter()
-      .GetResult();
-    if (loaded != size)
+    SpeechSynthesisStream stream;
+    try
     {
-      throw new InvalidDataException(
-        $"The Windows.Media speech stream ended after {loaded} of " +
-        $"{size} bytes.");
+      stream = synthesizer
+        .SynthesizeSsmlToStreamAsync(ssml)
+        .AsTask()
+        .GetAwaiter()
+        .GetResult();
     }
-
-    var bytes = new byte[byteCount];
-    reader.ReadBytes(bytes);
-    PcmWaveData wave = PcmWaveData.Parse(bytes);
-    IReadOnlyList<SpeechWordBoundary> wordBoundaries =
-      CreateWindowsMediaBoundaries(
-        markup.PlainText,
-        stream,
-        wave.Duration,
-        voice.DisplayName);
-    int speakableTokenCount = SpeechTokenization.Matches(markup.PlainText)
-      .Cast<Match>()
-      .Count(token => token.Value.Any(char.IsLetterOrDigit));
-    int exactSpeakableBoundaryCount = wordBoundaries
-      .Where(boundary => boundary.Exact &&
-        boundary.Text.Any(char.IsLetterOrDigit))
-      .Select(boundary => boundary.WordIndex)
-      .Distinct()
-      .Count();
-    bool wordTimingReliable = speakableTokenCount != 0 &&
-      exactSpeakableBoundaryCount >= Math.Ceiling(speakableTokenCount * 0.8);
-    if (requestBookmarks &&
-        (bookmarkMode == WindowsMediaBookmarkMode.Always ||
-         !wordTimingReliable) &&
-        TryCreateWindowsMediaBookmarkBoundaries(
-          markup.PlainText,
-          stream,
-          out IReadOnlyList<SpeechWordBoundary> bookmarkBoundaries))
+    catch (Exception exception) when (
+      exception is FormatException or COMException or ArgumentException)
     {
-      boundaries = bookmarkBoundaries;
-      DiagnosticLog.Write("speech.windows_media_bookmarks_used", new
+      DiagnosticLog.Write("speech.windows_media_ssml_rejected", new
       {
         voice = voice.DisplayName,
-        mode = bookmarkMode.ToString(),
-        boundaryCount = boundaries.Count
+        voice.Language,
+        bookmarkMode = bookmarkMode.ToString(),
+        bookmarkedSsmlBuilt,
+        ssml,
+        hresult = exception.HResult,
+        exception = exception.ToString()
       });
+
+      if (!bookmarkedSsmlBuilt)
+      {
+        throw;
+      }
+
+      string fallbackSsml = BuildSsmlDocument(
+        markup.SsmlContent,
+        voice.Language);
+      DiagnosticLog.Write("speech.windows_media_ssml_retry_without_bookmarks", new
+      {
+        voice = voice.DisplayName,
+        voice.Language,
+        bookmarkMode = bookmarkMode.ToString(),
+        fallbackSsml
+      });
+      try
+      {
+        stream = synthesizer
+          .SynthesizeSsmlToStreamAsync(fallbackSsml)
+          .AsTask()
+          .GetAwaiter()
+          .GetResult();
+        requestBookmarks = false;
+      }
+      catch (Exception fallbackException)
+      {
+        DiagnosticLog.Write("speech.windows_media_ssml_retry_failed", new
+        {
+          voice = voice.DisplayName,
+          voice.Language,
+          fallbackSsml,
+          hresult = fallbackException.HResult,
+          exception = fallbackException.ToString()
+        });
+        throw;
+      }
     }
-    else
+
+    using (stream)
     {
-      boundaries = wordBoundaries;
+      int byteCount = checked((int)stream.Size);
+      uint size = checked((uint)byteCount);
+      using IInputStream input = stream.GetInputStreamAt(0);
+      using var reader = new DataReader(input);
+      uint loaded = reader.LoadAsync(size)
+        .AsTask()
+        .GetAwaiter()
+        .GetResult();
+      if (loaded != size)
+      {
+        throw new InvalidDataException(
+          $"The Windows.Media speech stream ended after {loaded} of " +
+          $"{size} bytes.");
+      }
+  
+      var bytes = new byte[byteCount];
+      reader.ReadBytes(bytes);
+      PcmWaveData wave = PcmWaveData.Parse(bytes);
+      IReadOnlyList<SpeechWordBoundary> wordBoundaries =
+        CreateWindowsMediaBoundaries(
+          markup.PlainText,
+          stream,
+          wave.Duration,
+          voice.DisplayName);
+      int speakableTokenCount = SpeechTokenization.Matches(markup.PlainText)
+        .Cast<Match>()
+        .Count(token => token.Value.Any(char.IsLetterOrDigit));
+      int exactSpeakableBoundaryCount = wordBoundaries
+        .Where(boundary => boundary.Exact &&
+          boundary.Text.Any(char.IsLetterOrDigit))
+        .Select(boundary => boundary.WordIndex)
+        .Distinct()
+        .Count();
+      bool wordTimingReliable = speakableTokenCount != 0 &&
+        exactSpeakableBoundaryCount >= Math.Ceiling(speakableTokenCount * 0.8);
+      if (requestBookmarks &&
+          (bookmarkMode == WindowsMediaBookmarkMode.Always ||
+           !wordTimingReliable) &&
+          TryCreateWindowsMediaBookmarkBoundaries(
+            markup.PlainText,
+            stream,
+            out IReadOnlyList<SpeechWordBoundary> bookmarkBoundaries))
+      {
+        boundaries = bookmarkBoundaries;
+        DiagnosticLog.Write("speech.windows_media_bookmarks_used", new
+        {
+          voice = voice.DisplayName,
+          mode = bookmarkMode.ToString(),
+          boundaryCount = boundaries.Count
+        });
+      }
+      else
+      {
+        boundaries = wordBoundaries;
+      }
+      return wave;
     }
-    return wave;
   }
 
   /// <summary>

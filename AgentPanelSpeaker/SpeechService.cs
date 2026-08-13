@@ -39,6 +39,9 @@ internal sealed class SpeechService : IDisposable
   private bool _processingTimeAnnouncementRequested;
   private bool _processingTimeReturnToPause;
   private bool _restorePauseAfterCancellation;
+  private Action? _pendingPreviewStart;
+  private bool _previewActive;
+  private bool _previewReturnToPause;
   private FenceActivityKey? _lastFenceActivity;
   private bool _reportedSpeaking;
   private bool _isPaused;
@@ -113,6 +116,19 @@ internal sealed class SpeechService : IDisposable
       {
         return _isPaused;
       }
+    }
+  }
+
+  /// <summary>
+  /// Returns whether preview/test audio can start without interrupting active
+  /// unpaused playback.  Paused monitored playback is eligible because preview
+  /// audio temporarily owns the engine and returns to the same paused cursor.
+  /// </summary>
+  public bool CanStartPreviewAudio()
+  {
+    lock (_sync)
+    {
+      return CanStartPreviewAudioLocked();
     }
   }
 
@@ -521,7 +537,7 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
-      if (_activeKind != ActiveSpeechKind.None || !profile.IsSpoken)
+      if (!CanStartPreviewAudioLocked() || !profile.IsSpoken)
       {
         return;
       }
@@ -532,19 +548,11 @@ internal sealed class SpeechService : IDisposable
         normalized.Pitch,
         Array.Empty<string>(),
         PronunciationRuleSet.Parse(string.Empty));
-      SetActiveKindLocked(ActiveSpeechKind.Untracked);
-      try
-      {
+      QueueOrStartPreviewLocked(() =>
         _engine.PreviewText(
           markup,
           normalized,
-          wakeSettings.Normalize());
-      }
-      catch
-      {
-        SetActiveKindLocked(ActiveSpeechKind.None);
-        throw;
-      }
+          wakeSettings.Normalize()));
     }
   }
 
@@ -567,7 +575,7 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
-      if (_activeKind != ActiveSpeechKind.None || !profile.IsSpoken)
+      if (!CanStartPreviewAudioLocked() || !profile.IsSpoken)
       {
         return;
       }
@@ -591,21 +599,13 @@ internal sealed class SpeechService : IDisposable
             normalized.Pitch,
             Array.Empty<string>(),
             PronunciationRuleSet.Parse(string.Empty));
-      SetActiveKindLocked(ActiveSpeechKind.Untracked);
-      try
-      {
+      QueueOrStartPreviewLocked(() =>
         _engine.PreviewIpa(
           isolatedMarkup,
           exampleMarkup,
           exampleFallbackMarkup,
           normalized,
-          wakeSettings.Normalize());
-      }
-      catch
-      {
-        SetActiveKindLocked(ActiveSpeechKind.None);
-        throw;
-      }
+          wakeSettings.Normalize()));
     }
   }
 
@@ -618,21 +618,13 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
-      if (_activeKind != ActiveSpeechKind.None)
+      if (!CanStartPreviewAudioLocked())
       {
         return;
       }
 
-      SetActiveKindLocked(ActiveSpeechKind.Untracked);
-      try
-      {
-        _engine.TestWakeTone(wakeSettings.Normalize());
-      }
-      catch
-      {
-        SetActiveKindLocked(ActiveSpeechKind.None);
-        throw;
-      }
+      AudioWakeSettings normalized = wakeSettings.Normalize();
+      QueueOrStartPreviewLocked(() => _engine.TestWakeTone(normalized));
     }
   }
 
@@ -650,7 +642,7 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
-      if (_activeKind != ActiveSpeechKind.None || !profile.IsSpoken)
+      if (!CanStartPreviewAudioLocked() || !profile.IsSpoken)
       {
         return;
       }
@@ -661,19 +653,9 @@ internal sealed class SpeechService : IDisposable
         normalized.Pitch,
         _spelledWordsProvider(),
         _pronunciationProvider());
-      SetActiveKindLocked(ActiveSpeechKind.Untracked);
-      try
-      {
-        _engine.TestWakePhrase(
-          markup,
-          normalized,
-          wakeSettings.Normalize());
-      }
-      catch
-      {
-        SetActiveKindLocked(ActiveSpeechKind.None);
-        throw;
-      }
+      AudioWakeSettings normalizedWake = wakeSettings.Normalize();
+      QueueOrStartPreviewLocked(() =>
+        _engine.TestWakePhrase(markup, normalized, normalizedWake));
     }
   }
 
@@ -958,6 +940,70 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Tests preview/test-audio eligibility while holding <see cref="_sync"/>.
+  /// </summary>
+  private bool CanStartPreviewAudioLocked()
+  {
+    return !_disposed &&
+      !_previewActive &&
+      _pendingPreviewStart is null &&
+      (_activeKind == ActiveSpeechKind.None || _isPaused);
+  }
+
+  /// <summary>
+  /// Starts preview audio immediately when idle, or cancels a paused monitored
+  /// utterance and starts the preview after that cancellation completes.
+  /// </summary>
+  private void QueueOrStartPreviewLocked(Action startPreview)
+  {
+    if (_isPaused && _activeKind != ActiveSpeechKind.None)
+    {
+      if (_activeKind == ActiveSpeechKind.History &&
+          _activeHistoryIndex >= 0)
+      {
+        _pendingHistoryIndex = _activeHistoryIndex;
+        _pendingHistoryWordIndex = Math.Max(0, _activeWordIndex);
+        _nextHistoryIndex = _activeHistoryIndex;
+      }
+
+      _pendingPreviewStart = startPreview;
+      _previewReturnToPause = true;
+      SpeakingStateChanged?.Invoke(true);
+      DiagnosticLog.Write("speech.preview_queued_from_pause", new
+      {
+        activeKind = _activeKind.ToString(),
+        activeHistoryIndex = _activeHistoryIndex,
+        activeWordIndex = _activeWordIndex
+      });
+      _engine.Cancel();
+      return;
+    }
+
+    StartPreviewLocked(startPreview, returnToPause: _isPaused);
+  }
+
+  /// <summary>
+  /// Gives the shared engine to one preview/test request.
+  /// </summary>
+  private void StartPreviewLocked(Action startPreview, bool returnToPause)
+  {
+    _previewActive = true;
+    _previewReturnToPause = returnToPause;
+    SetActiveKindLocked(ActiveSpeechKind.Untracked);
+    try
+    {
+      startPreview();
+    }
+    catch
+    {
+      _previewActive = false;
+      _previewReturnToPause = false;
+      SetActiveKindLocked(ActiveSpeechKind.None);
+      throw;
+    }
+  }
+
+  /// <summary>
   /// Pauses or resumes playback.  An idle pause is allowed while monitoring is
   /// waiting at the current live end.
   /// </summary>
@@ -1127,15 +1173,52 @@ internal sealed class SpeechService : IDisposable
       }
 
       ActiveSpeechKind completedKind = _activeKind;
+      bool wasPaused = _isPaused;
+      bool completedPreview = _previewActive;
       ProcessingTimeAnnouncement? completedProcessing =
         completedKind == ActiveSpeechKind.ProcessingTime
           ? _pendingProcessingTime
           : null;
       bool restorePause = _restorePauseAfterCancellation;
       _restorePauseAfterCancellation = false;
-      SetPausedLocked(false);
+
       _activeKind = ActiveSpeechKind.None;
       _activeHistoryIndex = -1;
+
+      if (_pendingPreviewStart is Action pendingPreview)
+      {
+        _pendingPreviewStart = null;
+        DiagnosticLog.Write("speech.preview_start_after_paused_cancel", new
+        {
+          wasPaused,
+          completedKind = completedKind.ToString()
+        });
+        StartPreviewLocked(pendingPreview, returnToPause: true);
+        return;
+      }
+
+      if (completedPreview)
+      {
+        bool returnToPause = _previewReturnToPause;
+        _previewActive = false;
+        _previewReturnToPause = false;
+        SetActiveKindLocked(ActiveSpeechKind.None);
+        if (returnToPause)
+        {
+          SetPausedLocked(true);
+          ReportPlaybackPositionLocked(
+            _pendingHistoryIndex is null
+              ? TranscriptPlaybackState.PausedAtLiveEnd
+              : TranscriptPlaybackState.Paused);
+        }
+        else
+        {
+          SetPausedLocked(false);
+          StartPendingOrNextLocked();
+        }
+        return;
+      }
+
       if (completedKind == ActiveSpeechKind.ProcessingTime)
       {
         DiagnosticLog.Write("processing_time.spoken", new
@@ -1151,16 +1234,31 @@ internal sealed class SpeechService : IDisposable
         if (_processingTimeReturnToPause)
         {
           _processingTimeReturnToPause = false;
-          SetPausedLocked(true);
+          restorePause = true;
         }
       }
 
       TrimHistoryLocked();
-      if (restorePause)
+
+      bool remainPaused = wasPaused || restorePause;
+      if (remainPaused)
       {
+        DiagnosticLog.Write("speech.completed_while_paused", new
+        {
+          completedKind = completedKind.ToString(),
+          wasPaused,
+          restorePause,
+          pendingHistoryIndex = _pendingHistoryIndex,
+          pendingHistoryWordIndex = _pendingHistoryWordIndex
+        });
         SetPausedLocked(true);
       }
-      StartPendingOrNextLocked();
+      else
+      {
+        SetPausedLocked(false);
+        StartPendingOrNextLocked();
+      }
+
       if (_activeKind == ActiveSpeechKind.None)
       {
         SetActiveKindLocked(ActiveSpeechKind.None);

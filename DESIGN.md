@@ -741,9 +741,12 @@ text fallback.  Carrier examples deliberately have no text fallback, so a
 provider rejection skips the carrier instead of speaking an unrelated fake
 word.  Only `FormatException` and `COMException` select this recovery path;
 unrelated synthesis and playback failures remain fatal and visible.  The rule
-editor remains available while ordinary or paused speech is active, but its
-Pronounce action and pending IPA hover audio are disabled until speech is idle.
-IPA symbol insertion remains available because it does not require audio.
+editor remains available while speech is active.  Preview/test audio uses the
+shared `SpeechService.CanStartPreviewAudio()` policy everywhere: it is blocked
+while monitored playback is actively sounding, but is allowed while playback is
+paused.  A preview started from pause temporarily owns the speech engine and
+returns to the same paused transcript position afterward.  IPA symbol insertion
+remains available because it does not require audio.
 
 ## Bluetooth wake sequence
 
