@@ -1,0 +1,65 @@
+name: AIConversationCore integration validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out AgentPanelSpeaker
+        uses: actions/checkout@v4
+
+      - name: Check out pinned AIConversationCore
+        uses: actions/checkout@v4
+        with:
+          repository: Ma-XX-oN/AIConversationCore
+          ref: e2e86e844e0600b5bd6a8966b464931598308899
+          path: AIConversationCore
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify AIConversationCore worker pin
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+        run: |
+          $request = '{"operation":"ping"}'
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne 'e2e86e844e0600b5bd6a8966b464931598308899') {
+            throw "Unexpected core commit: $($decoded.core_commit)"
+          }
+
+      - name: Verify structured Claude projection
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+        run: |
+          $record = @{ type = 'user'; uuid = 'ci-user'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = 'CI projection check' }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
+          if ($decoded.projection.schema_version -ne 1) { throw 'Unexpected projection schema.' }
+          if ($decoded.projection.units.Count -ne 1) { throw 'Expected one projected unit.' }
+          if ($decoded.projection.units[0].source_record_id -ne 'ci-user') { throw 'Source identity was not preserved.' }
