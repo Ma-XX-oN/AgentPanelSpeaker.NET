@@ -33,6 +33,14 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Run pinned AIConversationCore regression tests
+        shell: pwsh
+        run: npm test --prefix AIConversationCore
+
+      - name: Validate Phase 2 fixture and baseline inventory
+        shell: pwsh
+        run: python AIConversationCore/tests/validate-phase2-baseline.py
+
       - name: Build AgentPanelSpeaker
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
