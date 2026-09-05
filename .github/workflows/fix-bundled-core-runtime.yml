@@ -1,4 +1,4 @@
-name: Fix bundled core runtime regression
+name: Fix transcript render retry loop
 
 on:
   push:
@@ -18,210 +18,56 @@ jobs:
         with:
           ref: feature/aiconversationcore-integration
 
-      - name: Apply exact regression fixes
+      - name: Guard failed renders from immediate identical retries
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
-            p = Path(path)
-            text = p.read_text(encoding='utf-8')
-            count = text.count(old)
-            if count != 1:
-              raise SystemExit(f'{path}: expected exactly one match, found {count}')
-            p.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
-
-          worker = Path('tools/AIConversationCore-worker.mjs')
-          text = worker.read_text(encoding='utf-8')
-          text = text.replace("import { execFileSync } from 'node:child_process';\n", "import { readFileSync } from 'node:fs';\n")
-          old = '''function coreRootPath() {
-            const configured = process.env.AI_CONVERSATION_CORE;
-            if (configured) return path.resolve(configured);
-            return path.resolve(import.meta.dirname, '..', '..', 'AIConversationCore');
-          }
-          '''
-          new = '''function coreRootPath() {
-            const configured = process.env.AI_CONVERSATION_CORE;
-            if (configured) return path.resolve(configured);
-            return path.resolve(import.meta.dirname, 'AIConversationCore-runtime');
-          }
-          '''
-          if text.count(old) != 1:
-            raise SystemExit('worker coreRootPath replacement did not match exactly once')
-          text = text.replace(old, new, 1)
-          old = '''function verifyCorePin() {
-            let actual;
-            try {
-              actual = execFileSync('git', ['-C', coreRootPath(), 'rev-parse', 'HEAD'], {
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'pipe']
-              }).trim();
-            } catch (error) {
-              throw new Error(
-                `Cannot verify AIConversationCore checkout at ${coreRootPath()}: ${error.message}`
-              );
-            }
-            if (actual !== CORE_COMMIT) {
-              throw new Error(
-                `AIConversationCore commit mismatch: expected ${CORE_COMMIT}, found ${actual}`
-              );
-            }
-          }
-          '''
-          new = '''function verifyCorePin() {
-            let actual;
-            try {
-              actual = readFileSync(
-                path.join(coreRootPath(), 'CORE_COMMIT'),
-                'utf8'
-              ).trim();
-            } catch (error) {
-              if (process.env.AI_CONVERSATION_CORE) {
-                throw new Error(
-                  `Configured AIConversationCore runtime at ${coreRootPath()} has no ` +
-                  `CORE_COMMIT marker: ${error.message}`
-                );
-              }
-              throw new Error(
-                `Bundled AIConversationCore runtime is missing at ${coreRootPath()}: ` +
-                `${error.message}`
-              );
-            }
-            if (actual !== CORE_COMMIT) {
-              throw new Error(
-                `AIConversationCore commit mismatch: expected ${CORE_COMMIT}, found ${actual}`
-              );
-            }
-          }
-          '''
-          if text.count(old) != 1:
-            raise SystemExit('worker verifyCorePin replacement did not match exactly once')
-          worker.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
-
-          csproj = Path('AgentPanelSpeaker/AgentPanelSpeaker.csproj')
-          text = csproj.read_text(encoding='utf-8')
-          old = '''    <None Include="..\\tools\\AIConversationCore-worker.mjs"
-                  Link="tools\\AIConversationCore-worker.mjs"
-                  CopyToOutputDirectory="PreserveNewest"
-                  CopyToPublishDirectory="PreserveNewest" />
-          '''
-          new = '''    <None Include="..\\tools\\AIConversationCore-worker.mjs"
-                  Link="tools\\AIConversationCore-worker.mjs"
-                  CopyToOutputDirectory="PreserveNewest"
-                  CopyToPublishDirectory="PreserveNewest" />
-            <None Include="..\\tools\\AIConversationCore-runtime\\**\\*"
-                  Link="tools\\AIConversationCore-runtime\\%(RecursiveDir)%(Filename)%(Extension)"
-                  CopyToOutputDirectory="PreserveNewest"
-                  CopyToPublishDirectory="PreserveNewest" />
-          '''
-          if text.count(old) != 1:
-            raise SystemExit('csproj runtime-copy insertion did not match exactly once')
-          csproj.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
-
-          client = Path('AgentPanelSpeaker/AIConversationCoreClient.cs')
-          text = client.read_text(encoding='utf-8')
-          old = '''    if (responseLine is null)
-            {
-              throw new InvalidOperationException(
-                "AIConversationCore worker terminated during startup.");
-            }
-          '''
-          new = '''    if (responseLine is null)
-            {
-              Process? process = _process;
-              if (process is not null)
-              {
-                try
-                {
-                  process.WaitForExit();
-                }
-                catch (InvalidOperationException)
-                {
-                }
-              }
-              string diagnostics;
-              lock (_standardError)
-              {
-                diagnostics = _standardError.ToString().Trim();
-              }
-              throw new InvalidOperationException(
-                "AIConversationCore worker terminated during startup." +
-                (diagnostics.Length == 0 ? string.Empty :
-                  Environment.NewLine + diagnostics));
-            }
-          '''
-          if text.count(old) != 1:
-            raise SystemExit('startup diagnostics replacement did not match exactly once')
-          client.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
-
-          view = Path('AgentPanelSpeaker/TranscriptView.cs')
-          text = view.read_text(encoding='utf-8')
+          path = Path('AgentPanelSpeaker/TranscriptView.cs')
+          text = path.read_text(encoding='utf-8')
           old = '''    if (generation != _renderGeneration)
-            {
-              return;
-            }
+          {
+            return;
+          }
 
-            var cancellation = new CancellationTokenSource();
+          var cancellation = new CancellationTokenSource();
           '''
+          if text.count(old) != 1:
+            old = '''    if (generation != _renderGeneration)
+    {
+      return;
+    }
+
+    var cancellation = new CancellationTokenSource();
+'''
           new = '''    if (generation != _renderGeneration)
-            {
-              return;
-            }
+    {
+      return;
+    }
 
-            // Record the exact file generation we are attempting before expensive
-            // preparation starts.  If preparation fails, the timer must not retry
-            // the identical bytes continuously; a real file change or explicit
-            // forced refresh will make the next attempt eligible.
-            _lastWriteUtc = info.LastWriteTimeUtc;
-            _lastLength = info.Length;
+    // Record the exact file generation before preparation starts.  If
+    // preparation fails, the timer must not retry identical bytes in a tight
+    // loop; a real file change or explicit forced refresh can retry.
+    _lastWriteUtc = info.LastWriteTimeUtc;
+    _lastLength = info.Length;
 
-            var cancellation = new CancellationTokenSource();
-          '''
+    var cancellation = new CancellationTokenSource();
+'''
           if text.count(old) != 1:
-            raise SystemExit('TranscriptView retry-guard replacement did not match exactly once')
-          view.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
-
-          workflow = Path('.github/workflows/core-integration-validation.yml')
-          text = workflow.read_text(encoding='utf-8')
-          old = '''      - name: Build display validation harness
-                shell: pwsh
-                run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
-          '''
-          new = '''      - name: Verify bundled runtime from built output
-                shell: pwsh
-                run: |
-                  Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
-                  $outputTools = Join-Path ${{ github.workspace }} 'AgentPanelSpeaker\\bin\\Release\\net10.0-windows10.0.22621.0\\tools'
-                  $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
-                  $marker = Join-Path $outputTools 'AIConversationCore-runtime\\CORE_COMMIT'
-                  if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
-                  if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
-                  $request = '{"operation":"ping"}'
-                  $response = $request | node $worker
-                  $decoded = $response | ConvertFrom-Json
-                  if (-not $decoded.ok) { throw "Bundled worker ping failed: $($decoded.error)" }
-                  if ($decoded.core_commit -ne 'a6fd322aece692cd0c90bc89f11228b3a4e83520') {
-                    throw "Unexpected bundled core commit: $($decoded.core_commit)"
-                  }
-
-              - name: Build display validation harness
-                shell: pwsh
-                run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
-          '''
-          if text.count(old) != 1:
-            raise SystemExit('CI built-output insertion did not match exactly once')
-          workflow.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+            raise SystemExit(f'expected one render-start site, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
           PY
 
-      - name: Commit fix and remove one-shot workflow
+      - name: Commit fix and remove temporary workflows
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/fix-bundled-core-runtime.yml
-          git add tools/AIConversationCore-worker.mjs AgentPanelSpeaker/AgentPanelSpeaker.csproj AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptView.cs .github/workflows/core-integration-validation.yml
-          git commit -m "fix bundled AIConversationCore startup"
+          git rm -f .github/workflows/apply-local-runtime-guards.yml
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m "prevent repeated failed transcript renders"
           git push origin HEAD:feature/aiconversationcore-integration
