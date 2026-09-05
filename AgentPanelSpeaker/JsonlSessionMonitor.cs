@@ -40,6 +40,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     TimeSpan.FromSeconds(1);
 
   private readonly object _sync = new();
+  private readonly CanonicalSessionExtractor _canonicalExtractor = new();
   private CancellationTokenSource? _cancellation;
   private Thread? _thread;
   private bool _disposed;
@@ -182,6 +183,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     Stop("dispose");
+    _canonicalExtractor.Dispose();
     _disposed = true;
   }
 
@@ -245,6 +247,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
       if (settings.PreindexedHistory is SpeechHistorySnapshot preindexedHistory)
       {
+        _canonicalExtractor.Prime(
+          session.Source,
+          ReadSharedLines(session.Path));
         nextNodeId = preindexedHistory.Fragments.Count == 0
           ? 1
           : preindexedHistory.Fragments.Max(fragment => fragment.NodeId) + 1;
@@ -375,7 +380,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
   }
 
   /// <summary>
-  /// Parses and classifies one newly appended JSONL line.
+  /// Canonically classifies one newly appended JSONL line.
   /// </summary>
   private void ProcessLine(
     LocatedSession session,
@@ -389,9 +394,22 @@ internal sealed class JsonlSessionMonitor : IDisposable
   {
     try
     {
-      ExtractionResult result = JsonlRecordExtractor.Extract(
+      ExtractionResult? result = _canonicalExtractor.Append(
         session.Source,
         line);
+      if (result is null)
+      {
+        DiagnosticLog.Write("jsonl.invalid_record", new
+        {
+          session.Source,
+          session.Path,
+          byteOffset,
+          exception = "Record is not a valid JSON object.",
+          linePreview = Abbreviate(line, 240)
+        });
+        return;
+      }
+
       RegisterInputRequest(result.InputRequest, pendingInputRequests);
       IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
         result.InputResponse,
@@ -773,7 +791,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// <summary>
   /// Reads all currently present conversational nodes and turn completions.
   /// </summary>
-  private static EligibleHistory ReadEligibleHistory(
+  private EligibleHistory ReadEligibleHistory(
     LocatedSession session,
     IDictionary<string, CodexInputRequest> pendingInputRequests,
     DateTime? minimumTimestampUtc = null)
@@ -782,53 +800,44 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var nodes = new List<ExtractedNode>();
     var completions = new List<TurnCompletion>();
     var backgroundWorkEvents = new List<BackgroundWorkEvent>();
-    foreach (string line in ReadSharedLines(session.Path))
+    IReadOnlyList<ExtractionResult> results = _canonicalExtractor.Load(
+      session.Source,
+      ReadSharedLines(session.Path));
+    foreach (ExtractionResult result in results)
     {
-      try
+      RegisterInputRequest(result.InputRequest, pendingInputRequests);
+      IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
+        result.InputResponse,
+        pendingInputRequests);
+      foreach (ExtractedNode node in result.Nodes.Concat(responseNodes))
       {
-        ExtractionResult result = JsonlRecordExtractor.Extract(
-          session.Source,
-          line);
-        RegisterInputRequest(result.InputRequest, pendingInputRequests);
-        IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
-          result.InputResponse,
-          pendingInputRequests);
-        foreach (ExtractedNode node in result.Nodes.Concat(responseNodes))
+        if (minimumTimestampUtc is null ||
+            IsAtOrAfter(node.Timestamp, minimumTimestampUtc.Value))
         {
-          if (minimumTimestampUtc is null ||
-              IsAtOrAfter(node.Timestamp, minimumTimestampUtc.Value))
-          {
-            nodes.Add(node);
-          }
-        }
-
-        foreach (BackgroundWorkEvent workEvent in
-                 result.BackgroundWorkEvents ??
-                   Array.Empty<BackgroundWorkEvent>())
-        {
-          if (minimumTimestampUtc is null ||
-              workEvent.StartUtc.UtcDateTime >= minimumTimestampUtc.Value ||
-              workEvent.EndUtc is DateTimeOffset endUtc &&
-                endUtc.UtcDateTime >= minimumTimestampUtc.Value)
-          {
-            backgroundWorkEvents.Add(workEvent);
-          }
-        }
-
-        TurnCompletion? completion = CreateTurnCompletion(
-          result.CompletionTimestamp);
-        if (completion is not null)
-        {
-          if (minimumTimestampUtc is null ||
-              completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value)
-          {
-            completions.Add(completion);
-          }
+          nodes.Add(node);
         }
       }
-      catch (JsonException)
+
+      foreach (BackgroundWorkEvent workEvent in
+               result.BackgroundWorkEvents ??
+                 Array.Empty<BackgroundWorkEvent>())
       {
-        // Ignore malformed historical records; live parsing logs new failures.
+        if (minimumTimestampUtc is null ||
+            workEvent.StartUtc.UtcDateTime >= minimumTimestampUtc.Value ||
+            workEvent.EndUtc is DateTimeOffset endUtc &&
+              endUtc.UtcDateTime >= minimumTimestampUtc.Value)
+        {
+          backgroundWorkEvents.Add(workEvent);
+        }
+      }
+
+      TurnCompletion? completion = CreateTurnCompletion(
+        result.CompletionTimestamp);
+      if (completion is not null &&
+          (minimumTimestampUtc is null ||
+           completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value))
+      {
+        completions.Add(completion);
       }
     }
 
@@ -845,7 +854,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
       ? new TurnCompletion(value)
       : null;
   }
-
 
   private sealed record EligibleHistory(
     IReadOnlyList<ExtractedNode> Nodes,
@@ -962,7 +970,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
     {
       preview.Dequeue();
     }
-
   }
 
   /// <summary>
