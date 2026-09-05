@@ -62,6 +62,10 @@ internal sealed class TranscriptVirtualDocument
       });
     }
 
+    // A details disclosure is one HTML structural unit even when it contains
+    // several source-record anchors. Splitting at those internal anchors would
+    // put the opening and closing tags in different virtual-record <section>s;
+    // the browser then cannot preserve the disclosure DOM hierarchy.
     IReadOnlyList<HtmlRange> detailsRanges = FindOutermostDetailsRanges(html);
     var starts = new SortedSet<int>();
     foreach (HtmlRange details in detailsRanges)
