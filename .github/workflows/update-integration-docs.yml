@@ -1,0 +1,86 @@
+name: Update canonical integration documentation
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/update-integration-docs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+
+      - name: Update README and DESIGN without rewriting existing history
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          readme = Path('README.md')
+          design = Path('DESIGN.md')
+
+          readme_prefix = '''## AIConversationCore integration branch
+
+`feature/aiconversationcore-integration` migrates Claude/Codex transcript semantics to the shared `AIConversationCore` canonical model.  AgentPanelSpeaker now consumes canonical projection data for speech extraction, transcript rendering, stable source identity, search/highlight mapping, and live append/reload behaviour.
+
+Provider-specific conversation normalization is no longer implemented in AgentPanelSpeaker.  `JsonlRecordExtractor` is retained only as a lightweight Claude/Codex file-format detector for manual session selection; it does not classify conversational content.  Stable record identity is taken from canonical provenance, and the old `JsonlRecordIdentity` parser has been removed.
+
+The runtime uses one persistent Node bridge (`tools/AIConversationCore-worker.mjs`) pinned to AIConversationCore commit `a6fd322aece692cd0c90bc89f11228b3a4e83520`.  AgentPanelSpeaker-specific responsibilities remain in C#: session discovery/tailing, speech policy and SAPI playback, WebView2 presentation, search/navigation, highlighting, and UI behaviour.
+
+The pre-migration v212 parser was retained only long enough to establish and pass migration parity gates.  After those gates passed, the legacy semantic parser/parity harness was removed so future provider semantics have one owner: AIConversationCore.
+
+'''
+
+          design_section = '''## AIConversationCore canonical transcript boundary
+
+Claude and Codex provider semantics are owned by `AIConversationCore`, not by AgentPanelSpeaker.  Raw JSONL records are accumulated by `CanonicalSessionExtractor`, projected through the persistent `AIConversationCoreClient`/Node worker, and converted by `CanonicalProjectionExtractor` into the app-owned speech/navigation model.
+
+The canonical provenance chain is:
+
+`source JSONL record -> canonical source_record_id/source_index -> TranscriptNodeIdentity -> rendered record/source anchor -> search/speech/highlight coordinates`.
+
+`TranscriptMarkdownFormatter` renders canonical Markdown and only adds AgentPanelSpeaker DOM anchoring required by virtualization/search.  `TranscriptNodeIdentityMap` derives identity from the same canonical projection used for speech, so display and speech no longer run independent provider parsers.  `JsonlRecordExtractor` now performs format detection only; the former semantic extraction implementation and `JsonlRecordIdentity` were removed after the v212 migration parity gate passed.
+
+AgentPanelSpeaker continues to own application policy: session discovery and follow-latest selection, live file tailing, duplicate suppression, speech segmentation and role/fenced-code policy, SAPI timing/playback, WebView2 virtualization, Find/navigation, and highlight behaviour.
+
+The bridge is intentionally pinned to AIConversationCore commit `a6fd322aece692cd0c90bc89f11228b3a4e83520`; both the C# client and Node worker reject a mismatched core revision.
+
+'''
+
+          def newline_of(data: bytes) -> bytes:
+            return b'\r\n' if b'\r\n' in data else b'\n'
+
+          data = readme.read_bytes()
+          if b'## AIConversationCore integration branch' not in data:
+            nl = newline_of(data)
+            prefix = readme_prefix.replace('\n', nl.decode('ascii')).encode('utf-8')
+            readme.write_bytes(prefix + data)
+
+          data = design.read_bytes()
+          if b'## AIConversationCore canonical transcript boundary' not in data:
+            nl = newline_of(data)
+            first_break = data.find(nl)
+            if first_break < 0:
+              raise SystemExit('DESIGN.md has no title line ending')
+            insert_at = first_break + len(nl)
+            section = ('\n' + design_section).replace('\n', nl.decode('ascii')).encode('utf-8')
+            design.write_bytes(data[:insert_at] + section + data[insert_at:])
+          PY
+
+      - name: Commit documentation and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/update-integration-docs.yml
+          git add README.md DESIGN.md
+          git commit -m "document AIConversationCore integration boundary"
+          git push origin HEAD:feature/aiconversationcore-integration
