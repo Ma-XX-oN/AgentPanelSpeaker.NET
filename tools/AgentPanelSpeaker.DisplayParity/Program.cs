@@ -26,7 +26,8 @@ ValidateCodex(coreRoot, failures);
 if (failures.Count != 0)
 {
   Console.Error.WriteLine(
-    $"FAIL: {failures.Count} canonical display/identity/highlight validation difference(s)");
+    $"FAIL: {failures.Count} canonical display/identity/highlight/growth " +
+    "validation difference(s)");
   foreach (string failure in failures)
   {
     Console.Error.WriteLine(failure);
@@ -35,7 +36,8 @@ if (failures.Count != 0)
 }
 
 Console.WriteLine(
-  "PASS: transcript display, node identity, and speech/highlight mapping are canonical.");
+  "PASS: transcript display, node identity, speech/highlight mapping, and " +
+  "live-growth stability are canonical.");
 return 0;
 
 static void ValidateClaude(string coreRoot, ICollection<string> failures)
@@ -66,6 +68,7 @@ static void ValidateClaude(string coreRoot, ICollection<string> failures)
     markdown,
     "Claude",
     failures);
+  ValidateGrowth(path, AgentSource.Claude, "Claude", failures);
 }
 
 static void ValidateCodex(string coreRoot, ICollection<string> failures)
@@ -94,6 +97,91 @@ static void ValidateCodex(string coreRoot, ICollection<string> failures)
     markdown,
     "Codex",
     failures);
+  ValidateGrowth(path, AgentSource.Codex, "Codex", failures);
+}
+
+static void ValidateGrowth(
+  string sourcePath,
+  AgentSource source,
+  string label,
+  ICollection<string> failures)
+{
+  string[] lines = File.ReadLines(sourcePath)
+    .Where(line => !string.IsNullOrWhiteSpace(line))
+    .ToArray();
+  string tempPath = Path.Combine(
+    Path.GetTempPath(),
+    $"AgentPanelSpeaker-growth-{Guid.NewGuid():N}.jsonl");
+  IReadOnlyList<TranscriptNodeIdentity> previous =
+    Array.Empty<TranscriptNodeIdentity>();
+
+  try
+  {
+    File.WriteAllText(tempPath, string.Empty);
+    for (int prefixLength = 1; prefixLength <= lines.Length; ++prefixLength)
+    {
+      File.AppendAllText(tempPath, lines[prefixLength - 1] + Environment.NewLine);
+      IReadOnlyList<TranscriptNodeIdentity> current =
+        TranscriptNodeIdentityMap.Build(tempPath, source);
+
+      if (current.Count < previous.Count)
+      {
+        failures.Add(
+          $"{label} live growth removed identities at prefix {prefixLength}: " +
+          $"previous={previous.Count} current={current.Count}.");
+      }
+      else
+      {
+        for (int index = 0; index < previous.Count; ++index)
+        {
+          if (!IdentityEquals(previous[index], current[index]))
+          {
+            failures.Add(
+              $"{label} live growth changed prior identity at prefix " +
+              $"{prefixLength}, node {index + 1}: " +
+              $"before={FormatIdentity(previous[index])} " +
+              $"after={FormatIdentity(current[index])}.");
+          }
+        }
+      }
+
+      string markdown = TranscriptMarkdownFormatter.Format(tempPath, source);
+      ValidateIdentityChain(
+        tempPath,
+        source,
+        markdown,
+        $"{label} growth prefix {prefixLength}",
+        failures);
+      previous = current;
+    }
+  }
+  finally
+  {
+    try
+    {
+      File.Delete(tempPath);
+    }
+    catch (IOException)
+    {
+      // Best-effort cleanup of a temporary parity fixture.
+    }
+  }
+}
+
+static bool IdentityEquals(
+  TranscriptNodeIdentity left,
+  TranscriptNodeIdentity right)
+{
+  return left.NodeId == right.NodeId &&
+    left.RecordNumber == right.RecordNumber &&
+    string.Equals(left.SourceId, right.SourceId, StringComparison.Ordinal) &&
+    left.Segments.SequenceEqual(right.Segments, StringComparer.Ordinal);
+}
+
+static string FormatIdentity(TranscriptNodeIdentity identity)
+{
+  return $"node={identity.NodeId},record={identity.RecordNumber}," +
+    $"source={identity.SourceId},segments=[{string.Join("|", identity.Segments)}]";
 }
 
 static void ValidateIdentityChain(
