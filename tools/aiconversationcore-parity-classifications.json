@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "baseline": "AgentPanelSpeaker v212",
+  "canonical_core_commit": "ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7",
+  "classifications": [
+    {
+      "area": "speech extraction",
+      "providers": ["claude", "codex"],
+      "classification": "REGRESSION_IF_DIFFERENT",
+      "gate": "AgentPanelSpeaker.CoreParity",
+      "reason": "The migration must preserve v212 speech-visible nodes, ordering, roles/categories, text, timestamps, turn starts, input requests/responses, completion markers, and background-work timing semantics."
+    },
+    {
+      "area": "canonical Claude tool presentation",
+      "providers": ["claude"],
+      "classification": "EXPECTED",
+      "gate": "AgentPanelSpeaker.DisplayParity",
+      "reason": "Display and speech previously interpreted Claude independently. Canonical display intentionally retains visible Bash tool call/result details while speech eligibility remains separately controlled by canonical speech metadata."
+    },
+    {
+      "area": "canonical Codex patch presentation",
+      "providers": ["codex"],
+      "classification": "EXPECTED",
+      "gate": "AgentPanelSpeaker.DisplayParity",
+      "reason": "The old AgentPanelSpeaker display omitted the orphan apply_patch fixture. The shared canonical renderer intentionally presents the patch, eliminating display/speech parser drift rather than preserving that omission."
+    },
+    {
+      "area": "record identity and provenance",
+      "providers": ["claude", "codex"],
+      "classification": "REGRESSION_IF_DIFFERENT",
+      "gate": "AgentPanelSpeaker.DisplayParity",
+      "reason": "Every speech identity must retain a stable canonical source record and a matching rendered record/source anchor across full rendering and live growth."
+    },
+    {
+      "area": "search and highlight mapping",
+      "providers": ["claude", "codex"],
+      "classification": "REGRESSION_IF_DIFFERENT",
+      "gate": "AgentPanelSpeaker.DisplayParity",
+      "reason": "Every voiced node/word must resolve through the production search index to the same canonical record/source provenance before and after transcript growth."
+    },
+    {
+      "area": "live append extraction",
+      "providers": ["claude", "codex"],
+      "classification": "REGRESSION_IF_DIFFERENT",
+      "gate": "AgentPanelSpeaker.CoreParity",
+      "reason": "Each appended record must match the corresponding final-session canonical extraction and complete reload semantics without identity drift."
+    },
+    {
+      "area": "ChatGPT canonical semantics",
+      "providers": ["chatgpt"],
+      "classification": "CORE_REGRESSION_GATE",
+      "gate": "AIConversationCore node --test",
+      "reason": "AgentPanelSpeaker v212 has no ChatGPT JSONL production parser to compare against. Existing ChatGPT fixtures therefore run as a pinned shared-core regression gate rather than a fabricated AgentPanelSpeaker legacy comparison."
+    }
+  ]
+}
