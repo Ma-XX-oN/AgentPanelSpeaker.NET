@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = 'ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7';
+const CORE_COMMIT = 'a6fd322aece692cd0c90bc89f11228b3a4e83520';
 
 /**
  * Returns the configured or sibling AIConversationCore checkout.
