@@ -11,7 +11,7 @@ namespace AgentPanelSpeaker;
 internal sealed class AIConversationCoreClient : IDisposable
 {
   private const string ExpectedCoreCommit =
-    "ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7";
+    "a6fd322aece692cd0c90bc89f11228b3a4e83520";
 
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
