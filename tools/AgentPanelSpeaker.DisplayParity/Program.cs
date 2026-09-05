@@ -134,6 +134,10 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
       thoughtIndexes.Add(virtualIndex);
     }
 
+    // All source records inside one disclosure must resolve to the same
+    // structural virtual unit. Otherwise CreateWindow() would wrap fragments
+    // of one <details> element in separate <section> elements and the browser
+    // would repair the invalid cross-section DOM by ending the disclosure early.
     if (thoughtIndexes.Count == 3 && thoughtIndexes.Distinct().Count() != 1)
     {
       failures.Add(
