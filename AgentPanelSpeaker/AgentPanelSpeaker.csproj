@@ -17,6 +17,10 @@
           Link="THIRD-PARTY-NOTICES.md"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\tools\AIConversationCore-worker.mjs"
+          Link="tools\AIConversationCore-worker.mjs"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
