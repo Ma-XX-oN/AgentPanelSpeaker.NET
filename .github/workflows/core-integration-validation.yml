@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Ma-XX-oN/AIConversationCore
-          ref: e2e86e844e0600b5bd6a8966b464931598308899
+          ref: ae4f9d2fc7e1fea88b7191a171597230d3acbe02
           path: AIConversationCore
 
       - name: Set up Node.js
@@ -46,7 +46,7 @@ jobs:
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne 'e2e86e844e0600b5bd6a8966b464931598308899') {
+          if ($decoded.core_commit -ne 'ae4f9d2fc7e1fea88b7191a171597230d3acbe02') {
             throw "Unexpected core commit: $($decoded.core_commit)"
           }
 
@@ -55,7 +55,7 @@ jobs:
         env:
           AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
         run: |
-          $record = @{ type = 'user'; uuid = 'ci-user'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = 'CI projection check' }) } }
+          $record = @{ type = 'user'; uuid = 'ci-user'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = '<system-reminder>generated</system-reminder>CI projection check' }) } }
           $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
@@ -63,3 +63,22 @@ jobs:
           if ($decoded.projection.schema_version -ne 1) { throw 'Unexpected projection schema.' }
           if ($decoded.projection.units.Count -ne 1) { throw 'Expected one projected unit.' }
           if ($decoded.projection.units[0].source_record_id -ne 'ci-user') { throw 'Source identity was not preserved.' }
+          if ($decoded.projection.units[0].block.text -ne 'CI projection check') { throw 'Interactive Claude cleanup was not applied.' }
+
+      - name: Verify structured Codex lifecycle projection
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+        run: |
+          $records = @(
+            @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:00Z'; payload = @{ type = 'user_message'; message = "context`n## My request for Codex:`nActual request" } },
+            @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:01Z'; payload = @{ type = 'task_complete' } }
+          )
+          $request = @{ operation = 'project'; provider = 'codex'; records = $records } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
+          $user = $decoded.projection.events | Where-Object { $_.content_type -eq 'user_message' }
+          $completion = $decoded.projection.events | Where-Object { $_.content_type -eq 'task_complete' }
+          if ($user.blocks[0].text -ne 'Actual request') { throw 'Codex user preamble was not removed.' }
+          if ($completion.lifecycle.timestamp -ne '2026-09-05T00:00:01Z') { throw 'Task completion timestamp was not preserved.' }
