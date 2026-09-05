@@ -100,41 +100,74 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
       failures);
     Require(markdown, "</details>", "Claude thought details closing", failures);
 
-    string html = Markdown.ToHtml(
-      markdown,
-      new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
-    int detailsStart = html.IndexOf("<details>", StringComparison.Ordinal);
-    int detailsEnd = detailsStart < 0
-      ? -1
-      : html.IndexOf("</details>", detailsStart, StringComparison.Ordinal);
-    if (detailsStart < 0 || detailsEnd < 0)
+    var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+    string html = TranscriptHtmlRenderer.ToHtml(markdown, pipeline);
+    ValidateDetailsRange(html, "rendered Claude thought HTML", failures);
+
+    IReadOnlyList<TranscriptNodeIdentity> identities =
+      TranscriptNodeIdentityMap.Build(tempPath, AgentSource.Claude);
+    TranscriptNodeIdentity[] thoughtIdentities = identities
+      .Where(identity =>
+        identity.SourceId is "thought-one" or "thought-two" or "thought-three")
+      .ToArray();
+    if (thoughtIdentities.Length != 3)
     {
-      failures.Add("Claude thought details did not survive Markdig as one DOM disclosure.");
+      failures.Add(
+        $"Claude grouped-thought fixture expected 3 thought identities, " +
+        $"found {thoughtIdentities.Length}.");
     }
-    else
+
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
+    var thoughtIndexes = new List<int>();
+    foreach (TranscriptNodeIdentity identity in thoughtIdentities)
     {
-      foreach (string thought in new[]
-               {
-                 "First thought has unique alpha words.",
-                 "Second thought has unique beta words.",
-                 "Third thought has unique gamma words."
-               })
+      if (!document.TryGetIndex(
+            identity.RecordNumber,
+            identity.SourceId,
+            out int virtualIndex))
       {
-        int thoughtIndex = html.IndexOf(thought, StringComparison.Ordinal);
-        if (thoughtIndex <= detailsStart || thoughtIndex >= detailsEnd)
+        failures.Add(
+          $"Claude thought identity has no virtual-document unit: " +
+          $"{identity.RecordNumber}/{identity.SourceId}.");
+        continue;
+      }
+      thoughtIndexes.Add(virtualIndex);
+    }
+
+    if (thoughtIndexes.Count == 3 && thoughtIndexes.Distinct().Count() != 1)
+    {
+      failures.Add(
+        "Claude details disclosure was split across multiple virtual-document units: " +
+        string.Join(",", thoughtIndexes));
+    }
+    if (thoughtIndexes.Count != 0)
+    {
+      TranscriptWindow window = document.CreateWindow(thoughtIndexes[0]);
+      ValidateDetailsRange(window.Html, "virtualized Claude thought HTML", failures);
+      int detailsStart = window.Html.IndexOf("<details>", StringComparison.Ordinal);
+      int detailsEnd = detailsStart < 0
+        ? -1
+        : window.Html.IndexOf("</details>", detailsStart, StringComparison.Ordinal);
+      if (detailsStart >= 0 && detailsEnd >= 0)
+      {
+        int nestedSection = window.Html.IndexOf(
+          "<section class=\"virtual-record\"",
+          detailsStart + 1,
+          StringComparison.Ordinal);
+        if (nestedSection >= 0 && nestedSection < detailsEnd)
         {
           failures.Add(
-            $"Claude thought text escaped the details DOM: {thought}");
+            "Virtualization inserted a record section boundary inside Claude details.");
         }
-      }
-
-      int blockquoteStart = html.IndexOf(
-        "<blockquote>",
-        detailsStart,
-        StringComparison.Ordinal);
-      if (blockquoteStart < 0 || blockquoteStart >= detailsEnd)
-      {
-        failures.Add("Claude thought quote styling is not enclosed by details.");
+        int containingSectionClose = window.Html.IndexOf(
+          "</section>",
+          detailsStart,
+          StringComparison.Ordinal);
+        if (containingSectionClose >= 0 && containingSectionClose < detailsEnd)
+        {
+          failures.Add(
+            "Virtualization closed the containing record section before Claude details ended.");
+        }
       }
     }
 
@@ -155,6 +188,45 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
     {
       // Best-effort cleanup of a temporary regression fixture.
     }
+  }
+}
+
+static void ValidateDetailsRange(
+  string html,
+  string label,
+  ICollection<string> failures)
+{
+  int detailsStart = html.IndexOf("<details>", StringComparison.Ordinal);
+  int detailsEnd = detailsStart < 0
+    ? -1
+    : html.IndexOf("</details>", detailsStart, StringComparison.Ordinal);
+  if (detailsStart < 0 || detailsEnd < 0)
+  {
+    failures.Add($"{label} does not contain one complete details disclosure.");
+    return;
+  }
+
+  foreach (string thought in new[]
+           {
+             "First thought has unique alpha words.",
+             "Second thought has unique beta words.",
+             "Third thought has unique gamma words."
+           })
+  {
+    int thoughtIndex = html.IndexOf(thought, StringComparison.Ordinal);
+    if (thoughtIndex <= detailsStart || thoughtIndex >= detailsEnd)
+    {
+      failures.Add($"{label}: thought text escaped details: {thought}");
+    }
+  }
+
+  int blockquoteStart = html.IndexOf(
+    "<blockquote>",
+    detailsStart,
+    StringComparison.Ordinal);
+  if (blockquoteStart < 0 || blockquoteStart >= detailsEnd)
+  {
+    failures.Add($"{label}: Claude thought quote styling is outside details.");
   }
 }
 
