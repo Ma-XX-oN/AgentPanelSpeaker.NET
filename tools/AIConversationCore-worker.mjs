@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -8,14 +9,49 @@ import { pathToFileURL } from 'node:url';
 const CORE_COMMIT = 'a6fd322aece692cd0c90bc89f11228b3a4e83520';
 
 /**
- * Returns the configured or sibling AIConversationCore checkout.
+ * Returns the configured development checkout or the runtime bundled beside
+ * this worker.
  *
- * @returns {string} Absolute AIConversationCore repository path.
+ * @returns {string} Absolute AIConversationCore runtime path.
  */
 function coreRootPath() {
   const configured = process.env.AI_CONVERSATION_CORE;
   if (configured) return path.resolve(configured);
-  return path.resolve(import.meta.dirname, '..', '..', 'AIConversationCore');
+  return path.resolve(import.meta.dirname, 'AIConversationCore-runtime');
+}
+
+/**
+ * Reads the exact core revision represented by one runtime path.
+ *
+ * Bundled runtimes carry a CORE_COMMIT marker and therefore do not depend on
+ * git.  An explicitly configured development checkout may fall back to git so
+ * CI and local development can still point at the source repository directly.
+ *
+ * @param {string} root - AIConversationCore runtime or checkout root.
+ * @returns {string} Exact represented commit SHA.
+ */
+function representedCoreCommit(root) {
+  const marker = path.join(root, 'CORE_COMMIT');
+  if (existsSync(marker)) {
+    return readFileSync(marker, 'utf8').trim();
+  }
+
+  if (process.env.AI_CONVERSATION_CORE) {
+    try {
+      return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe']
+      }).trim();
+    } catch (error) {
+      throw new Error(
+        `Cannot verify configured AIConversationCore checkout at ${root}: ${error.message}`
+      );
+    }
+  }
+
+  throw new Error(
+    `Bundled AIConversationCore runtime is missing CORE_COMMIT at ${marker}`
+  );
 }
 
 /**
@@ -25,17 +61,8 @@ function coreRootPath() {
  * @returns {void}
  */
 function verifyCorePin() {
-  let actual;
-  try {
-    actual = execFileSync('git', ['-C', coreRootPath(), 'rev-parse', 'HEAD'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    }).trim();
-  } catch (error) {
-    throw new Error(
-      `Cannot verify AIConversationCore checkout at ${coreRootPath()}: ${error.message}`
-    );
-  }
+  const root = coreRootPath();
+  const actual = representedCoreCommit(root);
   if (actual !== CORE_COMMIT) {
     throw new Error(
       `AIConversationCore commit mismatch: expected ${CORE_COMMIT}, found ${actual}`
