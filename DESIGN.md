@@ -1,5 +1,20 @@
 # Agent Panel Speaker internal design
 
+## AIConversationCore canonical transcript boundary
+
+Claude and Codex provider semantics are owned by `AIConversationCore`, not by AgentPanelSpeaker.  Raw JSONL records are accumulated by `CanonicalSessionExtractor`, projected through the persistent `AIConversationCoreClient`/Node worker, and converted by `CanonicalProjectionExtractor` into the app-owned speech/navigation model.
+
+The canonical provenance chain is:
+
+`source JSONL record -> canonical source_record_id/source_index -> TranscriptNodeIdentity -> rendered record/source anchor -> search/speech/highlight coordinates`.
+
+`TranscriptMarkdownFormatter` renders canonical Markdown and only adds AgentPanelSpeaker DOM anchoring required by virtualization/search.  `TranscriptNodeIdentityMap` derives identity from the same canonical projection used for speech, so display and speech no longer run independent provider parsers.  `JsonlRecordExtractor` now performs format detection only; the former semantic extraction implementation and `JsonlRecordIdentity` were removed after the v212 migration parity gate passed.
+
+AgentPanelSpeaker continues to own application policy: session discovery and follow-latest selection, live file tailing, duplicate suppression, speech segmentation and role/fenced-code policy, SAPI timing/playback, WebView2 virtualization, Find/navigation, and highlight behaviour.
+
+The bridge is intentionally pinned to AIConversationCore commit `a6fd322aece692cd0c90bc89f11228b3a4e83520`; both the C# client and Node worker reject a mismatched core revision.
+
+
 ## v68 decimal-aware bookmark tokens
 
 `SpeechTokenization` recognizes decimal values before general period and word

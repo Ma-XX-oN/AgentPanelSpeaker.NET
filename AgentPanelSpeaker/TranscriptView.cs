@@ -566,6 +566,12 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
+    // Record the exact file generation before preparation starts. If
+    // preparation fails, the timer must not retry identical bytes in a tight
+    // loop; a real file change or explicit forced refresh can retry.
+    _lastWriteUtc = info.LastWriteTimeUtc;
+    _lastLength = info.Length;
+
     var cancellation = new CancellationTokenSource();
     _renderCancellation = cancellation;
     _activeRenderGeneration = generation;

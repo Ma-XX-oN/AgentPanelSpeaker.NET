@@ -1,0 +1,130 @@
+# Canonical integration branch validation.
+name: AIConversationCore integration validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out AgentPanelSpeaker and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify AIConversationCore submodule pin
+        shell: pwsh
+        run: |
+          $expected = 'a6fd322aece692cd0c90bc89f11228b3a4e83520'
+          $actual = git -C dependencies/AIConversationCore rev-parse HEAD
+          if ($actual.Trim() -ne $expected) {
+            throw "Unexpected AIConversationCore submodule revision: $actual"
+          }
+
+      - name: Run pinned AIConversationCore regression tests
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Validate Phase 2 fixture and baseline inventory
+        shell: pwsh
+        run: python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify bundled runtime from built output
+        shell: pwsh
+        run: |
+          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
+          $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
+          $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
+          $marker = Join-Path $outputTools 'AIConversationCore-runtime\CORE_COMMIT'
+          $package = Join-Path $outputTools 'AIConversationCore-runtime\package.json'
+          if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
+          if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
+          if (-not (Test-Path $package)) { throw "Bundled core package metadata missing: $package" }
+          $request = '{"operation":"project","provider":"claude","records":[{"type":"user","uuid":"bundled-ci","timestamp":"2026-09-05T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Bundled runtime check"}]}}]}'
+          $response = $request | node $worker
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne 'a6fd322aece692cd0c90bc89f11228b3a4e83520') {
+            throw "Unexpected bundled core commit: $($decoded.core_commit)"
+          }
+          if ($decoded.projection.units[0].block.text -ne 'Bundled runtime check') {
+            throw 'Bundled projection returned unexpected text.'
+          }
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Verify AIConversationCore worker pin
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $request = '{"operation":"ping"}'
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne 'a6fd322aece692cd0c90bc89f11228b3a4e83520') {
+            throw "Unexpected core commit: $($decoded.core_commit)"
+          }
+
+      - name: Verify structured Claude projection
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $record = @{ type = 'user'; uuid = 'ci-user'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = '<system-reminder>generated</system-reminder>CI projection check' }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
+          if ($decoded.projection.schema_version -ne 1) { throw 'Unexpected projection schema.' }
+          if ($decoded.projection.units.Count -ne 1) { throw 'Expected one projected unit.' }
+          if ($decoded.projection.units[0].source_record_id -ne 'ci-user') { throw 'Source identity was not preserved.' }
+          if ($decoded.projection.units[0].block.text -ne 'CI projection check') { throw 'Interactive Claude cleanup was not applied.' }
+
+      - name: Verify structured Codex lifecycle projection
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $records = @(
+            @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:00Z'; payload = @{ type = 'user_message'; message = "context`n## My request for Codex:`nActual request" } },
+            @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:01Z'; payload = @{ type = 'task_complete' } }
+          )
+          $request = @{ operation = 'project'; provider = 'codex'; records = $records } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
+          $user = $decoded.projection.events | Where-Object { $_.content_type -eq 'user_message' }
+          $completion = $decoded.projection.events | Where-Object { $_.content_type -eq 'task_complete' }
+          if ($user.blocks[0].text -ne 'Actual request') { throw 'Codex user preamble was not removed.' }
+          if ($completion.lifecycle.timestamp -ne '2026-09-05T00:00:01Z') { throw 'Task completion timestamp was not preserved.' }
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"

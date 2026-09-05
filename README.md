@@ -1,3 +1,13 @@
+## AIConversationCore integration branch
+
+`feature/aiconversationcore-integration` migrates Claude/Codex transcript semantics to the shared `AIConversationCore` canonical model.  AgentPanelSpeaker now consumes canonical projection data for speech extraction, transcript rendering, stable source identity, search/highlight mapping, and live append/reload behaviour.
+
+Provider-specific conversation normalization is no longer implemented in AgentPanelSpeaker.  `JsonlRecordExtractor` is retained only as a lightweight Claude/Codex file-format detector for manual session selection; it does not classify conversational content.  Stable record identity is taken from canonical provenance, and the old `JsonlRecordIdentity` parser has been removed.
+
+The runtime uses one persistent Node bridge (`tools/AIConversationCore-worker.mjs`) pinned to AIConversationCore commit `a6fd322aece692cd0c90bc89f11228b3a4e83520`.  AgentPanelSpeaker-specific responsibilities remain in C#: session discovery/tailing, speech policy and SAPI playback, WebView2 presentation, search/navigation, highlighting, and UI behaviour.
+
+The pre-migration v212 parser was retained only long enough to establish and pass migration parity gates.  After those gates passed, the legacy semantic parser/parity harness was removed so future provider semantics have one owner: AIConversationCore.
+
 ## v212 stable transcript word identities and Find navigation
 
 - Assigns every transcript token one stable `WordId` when the full transcript
