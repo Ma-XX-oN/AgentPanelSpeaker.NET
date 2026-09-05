@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = 'ae4f9d2fc7e1fea88b7191a171597230d3acbe02';
+const CORE_COMMIT = 'ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7';
 
 /**
  * Returns the configured or sibling AIConversationCore checkout.
@@ -49,7 +49,7 @@ const core = await import(
 );
 
 /**
- * Normalizes provider-native records through the interactive core seam.
+ * Normalizes provider-native records through the canonical speech-session seam.
  *
  * @param {string} provider - Canonical provider identifier.
  * @param {Array<Object<string, *>>} records - Ordered source records.
@@ -57,7 +57,7 @@ const core = await import(
  */
 function adapt(provider, records) {
   if (provider === 'claude' || provider === 'codex') {
-    return core.adaptInteractiveSessionRecords(provider, records);
+    return core.adaptSpeechSessionRecords(provider, records);
   }
   if (provider === 'chatgpt') return core.adaptChatGPTRecords(records);
   throw new Error(`Unsupported provider: ${provider}`);
