@@ -158,7 +158,7 @@ internal static partial class TranscriptMarkdownFormatter
 
   /// <summary>
   /// Converts canonical renderer provenance comments into the hidden record
-  /// anchors used by AgentPanelSpeaker virtualization.  The conversion reads
+  /// anchors used by AgentPanelSpeaker virtualization. The conversion reads
   /// only canonical record identity/index metadata, never provider-native JSON.
   /// </summary>
   private static string AddRecordAnchors(
@@ -166,6 +166,10 @@ internal static partial class TranscriptMarkdownFormatter
     IReadOnlyList<JsonElement> events,
     CancellationToken cancellationToken)
   {
+    string provenanceComplete = EnsureVisibleMessageProvenance(
+      markdown,
+      events,
+      cancellationToken);
     var sourceIds = new Dictionary<int, string>();
     foreach (JsonElement eventElement in events)
     {
@@ -181,8 +185,9 @@ internal static partial class TranscriptMarkdownFormatter
     }
 
     var emitted = new HashSet<int>();
-    var output = new StringBuilder(markdown.Length + 1024);
-    string normalized = markdown.Replace("\r\n", "\n", StringComparison.Ordinal)
+    var output = new StringBuilder(provenanceComplete.Length + 1024);
+    string normalized = provenanceComplete
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
       .Replace('\r', '\n');
     foreach (string line in normalized.Split('\n'))
     {
@@ -216,6 +221,103 @@ internal static partial class TranscriptMarkdownFormatter
       output.AppendLine(ProvenanceCommentRegex().Replace(line, string.Empty));
     }
     return output.ToString();
+  }
+
+  /// <summary>
+  /// Ensures each visible canonical message has source provenance at the point
+  /// where its first text appears. The canonical renderer can deliberately
+  /// group multiple Assistant messages beneath one heading; this supplements
+  /// that grouped presentation with hidden provenance so record identity does
+  /// not collapse when the source record changes inside the group.
+  /// </summary>
+  private static string EnsureVisibleMessageProvenance(
+    string markdown,
+    IReadOnlyList<JsonElement> events,
+    CancellationToken cancellationToken)
+  {
+    var alreadyRepresented = new HashSet<int>();
+    foreach (Match match in ProvenanceCommentRegex().Matches(markdown))
+    {
+      if (int.TryParse(
+            match.Groups["index"].Value,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out int index))
+      {
+        alreadyRepresented.Add(index);
+      }
+    }
+
+    string result = markdown;
+    int searchStart = 0;
+    foreach (JsonElement eventElement in events)
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      int sourceIndex = GetInt32(eventElement, "source_index");
+      if (sourceIndex < 0 ||
+          alreadyRepresented.Contains(sourceIndex) ||
+          GetString(eventElement, "visibility") == "hidden" ||
+          GetString(eventElement, "kind") != "message" ||
+          !TryGetFirstTextLine(eventElement, out string firstLine))
+      {
+        continue;
+      }
+
+      int textIndex = result.IndexOf(
+        firstLine,
+        searchStart,
+        StringComparison.Ordinal);
+      if (textIndex < 0)
+      {
+        textIndex = result.IndexOf(firstLine, StringComparison.Ordinal);
+      }
+      if (textIndex < 0)
+      {
+        continue;
+      }
+
+      int lineStart = result.LastIndexOf('\n', Math.Max(0, textIndex - 1));
+      lineStart = lineStart < 0 ? 0 : lineStart + 1;
+      string sourceId = GetString(eventElement, "source_record_id").Trim();
+      string comment = sourceId.Length == 0
+        ? $"<!-- record_index={sourceIndex} -->"
+        : $"<!-- record_id={sourceId} record_index={sourceIndex} -->";
+      result = result.Insert(lineStart, comment + "\n");
+      alreadyRepresented.Add(sourceIndex);
+      searchStart = lineStart + comment.Length + 1 + firstLine.Length;
+    }
+    return result;
+  }
+
+  private static bool TryGetFirstTextLine(
+    JsonElement eventElement,
+    out string firstLine)
+  {
+    firstLine = string.Empty;
+    if (!eventElement.TryGetProperty("blocks", out JsonElement blocks) ||
+        blocks.ValueKind != JsonValueKind.Array)
+    {
+      return false;
+    }
+
+    foreach (JsonElement block in blocks.EnumerateArray())
+    {
+      if (GetString(block, "type") != "text")
+      {
+        continue;
+      }
+      string text = GetString(block, "text")
+        .Replace("\r\n", "\n", StringComparison.Ordinal)
+        .Replace('\r', '\n');
+      firstLine = text.Split('\n')
+        .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?
+        .Trim() ?? string.Empty;
+      if (firstLine.Length != 0)
+      {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// <summary>
