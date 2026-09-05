@@ -612,7 +612,7 @@ internal sealed class TranscriptView : UserControl
             source,
             token));
         token.ThrowIfCancellationRequested();
-        string html = Markdown.ToHtml(markdown, _pipeline);
+        string html = TranscriptHtmlRenderer.ToHtml(markdown, _pipeline);
         TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
           html,
           identities,

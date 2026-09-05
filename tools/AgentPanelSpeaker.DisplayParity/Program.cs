@@ -317,7 +317,7 @@ static void ValidateIdentityChain(
     }
   }
 
-  string html = Markdown.ToHtml(
+  string html = TranscriptHtmlRenderer.ToHtml(
     markdown,
     new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
   TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
