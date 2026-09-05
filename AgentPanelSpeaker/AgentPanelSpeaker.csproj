@@ -21,8 +21,16 @@
           Link="tools\AIConversationCore-worker.mjs"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\tools\AIConversationCore-runtime\**\*"
-          Link="tools\AIConversationCore-runtime\%(RecursiveDir)%(Filename)%(Extension)"
+    <None Include="..\tools\AIConversationCore-runtime\CORE_COMMIT"
+          Link="tools\AIConversationCore-runtime\CORE_COMMIT"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\dependencies\AIConversationCore\package.json"
+          Link="tools\AIConversationCore-runtime\package.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\dependencies\AIConversationCore\src\**\*"
+          Link="tools\AIConversationCore-runtime\src\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

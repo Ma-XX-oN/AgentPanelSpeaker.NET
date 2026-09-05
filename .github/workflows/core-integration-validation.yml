@@ -14,15 +14,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Check out AgentPanelSpeaker
-        uses: actions/checkout@v4
-
-      - name: Check out pinned AIConversationCore
+      - name: Check out AgentPanelSpeaker and submodules
         uses: actions/checkout@v4
         with:
-          repository: Ma-XX-oN/AIConversationCore
-          ref: a6fd322aece692cd0c90bc89f11228b3a4e83520
-          path: AIConversationCore
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -34,13 +29,22 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Verify AIConversationCore submodule pin
+        shell: pwsh
+        run: |
+          $expected = 'a6fd322aece692cd0c90bc89f11228b3a4e83520'
+          $actual = git -C dependencies/AIConversationCore rev-parse HEAD
+          if ($actual.Trim() -ne $expected) {
+            throw "Unexpected AIConversationCore submodule revision: $actual"
+          }
+
       - name: Run pinned AIConversationCore regression tests
         shell: pwsh
-        run: npm test --prefix AIConversationCore
+        run: npm test --prefix dependencies/AIConversationCore
 
       - name: Validate Phase 2 fixture and baseline inventory
         shell: pwsh
-        run: python AIConversationCore/tests/validate-phase2-baseline.py
+        run: python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
 
       - name: Build AgentPanelSpeaker
         shell: pwsh
@@ -53,8 +57,10 @@ jobs:
           $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
           $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
           $marker = Join-Path $outputTools 'AIConversationCore-runtime\CORE_COMMIT'
+          $package = Join-Path $outputTools 'AIConversationCore-runtime\package.json'
           if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
           if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
+          if (-not (Test-Path $package)) { throw "Bundled core package metadata missing: $package" }
           $request = '{"operation":"project","provider":"claude","records":[{"type":"user","uuid":"bundled-ci","timestamp":"2026-09-05T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Bundled runtime check"}]}}]}'
           $response = $request | node $worker
           $decoded = $response | ConvertFrom-Json
@@ -73,7 +79,7 @@ jobs:
       - name: Verify AIConversationCore worker pin
         shell: pwsh
         env:
-          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
           $request = '{"operation":"ping"}'
           $response = $request | node tools/AIConversationCore-worker.mjs
@@ -86,7 +92,7 @@ jobs:
       - name: Verify structured Claude projection
         shell: pwsh
         env:
-          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
           $record = @{ type = 'user'; uuid = 'ci-user'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = '<system-reminder>generated</system-reminder>CI projection check' }) } }
           $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
@@ -101,7 +107,7 @@ jobs:
       - name: Verify structured Codex lifecycle projection
         shell: pwsh
         env:
-          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
           $records = @(
             @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:00Z'; payload = @{ type = 'user_message'; message = "context`n## My request for Codex:`nActual request" } },
@@ -119,6 +125,6 @@ jobs:
       - name: Validate canonical transcript display
         shell: pwsh
         env:
-          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
-          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
