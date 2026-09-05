@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Ma-XX-oN/AIConversationCore
-          ref: ae4f9d2fc7e1fea88b7191a171597230d3acbe02
+          ref: ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7
           path: AIConversationCore
 
       - name: Set up Node.js
@@ -50,7 +50,7 @@ jobs:
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne 'ae4f9d2fc7e1fea88b7191a171597230d3acbe02') {
+          if ($decoded.core_commit -ne 'ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7') {
             throw "Unexpected core commit: $($decoded.core_commit)"
           }
 
