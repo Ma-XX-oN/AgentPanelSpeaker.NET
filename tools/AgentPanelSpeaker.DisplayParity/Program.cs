@@ -199,6 +199,37 @@ static void ValidateIdentityChain(
     return;
   }
 
+  using (var monitor = new JsonlSessionMonitor())
+  {
+    LocatedSession session = SessionLocator.FromPath(path, source);
+    SpeechHistorySnapshot history = monitor.LoadHistoryPreview(
+      session,
+      speakExistingLatestTurn: false);
+    foreach (IGrouping<long, SpeechFragment> nodeGroup in
+             history.Fragments.GroupBy(fragment => fragment.NodeId))
+    {
+      TranscriptNodeIdentity? identity = identities.FirstOrDefault(
+        item => item.NodeId == nodeGroup.Key);
+      if (identity is null)
+      {
+        failures.Add(
+          $"{label} speech node has no transcript identity: " +
+          $"node={nodeGroup.Key}.");
+        continue;
+      }
+
+      IReadOnlyList<string> expectedSegments = nodeGroup
+        .Select(fragment => fragment.Text)
+        .ToArray();
+      if (expectedSegments.Count != 0 && identity.Segments.Count == 0)
+      {
+        failures.Add(
+          $"{label} rendered speech node lost all DOM segments: " +
+          $"node={nodeGroup.Key}; first={expectedSegments[0]}.");
+      }
+    }
+  }
+
   string html = Markdown.ToHtml(
     markdown,
     new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());

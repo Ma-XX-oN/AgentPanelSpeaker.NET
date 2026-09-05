@@ -163,14 +163,14 @@ internal static class TranscriptNodeIdentityMap
   {
     if (source == AgentSource.Claude)
     {
-      return kind is "claude.user_text" or
-        "claude.queued_command.context" or "claude.queued_command" or
-        "claude.thinking" or "claude.text" or
-        "claude.subagent.result";
+      return kind.StartsWith("claude.canonical.", StringComparison.Ordinal) ||
+        kind is "claude.queued_command.context" or
+          "claude.queued_command" or
+          "claude.subagent.result";
     }
 
-    return kind == "codex.user_message" ||
-      kind.StartsWith("codex.agent_message", StringComparison.Ordinal);
+    return kind.StartsWith("codex.canonical.", StringComparison.Ordinal) ||
+      kind == "codex.plan";
   }
 
   private static IReadOnlyList<ExtractedNode> ResolveInputResponse(
