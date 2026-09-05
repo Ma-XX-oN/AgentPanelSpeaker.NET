@@ -255,6 +255,8 @@ internal static partial class TranscriptMarkdownFormatter
     {
       cancellationToken.ThrowIfCancellationRequested();
       MatchCollection matches = ProvenanceCommentRegex().Matches(line);
+      string quotePrefix = MarkdownQuotePrefix(line);
+      bool emittedAnchor = false;
       foreach (Match match in matches)
       {
         if (!int.TryParse(
@@ -273,14 +275,26 @@ internal static partial class TranscriptMarkdownFormatter
           : sourceIds.TryGetValue(sourceIndex, out string? mapped)
             ? mapped
             : (sourceIndex + 1).ToString(CultureInfo.InvariantCulture);
-        output.Append("<span class=\"record-anchor\" data-jsonl-record=\"")
+        output.Append(quotePrefix)
+          .Append("<span class=\"record-anchor\" data-jsonl-record=\"")
           .Append(sourceIndex + 1)
           .Append("\" data-source-id=\"")
           .Append(WebUtility.HtmlEncode(sourceId))
           .AppendLine("\"></span>");
+        emittedAnchor = true;
       }
 
-      output.AppendLine(ProvenanceCommentRegex().Replace(line, string.Empty));
+      string remainder = ProvenanceCommentRegex().Replace(line, string.Empty);
+      if (matches.Count != 0 &&
+          (string.IsNullOrWhiteSpace(remainder) || IsMarkdownQuoteOnly(remainder)))
+      {
+        if (!emittedAnchor)
+        {
+          output.AppendLine();
+        }
+        continue;
+      }
+      output.AppendLine(remainder);
     }
     return output.ToString();
   }
@@ -330,15 +344,9 @@ internal static partial class TranscriptMarkdownFormatter
     var relocationIndices = relocations
       .Select(item => item.SourceIndex)
       .ToHashSet();
-    string result = ProvenanceCommentRegex().Replace(
+    string result = RemoveRelocatedProvenance(
       markdown,
-      match => int.TryParse(
-          match.Groups["index"].Value,
-          NumberStyles.Integer,
-          CultureInfo.InvariantCulture,
-          out int index) && relocationIndices.Contains(index)
-        ? string.Empty
-        : match.Value);
+      relocationIndices);
 
     int searchStart = 0;
     foreach ((int sourceIndex, string sourceId, string firstLine) in relocations)
@@ -362,10 +370,63 @@ internal static partial class TranscriptMarkdownFormatter
       string comment = sourceId.Length == 0
         ? $"<!-- record_index={sourceIndex} -->"
         : $"<!-- record_id={sourceId} record_index={sourceIndex} -->";
-      result = result.Insert(lineStart, comment + "\n");
-      searchStart = textIndex + comment.Length + 1 + firstLine.Length;
+      int lineEnd = result.IndexOf('\n', lineStart);
+      if (lineEnd < 0)
+      {
+        lineEnd = result.Length;
+      }
+      string quotePrefix = MarkdownQuotePrefix(result[lineStart..lineEnd]);
+      string inserted = quotePrefix + comment + "\n";
+      result = result.Insert(lineStart, inserted);
+      searchStart = textIndex + inserted.Length + firstLine.Length;
     }
     return result;
+  }
+
+  /// <summary>
+  /// Removes selected renderer provenance while preserving Markdown structure.
+  /// Provenance-only quoted lines become blank lines instead of bare quote
+  /// markers, which would otherwise render as visible greater-than symbols.
+  /// </summary>
+  private static string RemoveRelocatedProvenance(
+    string markdown,
+    IReadOnlySet<int> relocationIndices)
+  {
+    string normalized = markdown
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    var output = new StringBuilder(normalized.Length);
+    foreach (string line in normalized.Split('\n'))
+    {
+      string replaced = ProvenanceCommentRegex().Replace(
+        line,
+        match => int.TryParse(
+            match.Groups["index"].Value,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out int index) && relocationIndices.Contains(index)
+          ? string.Empty
+          : match.Value);
+      output.AppendLine(IsMarkdownQuoteOnly(replaced) ? string.Empty : replaced);
+    }
+    return output.ToString();
+  }
+
+  /// <summary>
+  /// Returns the complete leading Markdown blockquote prefix for one line.
+  /// </summary>
+  private static string MarkdownQuotePrefix(string line)
+  {
+    Match match = MarkdownQuotePrefixRegex().Match(line);
+    return match.Success ? match.Value : string.Empty;
+  }
+
+  /// <summary>
+  /// Returns whether a line contains only Markdown blockquote markers/spacing.
+  /// </summary>
+  private static bool IsMarkdownQuoteOnly(string line)
+  {
+    return MarkdownQuoteOnlyRegex().IsMatch(line);
   }
 
   private static bool TryGetFirstTextLine(
@@ -497,4 +558,14 @@ internal static partial class TranscriptMarkdownFormatter
     @"<!--\s*(?:record_id=(?<id>[^\s>]+)\s+)?record_index=(?<index>\d+)\s*-->",
     RegexOptions.CultureInvariant)]
   private static partial Regex ProvenanceCommentRegex();
+
+  [GeneratedRegex(
+    @"^(?:[ \t]*>[ \t]?)+",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex MarkdownQuotePrefixRegex();
+
+  [GeneratedRegex(
+    @"^(?:[ \t]*>[ \t]?)+[ \t]*$",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex MarkdownQuoteOnlyRegex();
 }

@@ -103,6 +103,16 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
     var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
     string html = TranscriptHtmlRenderer.ToHtml(markdown, pipeline);
     ValidateDetailsRange(html, "rendered Claude thought HTML", failures);
+    Reject(
+      html,
+      "<p>&gt;",
+      "literal Markdown quote marker in grouped Claude thoughts",
+      failures);
+    Reject(
+      html,
+      "<p>***</p>",
+      "literal Markdown thought separator in grouped Claude thoughts",
+      failures);
 
     IReadOnlyList<TranscriptNodeIdentity> identities =
       TranscriptNodeIdentityMap.Build(tempPath, AgentSource.Claude);
