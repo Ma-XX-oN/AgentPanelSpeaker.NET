@@ -54,6 +54,8 @@ internal sealed class TranscriptVirtualDocument
       return new TranscriptVirtualDocument(new[]
       {
         new TranscriptVirtualRecord(
+          0,
+          string.Empty,
           html,
           EstimateHeight(html),
           Array.Empty<TranscriptVirtualIdentity>())
@@ -96,8 +98,13 @@ internal sealed class TranscriptVirtualDocument
         identities.Add(ReadIdentity(anchor));
       }
 
+      TranscriptVirtualIdentity primary = identities.Count == 0
+        ? new TranscriptVirtualIdentity(0, string.Empty)
+        : identities[0];
       string recordHtml = html[start..end];
       records.Add(new TranscriptVirtualRecord(
+        primary.RecordNumber,
+        primary.SourceId,
         recordHtml,
         EstimateHeight(recordHtml),
         identities));
@@ -274,6 +281,8 @@ internal sealed record TranscriptVirtualIdentity(
   string SourceId);
 
 internal sealed record TranscriptVirtualRecord(
+  int RecordNumber,
+  string SourceId,
   string Html,
   double EstimatedHeight,
   IReadOnlyList<TranscriptVirtualIdentity> Identities);
