@@ -41,6 +41,10 @@ jobs:
         shell: pwsh
         run: dotnet build tools/AgentPanelSpeaker.CoreParity/AgentPanelSpeaker.CoreParity.csproj --configuration Release
 
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
       - name: Verify AIConversationCore worker pin
         shell: pwsh
         env:
@@ -93,3 +97,10 @@ jobs:
           AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
         run: |
           dotnet run --project tools/AgentPanelSpeaker.CoreParity/AgentPanelSpeaker.CoreParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
