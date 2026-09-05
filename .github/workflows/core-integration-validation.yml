@@ -1,3 +1,4 @@
+# Canonical integration branch validation.
 name: AIConversationCore integration validation
 
 on:
