@@ -243,8 +243,28 @@ internal sealed class AIConversationCoreClient : IDisposable
     string? responseLine = _output!.ReadLine();
     if (responseLine is null)
     {
+      Process? process = _process;
+      if (process is not null)
+      {
+        try
+        {
+          process.WaitForExit();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+      }
+
+      string diagnostics;
+      lock (_standardError)
+      {
+        diagnostics = _standardError.ToString().Trim();
+      }
       throw new InvalidOperationException(
-        "AIConversationCore worker terminated during startup.");
+        "AIConversationCore worker terminated during startup." +
+        (diagnostics.Length == 0
+          ? string.Empty
+          : Environment.NewLine + diagnostics));
     }
     return JsonSerializer.Deserialize<CoreResponse>(responseLine, JsonOptions) ??
       throw new InvalidOperationException(
