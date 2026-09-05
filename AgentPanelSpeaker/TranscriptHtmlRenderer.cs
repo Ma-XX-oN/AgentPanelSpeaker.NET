@@ -42,7 +42,7 @@ internal static partial class TranscriptHtmlRenderer
       output.Append("<summary>");
       output.Append(range.SummaryHtml);
       output.AppendLine("</summary>");
-      output.Append(RenderRange(body, pipeline));
+      output.Append(RenderDetailsBody(body, pipeline));
       output.AppendLine("</details>");
       position = range.CloseEnd;
     }
@@ -52,6 +52,68 @@ internal static partial class TranscriptHtmlRenderer
       output.Append(Markdown.ToHtml(markdown[position..], pipeline));
     }
     return output.ToString();
+  }
+
+  /// <summary>
+  /// Renders a details body while preserving AIConversationCore's outer
+  /// blockquote as HTML structure rather than Markdown syntax. AgentPanelSpeaker
+  /// inserts hidden record anchors into these bodies; parsing the leading quote
+  /// markers after that insertion can otherwise expose literal greater-than
+  /// characters or break thought separators. Exactly one outer quote level is
+  /// removed and restored as one HTML blockquote; nested quote levels remain.
+  /// </summary>
+  private static string RenderDetailsBody(
+    string body,
+    MarkdownPipeline pipeline)
+  {
+    if (!TryStripOuterBlockquote(body, out string unquoted))
+    {
+      return RenderRange(body, pipeline);
+    }
+
+    var output = new StringBuilder(unquoted.Length + 32);
+    output.AppendLine("<blockquote>");
+    output.Append(RenderRange(unquoted, pipeline));
+    output.AppendLine("</blockquote>");
+    return output.ToString();
+  }
+
+  /// <summary>
+  /// Removes exactly one common Markdown blockquote level when every nonblank
+  /// line in a disclosure body belongs to that outer quote.
+  /// </summary>
+  private static bool TryStripOuterBlockquote(
+    string markdown,
+    out string stripped)
+  {
+    string normalized = markdown
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    string[] lines = normalized.Split('\n');
+    var output = new StringBuilder(normalized.Length);
+    bool foundQuotedContent = false;
+
+    foreach (string line in lines)
+    {
+      if (string.IsNullOrWhiteSpace(line))
+      {
+        output.AppendLine();
+        continue;
+      }
+
+      Match quote = OuterBlockquotePrefixRegex().Match(line);
+      if (!quote.Success)
+      {
+        stripped = markdown;
+        return false;
+      }
+
+      foundQuotedContent = true;
+      output.AppendLine(line[quote.Length..]);
+    }
+
+    stripped = output.ToString();
+    return foundQuotedContent;
   }
 
   private static bool TryFindDetails(
@@ -139,4 +201,9 @@ internal static partial class TranscriptHtmlRenderer
     @"\G\s*<summary>(?<text>.*?)</summary>\s*\n?",
     RegexOptions.CultureInvariant | RegexOptions.Singleline)]
   private static partial Regex SummaryLineRegex();
+
+  [GeneratedRegex(
+    @"^[ \t]*>[ \t]?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex OuterBlockquotePrefixRegex();
 }
