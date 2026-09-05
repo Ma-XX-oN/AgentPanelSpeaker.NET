@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = 'a6fd322aece692cd0c90bc89f11228b3a4e83520';
+const CORE_COMMIT = '8d9197d2fb40c4ecad9e9c461d4114ca0e3ce723';
 
 /**
  * Returns the configured development checkout or the runtime bundled beside
@@ -24,7 +24,7 @@ function coreRootPath() {
  * Reads the exact core revision represented by one runtime path.
  *
  * Bundled runtimes carry a CORE_COMMIT marker and therefore do not depend on
- * git.  An explicitly configured development checkout may fall back to git so
+ * git. An explicitly configured development checkout may fall back to git so
  * CI and local development can still point at the source repository directly.
  *
  * @param {string} root - AIConversationCore runtime or checkout root.
