@@ -46,6 +46,26 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
+      - name: Verify bundled runtime from built output
+        shell: pwsh
+        run: |
+          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
+          $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
+          $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
+          $marker = Join-Path $outputTools 'AIConversationCore-runtime\CORE_COMMIT'
+          if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
+          if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
+          $request = '{"operation":"project","provider":"claude","records":[{"type":"user","uuid":"bundled-ci","timestamp":"2026-09-05T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Bundled runtime check"}]}}]}'
+          $response = $request | node $worker
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne 'a6fd322aece692cd0c90bc89f11228b3a4e83520') {
+            throw "Unexpected bundled core commit: $($decoded.core_commit)"
+          }
+          if ($decoded.projection.units[0].block.text -ne 'Bundled runtime check') {
+            throw 'Bundled projection returned unexpected text.'
+          }
+
       - name: Build display validation harness
         shell: pwsh
         run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
