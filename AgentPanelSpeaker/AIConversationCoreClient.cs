@@ -110,7 +110,11 @@ internal sealed class AIConversationCoreClient : IDisposable
       string? responseLine = _output!.ReadLine();
       if (responseLine is null)
       {
-        string diagnostics = _standardError.ToString();
+        string diagnostics;
+        lock (_standardError)
+        {
+          diagnostics = _standardError.ToString();
+        }
         StopProcess();
         throw new InvalidOperationException(
           "AIConversationCore worker terminated without a response." +
@@ -158,7 +162,10 @@ internal sealed class AIConversationCoreClient : IDisposable
     }
 
     StopProcess();
-    _standardError.Clear();
+    lock (_standardError)
+    {
+      _standardError.Clear();
+    }
     var startInfo = new ProcessStartInfo
     {
       FileName = "node",
@@ -198,7 +205,7 @@ internal sealed class AIConversationCoreClient : IDisposable
       _input = process.StandardInput;
       _output = process.StandardOutput;
 
-      var ping = new CoreRequest("ping", null, default);
+      var ping = new CoreRequest("ping", null, null);
       CoreResponse response = SendRequestWithoutStartup(ping);
       if (!response.Ok ||
           !string.Equals(
@@ -297,7 +304,7 @@ internal sealed class AIConversationCoreClient : IDisposable
   private sealed record CoreRequest(
     [property: JsonPropertyName("operation")] string Operation,
     [property: JsonPropertyName("provider")] string? Provider,
-    [property: JsonPropertyName("records")] JsonElement Records);
+    [property: JsonPropertyName("records")] JsonElement? Records);
 
   private sealed record CoreResponse(
     [property: JsonPropertyName("ok")] bool Ok,
