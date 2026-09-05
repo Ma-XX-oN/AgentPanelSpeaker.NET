@@ -1,0 +1,36 @@
+name: Apply runtime regression fix
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/apply-runtime-regression-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+
+      - name: Apply patch
+        run: python tools/apply-runtime-regression-fix.py
+
+      - name: Commit patch and remove one-shot files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-runtime-regression-fix.yml
+          git rm -f .github/workflows/fix-bundled-core-runtime.yml
+          git rm -f .github/workflows/apply-local-runtime-guards.yml
+          git rm tools/apply-runtime-regression-fix.py
+          git add AgentPanelSpeaker/TranscriptView.cs .github/workflows/core-integration-validation.yml
+          git commit -m "fix local AIConversationCore runtime regression"
+          git push origin HEAD:feature/aiconversationcore-integration
