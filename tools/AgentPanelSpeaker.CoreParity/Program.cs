@@ -11,6 +11,13 @@ string coreRoot = Path.GetFullPath(args[0]);
 string workerPath = Path.GetFullPath(args[1]);
 Environment.SetEnvironmentVariable("AI_CONVERSATION_CORE", coreRoot);
 
+string deployedWorkerDirectory = Path.Combine(AppContext.BaseDirectory, "tools");
+Directory.CreateDirectory(deployedWorkerDirectory);
+File.Copy(
+  workerPath,
+  Path.Combine(deployedWorkerDirectory, "AIConversationCore-worker.mjs"),
+  overwrite: true);
+
 var fixtures = new[]
 {
   new Fixture(
@@ -34,6 +41,7 @@ foreach (Fixture fixture in fixtures)
     .ToArray();
   AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
     client.Project(fixture.Source, lines));
+  var fullResults = new List<ExtractionResult>(lines.Length);
 
   for (int index = 0; index < lines.Length; ++index)
   {
@@ -44,6 +52,7 @@ foreach (Fixture fixture in fixtures)
       projection,
       fixture.Source,
       index);
+    fullResults.Add(canonical);
     CompareResult(
       fixture.RelativePath,
       index + 1,
@@ -51,12 +60,18 @@ foreach (Fixture fixture in fixtures)
       canonical,
       failures);
   }
+
+  ValidateIncrementalExtraction(
+    fixture,
+    lines,
+    fullResults,
+    failures);
 }
 
 if (failures.Count != 0)
 {
   Console.Error.WriteLine(
-    $"FAIL: {failures.Count} canonical extraction parity difference(s)");
+    $"FAIL: {failures.Count} canonical extraction/live-session parity difference(s)");
   foreach (string failure in failures)
   {
     Console.Error.WriteLine(failure);
@@ -65,8 +80,54 @@ if (failures.Count != 0)
 }
 
 Console.WriteLine(
-  $"PASS: canonical extraction matches v212 semantics for {fixtures.Length} fixtures.");
+  $"PASS: canonical extraction and live growth match v212/final-session semantics " +
+  $"for {fixtures.Length} fixtures.");
 return 0;
+
+static void ValidateIncrementalExtraction(
+  Fixture fixture,
+  IReadOnlyList<string> lines,
+  IReadOnlyList<ExtractionResult> fullResults,
+  ICollection<string> failures)
+{
+  using var session = new CanonicalSessionExtractor();
+  session.Prime(fixture.Source, Array.Empty<string>());
+  for (int index = 0; index < lines.Count; ++index)
+  {
+    ExtractionResult? appended = session.Append(fixture.Source, lines[index]);
+    if (appended is null)
+    {
+      failures.Add(
+        $"{fixture.RelativePath}:record {index + 1}: valid live append was rejected");
+      continue;
+    }
+
+    CompareResult(
+      fixture.RelativePath + ":live",
+      index + 1,
+      fullResults[index],
+      appended,
+      failures);
+  }
+
+  IReadOnlyList<ExtractionResult> loaded = session.Load(fixture.Source, lines);
+  if (loaded.Count != fullResults.Count)
+  {
+    failures.Add(
+      $"{fixture.RelativePath}:reload result count full={fullResults.Count} " +
+      $"reload={loaded.Count}");
+    return;
+  }
+  for (int index = 0; index < loaded.Count; ++index)
+  {
+    CompareResult(
+      fixture.RelativePath + ":reload",
+      index + 1,
+      fullResults[index],
+      loaded[index],
+      failures);
+  }
+}
 
 static void CompareResult(
   string fixture,
@@ -168,7 +229,7 @@ static void CompareInputRequest(
       failures.Add(
         $"{questionPrefix}: option count legacy={left.Options.Count} " +
         $"canonical={right.Options.Count}");
-      continue;
+      return;
     }
     for (int optionIndex = 0; optionIndex < left.Options.Count; ++optionIndex)
     {
