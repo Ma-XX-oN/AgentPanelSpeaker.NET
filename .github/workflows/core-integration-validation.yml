@@ -37,6 +37,10 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
+      - name: Build extraction parity harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.CoreParity/AgentPanelSpeaker.CoreParity.csproj --configuration Release
+
       - name: Verify AIConversationCore worker pin
         shell: pwsh
         env:
@@ -82,3 +86,10 @@ jobs:
           $completion = $decoded.projection.events | Where-Object { $_.content_type -eq 'task_complete' }
           if ($user.blocks[0].text -ne 'Actual request') { throw 'Codex user preamble was not removed.' }
           if ($completion.lifecycle.timestamp -ne '2026-09-05T00:00:01Z') { throw 'Task completion timestamp was not preserved.' }
+
+      - name: Compare canonical extraction with v212 parser
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.CoreParity/AgentPanelSpeaker.CoreParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
