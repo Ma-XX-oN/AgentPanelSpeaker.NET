@@ -1,0 +1,68 @@
+name: Repin AIConversationCore
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/repin-aicore.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out integration branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Repin core and exact commit references
+        shell: python
+        run: |
+          import subprocess
+          from pathlib import Path
+
+          old = '8d9197d2fb40c4ecad9e9c461d4114ca0e3ce723'
+          new = 'c9c618ab1181109a2cf16f6d5596e886513799ba'
+          paths = [
+            Path('tools/AIConversationCore-runtime/CORE_COMMIT'),
+            Path('tools/AIConversationCore-worker.mjs'),
+            Path('AgentPanelSpeaker/AIConversationCoreClient.cs'),
+            Path('.github/workflows/core-integration-validation.yml'),
+          ]
+          for path in paths:
+            text = path.read_text(encoding='utf-8')
+            count = text.count(old)
+            if count < 1:
+              raise RuntimeError(f'{path}: old core pin not found')
+            path.write_text(text.replace(old, new), encoding='utf-8')
+
+          subprocess.run(
+            ['git', '-C', 'dependencies/AIConversationCore', 'fetch', 'origin', new],
+            check=True
+          )
+          subprocess.run(
+            ['git', '-C', 'dependencies/AIConversationCore', 'checkout', '--detach', new],
+            check=True
+          )
+
+      - name: Commit exact repin
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            dependencies/AIConversationCore \
+            tools/AIConversationCore-runtime/CORE_COMMIT \
+            tools/AIConversationCore-worker.mjs \
+            AgentPanelSpeaker/AIConversationCoreClient.cs \
+            .github/workflows/core-integration-validation.yml
+          git diff --cached --check
+          git commit -m 'repin final core presentation contract'
+          git push origin HEAD:feature/aiconversationcore-integration
