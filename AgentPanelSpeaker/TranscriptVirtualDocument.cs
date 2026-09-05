@@ -5,8 +5,8 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Stores the complete rendered transcript as independently renderable records
-/// while retaining an estimated height for unloaded records.
+/// Stores the complete rendered transcript as independently renderable structural
+/// units while retaining estimated heights for unloaded content.
 /// </summary>
 internal sealed class TranscriptVirtualDocument
 {
@@ -20,6 +20,11 @@ internal sealed class TranscriptVirtualDocument
   private static readonly Regex TagRegex = new(
     "<[^>]+>",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
+  private static readonly Regex DetailsTagRegex = new(
+    "</?details\\b[^>]*>",
+    RegexOptions.Compiled |
+    RegexOptions.CultureInvariant |
+    RegexOptions.IgnoreCase);
 
   private readonly TranscriptVirtualRecord[] _records;
   private readonly Dictionary<string, int> _recordIndexes;
@@ -32,7 +37,10 @@ internal sealed class TranscriptVirtualDocument
     _recordIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
     for (int index = 0; index < records.Length; ++index)
     {
-      _recordIndexes[MakeKey(records[index].RecordNumber, records[index].SourceId)] = index;
+      foreach (TranscriptVirtualIdentity identity in records[index].Identities)
+      {
+        _recordIndexes[MakeKey(identity.RecordNumber, identity.SourceId)] = index;
+      }
     }
   }
 
@@ -40,33 +48,64 @@ internal sealed class TranscriptVirtualDocument
 
   public static TranscriptVirtualDocument Build(string html)
   {
-    MatchCollection matches = AnchorRegex.Matches(html);
-    if (matches.Count == 0)
+    MatchCollection anchors = AnchorRegex.Matches(html);
+    if (anchors.Count == 0)
     {
       return new TranscriptVirtualDocument(new[]
       {
-        new TranscriptVirtualRecord(0, string.Empty, html, EstimateHeight(html))
+        new TranscriptVirtualRecord(
+          0,
+          string.Empty,
+          html,
+          EstimateHeight(html),
+          Array.Empty<TranscriptVirtualIdentity>())
       });
     }
-    var records = new List<TranscriptVirtualRecord>(matches.Count);
-    for (int index = 0; index < matches.Count; ++index)
+
+    IReadOnlyList<HtmlRange> detailsRanges = FindOutermostDetailsRanges(html);
+    var starts = new SortedSet<int>();
+    foreach (HtmlRange details in detailsRanges)
     {
-      Match match = matches[index];
-      int start = index == 0 ? 0 : match.Index;
-      int end = index + 1 < matches.Count ? matches[index + 1].Index : html.Length;
-      _ = int.TryParse(
-        WebUtility.HtmlDecode(match.Groups["record"].Value),
-        NumberStyles.Integer,
-        CultureInfo.InvariantCulture,
-        out int recordNumber);
-      string sourceId = WebUtility.HtmlDecode(match.Groups["source"].Value);
+      starts.Add(details.Start);
+    }
+    foreach (Match anchor in anchors)
+    {
+      if (!detailsRanges.Any(details => details.Contains(anchor.Index)))
+      {
+        starts.Add(anchor.Index);
+      }
+    }
+
+    int[] unitStarts = starts.ToArray();
+    var records = new List<TranscriptVirtualRecord>(unitStarts.Length);
+    for (int index = 0; index < unitStarts.Length; ++index)
+    {
+      int start = index == 0 ? 0 : unitStarts[index];
+      int end = index + 1 < unitStarts.Length
+        ? unitStarts[index + 1]
+        : html.Length;
+      var identities = new List<TranscriptVirtualIdentity>();
+      foreach (Match anchor in anchors)
+      {
+        if (anchor.Index < start || anchor.Index >= end)
+        {
+          continue;
+        }
+        identities.Add(ReadIdentity(anchor));
+      }
+
+      TranscriptVirtualIdentity primary = identities.Count == 0
+        ? new TranscriptVirtualIdentity(0, string.Empty)
+        : identities[0];
       string recordHtml = html[start..end];
       records.Add(new TranscriptVirtualRecord(
-        recordNumber,
-        sourceId,
+        primary.RecordNumber,
+        primary.SourceId,
         recordHtml,
-        EstimateHeight(recordHtml)));
+        EstimateHeight(recordHtml),
+        identities));
     }
+
     return new TranscriptVirtualDocument(records.ToArray());
   }
 
@@ -162,6 +201,53 @@ internal sealed class TranscriptVirtualDocument
     return result;
   }
 
+  private static TranscriptVirtualIdentity ReadIdentity(Match anchor)
+  {
+    _ = int.TryParse(
+      WebUtility.HtmlDecode(anchor.Groups["record"].Value),
+      NumberStyles.Integer,
+      CultureInfo.InvariantCulture,
+      out int recordNumber);
+    string sourceId = WebUtility.HtmlDecode(anchor.Groups["source"].Value);
+    return new TranscriptVirtualIdentity(recordNumber, sourceId);
+  }
+
+  /// <summary>
+  /// Finds complete outermost details elements so virtualization never inserts
+  /// section boundaries between an opening details tag and its closing tag.
+  /// </summary>
+  private static IReadOnlyList<HtmlRange> FindOutermostDetailsRanges(string html)
+  {
+    var ranges = new List<HtmlRange>();
+    int depth = 0;
+    int outerStart = -1;
+    foreach (Match tag in DetailsTagRegex.Matches(html))
+    {
+      bool closing = tag.Value.StartsWith("</", StringComparison.Ordinal);
+      if (!closing)
+      {
+        if (depth == 0)
+        {
+          outerStart = tag.Index;
+        }
+        ++depth;
+        continue;
+      }
+
+      if (depth == 0)
+      {
+        continue;
+      }
+      --depth;
+      if (depth == 0 && outerStart >= 0)
+      {
+        ranges.Add(new HtmlRange(outerStart, tag.Index + tag.Length));
+        outerStart = -1;
+      }
+    }
+    return ranges;
+  }
+
   private static double EstimateHeight(string html)
   {
     string text = WebUtility.HtmlDecode(TagRegex.Replace(html, " "));
@@ -179,13 +265,23 @@ internal sealed class TranscriptVirtualDocument
   {
     return sourceId + "\0" + recordNumber.ToString(CultureInfo.InvariantCulture);
   }
+
+  private readonly record struct HtmlRange(int Start, int End)
+  {
+    public bool Contains(int index) => index >= Start && index < End;
+  }
 }
+
+internal sealed record TranscriptVirtualIdentity(
+  int RecordNumber,
+  string SourceId);
 
 internal sealed record TranscriptVirtualRecord(
   int RecordNumber,
   string SourceId,
   string Html,
-  double EstimatedHeight);
+  double EstimatedHeight,
+  IReadOnlyList<TranscriptVirtualIdentity> Identities);
 
 internal sealed record TranscriptWindow(
   string Html,
