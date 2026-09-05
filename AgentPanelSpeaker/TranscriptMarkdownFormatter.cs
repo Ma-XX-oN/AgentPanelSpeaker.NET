@@ -64,8 +64,10 @@ internal static partial class TranscriptMarkdownFormatter
       source,
       jsonLines.Count,
       projection.Events);
+    string canonicalMarkdown = NormalizeQuotedDetailsForMarkdig(
+      projection.Markdown);
     string anchored = AddRecordAnchors(
-      projection.Markdown,
+      canonicalMarkdown,
       projection.Events,
       cancellationToken);
     return header + anchored;
@@ -157,6 +159,66 @@ internal static partial class TranscriptMarkdownFormatter
   }
 
   /// <summary>
+  /// Rewrites AIConversationCore's blockquoted HTML-details wrapper into the
+  /// equivalent HTML container with the Claude blockquote retained inside it.
+  /// Markdig otherwise ends the raw details block before parsing the quoted
+  /// Markdown body, leaving the thoughts visibly outside the disclosure.
+  /// </summary>
+  private static string NormalizeQuotedDetailsForMarkdig(string markdown)
+  {
+    string normalized = markdown
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    string[] lines = normalized.Split('\n');
+    var output = new StringBuilder(normalized.Length + 64);
+    bool inQuotedDetails = false;
+
+    for (int index = 0; index < lines.Length; ++index)
+    {
+      string line = lines[index];
+      if (!inQuotedDetails &&
+          line.StartsWith("> <details>", StringComparison.Ordinal))
+      {
+        output.AppendLine(line[2..]);
+        inQuotedDetails = true;
+        continue;
+      }
+
+      if (inQuotedDetails &&
+          line.StartsWith("> <summary>", StringComparison.Ordinal))
+      {
+        output.AppendLine(line[2..]);
+        continue;
+      }
+
+      if (inQuotedDetails &&
+          line.StartsWith("> </details>", StringComparison.Ordinal))
+      {
+        output.AppendLine(line[2..]);
+        inQuotedDetails = false;
+        continue;
+      }
+
+      if (inQuotedDetails && line == ">")
+      {
+        bool immediatelyAfterSummary = index > 0 &&
+          lines[index - 1].StartsWith("> <summary>", StringComparison.Ordinal);
+        bool immediatelyBeforeClose = index + 1 < lines.Length &&
+          lines[index + 1].StartsWith("> </details>", StringComparison.Ordinal);
+        if (immediatelyAfterSummary || immediatelyBeforeClose)
+        {
+          output.AppendLine();
+          continue;
+        }
+      }
+
+      output.AppendLine(line);
+    }
+
+    return output.ToString();
+  }
+
+  /// <summary>
   /// Converts canonical renderer provenance comments into the hidden record
   /// anchors used by AgentPanelSpeaker virtualization. The conversion reads
   /// only canonical record identity/index metadata, never provider-native JSON.
@@ -224,48 +286,67 @@ internal static partial class TranscriptMarkdownFormatter
   }
 
   /// <summary>
-  /// Ensures each visible canonical message has source provenance at the point
-  /// where its first text appears. The canonical renderer can deliberately
-  /// group multiple Assistant messages beneath one heading; this supplements
-  /// that grouped presentation with hidden provenance so record identity does
-  /// not collapse when the source record changes inside the group.
+  /// Positions one provenance marker immediately before the first rendered text
+  /// owned by each visible canonical source record. AIConversationCore can group
+  /// several reasoning records in one details block and place all of their debug
+  /// comments at the summary. Those comments identify the right records but are
+  /// not content boundaries, so leaving them there makes record-scoped speech
+  /// mapping assign the grouped body to the last record only.
   /// </summary>
   private static string EnsureVisibleMessageProvenance(
     string markdown,
     IReadOnlyList<JsonElement> events,
     CancellationToken cancellationToken)
   {
-    var alreadyRepresented = new HashSet<int>();
-    foreach (Match match in ProvenanceCommentRegex().Matches(markdown))
-    {
-      if (int.TryParse(
-            match.Groups["index"].Value,
-            NumberStyles.Integer,
-            CultureInfo.InvariantCulture,
-            out int index))
-      {
-        alreadyRepresented.Add(index);
-      }
-    }
+    var relocations = new List<(int SourceIndex, string SourceId, string FirstLine)>();
+    var positionedSourceIndices = new HashSet<int>();
 
-    string result = markdown;
-    int searchStart = 0;
     foreach (JsonElement eventElement in events)
     {
       cancellationToken.ThrowIfCancellationRequested();
       int sourceIndex = GetInt32(eventElement, "source_index");
+      string kind = GetString(eventElement, "kind");
       if (sourceIndex < 0 ||
-          alreadyRepresented.Contains(sourceIndex) ||
+          positionedSourceIndices.Contains(sourceIndex) ||
           GetString(eventElement, "visibility") == "hidden" ||
-          GetString(eventElement, "kind") != "message" ||
+          kind is not ("message" or "commentary" or "reasoning_summary") ||
           !TryGetFirstTextLine(eventElement, out string firstLine))
       {
         continue;
       }
 
+      positionedSourceIndices.Add(sourceIndex);
+      relocations.Add((
+        sourceIndex,
+        GetString(eventElement, "source_record_id").Trim(),
+        firstLine));
+    }
+
+    if (relocations.Count == 0)
+    {
+      return markdown;
+    }
+
+    var relocationIndices = relocations
+      .Select(item => item.SourceIndex)
+      .ToHashSet();
+    string result = ProvenanceCommentRegex().Replace(
+      markdown,
+      match => int.TryParse(
+          match.Groups["index"].Value,
+          NumberStyles.Integer,
+          CultureInfo.InvariantCulture,
+          out int index) && relocationIndices.Contains(index)
+        ? string.Empty
+        : match.Value);
+
+    int searchStart = 0;
+    foreach ((int sourceIndex, string sourceId, string firstLine) in relocations)
+    {
+      cancellationToken.ThrowIfCancellationRequested();
       int textIndex = result.IndexOf(
         firstLine,
-        searchStart,
+        Math.Min(searchStart, result.Length),
         StringComparison.Ordinal);
       if (textIndex < 0)
       {
@@ -278,13 +359,11 @@ internal static partial class TranscriptMarkdownFormatter
 
       int lineStart = result.LastIndexOf('\n', Math.Max(0, textIndex - 1));
       lineStart = lineStart < 0 ? 0 : lineStart + 1;
-      string sourceId = GetString(eventElement, "source_record_id").Trim();
       string comment = sourceId.Length == 0
         ? $"<!-- record_index={sourceIndex} -->"
         : $"<!-- record_id={sourceId} record_index={sourceIndex} -->";
       result = result.Insert(lineStart, comment + "\n");
-      alreadyRepresented.Add(sourceIndex);
-      searchStart = lineStart + comment.Length + 1 + firstLine.Length;
+      searchStart = textIndex + comment.Length + 1 + firstLine.Length;
     }
     return result;
   }
@@ -302,11 +381,26 @@ internal static partial class TranscriptMarkdownFormatter
 
     foreach (JsonElement block in blocks.EnumerateArray())
     {
-      if (GetString(block, "type") != "text")
+      string blockType = GetString(block, "type");
+      string text;
+      if (blockType == "text")
+      {
+        text = GetString(block, "text");
+      }
+      else if (blockType == "reasoning_summary")
+      {
+        text = GetString(block, "content");
+        if (string.IsNullOrWhiteSpace(text))
+        {
+          text = GetString(block, "summary");
+        }
+      }
+      else
       {
         continue;
       }
-      string text = GetString(block, "text")
+
+      text = text
         .Replace("\r\n", "\n", StringComparison.Ordinal)
         .Replace('\r', '\n');
       firstLine = text.Split('\n')
