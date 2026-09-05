@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "AgentPanelSpeaker v212",
-  "canonical_core_commit": "ff9e78fd7dbb7f42eacc6089fc8eef6efbd5f6b7",
+  "canonical_core_commit": "a6fd322aece692cd0c90bc89f11228b3a4e83520",
   "classifications": [
     {
       "area": "speech extraction",
