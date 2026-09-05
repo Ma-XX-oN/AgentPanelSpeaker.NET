@@ -33,7 +33,6 @@ jobs:
             Path('tools/AIConversationCore-runtime/CORE_COMMIT'),
             Path('tools/AIConversationCore-worker.mjs'),
             Path('AgentPanelSpeaker/AIConversationCoreClient.cs'),
-            Path('.github/workflows/core-integration-validation.yml'),
           ]
           for path in paths:
             text = path.read_text(encoding='utf-8')
@@ -61,8 +60,7 @@ jobs:
             dependencies/AIConversationCore \
             tools/AIConversationCore-runtime/CORE_COMMIT \
             tools/AIConversationCore-worker.mjs \
-            AgentPanelSpeaker/AIConversationCoreClient.cs \
-            .github/workflows/core-integration-validation.yml
+            AgentPanelSpeaker/AIConversationCoreClient.cs
           git diff --cached --check
           git commit -m 'repin final core presentation contract'
           git push origin HEAD:feature/aiconversationcore-integration
