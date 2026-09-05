@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace AgentPanelSpeaker;
 
@@ -50,7 +49,7 @@ internal sealed class CanonicalSessionExtractor : IDisposable
       return Array.Empty<ExtractionResult>();
     }
 
-    AIConversationProjection projection = PrepareSpeechProjection(
+    AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
       _client.Project(source, _jsonLines));
     var results = new List<ExtractionResult>(_jsonLines.Count);
     for (int sourceIndex = 0; sourceIndex < _jsonLines.Count; ++sourceIndex)
@@ -87,94 +86,12 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     }
 
     _jsonLines.Add(line);
-    AIConversationProjection projection = PrepareSpeechProjection(
+    AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
       _client.Project(source, _jsonLines));
     return CanonicalProjectionExtractor.ExtractRecord(
       projection,
       source,
       _jsonLines.Count - 1);
-  }
-
-  /// <summary>
-  /// Applies core-supplied speech participation/timer identity metadata without
-  /// reading any provider-native fields in C#.
-  /// </summary>
-  private static AIConversationProjection PrepareSpeechProjection(
-    AIConversationProjection projection)
-  {
-    var events = new List<JsonElement>(projection.Events.Length);
-    foreach (JsonElement eventElement in projection.Events)
-    {
-      if (TryGetSpeechEligibility(eventElement, out bool eligible) && !eligible)
-      {
-        continue;
-      }
-
-      if (GetBackgroundIdentityKind(eventElement) == "task_timestamp")
-      {
-        events.Add(WithoutToolCallRelationship(eventElement));
-      }
-      else
-      {
-        events.Add(eventElement.Clone());
-      }
-    }
-
-    return projection with { Events = events.ToArray() };
-  }
-
-  /// <summary>
-  /// Reads optional core-supplied speech eligibility metadata.
-  /// </summary>
-  private static bool TryGetSpeechEligibility(
-    JsonElement eventElement,
-    out bool eligible)
-  {
-    eligible = true;
-    return eventElement.ValueKind == JsonValueKind.Object &&
-      eventElement.TryGetProperty("speech", out JsonElement speech) &&
-      speech.ValueKind == JsonValueKind.Object &&
-      speech.TryGetProperty("eligible", out JsonElement value) &&
-      (value.ValueKind == JsonValueKind.True ||
-       value.ValueKind == JsonValueKind.False) &&
-      (eligible = value.GetBoolean()) == eligible;
-  }
-
-  /// <summary>
-  /// Reads the core-supplied background timer identity strategy.
-  /// </summary>
-  private static string GetBackgroundIdentityKind(JsonElement eventElement)
-  {
-    if (!eventElement.TryGetProperty("speech", out JsonElement speech) ||
-        speech.ValueKind != JsonValueKind.Object ||
-        !speech.TryGetProperty(
-          "background_work_identity",
-          out JsonElement identity) ||
-        identity.ValueKind != JsonValueKind.Object ||
-        !identity.TryGetProperty("kind", out JsonElement kind) ||
-        kind.ValueKind != JsonValueKind.String)
-    {
-      return string.Empty;
-    }
-    return kind.GetString() ?? string.Empty;
-  }
-
-  /// <summary>
-  /// Removes the tool-call identity from one queue completion projection so the
-  /// existing app timing contract derives `taskId@timestamp` from canonical
-  /// subagent identity and canonical timestamp.
-  /// </summary>
-  private static JsonElement WithoutToolCallRelationship(JsonElement eventElement)
-  {
-    JsonObject? root = JsonNode.Parse(eventElement.GetRawText()) as JsonObject;
-    if (root?["relationships"] is JsonObject relationships)
-    {
-      relationships["tool_call_id"] = null;
-    }
-
-    using JsonDocument document = JsonDocument.Parse(
-      root?.ToJsonString() ?? eventElement.GetRawText());
-    return document.RootElement.Clone();
   }
 
   /// <summary>
