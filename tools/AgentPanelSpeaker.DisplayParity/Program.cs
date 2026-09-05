@@ -105,13 +105,18 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
     ValidateDetailsRange(html, "rendered Claude thought HTML", failures);
     Reject(
       html,
-      "<p>&gt;",
+      "&gt;",
       "literal Markdown quote marker in grouped Claude thoughts",
       failures);
     Reject(
       html,
-      "<p>***</p>",
+      "***",
       "literal Markdown thought separator in grouped Claude thoughts",
+      failures);
+    Require(
+      html,
+      "<hr",
+      "rendered Markdown thought separator in grouped Claude thoughts",
       failures);
 
     IReadOnlyList<TranscriptNodeIdentity> identities =
