@@ -1,4 +1,5 @@
 using AgentPanelSpeaker;
+using Markdig;
 
 if (args.Length != 2)
 {
@@ -25,7 +26,7 @@ ValidateCodex(coreRoot, failures);
 if (failures.Count != 0)
 {
   Console.Error.WriteLine(
-    $"FAIL: {failures.Count} canonical display/identity validation difference(s)");
+    $"FAIL: {failures.Count} canonical display/identity/highlight validation difference(s)");
   foreach (string failure in failures)
   {
     Console.Error.WriteLine(failure);
@@ -34,7 +35,7 @@ if (failures.Count != 0)
 }
 
 Console.WriteLine(
-  "PASS: transcript display and node identity are sourced from canonical projection.");
+  "PASS: transcript display, node identity, and speech/highlight mapping are canonical.");
 return 0;
 
 static void ValidateClaude(string coreRoot, ICollection<string> failures)
@@ -110,6 +111,14 @@ static void ValidateIdentityChain(
     return;
   }
 
+  string html = Markdown.ToHtml(
+    markdown,
+    new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
+  TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
+    html,
+    identities,
+    CancellationToken.None);
+
   long expectedNodeId = 1;
   foreach (TranscriptNodeIdentity identity in identities)
   {
@@ -128,6 +137,40 @@ static void ValidateIdentityChain(
       failures.Add(
         $"{label} canonical identity has no matching DOM anchor: " +
         $"record={identity.RecordNumber} source={identity.SourceId}.");
+    }
+
+    int nodeWordIndex = 0;
+    foreach (string segment in identity.Segments)
+    {
+      int wordCount = SpeechTokenization.Matches(segment).Count;
+      for (int index = 0; index < wordCount; ++index)
+      {
+        if (!searchIndex.TryResolveVoiceOrigin(
+              identity.NodeId,
+              nodeWordIndex,
+              out int recordNumber,
+              out string sourceId,
+              out int recordWordIndex))
+        {
+          failures.Add(
+            $"{label} speech word is not mapped to rendered transcript: " +
+            $"node={identity.NodeId} word={nodeWordIndex}.");
+        }
+        else if (recordNumber != identity.RecordNumber ||
+                 !string.Equals(
+                   sourceId,
+                   identity.SourceId,
+                   StringComparison.Ordinal) ||
+                 recordWordIndex < 0)
+        {
+          failures.Add(
+            $"{label} speech/highlight provenance mismatch: " +
+            $"node={identity.NodeId} word={nodeWordIndex} " +
+            $"expected={identity.RecordNumber}/{identity.SourceId} " +
+            $"actual={recordNumber}/{sourceId}/{recordWordIndex}.");
+        }
+        nodeWordIndex++;
+      }
     }
   }
 }
