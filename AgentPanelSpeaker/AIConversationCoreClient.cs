@@ -11,7 +11,12 @@ namespace AgentPanelSpeaker;
 internal sealed class AIConversationCoreClient : IDisposable
 {
   private const string ExpectedCoreCommit =
-    "a6fd322aece692cd0c90bc89f11228b3a4e83520";
+    "8d9197d2fb40c4ecad9e9c461d4114ca0e3ce723";
+  private const int ExpectedPresentationSchemaVersion = 1;
+  private const string ExpectedSplitPolicy =
+    "record-anchor-except-declared-atomic-unit";
+  private const string ExpectedStructuralUnitMarkerClass =
+    "aicore-structural-unit";
 
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
@@ -78,6 +83,7 @@ internal sealed class AIConversationCoreClient : IDisposable
       throw new InvalidOperationException(
         "AIConversationCore returned no structured projection.");
     }
+    ValidateProjectionContract(response.Projection);
     return response.Projection;
   }
 
@@ -94,6 +100,41 @@ internal sealed class AIConversationCoreClient : IDisposable
       }
       _disposed = true;
       StopProcess();
+    }
+  }
+
+  private static void ValidateProjectionContract(AIConversationProjection projection)
+  {
+    AIConversationPresentation? presentation = projection.Presentation;
+    if (presentation is null)
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore projection omitted its presentation contract.");
+    }
+    if (presentation.SchemaVersion != ExpectedPresentationSchemaVersion)
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore presentation schema mismatch: expected " +
+        $"{ExpectedPresentationSchemaVersion}, received {presentation.SchemaVersion}.");
+    }
+    if (!string.Equals(
+          presentation.SplitPolicy,
+          ExpectedSplitPolicy,
+          StringComparison.Ordinal))
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore presentation split policy mismatch: expected " +
+        $"{ExpectedSplitPolicy}, received {presentation.SplitPolicy}.");
+    }
+    if (!string.Equals(
+          presentation.StructuralUnitMarkerClass,
+          ExpectedStructuralUnitMarkerClass,
+          StringComparison.Ordinal))
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore structural marker mismatch: expected " +
+        $"{ExpectedStructuralUnitMarkerClass}, received " +
+        $"{presentation.StructuralUnitMarkerClass}.");
     }
   }
 
@@ -341,7 +382,27 @@ internal sealed record AIConversationProjection(
   [property: JsonPropertyName("events")] JsonElement[] Events,
   [property: JsonPropertyName("turns")] CanonicalTurnProjection[] Turns,
   [property: JsonPropertyName("units")] CanonicalUnitProjection[] Units,
+  [property: JsonPropertyName("presentation")] AIConversationPresentation? Presentation,
   [property: JsonPropertyName("markdown")] string Markdown);
+
+/// <summary>
+/// Shared presentation contract returned by AIConversationCore.
+/// </summary>
+internal sealed record AIConversationPresentation(
+  [property: JsonPropertyName("schema_version")] int SchemaVersion,
+  [property: JsonPropertyName("split_policy")] string SplitPolicy,
+  [property: JsonPropertyName("structural_unit_marker_class")] string StructuralUnitMarkerClass,
+  [property: JsonPropertyName("structural_units")] CanonicalStructuralUnitProjection[] StructuralUnits);
+
+/// <summary>
+/// One core-declared atomic presentation unit.
+/// </summary>
+internal sealed record CanonicalStructuralUnitProjection(
+  [property: JsonPropertyName("id")] string Id,
+  [property: JsonPropertyName("kind")] string Kind,
+  [property: JsonPropertyName("atomic")] bool Atomic,
+  [property: JsonPropertyName("source_indexes")] int[] SourceIndexes,
+  [property: JsonPropertyName("source_record_ids")] string[] SourceRecordIds);
 
 /// <summary>
 /// Canonical derived turn returned by AIConversationCore.
