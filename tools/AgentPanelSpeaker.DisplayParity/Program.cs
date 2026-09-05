@@ -21,6 +21,7 @@ File.Copy(
 
 var failures = new List<string>();
 ValidateClaude(coreRoot, failures);
+ValidateClaudeThoughtGroup(failures);
 ValidateCodex(coreRoot, failures);
 
 if (failures.Count != 0)
@@ -69,6 +70,92 @@ static void ValidateClaude(string coreRoot, ICollection<string> failures)
     "Claude",
     failures);
   ValidateGrowth(path, AgentSource.Claude, "Claude", failures);
+}
+
+static void ValidateClaudeThoughtGroup(ICollection<string> failures)
+{
+  string tempPath = Path.Combine(
+    Path.GetTempPath(),
+    $"AgentPanelSpeaker-thoughts-{Guid.NewGuid():N}.jsonl");
+  string[] records =
+  {
+    "{\"type\":\"user\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:01.000Z\",\"uuid\":\"thought-user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Please reason through this.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:02.000Z\",\"uuid\":\"thought-one\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"First thought has unique alpha words.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:03.000Z\",\"uuid\":\"thought-two\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Second thought has unique beta words.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:04.000Z\",\"uuid\":\"thought-three\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Third thought has unique gamma words.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:05.000Z\",\"uuid\":\"thought-final\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Final Claude answer after thoughts.\"}]}}"
+  };
+
+  try
+  {
+    File.WriteAllLines(tempPath, records);
+    string markdown = TranscriptMarkdownFormatter.Format(
+      tempPath,
+      AgentSource.Claude);
+    Require(markdown, "<details>", "Claude thought details opening", failures);
+    Require(
+      markdown,
+      "<summary>Having 3 thoughts</summary>",
+      "Claude thought details summary",
+      failures);
+    Require(markdown, "</details>", "Claude thought details closing", failures);
+
+    string html = Markdown.ToHtml(
+      markdown,
+      new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
+    int detailsStart = html.IndexOf("<details>", StringComparison.Ordinal);
+    int detailsEnd = detailsStart < 0
+      ? -1
+      : html.IndexOf("</details>", detailsStart, StringComparison.Ordinal);
+    if (detailsStart < 0 || detailsEnd < 0)
+    {
+      failures.Add("Claude thought details did not survive Markdig as one DOM disclosure.");
+    }
+    else
+    {
+      foreach (string thought in new[]
+               {
+                 "First thought has unique alpha words.",
+                 "Second thought has unique beta words.",
+                 "Third thought has unique gamma words."
+               })
+      {
+        int thoughtIndex = html.IndexOf(thought, StringComparison.Ordinal);
+        if (thoughtIndex <= detailsStart || thoughtIndex >= detailsEnd)
+        {
+          failures.Add(
+            $"Claude thought text escaped the details DOM: {thought}");
+        }
+      }
+
+      int blockquoteStart = html.IndexOf(
+        "<blockquote>",
+        detailsStart,
+        StringComparison.Ordinal);
+      if (blockquoteStart < 0 || blockquoteStart >= detailsEnd)
+      {
+        failures.Add("Claude thought quote styling is not enclosed by details.");
+      }
+    }
+
+    ValidateIdentityChain(
+      tempPath,
+      AgentSource.Claude,
+      markdown,
+      "Claude grouped thoughts",
+      failures);
+  }
+  finally
+  {
+    try
+    {
+      File.Delete(tempPath);
+    }
+    catch (IOException)
+    {
+      // Best-effort cleanup of a temporary regression fixture.
+    }
+  }
 }
 
 static void ValidateCodex(string coreRoot, ICollection<string> failures)
