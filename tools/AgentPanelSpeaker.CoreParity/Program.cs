@@ -32,7 +32,8 @@ foreach (Fixture fixture in fixtures)
   string[] lines = File.ReadLines(path)
     .Where(line => !string.IsNullOrWhiteSpace(line))
     .ToArray();
-  AIConversationProjection projection = client.Project(fixture.Source, lines);
+  AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
+    client.Project(fixture.Source, lines));
 
   for (int index = 0; index < lines.Length; ++index)
   {
