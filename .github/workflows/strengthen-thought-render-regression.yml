@@ -1,0 +1,28 @@
+name: Strengthen grouped-thought render regression
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/strengthen-thought-render-regression.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          fetch-depth: 0
+      - run: python scripts/strengthen-thought-render-regression.py
+      - run: git diff --check
+      - run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/AgentPanelSpeaker.DisplayParity/Program.cs
+          git commit -m 'strengthen grouped-thought render regression'
+          git push origin HEAD:feature/aiconversationcore-integration
