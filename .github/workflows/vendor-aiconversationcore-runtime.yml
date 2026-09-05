@@ -1,0 +1,48 @@
+name: Vendor AIConversationCore runtime
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/vendor-aiconversationcore-runtime.yml
+
+permissions:
+  contents: write
+
+jobs:
+  vendor-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out AgentPanelSpeaker integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+
+      - name: Check out pinned AIConversationCore
+        uses: actions/checkout@v4
+        with:
+          repository: Ma-XX-oN/AIConversationCore
+          ref: a6fd322aece692cd0c90bc89f11228b3a4e83520
+          path: _AIConversationCore
+
+      - name: Vendor exact runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf tools/AIConversationCore-runtime
+          mkdir -p tools/AIConversationCore-runtime
+          cp -a _AIConversationCore/src tools/AIConversationCore-runtime/src
+          printf '%s\n' 'a6fd322aece692cd0c90bc89f11228b3a4e83520' > tools/AIConversationCore-runtime/CORE_COMMIT
+          rm -rf _AIConversationCore
+
+      - name: Commit vendored runtime and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/vendor-aiconversationcore-runtime.yml
+          git add tools/AIConversationCore-runtime
+          git commit -m "bundle pinned AIConversationCore runtime"
+          git push origin HEAD:feature/aiconversationcore-integration
