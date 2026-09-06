@@ -587,6 +587,7 @@ internal sealed class TranscriptView : UserControl
       info.Length
     });
     var renderTimer = Stopwatch.StartNew();
+    string structureProbeId = $"{generation}:{Guid.NewGuid():N}";
 
     try
     {
@@ -613,12 +614,21 @@ internal sealed class TranscriptView : UserControl
             token));
         token.ThrowIfCancellationRequested();
         string html = TranscriptHtmlRenderer.ToHtml(markdown, _pipeline);
+        TranscriptStructureSnapshot rendererStructure =
+          TranscriptStructureProbe.CaptureHtml(
+            structureProbeId,
+            "renderer-html",
+            html);
         TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
           html,
           identities,
           token);
         TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
-        return new TranscriptRenderPayload(document, identities, searchIndex);
+        return new TranscriptRenderPayload(
+          document,
+          identities,
+          searchIndex,
+          rendererStructure);
       }, token);
 
       long preparationMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -634,6 +644,14 @@ internal sealed class TranscriptView : UserControl
       _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
       TranscriptWindow window = payload.Document.CreateWindow(focalIndex);
+      TranscriptStructureSnapshot virtualStructure =
+        TranscriptStructureProbe.CaptureHtml(
+          structureProbeId,
+          "virtual-window-html",
+          window.Html);
+      TranscriptStructureProbe.Compare(
+        payload.RendererStructure,
+        virtualStructure);
       string script = BuildReplaceWindowScript(
         window,
         preserve: !force,
@@ -646,6 +664,12 @@ internal sealed class TranscriptView : UserControl
       }
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
+      TranscriptStructureSnapshot? webViewStructure =
+        await CaptureWebViewStructureAsync(structureProbeId);
+      if (webViewStructure is not null)
+      {
+        TranscriptStructureProbe.Compare(virtualStructure, webViewStructure);
+      }
 
       TranscriptPlaybackPosition? renderAnchor = null;
       int latestIndex = -1;
@@ -672,6 +696,13 @@ internal sealed class TranscriptView : UserControl
           (latestIndex < _windowStartIndex || latestIndex > _windowEndIndex))
       {
         window = payload.Document.CreateWindow(latestIndex);
+        virtualStructure = TranscriptStructureProbe.CaptureHtml(
+          structureProbeId,
+          "virtual-window-html-positioned",
+          window.Html);
+        TranscriptStructureProbe.Compare(
+          payload.RendererStructure,
+          virtualStructure);
         if (!await ExecuteAsync(BuildReplaceWindowScript(
               window,
               preserve: false,
@@ -683,6 +714,11 @@ internal sealed class TranscriptView : UserControl
         }
         _windowStartIndex = window.StartIndex;
         _windowEndIndex = window.EndIndex;
+        webViewStructure = await CaptureWebViewStructureAsync(structureProbeId);
+        if (webViewStructure is not null)
+        {
+          TranscriptStructureProbe.Compare(virtualStructure, webViewStructure);
+        }
         focalIndex = latestIndex;
       }
 
@@ -1358,6 +1394,33 @@ internal sealed class TranscriptView : UserControl
     };
   }
 
+  private async Task<TranscriptStructureSnapshot?> CaptureWebViewStructureAsync(
+    string probeId)
+  {
+    try
+    {
+      CoreWebView2? core = _webView.CoreWebView2;
+      if (!_initialized || _webView.IsDisposed || core is null)
+      {
+        return null;
+      }
+      string result = await core.ExecuteScriptAsync(
+        TranscriptStructureProbe.BuildWebViewProbeScript());
+      return TranscriptStructureProbe.CaptureWebViewResult(probeId, result);
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or ObjectDisposedException or JsonException)
+    {
+      DiagnosticLog.Write("transcript.structure_probe_failed", new
+      {
+        probeId,
+        stage = "webview-dom",
+        exception = exception.ToString()
+      });
+      return null;
+    }
+  }
+
   private async Task<bool> ExecuteAsync(string script)
   {
     try
@@ -1576,7 +1639,8 @@ internal sealed class TranscriptView : UserControl
   private sealed record TranscriptRenderPayload(
     TranscriptVirtualDocument Document,
     IReadOnlyList<TranscriptNodeIdentity> Identities,
-    TranscriptSearchIndex SearchIndex);
+    TranscriptSearchIndex SearchIndex,
+    TranscriptStructureSnapshot RendererStructure);
 
 
   private int ResolveInitialWindowIndex(

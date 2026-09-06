@@ -42,7 +42,8 @@ new = '''        string html = string.Empty;
             path,
             source,
             _pipeline,
-            token));
+            token,
+            structureProbeId));
         token.ThrowIfCancellationRequested();'''
 if old not in text:
   raise SystemExit('TranscriptView render pipeline snippet not found')

@@ -28,7 +28,8 @@ internal static class TranscriptPresentationHtmlFormatter
     string path,
     AgentSource source,
     MarkdownPipeline pipeline,
-    CancellationToken cancellationToken = default)
+    CancellationToken cancellationToken = default,
+    string? structureProbeId = null)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
     ArgumentNullException.ThrowIfNull(pipeline);
@@ -72,6 +73,10 @@ internal static class TranscriptPresentationHtmlFormatter
     {
       throw new InvalidOperationException(
         "AIConversationCore projection omitted the canonical presentation tree.");
+    }
+    if (!string.IsNullOrWhiteSpace(structureProbeId))
+    {
+      TranscriptStructureProbe.CapturePresentationTree(structureProbeId, tree);
     }
 
     var output = new StringBuilder();
