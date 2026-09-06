@@ -1,0 +1,43 @@
+name: Fix malformed details rendering
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Apply fix
+        shell: pwsh
+        run: python scripts/fix-malformed-details.py
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+      - name: Run display validation harness
+        shell: pwsh
+        run: dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release -- AgentPanelSpeaker/AIConversationCore tools/AIConversationCore-worker.mjs
+      - name: Commit fix
+        shell: pwsh
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add AgentPanelSpeaker/TranscriptHtmlRenderer.cs tools/AgentPanelSpeaker.DisplayParity/Program.cs
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "fix nested details rendering across blockquotes"
+          git push
