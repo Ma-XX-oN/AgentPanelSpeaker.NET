@@ -22,9 +22,16 @@ internal static class Program
       return;
     }
 
-    if (args.Length == 1 && args[0] == "--test")
+    if (args.Length >= 1 && args[0] == "--test")
     {
-      Environment.ExitCode = RegressionTestRunner.Run();
+      if (args.Length > 2)
+      {
+        Console.Error.WriteLine("Usage: AgentPanelSpeaker.exe --test [suite]");
+        Environment.ExitCode = 2;
+        return;
+      }
+      Environment.ExitCode = RegressionTestRunner.Run(
+        args.Length == 2 ? args[1] : null);
       return;
     }
 
