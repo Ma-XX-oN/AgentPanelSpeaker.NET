@@ -1,0 +1,28 @@
+name: Issue 21 Codex worker reuse red proof
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - AgentPanelSpeaker/CoreRegressionTestRunner.cs
+      - AgentPanelSpeaker/SessionLocator.cs
+      - .github/workflows/issue-21-worker-reuse-red.yml
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build AgentPanelSpeaker
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+      - name: Run core-boundary regressions
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test core
