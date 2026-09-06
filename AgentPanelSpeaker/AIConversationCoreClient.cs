@@ -6,12 +6,25 @@ using System.Text.Json.Serialization;
 namespace AgentPanelSpeaker;
 
 /// <summary>
+/// Options passed through to AIConversationCore for one structured projection.
+/// </summary>
+/// <param name="IncludeRolledBackTurns">
+/// Whether rolled-back/superseded Codex revisions should be visible.
+/// </param>
+/// <param name="CodexSessionIndexPath">
+/// Optional caller-discovered Codex session-index path. The core reads/parses it.
+/// </param>
+internal sealed record AIConversationCoreProjectOptions(
+  bool IncludeRolledBackTurns = false,
+  string? CodexSessionIndexPath = null);
+
+/// <summary>
 /// Owns one persistent Node.js bridge process for AIConversationCore.
 /// </summary>
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "b7161f198a204f18d12d896689f6553d76161102";
+    "df58d483956c280d0103bd9ae9f79c642f0d279e";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
@@ -54,10 +67,12 @@ internal sealed class AIConversationCoreClient : IDisposable
   /// </summary>
   /// <param name="source">Selected provider.</param>
   /// <param name="jsonLines">Ordered raw JSONL records.</param>
+  /// <param name="options">Optional canonical provider options.</param>
   /// <returns>The canonical structured projection.</returns>
   public AIConversationProjection Project(
     AgentSource source,
-    IReadOnlyList<string> jsonLines)
+    IReadOnlyList<string> jsonLines,
+    AIConversationCoreProjectOptions? options = null)
   {
     ArgumentNullException.ThrowIfNull(jsonLines);
     string provider = source switch
@@ -73,10 +88,24 @@ internal sealed class AIConversationCoreClient : IDisposable
     using var recordsDocument = JsonDocument.Parse(
       "[" + string.Join(",", jsonLines.Where(line =>
         !string.IsNullOrWhiteSpace(line))) + "]");
+
+    AIConversationCoreProjectOptions effective = options ?? new();
+    var supplementary = new Dictionary<string, object>();
+    if (source == AgentSource.Codex &&
+        !string.IsNullOrWhiteSpace(effective.CodexSessionIndexPath))
+    {
+      supplementary["codexSessionIndex"] = new
+      {
+        path = Path.GetFullPath(effective.CodexSessionIndexPath)
+      };
+    }
+
     var request = new CoreRequest(
       "project",
       provider,
-      recordsDocument.RootElement.Clone());
+      recordsDocument.RootElement.Clone(),
+      new CoreOptions(effective.IncludeRolledBackTurns),
+      supplementary);
     CoreResponse response = SendRequest(request);
     if (response.Projection is null)
     {
@@ -239,7 +268,7 @@ internal sealed class AIConversationCoreClient : IDisposable
       _input = process.StandardInput;
       _output = process.StandardOutput;
 
-      var ping = new CoreRequest("ping", null, null);
+      var ping = new CoreRequest("ping", null, null, null, null);
       CoreResponse response = SendRequestWithoutStartup(ping);
       if (!response.Ok ||
           !string.Equals(
@@ -358,7 +387,12 @@ internal sealed class AIConversationCoreClient : IDisposable
   private sealed record CoreRequest(
     [property: JsonPropertyName("operation")] string Operation,
     [property: JsonPropertyName("provider")] string? Provider,
-    [property: JsonPropertyName("records")] JsonElement? Records);
+    [property: JsonPropertyName("records")] JsonElement? Records,
+    [property: JsonPropertyName("options")] CoreOptions? Options,
+    [property: JsonPropertyName("supplementary_sources")] IReadOnlyDictionary<string, object>? SupplementarySources);
+
+  private sealed record CoreOptions(
+    [property: JsonPropertyName("includeRolledBackTurns")] bool IncludeRolledBackTurns);
 
   private sealed record CoreResponse(
     [property: JsonPropertyName("ok")] bool Ok,
@@ -376,7 +410,16 @@ internal sealed record AIConversationProjection(
   [property: JsonPropertyName("turns")] CanonicalTurnProjection[] Turns,
   [property: JsonPropertyName("units")] CanonicalUnitProjection[] Units,
   [property: JsonPropertyName("presentation")] AIConversationPresentation? Presentation,
-  [property: JsonPropertyName("markdown")] string Markdown);
+  [property: JsonPropertyName("markdown")] string Markdown,
+  [property: JsonPropertyName("session_metadata")] AIConversationSessionMetadata? SessionMetadata = null);
+
+/// <summary>
+/// Provider session metadata resolved by AIConversationCore.
+/// </summary>
+internal sealed record AIConversationSessionMetadata(
+  [property: JsonPropertyName("session_id")] string? SessionId,
+  [property: JsonPropertyName("title")] string? Title,
+  [property: JsonPropertyName("title_source")] string? TitleSource);
 
 /// <summary>
 /// Shared presentation contract returned by AIConversationCore.
