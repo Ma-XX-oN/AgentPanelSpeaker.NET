@@ -11,6 +11,7 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   private readonly AIConversationCoreClient _client = new();
   private readonly List<string> _jsonLines = new();
   private AgentSource? _source;
+  private AIConversationCoreProjectOptions _options = new();
   private bool _disposed;
 
   /// <summary>
@@ -18,11 +19,16 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   /// </summary>
   /// <param name="source">Selected provider.</param>
   /// <param name="jsonLines">Existing source records.</param>
-  public void Prime(AgentSource source, IEnumerable<string> jsonLines)
+  /// <param name="options">Canonical provider projection options.</param>
+  public void Prime(
+    AgentSource source,
+    IEnumerable<string> jsonLines,
+    AIConversationCoreProjectOptions? options = null)
   {
     ArgumentNullException.ThrowIfNull(jsonLines);
     ThrowIfDisposed();
     _source = source;
+    _options = options ?? new();
     _jsonLines.Clear();
     foreach (string line in jsonLines)
     {
@@ -38,19 +44,21 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   /// </summary>
   /// <param name="source">Selected provider.</param>
   /// <param name="jsonLines">Existing source records.</param>
+  /// <param name="options">Canonical provider projection options.</param>
   /// <returns>One extraction result per valid source record.</returns>
   public IReadOnlyList<ExtractionResult> Load(
     AgentSource source,
-    IEnumerable<string> jsonLines)
+    IEnumerable<string> jsonLines,
+    AIConversationCoreProjectOptions? options = null)
   {
-    Prime(source, jsonLines);
+    Prime(source, jsonLines, options);
     if (_jsonLines.Count == 0)
     {
       return Array.Empty<ExtractionResult>();
     }
 
     AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
-      _client.Project(source, _jsonLines));
+      _client.Project(source, _jsonLines, _options));
     var results = new List<ExtractionResult>(_jsonLines.Count);
     for (int sourceIndex = 0; sourceIndex < _jsonLines.Count; ++sourceIndex)
     {
@@ -87,7 +95,7 @@ internal sealed class CanonicalSessionExtractor : IDisposable
 
     _jsonLines.Add(line);
     AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
-      _client.Project(source, _jsonLines));
+      _client.Project(source, _jsonLines, _options));
     return CanonicalProjectionExtractor.ExtractRecord(
       projection,
       source,
@@ -107,6 +115,7 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     _client.Dispose();
     _jsonLines.Clear();
     _source = null;
+    _options = new();
   }
 
   /// <summary>
