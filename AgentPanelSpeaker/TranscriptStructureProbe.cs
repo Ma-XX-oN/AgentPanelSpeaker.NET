@@ -228,7 +228,7 @@ internal static class TranscriptStructureProbe
   {
     return """
       (() => {
-        const keyForDetails = (details, ordinal) => {
+        const keyForDetails = (details) => {
           const presentation = details.getAttribute('data-presentation-id');
           if (presentation) return 'presentation:' + presentation;
           const marker = details.querySelector('[data-aicore-unit-id]');
@@ -236,11 +236,11 @@ internal static class TranscriptStructureProbe
           const summary = Array.from(details.children).find(
             child => child.tagName === 'SUMMARY');
           const text = summary ? summary.textContent.trim().replace(/\s+/g, ' ') : '';
-          return 'details:' + ordinal + ':' + text;
+          return 'summary:' + text;
         };
         const allDetails = Array.from(document.querySelectorAll('details'));
         const detailsKeys = new Map(
-          allDetails.map((details, index) => [details, keyForDetails(details, index)]));
+          allDetails.map(details => [details, keyForDetails(details)]));
         const entries = Array.from(document.querySelectorAll('.record-anchor')).map(anchor => {
           const chain = [];
           let element = anchor.parentElement;
@@ -444,7 +444,7 @@ internal static class TranscriptStructureProbe
     string summaryText = summary.Success
       ? NormalizeText(summary.Groups["text"].Value)
       : string.Empty;
-    return $"details:{ordinal}:{summaryText}";
+    return "summary:" + summaryText;
   }
 
   private static string AttributeValue(Regex regex, string text)

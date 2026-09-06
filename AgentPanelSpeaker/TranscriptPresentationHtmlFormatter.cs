@@ -74,9 +74,11 @@ internal static class TranscriptPresentationHtmlFormatter
       throw new InvalidOperationException(
         "AIConversationCore projection omitted the canonical presentation tree.");
     }
+    TranscriptStructureSnapshot? presentationStructure = null;
     if (!string.IsNullOrWhiteSpace(structureProbeId))
     {
-      TranscriptStructureProbe.CapturePresentationTree(structureProbeId, tree);
+      presentationStructure =
+        TranscriptStructureProbe.CapturePresentationTree(structureProbeId, tree);
     }
 
     var output = new StringBuilder();
@@ -97,7 +99,19 @@ internal static class TranscriptPresentationHtmlFormatter
         emittedSourceIndexes,
         cancellationToken);
     }
-    return output.ToString();
+    string html = output.ToString();
+    if (presentationStructure is not null)
+    {
+      TranscriptStructureSnapshot directRendererStructure =
+        TranscriptStructureProbe.CaptureHtml(
+          structureProbeId!,
+          "direct-renderer-html",
+          html);
+      TranscriptStructureProbe.Compare(
+        presentationStructure,
+        directRendererStructure);
+    }
+    return html;
   }
 
   private static void RenderTurn(
