@@ -2316,12 +2316,59 @@ function compareStructureMaps(before, after) {
   return differences;
 }
 
+function structureAnchorSelector(recordNumber, sourceId) {
+  return '.record-anchor[data-jsonl-record="' +
+    CSS.escape(String(recordNumber)) + '"][data-source-id="' +
+    CSS.escape(String(sourceId || '')) + '"]';
+}
+
+function inputContextForRecord(html, recordNumber, sourceId) {
+  const recordNeedle = 'data-jsonl-record="' + String(recordNumber) + '"';
+  const sourceNeedle = 'data-source-id="' + String(sourceId || '') + '"';
+  let index = html.indexOf(sourceNeedle);
+  if (index < 0) index = html.indexOf(recordNeedle);
+  if (index < 0) return '';
+  const start = Math.max(0, index - 1800);
+  const end = Math.min(html.length, index + 2200);
+  return html.slice(start, end);
+}
+
+function domContextForRecord(recordNumber, sourceId) {
+  const anchor = transcript.querySelector(
+    structureAnchorSelector(recordNumber, sourceId));
+  if (!anchor) return '';
+  let element = anchor.parentElement;
+  let selected = anchor;
+  for (let depth = 0; element && depth < 4; depth++) {
+    selected = element;
+    if (element.tagName === 'DETAILS') break;
+    element = element.parentElement;
+  }
+  const html = selected.outerHTML || '';
+  return html.length <= 5000 ? html : html.slice(0, 5000);
+}
+
+function buildStructureDivergenceContexts(html, differences) {
+  return (differences || []).slice(0, 20).map(diff => ({
+    recordNumber: diff.recordNumber,
+    sourceId: diff.sourceId,
+    beforeDetails: diff.beforeDetails,
+    afterDetails: diff.afterDetails,
+    inputContext: inputContextForRecord(
+      html,
+      diff.recordNumber,
+      diff.sourceId),
+    domContext: domContextForRecord(diff.recordNumber, diff.sourceId)
+  }));
+}
+
 function postStructureStage(
   probeId,
   stage,
   expectedMap,
   previousMap,
-  previousStage) {
+  previousStage,
+  rawInputHtml = '') {
   if (!probeId) return previousMap;
   const snapshot = captureStructureDom();
   const currentMap = normalizeStructureEntries(snapshot.entries);
@@ -2340,7 +2387,11 @@ function postStructureStage(
     expectedDifferenceCount: expectedDifferences.length,
     previousDifferenceCount: previousDifferences.length,
     differencesFromExpected: expectedDifferences,
-    differencesFromPrevious: previousDifferences
+    differencesFromPrevious: previousDifferences,
+    divergenceContexts:
+      previousDifferences.length === 0 || !rawInputHtml
+        ? []
+        : buildStructureDivergenceContexts(rawInputHtml, previousDifferences)
   });
   return currentMap;
 }
@@ -2382,7 +2433,8 @@ function replaceTranscriptWindow(
     'after-inner-html',
     expectedStructureMap,
     previousStructureMap,
-    previousStructureStage);
+    previousStructureStage,
+    html);
   previousStructureStage = 'after-inner-html';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
