@@ -33,6 +33,7 @@ jobs:
         run: |
           python scripts/migrate-presentation-dom.py
           python scripts/fix-dom-test.py
+          python scripts/fix-dom-tool-summary.py
       - name: Run pinned AIConversationCore tests
         shell: pwsh
         working-directory: dependencies/AIConversationCore
@@ -53,7 +54,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptVirtualDocument.cs AgentPanelSpeaker/TranscriptView.cs tools/AIConversationCore-worker.mjs tools/AgentPanelSpeaker.DisplayParity/Program.cs dependencies/AIConversationCore
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptPresentationDomFormatter.cs AgentPanelSpeaker/TranscriptVirtualDocument.cs AgentPanelSpeaker/TranscriptView.cs tools/AIConversationCore-worker.mjs tools/AgentPanelSpeaker.DisplayParity/Program.cs dependencies/AIConversationCore
           if (git diff --cached --quiet) { exit 0 }
           git commit -m "render canonical presentation with DOM objects"
           git push
