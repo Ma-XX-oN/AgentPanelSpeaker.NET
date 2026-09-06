@@ -177,99 +177,43 @@ internal static partial class SessionLocator
   /// </summary>
   private static string ReadCodexTitle(string sessionPath, string sessionId)
   {
-    string indexTitle = ReadCodexIndexTitle(sessionId);
-    if (indexTitle.Length != 0)
-    {
-      return indexTitle;
-    }
-
     try
     {
-      foreach (string line in ReadSharedLines(sessionPath))
-      {
-        using JsonDocument document = JsonDocument.Parse(line);
-        JsonElement root = document.RootElement;
-        if (!TryGetString(root, "type", out string recordType) ||
-            !recordType.Equals("event_msg", StringComparison.Ordinal))
-        {
-          continue;
-        }
-
-        if (!root.TryGetProperty("payload", out JsonElement payload) ||
-            !TryGetString(payload, "type", out string payloadType) ||
-            !payloadType.Equals("user_message", StringComparison.Ordinal) ||
-            !TryGetString(payload, "message", out string message))
-        {
-          continue;
-        }
-
-        string stripped = CodexRequestPreambleRegex().Replace(message, "$1");
-        string title = FirstMeaningfulLine(stripped);
-        if (title.Length != 0)
-        {
-          return LimitTitle(title);
-        }
-      }
+      using var client = new AIConversationCoreClient();
+      AIConversationProjection projection = client.Project(
+        AgentSource.Codex,
+        ReadSharedLines(sessionPath).ToArray(),
+        new AIConversationCoreProjectOptions(
+          CodexSessionIndexPath: GetCodexSessionIndexPath()));
+      string? title = projection.SessionMetadata?.Title;
+      return string.IsNullOrWhiteSpace(title)
+        ? sessionId
+        : LimitTitle(title.Trim());
     }
     catch (Exception exception) when (
       exception is IOException or
       UnauthorizedAccessException or
-      JsonException)
+      JsonException or
+      InvalidOperationException or
+      ArgumentException)
     {
+      DiagnosticLog.Write("session.codex_title_failed", new
+      {
+        sessionPath,
+        sessionId,
+        exception = exception.Message
+      });
+      return sessionId;
     }
-
-    return sessionId;
   }
 
   /// <summary>
-  /// Reads the newest matching Codex session-index title.
+  /// Gets the optional caller-discovered Codex session-index path.
   /// </summary>
-  private static string ReadCodexIndexTitle(string sessionId)
+  internal static string? GetCodexSessionIndexPath()
   {
-    string indexPath = Path.Combine(GetCodexHome(), "session_index.jsonl");
-    if (!File.Exists(indexPath))
-    {
-      return string.Empty;
-    }
-
-    string latestTimestamp = string.Empty;
-    string latestTitle = string.Empty;
-    try
-    {
-      foreach (string line in ReadSharedLines(indexPath))
-      {
-        using JsonDocument document = JsonDocument.Parse(line);
-        JsonElement root = document.RootElement;
-        if (!TryGetString(root, "id", out string id) ||
-            !id.Equals(sessionId, StringComparison.OrdinalIgnoreCase))
-        {
-          continue;
-        }
-
-        TryGetString(root, "updated_at", out string updatedAt);
-        if (latestTitle.Length != 0 &&
-            string.CompareOrdinal(updatedAt, latestTimestamp) <= 0)
-        {
-          continue;
-        }
-
-        if (TryGetString(root, "thread_name", out string threadName) &&
-            !string.IsNullOrWhiteSpace(threadName))
-        {
-          latestTimestamp = updatedAt;
-          latestTitle = LimitTitle(threadName.Trim());
-        }
-      }
-    }
-    catch (Exception exception) when (
-      exception is IOException or
-      UnauthorizedAccessException or
-      JsonException)
-    {
-      return string.Empty;
-    }
-
-    return latestTitle;
+    string path = Path.Combine(GetCodexHome(), "session_index.jsonl");
+    return File.Exists(path) ? path : null;
   }
 
   /// <summary>
@@ -594,10 +538,6 @@ internal static partial class SessionLocator
       : home;
   }
 
-  [GeneratedRegex(
-    @"## My request for Codex:\s*(.*)",
-    RegexOptions.Singleline)]
-  private static partial Regex CodexRequestPreambleRegex();
 
   [GeneratedRegex(
     @"<(?:ide_opened_file|ide_selection|system[-_]reminder|system|env|" +

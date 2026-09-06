@@ -1574,7 +1574,9 @@ internal sealed class MainForm : Form, IMessageFilter
         _followLatestCheckBox.Checked,
         _speakExistingCheckBox.Checked,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
-        preindexedHistory));
+        preindexedHistory,
+        IncludeRolledBackTurns:
+          _transcriptSettingsPopup.Settings.ShowRolledBackHistory));
       if (reusePausedHistory)
       {
         PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
@@ -2193,6 +2195,9 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
+    bool historyVisibilityChanged =
+      _settingsStore.Current.Transcript.ShowRolledBackHistory !=
+      settings.ShowRolledBackHistory;
     _transcriptView.ApplySettings(settings, dark);
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
@@ -2205,6 +2210,25 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     _transcriptSettingsSaveTimer.Stop();
     _transcriptSettingsSaveTimer.Start();
+    if (historyVisibilityChanged && !_monitor.IsRunning &&
+        !string.IsNullOrWhiteSpace(_sessionPathTextBox.Text))
+    {
+      try
+      {
+        LocatedSession session = SessionLocator.FromPath(
+          _sessionPathTextBox.Text,
+          GetSelectedSource());
+        _selectedSessionHistory = null;
+        _selectedSessionHistoryPath = null;
+        _ = LoadPausedHistoryPreviewAsync(session);
+      }
+      catch (Exception exception) when (
+        exception is IOException or UnauthorizedAccessException or
+        InvalidDataException or InvalidOperationException or ArgumentException)
+      {
+        AppendLog($"Unable to rebuild transcript history: {exception.Message}");
+      }
+    }
   }
 
   /// <summary>
@@ -4016,7 +4040,10 @@ internal sealed class MainForm : Form, IMessageFilter
     try
     {
       SpeechHistorySnapshot snapshot = await Task.Run(() =>
-        _monitor.LoadHistoryPreview(session, startAtLatestTurn));
+        _monitor.LoadHistoryPreview(
+          session,
+          startAtLatestTurn,
+          _transcriptSettingsPopup.Settings.ShowRolledBackHistory));
       if (_closing || IsDisposed || generation != Volatile.Read(
             ref _historyPreviewGeneration) || _monitor.IsRunning ||
           !string.Equals(

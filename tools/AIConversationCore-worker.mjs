@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = 'df58d483956c280d0103bd9ae9f79c642f0d279e';
+const CORE_COMMIT = '9ab9e4f5bd5f4e4a02653267ed118c378912617f';
 
 /**
  * Returns the configured development checkout or the runtime bundled beside

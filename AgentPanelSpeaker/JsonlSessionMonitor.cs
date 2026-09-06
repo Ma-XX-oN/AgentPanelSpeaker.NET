@@ -27,7 +27,8 @@ internal sealed record MonitorSettings(
   bool FollowLatest,
   bool SpeakExistingLatestTurn,
   TimeSpan PollInterval,
-  SpeechHistorySnapshot? PreindexedHistory = null);
+  SpeechHistorySnapshot? PreindexedHistory = null,
+  bool IncludeRolledBackTurns = false);
 
 /// <summary>
 /// Tails Claude or Codex session JSONL and emits conversational text.
@@ -194,7 +195,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   public SpeechHistorySnapshot LoadHistoryPreview(
     LocatedSession session,
-    bool speakExistingLatestTurn)
+    bool speakExistingLatestTurn,
+    bool includeRolledBackTurns = false)
   {
     ArgumentNullException.ThrowIfNull(session);
     lock (_sync)
@@ -220,7 +222,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
       recentFingerprintQueue,
       recentFingerprintSet,
       preview,
-      pendingInputRequests);
+      pendingInputRequests,
+      includeRolledBackTurns);
   }
 
   /// <summary>
@@ -249,7 +252,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
       {
         _canonicalExtractor.Prime(
           session.Source,
-          ReadSharedLines(session.Path));
+          ReadSharedLines(session.Path),
+          ProjectionOptions(session, settings.IncludeRolledBackTurns));
         nextNodeId = preindexedHistory.Fragments.Count == 0
           ? 1
           : preindexedHistory.Fragments.Max(fragment => fragment.NodeId) + 1;
@@ -309,7 +313,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
               recentFingerprintQueue,
               recentFingerprintSet,
               preview,
-              pendingInputRequests);
+              pendingInputRequests,
+            settings.IncludeRolledBackTurns);
             HistoryLoaded?.Invoke(switchedHistory);
             MessagesChanged?.Invoke(preview.ToArray());
           }
@@ -751,12 +756,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
-    IDictionary<string, CodexInputRequest> pendingInputRequests)
+    IDictionary<string, CodexInputRequest> pendingInputRequests,
+    bool includeRolledBackTurns)
   {
     var fragments = new List<SpeechFragment>();
     EligibleHistory eligibleHistory = ReadEligibleHistory(
       session,
-      pendingInputRequests);
+      pendingInputRequests,
+      includeRolledBackTurns);
     foreach (ExtractedNode node in eligibleHistory.Nodes)
     {
       ProcessNode(
@@ -794,6 +801,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
   private EligibleHistory ReadEligibleHistory(
     LocatedSession session,
     IDictionary<string, CodexInputRequest> pendingInputRequests,
+    bool includeRolledBackTurns,
     DateTime? minimumTimestampUtc = null)
   {
     pendingInputRequests.Clear();
@@ -802,7 +810,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var backgroundWorkEvents = new List<BackgroundWorkEvent>();
     IReadOnlyList<ExtractionResult> results = _canonicalExtractor.Load(
       session.Source,
-      ReadSharedLines(session.Path));
+      ReadSharedLines(session.Path),
+      ProjectionOptions(session, includeRolledBackTurns));
     foreach (ExtractionResult result in results)
     {
       RegisterInputRequest(result.InputRequest, pendingInputRequests);
@@ -842,6 +851,20 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     return new EligibleHistory(nodes, completions, backgroundWorkEvents);
+  }
+
+  /// <summary>
+  /// Builds the core projection options for one selected session.
+  /// </summary>
+  private static AIConversationCoreProjectOptions ProjectionOptions(
+    LocatedSession session,
+    bool includeRolledBackTurns)
+  {
+    return new AIConversationCoreProjectOptions(
+      IncludeRolledBackTurns: includeRolledBackTurns,
+      CodexSessionIndexPath: session.Source == AgentSource.Codex
+        ? SessionLocator.GetCodexSessionIndexPath()
+        : null);
   }
 
   /// <summary>
