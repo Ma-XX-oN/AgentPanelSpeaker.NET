@@ -2,28 +2,47 @@ from pathlib import Path
 
 renderer = Path('AgentPanelSpeaker/TranscriptHtmlRenderer.cs')
 text = renderer.read_text(encoding='utf-8')
-old = '''    var output = new StringBuilder(unquoted.Length + 32);
+old = '''  private static string RenderDetailsBody(
+    string body,
+    MarkdownPipeline pipeline)
+  {
+    if (!TryStripOuterBlockquote(body, out string unquoted))
+    {
+      return RenderRange(body, pipeline);
+    }
+
+    var output = new StringBuilder(unquoted.Length + 32);
     output.AppendLine("<blockquote>");
     output.Append(RenderRange(unquoted, pipeline));
     output.AppendLine("</blockquote>");
     return output.ToString();
   }
 '''
-new = '''    string renderable = NormalizeNestedQuotedDetailsStructure(unquoted);
-    var output = new StringBuilder(renderable.Length + 32);
+new = '''  private static string RenderDetailsBody(
+    string body,
+    MarkdownPipeline pipeline)
+  {
+    string normalizedBody = NormalizeNestedQuotedDetailsStructure(body);
+    if (!TryStripOuterBlockquote(normalizedBody, out string unquoted))
+    {
+      return RenderRange(normalizedBody, pipeline);
+    }
+
+    var output = new StringBuilder(unquoted.Length + 32);
     output.AppendLine("<blockquote>");
-    output.Append(RenderRange(renderable, pipeline));
+    output.Append(RenderRange(unquoted, pipeline));
     output.AppendLine("</blockquote>");
     return output.ToString();
   }
 
   /// <summary>
-  /// Removes one Markdown quote level from nested details/summary structural
-  /// tag lines before recursively rendering a disclosure body. Without this,
-  /// Markdig can parse a line such as <c>&gt; &lt;details&gt;</c> as a
-  /// blockquote containing only the opening tag, then close that blockquote
-  /// before the following summary. That produces misnested HTML which the
-  /// browser must repair during <c>innerHTML</c> parsing.
+  /// Removes Markdown quote prefixes from nested details/summary structural tag
+  /// lines before recursively rendering a disclosure body. Structural tags must
+  /// not be handed to Markdig as quoted fragments because Markdig can emit an
+  /// opening details tag in one blockquote and its summary/closing tag outside
+  /// that blockquote, producing invalid HTML that the browser then repairs.
+  /// Content lines keep their quote prefixes; only the structural tag lines are
+  /// unquoted.
   /// </summary>
   private static string NormalizeNestedQuotedDetailsStructure(string markdown)
   {
@@ -55,7 +74,7 @@ new = '''  [GeneratedRegex(
   private static partial Regex OuterBlockquotePrefixRegex();
 
   [GeneratedRegex(
-    @"^[ \\t]*>[ \\t]?(?=</?(?:details|summary)\\b)",
+    @"^[ \\t]*(?:>[ \\t]?)+(?=</?(?:details|summary)\\b)",
     RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
   private static partial Regex QuotedDetailsStructuralPrefixRegex();
 }'''
