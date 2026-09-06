@@ -10,7 +10,7 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class AIConversationCoreClient : IDisposable
 {
-  private const string ExpectedCoreCommit =
+  internal const string ExpectedCoreCommit =
     "2255b6603ef5f2ccbd4111a891375c9c4c246d3e";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
@@ -40,9 +40,8 @@ internal sealed class AIConversationCoreClient : IDisposable
   }
 
   /// <summary>
-  /// Creates a bridge client using an explicit worker path.
+  /// Creates a bridge client for one explicit worker path.
   /// </summary>
-  /// <param name="workerPath">Absolute or relative Node.js worker path.</param>
   internal AIConversationCoreClient(string workerPath)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(workerPath);
@@ -50,11 +49,8 @@ internal sealed class AIConversationCoreClient : IDisposable
   }
 
   /// <summary>
-  /// Projects one ordered provider session through AIConversationCore.
+  /// Projects provider records through the canonical core runtime.
   /// </summary>
-  /// <param name="source">Selected provider.</param>
-  /// <param name="jsonLines">Ordered raw JSONL records.</param>
-  /// <returns>The canonical structured projection.</returns>
   public AIConversationProjection Project(
     AgentSource source,
     IReadOnlyList<string> jsonLines)
@@ -64,32 +60,120 @@ internal sealed class AIConversationCoreClient : IDisposable
     {
       AgentSource.Claude => "claude",
       AgentSource.Codex => "codex",
-      _ => throw new ArgumentOutOfRangeException(
-        nameof(source),
-        source,
-        "AIConversationCore projection requires an explicit provider.")
+      _ => throw new ArgumentOutOfRangeException(nameof(source), source, null)
     };
-
-    using var recordsDocument = JsonDocument.Parse(
-      "[" + string.Join(",", jsonLines.Where(line =>
-        !string.IsNullOrWhiteSpace(line))) + "]");
-    var request = new CoreRequest(
-      "project",
-      provider,
-      recordsDocument.RootElement.Clone());
-    CoreResponse response = SendRequest(request);
-    if (response.Projection is null)
+    JsonElement[] records = jsonLines
+      .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+      .ToArray();
+    lock (_sync)
     {
-      throw new InvalidOperationException(
-        "AIConversationCore returned no structured projection.");
+      ThrowIfDisposed();
+      EnsureStarted();
+      var request = new WorkerRequest("project", provider, records);
+      string serialized = JsonSerializer.Serialize(request, JsonOptions);
+      try
+      {
+        _input!.WriteLine(serialized);
+        _input.Flush();
+      }
+      catch (Exception exception) when (
+        exception is IOException or InvalidOperationException)
+      {
+        ResetProcess();
+        throw new InvalidOperationException(
+          "AIConversationCore worker input failed.",
+          exception);
+      }
+
+      string? line;
+      try
+      {
+        line = _output!.ReadLine();
+      }
+      catch (IOException exception)
+      {
+        string stderr = StandardErrorText();
+        ResetProcess();
+        throw new InvalidOperationException(
+          WorkerFailureMessage("AIConversationCore worker output failed.", stderr),
+          exception);
+      }
+      if (line is null)
+      {
+        string stderr = StandardErrorText();
+        ResetProcess();
+        throw new InvalidOperationException(
+          WorkerFailureMessage(
+            "AIConversationCore worker terminated before returning a response.",
+            stderr));
+      }
+
+      WorkerResponse? response;
+      try
+      {
+        response = JsonSerializer.Deserialize<WorkerResponse>(line, JsonOptions);
+      }
+      catch (JsonException exception)
+      {
+        throw new InvalidOperationException(
+          "AIConversationCore worker returned malformed JSON.",
+          exception);
+      }
+      if (response is null)
+      {
+        throw new InvalidOperationException(
+          "AIConversationCore worker returned an empty response.");
+      }
+      if (!response.Ok)
+      {
+        throw new InvalidOperationException(
+          "AIConversationCore projection failed: " +
+          (response.Error ?? "unknown worker error"));
+      }
+      if (!string.Equals(
+            response.CoreCommit,
+            ExpectedCoreCommit,
+            StringComparison.Ordinal))
+      {
+        throw new InvalidOperationException(
+          "AIConversationCore worker revision mismatch. Expected " +
+          $"{ExpectedCoreCommit}, got {response.CoreCommit ?? "<missing>"}.");
+      }
+      if (response.Projection is null)
+      {
+        throw new InvalidOperationException(
+          "AIConversationCore worker omitted the canonical projection.");
+      }
+      if (response.Projection.SchemaVersion != 2)
+      {
+        throw new InvalidOperationException(
+          $"Unexpected AIConversationCore projection schema {response.Projection.SchemaVersion}.");
+      }
+      if (response.Projection.Presentation is null)
+      {
+        throw new InvalidOperationException(
+          "AIConversationCore projection omitted presentation metadata.");
+      }
+      if (response.Projection.Presentation.SchemaVersion !=
+          ExpectedPresentationSchemaVersion)
+      {
+        throw new InvalidOperationException(
+          "Unexpected AIConversationCore presentation schema " +
+          $"{response.Projection.Presentation.SchemaVersion}.");
+      }
+      if (!string.Equals(
+            response.Projection.Presentation.SplitPolicy,
+            ExpectedSplitPolicy,
+            StringComparison.Ordinal))
+      {
+        throw new InvalidOperationException(
+          "Unexpected AIConversationCore split policy " +
+          $"'{response.Projection.Presentation.SplitPolicy}'.");
+      }
+      return response.Projection;
     }
-    ValidateProjectionContract(response.Projection);
-    return response.Projection;
   }
 
-  /// <summary>
-  /// Stops the bridge process and releases process resources.
-  /// </summary>
   public void Dispose()
   {
     lock (_sync)
@@ -99,103 +183,22 @@ internal sealed class AIConversationCoreClient : IDisposable
         return;
       }
       _disposed = true;
-      StopProcess();
-    }
-  }
-
-  private static void ValidateProjectionContract(AIConversationProjection projection)
-  {
-    AIConversationPresentation? presentation = projection.Presentation;
-    if (presentation is null)
-    {
-      throw new InvalidOperationException(
-        "AIConversationCore projection omitted its presentation contract.");
-    }
-    if (presentation.SchemaVersion != ExpectedPresentationSchemaVersion)
-    {
-      throw new InvalidOperationException(
-        "AIConversationCore presentation schema mismatch: expected " +
-        $"{ExpectedPresentationSchemaVersion}, received {presentation.SchemaVersion}.");
-    }
-    if (!string.Equals(
-          presentation.SplitPolicy,
-          ExpectedSplitPolicy,
-          StringComparison.Ordinal))
-    {
-      throw new InvalidOperationException(
-        "AIConversationCore presentation split policy mismatch: expected " +
-        $"{ExpectedSplitPolicy}, received {presentation.SplitPolicy}.");
-    }
-  }
-
-  private CoreResponse SendRequest(CoreRequest request)
-  {
-    lock (_sync)
-    {
-      ObjectDisposedException.ThrowIf(_disposed, this);
-      EnsureStarted();
-      string requestJson = JsonSerializer.Serialize(request, JsonOptions);
-      _input!.WriteLine(requestJson);
-      _input.Flush();
-
-      string? responseLine = _output!.ReadLine();
-      if (responseLine is null)
-      {
-        string diagnostics;
-        lock (_standardError)
-        {
-          diagnostics = _standardError.ToString();
-        }
-        StopProcess();
-        throw new InvalidOperationException(
-          "AIConversationCore worker terminated without a response." +
-          (diagnostics.Length == 0 ? string.Empty : $" {diagnostics}"));
-      }
-
-      CoreResponse? response = JsonSerializer.Deserialize<CoreResponse>(
-        responseLine,
-        JsonOptions);
-      if (response is null)
-      {
-        throw new InvalidOperationException(
-          "AIConversationCore returned an invalid JSON response.");
-      }
-      if (!response.Ok)
-      {
-        throw new InvalidOperationException(
-          $"AIConversationCore request failed: {response.Error}");
-      }
-      if (!string.Equals(
-            response.CoreCommit,
-            ExpectedCoreCommit,
-            StringComparison.Ordinal))
-      {
-        throw new InvalidOperationException(
-          "AIConversationCore response commit mismatch: expected " +
-          $"{ExpectedCoreCommit}, received {response.CoreCommit}.");
-      }
-      return response;
+      ResetProcess();
     }
   }
 
   private void EnsureStarted()
   {
-    if (_process is { HasExited: false })
+    if (_process is not null && !_process.HasExited)
     {
       return;
     }
-
+    ResetProcess();
     if (!File.Exists(_workerPath))
     {
       throw new FileNotFoundException(
         "AIConversationCore worker was not found.",
         _workerPath);
-    }
-
-    StopProcess();
-    lock (_standardError)
-    {
-      _standardError.Clear();
     }
     var startInfo = new ProcessStartInfo
     {
@@ -210,54 +213,35 @@ internal sealed class AIConversationCoreClient : IDisposable
       CreateNoWindow = true
     };
     startInfo.ArgumentList.Add(_workerPath);
-
-    var process = new Process
-    {
-      StartInfo = startInfo,
-      EnableRaisingEvents = true
-    };
+    var process = new Process { StartInfo = startInfo };
     process.ErrorDataReceived += (_, args) =>
     {
-      if (args.Data is not null)
+      if (args.Data is null)
       {
-        lock (_standardError)
-        {
-          _standardError.AppendLine(args.Data);
-        }
+        return;
+      }
+      lock (_standardError)
+      {
+        _standardError.AppendLine(args.Data);
       }
     };
-
+    lock (_standardError)
+    {
+      _standardError.Clear();
+    }
     try
     {
       if (!process.Start())
       {
+        process.Dispose();
         throw new InvalidOperationException(
-          "Node.js did not start the AIConversationCore worker.");
+          "AIConversationCore worker could not be started.");
       }
       process.BeginErrorReadLine();
       _process = process;
       _input = process.StandardInput;
       _output = process.StandardOutput;
-
-      var ping = new CoreRequest("ping", null, null);
-      CoreResponse response = SendRequestWithoutStartup(ping);
-      if (!response.Ok ||
-          !string.Equals(
-            response.CoreCommit,
-            ExpectedCoreCommit,
-            StringComparison.Ordinal))
-      {
-        throw new InvalidOperationException(
-          response.Error ??
-          "AIConversationCore worker failed version verification.");
-      }
-
-      DiagnosticLog.Write("core.worker_started", new
-      {
-        workerPath = _workerPath,
-        coreCommit = response.CoreCommit,
-        processId = process.Id
-      });
+      VerifyWorkerRevision();
     }
     catch
     {
@@ -269,158 +253,124 @@ internal sealed class AIConversationCoreClient : IDisposable
     }
   }
 
-  private CoreResponse SendRequestWithoutStartup(CoreRequest request)
+  private void VerifyWorkerRevision()
   {
-    string requestJson = JsonSerializer.Serialize(request, JsonOptions);
-    _input!.WriteLine(requestJson);
+    var request = new WorkerRequest("ping", null, null);
+    _input!.WriteLine(JsonSerializer.Serialize(request, JsonOptions));
     _input.Flush();
-    string? responseLine = _output!.ReadLine();
-    if (responseLine is null)
+    string? line = _output!.ReadLine();
+    if (line is null)
     {
-      Process? process = _process;
-      if (process is not null)
-      {
-        try
-        {
-          process.WaitForExit();
-        }
-        catch (InvalidOperationException)
-        {
-        }
-      }
-
-      string diagnostics;
-      lock (_standardError)
-      {
-        diagnostics = _standardError.ToString().Trim();
-      }
       throw new InvalidOperationException(
-        "AIConversationCore worker terminated during startup." +
-        (diagnostics.Length == 0
-          ? string.Empty
-          : Environment.NewLine + diagnostics));
+        WorkerFailureMessage(
+          "AIConversationCore worker terminated during startup.",
+          StandardErrorText()));
     }
-    return JsonSerializer.Deserialize<CoreResponse>(responseLine, JsonOptions) ??
+    WorkerResponse? response = JsonSerializer.Deserialize<WorkerResponse>(
+      line,
+      JsonOptions);
+    if (response is null || !response.Ok)
+    {
       throw new InvalidOperationException(
-        "AIConversationCore returned invalid startup JSON.");
+        "AIConversationCore worker startup check failed: " +
+        (response?.Error ?? "missing response"));
+    }
+    if (!string.Equals(
+          response.CoreCommit,
+          ExpectedCoreCommit,
+          StringComparison.Ordinal))
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore worker revision mismatch. Expected " +
+        $"{ExpectedCoreCommit}, got {response.CoreCommit ?? "<missing>"}.");
+    }
   }
 
-  private void StopProcess()
+  private void ResetProcess()
   {
-    Process? process = _process;
-    _process = null;
+    _input?.Dispose();
+    _output?.Dispose();
     _input = null;
     _output = null;
-    if (process is null)
+    if (_process is not null)
     {
-      return;
-    }
-
-    try
-    {
-      process.StandardInput.Close();
-      if (!process.HasExited && !process.WaitForExit(500))
+      try
       {
-        process.Kill(entireProcessTree: true);
+        if (!_process.HasExited)
+        {
+          _process.Kill(entireProcessTree: true);
+          _process.WaitForExit(1000);
+        }
+      }
+      catch (InvalidOperationException)
+      {
+      }
+      finally
+      {
+        _process.Dispose();
+        _process = null;
       }
     }
-    catch (InvalidOperationException)
+  }
+
+  private string StandardErrorText()
+  {
+    lock (_standardError)
     {
-      // The worker has already exited.
+      return _standardError.ToString().Trim();
     }
-    finally
-    {
-      process.Dispose();
-    }
+  }
+
+  private static string WorkerFailureMessage(string prefix, string stderr)
+  {
+    return string.IsNullOrWhiteSpace(stderr)
+      ? prefix
+      : prefix + " Worker stderr: " + stderr;
+  }
+
+  private void ThrowIfDisposed()
+  {
+    ObjectDisposedException.ThrowIf(_disposed, this);
   }
 
   private static string ResolveWorkerPath()
   {
-    string deployed = Path.Combine(
+    return Path.Combine(
       AppContext.BaseDirectory,
       "tools",
       "AIConversationCore-worker.mjs");
-    if (File.Exists(deployed))
-    {
-      return deployed;
-    }
-
-    return Path.GetFullPath(Path.Combine(
-      AppContext.BaseDirectory,
-      "..",
-      "..",
-      "..",
-      "..",
-      "tools",
-      "AIConversationCore-worker.mjs"));
   }
 
-  private sealed record CoreRequest(
+  private sealed record WorkerRequest(
     [property: JsonPropertyName("operation")] string Operation,
     [property: JsonPropertyName("provider")] string? Provider,
-    [property: JsonPropertyName("records")] JsonElement? Records);
+    [property: JsonPropertyName("records")] IReadOnlyList<JsonElement>? Records);
 
-  private sealed record CoreResponse(
+  private sealed record WorkerResponse(
     [property: JsonPropertyName("ok")] bool Ok,
+    [property: JsonPropertyName("error")] string? Error,
     [property: JsonPropertyName("core_commit")] string? CoreCommit,
-    [property: JsonPropertyName("projection")] AIConversationProjection? Projection,
-    [property: JsonPropertyName("error")] string? Error);
+    [property: JsonPropertyName("projection")] AIConversationProjection? Projection);
 }
 
-/// <summary>
-/// Structured canonical projection returned by AIConversationCore.
-/// </summary>
 internal sealed record AIConversationProjection(
   [property: JsonPropertyName("schema_version")] int SchemaVersion,
-  [property: JsonPropertyName("events")] JsonElement[] Events,
-  [property: JsonPropertyName("turns")] CanonicalTurnProjection[] Turns,
-  [property: JsonPropertyName("units")] CanonicalUnitProjection[] Units,
+  [property: JsonPropertyName("provider")] string Provider,
+  [property: JsonPropertyName("events")] IReadOnlyList<JsonElement> Events,
+  [property: JsonPropertyName("units")] IReadOnlyList<AIConversationUnit> Units,
   [property: JsonPropertyName("presentation")] AIConversationPresentation? Presentation,
   [property: JsonPropertyName("markdown")] string Markdown);
 
-/// <summary>
-/// Shared presentation contract returned by AIConversationCore.
-/// </summary>
+internal sealed record AIConversationUnit(
+  [property: JsonPropertyName("source_index")] int SourceIndex,
+  [property: JsonPropertyName("source_record_id")] string SourceRecordId,
+  [property: JsonPropertyName("event_index")] int EventIndex,
+  [property: JsonPropertyName("block_index")] int BlockIndex,
+  [property: JsonPropertyName("content_type")] string ContentType,
+  [property: JsonPropertyName("block")] JsonElement Block);
+
 internal sealed record AIConversationPresentation(
   [property: JsonPropertyName("schema_version")] int SchemaVersion,
   [property: JsonPropertyName("split_policy")] string SplitPolicy,
-  [property: JsonPropertyName("structural_units")] CanonicalStructuralUnitProjection[] StructuralUnits,
+  [property: JsonPropertyName("units")] IReadOnlyList<JsonElement> Units,
   [property: JsonPropertyName("tree")] JsonElement Tree);
-
-/// <summary>
-/// One core-declared atomic presentation unit.
-/// </summary>
-internal sealed record CanonicalStructuralUnitProjection(
-  [property: JsonPropertyName("id")] string Id,
-  [property: JsonPropertyName("kind")] string Kind,
-  [property: JsonPropertyName("atomic")] bool Atomic,
-  [property: JsonPropertyName("source_indexes")] int[] SourceIndexes,
-  [property: JsonPropertyName("source_record_ids")] string[] SourceRecordIds);
-
-/// <summary>
-/// Canonical derived turn returned by AIConversationCore.
-/// </summary>
-internal sealed record CanonicalTurnProjection(
-  [property: JsonPropertyName("id")] string Id,
-  [property: JsonPropertyName("index")] int Index,
-  [property: JsonPropertyName("role")] string Role,
-  [property: JsonPropertyName("event_ids")] string[] EventIds,
-  [property: JsonPropertyName("source")] JsonElement Source);
-
-/// <summary>
-/// Flattened canonical event/block unit used by interactive consumers.
-/// </summary>
-internal sealed record CanonicalUnitProjection(
-  [property: JsonPropertyName("id")] string Id,
-  [property: JsonPropertyName("event_id")] string EventId,
-  [property: JsonPropertyName("provider")] string? Provider,
-  [property: JsonPropertyName("source_record_id")] string? SourceRecordId,
-  [property: JsonPropertyName("source_index")] int? SourceIndex,
-  [property: JsonPropertyName("source_block_index")] int? SourceBlockIndex,
-  [property: JsonPropertyName("event_kind")] string? EventKind,
-  [property: JsonPropertyName("role")] string? Role,
-  [property: JsonPropertyName("channel")] string? Channel,
-  [property: JsonPropertyName("visibility")] string? Visibility,
-  [property: JsonPropertyName("content_type")] string? ContentType,
-  [property: JsonPropertyName("block_type")] string? BlockType,
-  [property: JsonPropertyName("block")] JsonElement Block);
