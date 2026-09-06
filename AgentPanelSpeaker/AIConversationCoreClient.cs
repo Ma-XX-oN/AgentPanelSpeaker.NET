@@ -11,9 +11,10 @@ namespace AgentPanelSpeaker;
 internal sealed class AIConversationCoreClient : IDisposable
 {
   private const string ExpectedCoreCommit =
-    "2c92bf3fe4b41a56051517ec47c5938243f5264a";
-  private const int ExpectedPresentationSchemaVersion = 2;
-  private const string ExpectedSplitPolicy = "presentation-tree";
+    "c9c618ab1181109a2cf16f6d5596e886513799ba";
+  private const int ExpectedPresentationSchemaVersion = 1;
+  private const string ExpectedSplitPolicy =
+    "record-anchor-except-declared-atomic-unit";
 
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
@@ -108,13 +109,11 @@ internal sealed class AIConversationCoreClient : IDisposable
       throw new InvalidOperationException(
         "AIConversationCore projection omitted its presentation contract.");
     }
-    if (projection.SchemaVersion != ExpectedPresentationSchemaVersion ||
-        presentation.SchemaVersion != ExpectedPresentationSchemaVersion)
+    if (presentation.SchemaVersion != ExpectedPresentationSchemaVersion)
     {
       throw new InvalidOperationException(
         "AIConversationCore presentation schema mismatch: expected " +
-        $"{ExpectedPresentationSchemaVersion}, received projection=" +
-        $"{projection.SchemaVersion}, presentation={presentation.SchemaVersion}.");
+        $"{ExpectedPresentationSchemaVersion}, received {presentation.SchemaVersion}.");
     }
     if (!string.Equals(
           presentation.SplitPolicy,
@@ -124,11 +123,6 @@ internal sealed class AIConversationCoreClient : IDisposable
       throw new InvalidOperationException(
         "AIConversationCore presentation split policy mismatch: expected " +
         $"{ExpectedSplitPolicy}, received {presentation.SplitPolicy}.");
-    }
-    if (presentation.Tree.ValueKind != JsonValueKind.Object)
-    {
-      throw new InvalidOperationException(
-        "AIConversationCore presentation contract omitted its tree.");
     }
   }
 
