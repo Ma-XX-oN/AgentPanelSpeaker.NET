@@ -60,11 +60,11 @@ jobs:
           $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
           dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
           if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
-          $dll = Join-Path $publish 'AgentPanelSpeaker.dll'
-          if (-not (Test-Path $dll)) { throw "Published application missing: $dll" }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
           Push-Location $publish
           try {
-            dotnet $dll --test
+            & $exe --test
             if ($LASTEXITCODE -ne 0) { throw 'Published regression suite failed.' }
           }
           finally {
