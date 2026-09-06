@@ -11,7 +11,7 @@ internal static class Program
     Volatile.Read(ref _externalTerminationRequested) != 0;
 
   /// <summary>
-  /// Starts the Windows Forms application.
+  /// Starts the Windows Forms application or a command-line worker/test mode.
   /// </summary>
   [STAThread]
   private static void Main(string[] args)
@@ -19,6 +19,12 @@ internal static class Program
     if (args.Length == 1 && args[0] == "--regex-search-worker")
     {
       Environment.ExitCode = RegexSearchWorker.Run();
+      return;
+    }
+
+    if (args.Length == 1 && args[0] == "--test")
+    {
+      Environment.ExitCode = RegressionTestRunner.Run();
       return;
     }
 
