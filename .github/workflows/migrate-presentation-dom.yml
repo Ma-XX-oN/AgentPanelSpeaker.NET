@@ -30,7 +30,9 @@ jobs:
           git -C dependencies/AIConversationCore checkout 2255b6603ef5f2ccbd4111a891375c9c4c246d3e
       - name: Apply DOM migration
         shell: pwsh
-        run: python scripts/migrate-presentation-dom.py
+        run: |
+          python scripts/migrate-presentation-dom.py
+          python scripts/fix-dom-test.py
       - name: Run pinned AIConversationCore tests
         shell: pwsh
         working-directory: dependencies/AIConversationCore
