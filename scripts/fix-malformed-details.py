@@ -63,6 +63,47 @@ new = '''  private static string RenderDetailsBody(
 if old not in text:
   raise SystemExit('RenderDetailsBody block not found')
 text = text.replace(old, new, 1)
+
+old = '''      Match nextOpen = DetailsOpenRegex().Match(markdown, scan);
+      Match nextClose = DetailsCloseRegex().Match(markdown, scan);'''
+new = '''      Match nextOpen = DetailsScanOpenRegex().Match(markdown, scan);
+      Match nextClose = DetailsScanCloseRegex().Match(markdown, scan);'''
+if old not in text:
+  raise SystemExit('details balance scanner block not found')
+text = text.replace(old, new, 1)
+
+old = '''  [GeneratedRegex(
+    @"(?m)^\\s*</details>\\s*\\n?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex DetailsCloseRegex();
+
+  [GeneratedRegex(
+    @"<summary>(?<text>.*?)</summary>",'''
+new = '''  [GeneratedRegex(
+    @"(?m)^\\s*</details>\\s*\\n?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex DetailsCloseRegex();
+
+  // Balancing must see nested disclosure tags even when the canonical Markdown
+  // places them one or more blockquote levels deep. The outer search remains
+  // unquoted; these expressions are used only after an outer details has been
+  // found, to identify its matching close correctly.
+  [GeneratedRegex(
+    @"(?m)^[ \\t]*(?:>[ \\t]?)*<details>(?:\\s*<summary>.*?</summary>)?\\s*\\n?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex DetailsScanOpenRegex();
+
+  [GeneratedRegex(
+    @"(?m)^[ \\t]*(?:>[ \\t]?)*</details>\\s*\\n?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex DetailsScanCloseRegex();
+
+  [GeneratedRegex(
+    @"<summary>(?<text>.*?)</summary>",'''
+if old not in text:
+  raise SystemExit('details close regex block not found')
+text = text.replace(old, new, 1)
+
 old = '''  [GeneratedRegex(
     @"^[ \\t]*>[ \\t]?",
     RegexOptions.CultureInvariant)]
@@ -132,17 +173,6 @@ method = r'''static void ValidateClaudeInterleavedReasoningTool(
 
     const string badOpen = "<blockquote>\n<details>\n</blockquote>";
     const string badClose = "<blockquote>\n</details>\n</blockquote>";
-    if (html.Contains(badOpen, StringComparison.Ordinal) ||
-        html.Contains(badClose, StringComparison.Ordinal))
-    {
-      Console.Error.WriteLine("INTERLEAVED_MARKDOWN_BEGIN");
-      Console.Error.WriteLine(markdown);
-      Console.Error.WriteLine("INTERLEAVED_MARKDOWN_END");
-      Console.Error.WriteLine("INTERLEAVED_HTML_BEGIN");
-      Console.Error.WriteLine(html);
-      Console.Error.WriteLine("INTERLEAVED_HTML_END");
-    }
-
     Reject(html, badOpen, "misnested nested-details opening", failures);
     Reject(html, badClose, "misnested details closing", failures);
 
