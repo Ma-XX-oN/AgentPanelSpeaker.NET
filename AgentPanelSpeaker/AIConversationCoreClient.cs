@@ -202,6 +202,9 @@ internal sealed class AIConversationCoreClient : IDisposable
       RedirectStandardInput = true,
       RedirectStandardOutput = true,
       RedirectStandardError = true,
+      StandardInputEncoding = Encoding.UTF8,
+      StandardOutputEncoding = Encoding.UTF8,
+      StandardErrorEncoding = Encoding.UTF8,
       CreateNoWindow = true
     };
     startInfo.ArgumentList.Add(_workerPath);
