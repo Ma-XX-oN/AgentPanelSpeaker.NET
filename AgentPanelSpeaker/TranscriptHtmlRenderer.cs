@@ -66,15 +66,41 @@ internal static partial class TranscriptHtmlRenderer
     string body,
     MarkdownPipeline pipeline)
   {
-    if (!TryStripOuterBlockquote(body, out string unquoted))
+    string normalizedBody = NormalizeNestedQuotedDetailsStructure(body);
+    if (!TryStripOuterBlockquote(normalizedBody, out string unquoted))
     {
-      return RenderRange(body, pipeline);
+      return RenderRange(normalizedBody, pipeline);
     }
 
     var output = new StringBuilder(unquoted.Length + 32);
     output.AppendLine("<blockquote>");
     output.Append(RenderRange(unquoted, pipeline));
     output.AppendLine("</blockquote>");
+    return output.ToString();
+  }
+
+  /// <summary>
+  /// Removes Markdown quote prefixes from nested details/summary structural tag
+  /// lines before recursively rendering a disclosure body. Structural tags must
+  /// not be handed to Markdig as quoted fragments because Markdig can emit an
+  /// opening details tag in one blockquote and its summary/closing tag outside
+  /// that blockquote, producing invalid HTML that the browser then repairs.
+  /// Content lines keep their quote prefixes; only the structural tag lines are
+  /// unquoted.
+  /// </summary>
+  private static string NormalizeNestedQuotedDetailsStructure(string markdown)
+  {
+    string normalized = markdown
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    var output = new StringBuilder(normalized.Length);
+    foreach (string line in normalized.Split('\n'))
+    {
+      Match structural = QuotedDetailsStructuralPrefixRegex().Match(line);
+      output.AppendLine(structural.Success
+        ? line[structural.Length..]
+        : line);
+    }
     return output.ToString();
   }
 
@@ -133,8 +159,8 @@ internal static partial class TranscriptHtmlRenderer
     Match close = default!;
     while (depth > 0)
     {
-      Match nextOpen = DetailsOpenRegex().Match(markdown, scan);
-      Match nextClose = DetailsCloseRegex().Match(markdown, scan);
+      Match nextOpen = DetailsScanOpenRegex().Match(markdown, scan);
+      Match nextClose = DetailsScanCloseRegex().Match(markdown, scan);
       if (!nextClose.Success)
       {
         return false;
@@ -192,6 +218,20 @@ internal static partial class TranscriptHtmlRenderer
     RegexOptions.CultureInvariant)]
   private static partial Regex DetailsCloseRegex();
 
+  // Balancing must see nested disclosure tags even when the canonical Markdown
+  // places them one or more blockquote levels deep. The outer search remains
+  // unquoted; these expressions are used only after an outer details has been
+  // found, to identify its matching close correctly.
+  [GeneratedRegex(
+    @"(?m)^[ \t]*(?:>[ \t]?)*<details>(?:\s*<summary>.*?</summary>)?\s*\n?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex DetailsScanOpenRegex();
+
+  [GeneratedRegex(
+    @"(?m)^[ \t]*(?:>[ \t]?)*</details>\s*\n?",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex DetailsScanCloseRegex();
+
   [GeneratedRegex(
     @"<summary>(?<text>.*?)</summary>",
     RegexOptions.CultureInvariant | RegexOptions.Singleline)]
@@ -206,4 +246,9 @@ internal static partial class TranscriptHtmlRenderer
     @"^[ \t]*>[ \t]?",
     RegexOptions.CultureInvariant)]
   private static partial Regex OuterBlockquotePrefixRegex();
+
+  [GeneratedRegex(
+    @"^[ \t]*(?:>[ \t]?)+(?=</?(?:details|summary)\b)",
+    RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+  private static partial Regex QuotedDetailsStructuralPrefixRegex();
 }

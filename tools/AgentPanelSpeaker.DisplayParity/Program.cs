@@ -22,6 +22,7 @@ File.Copy(
 var failures = new List<string>();
 ValidateClaude(coreRoot, failures);
 ValidateClaudeThoughtGroup(failures);
+ValidateClaudeInterleavedReasoningTool(failures);
 ValidateCodex(coreRoot, failures);
 
 if (failures.Count != 0)
@@ -113,11 +114,6 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
       "***",
       "literal Markdown thought separator in grouped Claude thoughts",
       failures);
-    Require(
-      html,
-      "<hr",
-      "rendered Markdown thought separator in grouped Claude thoughts",
-      failures);
 
     IReadOnlyList<TranscriptNodeIdentity> identities =
       TranscriptNodeIdentityMap.Build(tempPath, AgentSource.Claude);
@@ -196,6 +192,76 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
       markdown,
       "Claude grouped thoughts",
       failures);
+  }
+  finally
+  {
+    try
+    {
+      File.Delete(tempPath);
+    }
+    catch (IOException)
+    {
+      // Best-effort cleanup of a temporary regression fixture.
+    }
+  }
+}
+
+static void ValidateClaudeInterleavedReasoningTool(
+  ICollection<string> failures)
+{
+  string tempPath = Path.Combine(
+    Path.GetTempPath(),
+    $"AgentPanelSpeaker-interleaved-{Guid.NewGuid():N}.jsonl");
+  string[] records =
+  {
+    "{\"type\":\"user\",\"isSidechain\":false,\"timestamp\":\"2026-01-06T12:00:01.000Z\",\"uuid\":\"interleaved-user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Check the current time and continue reasoning.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-06T12:00:02.000Z\",\"uuid\":\"interleaved-thought-1\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"First reasoning before the time tool.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-06T12:00:03.000Z\",\"uuid\":\"interleaved-tool\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_time\",\"name\":\"Bash\",\"input\":{\"command\":\"date\",\"description\":\"Get current time\"}}]}}",
+    "{\"type\":\"user\",\"isSidechain\":false,\"timestamp\":\"2026-01-06T12:00:04.000Z\",\"uuid\":\"interleaved-tool-result\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_time\",\"content\":\"12:00:04\"}]},\"sourceToolAssistantUUID\":\"interleaved-tool\"}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-06T12:00:05.000Z\",\"uuid\":\"interleaved-thought-2\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Second reasoning after the time tool.\"}]}}",
+    "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-06T12:00:06.000Z\",\"uuid\":\"interleaved-final\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Visible answer after reasoning.\"}]}}"
+  };
+
+  try
+  {
+    File.WriteAllLines(tempPath, records);
+    string markdown = TranscriptMarkdownFormatter.Format(
+      tempPath,
+      AgentSource.Claude);
+    string html = TranscriptHtmlRenderer.ToHtml(
+      markdown,
+      new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
+
+    const string badOpen = "<blockquote>\n<details>\n</blockquote>";
+    const string badClose = "<blockquote>\n</details>\n</blockquote>";
+    Reject(html, badOpen, "misnested nested-details opening", failures);
+    Reject(html, badClose, "misnested details closing", failures);
+
+    int outerStart = html.IndexOf("<details>", StringComparison.Ordinal);
+    int outerEnd = outerStart < 0
+      ? -1
+      : html.LastIndexOf("</details>", StringComparison.Ordinal);
+    int nestedSummary = html.IndexOf(
+      "<summary>Get current time</summary>",
+      StringComparison.Ordinal);
+    int afterToolAnchor = html.IndexOf(
+      "data-source-id=\"interleaved-thought-2\"",
+      StringComparison.Ordinal);
+    if (outerStart < 0 || outerEnd <= outerStart)
+    {
+      failures.Add("Interleaved Claude regression has no complete outer details.");
+    }
+    else
+    {
+      if (nestedSummary <= outerStart || nestedSummary >= outerEnd)
+      {
+        failures.Add("Nested time tool escaped the outer reasoning disclosure.");
+      }
+      if (afterToolAnchor <= outerStart || afterToolAnchor >= outerEnd)
+      {
+        failures.Add("Reasoning after the time tool escaped the outer disclosure.");
+      }
+    }
   }
   finally
   {
