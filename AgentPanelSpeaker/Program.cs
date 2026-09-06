@@ -45,6 +45,13 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "environment", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = EnvironmentRegressionTestRunner.Run();
+        return;
+      }
+
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
@@ -54,7 +61,11 @@ internal static class Program
       int primary = RegressionTestRunner.Run();
       int extended = ExtendedRegressionTestRunner.Run();
       int additional = AdditionalRegressionTestRunner.Run();
-      Environment.ExitCode = primary == 0 && extended == 0 && additional == 0
+      int environment = EnvironmentRegressionTestRunner.Run();
+      Environment.ExitCode = primary == 0 &&
+                             extended == 0 &&
+                             additional == 0 &&
+                             environment == 0
         ? 0
         : 1;
       return;
