@@ -19,6 +19,8 @@ internal static class CoreRegressionTestRunner
       ("core/claude-leading-injected-context", TestClaudeLeadingInjectedContext),
       ("core/codex-revision-default-hidden", TestCodexRevisionDefaultHidden),
       ("core/codex-revision-opt-in", TestCodexRevisionOptIn),
+      ("core/codex-commentary-inside-reasoning-group",
+        TestCodexCommentaryInsideReasoningGroup),
       ("core/codex-session-index-title", TestCodexSessionIndexTitle),
       ("core/codex-session-title-worker-reuse", TestCodexSessionTitleWorkerReuse)
     };
@@ -170,6 +172,127 @@ internal static class CoreRegressionTestRunner
       "Opt-in Codex history omitted the original prompt.");
     Require(projection.Markdown.Contains("## User (edited)", StringComparison.Ordinal),
       "Opt-in Codex history omitted the edited label.");
+  }
+
+  /// <summary>
+  /// Verifies the exact consumer boundary for Codex thought commentary: visible
+  /// commentary emitted while reasoning is active remains inside the same outer
+  /// reasoning group as the surrounding thought/tool activity.
+  /// </summary>
+  private static void TestCodexCommentaryInsideReasoningGroup()
+  {
+    const string commentary =
+      "I’ll load the local Codex memory for this turn, then answer plainly.";
+    string[] records =
+    {
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-06T20:00:08.000Z",
+        payload = new
+        {
+          type = "agent_reasoning",
+          text = "Need to inspect local state."
+        }
+      }),
+      JsonSerializer.Serialize(new
+      {
+        type = "response_item",
+        timestamp = "2026-09-06T20:00:09.311Z",
+        payload = new
+        {
+          type = "function_call",
+          call_id = "call-1",
+          name = "shell_command",
+          arguments = "{\"command\":\"pwd\"}"
+        }
+      }),
+      JsonSerializer.Serialize(new
+      {
+        type = "response_item",
+        timestamp = "2026-09-06T20:00:10.085Z",
+        payload = new
+        {
+          type = "function_call_output",
+          call_id = "call-1",
+          output = "Exit code: 0"
+        }
+      }),
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-06T20:00:11.000Z",
+        payload = new
+        {
+          type = "agent_message",
+          phase = "commentary",
+          message = commentary
+        }
+      }),
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-06T20:00:12.000Z",
+        payload = new
+        {
+          type = "agent_reasoning",
+          text = "Continue thinking."
+        }
+      }),
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-06T20:00:13.000Z",
+        payload = new
+        {
+          type = "agent_message",
+          phase = "final",
+          message = "Final answer."
+        }
+      })
+    };
+
+    using var client = new AIConversationCoreClient();
+    AIConversationProjection projection = client.Project(AgentSource.Codex, records);
+    AIConversationPresentation presentation = projection.Presentation ??
+      throw new InvalidOperationException("Presentation tree is missing.");
+
+    JsonElement turns = presentation.Tree.GetProperty("turns");
+    Require(turns.GetArrayLength() == 1,
+      $"Expected one Codex turn, got {turns.GetArrayLength()}.");
+    JsonElement turn = turns[0];
+    Require(turn.GetProperty("actor").GetProperty("role").GetString() == "assistant",
+      "Expected the presentation turn to be an assistant turn.");
+
+    JsonElement children = turn.GetProperty("children");
+    Require(children.GetArrayLength() == 2,
+      $"Expected reasoning group plus final response, got {children.GetArrayLength()} children.");
+    JsonElement group = children[0];
+    Require(group.GetProperty("kind").GetString() == "reasoning_group",
+      "First assistant child is not the outer reasoning group.");
+
+    JsonElement groupChildren = group.GetProperty("children");
+    string[] kinds = groupChildren.EnumerateArray()
+      .Select(child => child.GetProperty("kind").GetString() ?? string.Empty)
+      .ToArray();
+    Require(kinds.SequenceEqual(new[]
+      {
+        "reasoning",
+        "tool",
+        "commentary",
+        "reasoning"
+      }),
+      "Commentary split the active thought/tool group instead of remaining inside it.");
+    Require(groupChildren[2].GetProperty("blocks")[0]
+        .GetProperty("text").GetString() == commentary,
+      "Expected commentary text was not inside the active reasoning group.");
+
+    JsonElement final = children[1];
+    Require(final.GetProperty("kind").GetString() == "markdown",
+      "Final assistant response did not remain outside the reasoning group.");
+    Require(final.GetProperty("blocks")[0]
+        .GetProperty("text").GetString() == "Final answer.",
+      "Final assistant response text is incorrect.");
   }
 
   /// <summary>
