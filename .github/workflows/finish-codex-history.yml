@@ -24,37 +24,28 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('AgentPanelSpeaker/JsonlSessionMonitor.cs')
           text = path.read_text(encoding='utf-8')
-          old = '''        SpeechHistorySnapshot initialHistory = LoadExistingHistory(
-          session,
-          settings.SpeakExistingLatestTurn,
-          ref nextNodeId,
-          recentFingerprintQueue,
-          recentFingerprintSet,
-          preview,
-          pendingInputRequests);'''
-          new = '''        SpeechHistorySnapshot initialHistory = LoadExistingHistory(
-          session,
-          settings.SpeakExistingLatestTurn,
-          ref nextNodeId,
-          recentFingerprintQueue,
-          recentFingerprintSet,
-          preview,
-          pendingInputRequests,
-          settings.IncludeRolledBackTurns);'''
-          if text.count(old) != 1:
-            raise SystemExit('initial history call did not match exactly once')
-          text = text.replace(old, new, 1)
-          text = text.replace(
-            '''              preview,
-              pendingInputRequests,
-            settings.IncludeRolledBackTurns);''',
-            '''              preview,
-              pendingInputRequests,
-              settings.IncludeRolledBackTurns);''',
-            1)
+          start = text.index('SpeechHistorySnapshot initialHistory = LoadExistingHistory(')
+          end = text.index(');', start) + 2
+          call = text[start:end]
+          if 'settings.IncludeRolledBackTurns' in call:
+            raise SystemExit('initial history call is already fixed')
+          if 'pendingInputRequests' not in call:
+            raise SystemExit('initial history call has unexpected shape')
+          fixed = call.replace(
+            'pendingInputRequests);',
+            'pendingInputRequests,\n          settings.IncludeRolledBackTurns);')
+          if fixed == call:
+            raise SystemExit('initial history syntax anchor was not found')
+          text = text[:start] + fixed + text[end:]
+          text = re.sub(
+            r'(\n\s+pendingInputRequests,\n)\s{12}(settings\.IncludeRolledBackTurns\);)',
+            lambda match: match.group(1) + '              ' + match.group(2),
+            text,
+            count=1)
           path.write_text(text, encoding='utf-8', newline='\n')
           PY
           git diff --check
