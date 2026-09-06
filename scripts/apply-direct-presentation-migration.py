@@ -107,7 +107,7 @@ if old not in text:
 text = text.replace(old, new, 1)
 
 method_marker = '''  /// <summary>
-  /// Returns only details ranges containing an explicit AIConversationCore'''
+  /// Returns details ranges containing an explicit AIConversationCore'''
 method = '''  /// <summary>
   /// Returns complete turns emitted by the direct canonical HTML renderer.
   /// </summary>
