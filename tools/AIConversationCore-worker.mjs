@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = 'b7161f198a204f18d12d896689f6553d76161102';
+const CORE_COMMIT = 'df58d483956c280d0103bd9ae9f79c642f0d279e';
 
 /**
  * Returns the configured development checkout or the runtime bundled beside
@@ -55,7 +55,7 @@ function representedCoreCommit(root) {
 }
 
 /**
- * Verifies that the runtime core is the exact Phase-8 version expected by this
+ * Verifies that the runtime core is the exact version expected by this
  * AgentPanelSpeaker branch.
  *
  * @returns {void}
@@ -80,11 +80,12 @@ const core = await import(
  *
  * @param {string} provider - Canonical provider identifier.
  * @param {Array<Object<string, *>>} records - Ordered source records.
+ * @param {Object<string, *>} options - Optional provider normalization options.
  * @returns {Array<Object<string, *>>} Ordered canonical events.
  */
-function adapt(provider, records) {
+function adapt(provider, records, options) {
   if (provider === 'claude' || provider === 'codex') {
-    return core.adaptSpeechSessionRecords(provider, records);
+    return core.adaptSpeechSessionRecords(provider, records, options);
   }
   if (provider === 'chatgpt') return core.adaptChatGPTRecords(records);
   throw new Error(`Unsupported provider: ${provider}`);
@@ -110,11 +111,26 @@ function execute(request) {
     throw new TypeError('project request records must be an array');
   }
 
-  const events = adapt(request.provider, request.records);
+  const options = {
+    includeRolledBackTurns: request?.options?.includeRolledBackTurns === true
+  };
+  const events = adapt(request.provider, request.records, options);
+  const projection = core.projectCanonicalConversation(events);
+
+  if (request.provider === 'codex') {
+    const loaded = core.loadConversationSources({
+      provider: 'codex',
+      primarySource: { records: request.records },
+      supplementarySources: request.supplementary_sources ?? {},
+      options
+    });
+    projection.session_metadata = loaded.session_metadata;
+  }
+
   return {
     ok: true,
     core_commit: CORE_COMMIT,
-    projection: core.projectCanonicalConversation(events)
+    projection
   };
 }
 
