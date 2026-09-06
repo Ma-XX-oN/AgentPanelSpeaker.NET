@@ -11,11 +11,16 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     "Lower values keep the cursor closer to the spoken audio by discarding " +
     "older pending positions. Higher values preserve more intermediate " +
     "movements but can make the visible cursor lag behind speech.";
+  private const string RolledBackDescription =
+    "Shows Codex turns that were rolled back or superseded. Historical " +
+    "revisions are hidden by default; enabling this includes original, " +
+    "superseded, edited, and aborted revision state in the transcript.";
 
   private readonly Label _description;
   private readonly TableLayoutPanel _layout;
   private readonly TrackBar _queueCapacitySlider = new();
   private readonly Label _queueCapacityValue = new();
+  private readonly CheckBox _showRolledBackCheckBox = new();
   private bool _adjustingLayout;
   private int _lastMeasuredTextWidth = -1;
   private int _lastMeasuredDpi = -1;
@@ -80,6 +85,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     _queueCapacityValue.TextAlign = ContentAlignment.TopRight;
     UpdateValueLabelMinimumWidth();
 
+    _showRolledBackCheckBox.AutoSize = true;
+    _showRolledBackCheckBox.Dock = DockStyle.Top;
+    _showRolledBackCheckBox.Margin = new Padding(0, 8, 0, 0);
+    _showRolledBackCheckBox.Text = "Show rolled-back Codex history";
+    _showRolledBackCheckBox.TabIndex = 1;
+    _showRolledBackCheckBox.AccessibleName = "Show rolled-back Codex history";
+    _showRolledBackCheckBox.AccessibleDescription = RolledBackDescription;
+
     var scaleLabels = new TableLayoutPanel
     {
       ColumnCount = 2,
@@ -121,7 +134,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       ColumnCount = 1,
-      RowCount = 5,
+      RowCount = 6,
       Dock = DockStyle.Top,
       Padding = new Padding(14)
     };
@@ -131,22 +144,22 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+    _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _layout.Controls.Add(title, 0, 0);
     _layout.Controls.Add(settingTitle, 0, 1);
     _layout.Controls.Add(_description, 0, 2);
     _layout.Controls.Add(sliderLayout, 0, 3);
     _layout.Controls.Add(scaleLabels, 0, 4);
+    _layout.Controls.Add(_showRolledBackCheckBox, 0, 5);
     Controls.Add(_layout);
     RecalculateLayout(force: true);
 
     _queueCapacitySlider.ValueChanged += (_, _) =>
     {
       UpdateValueText();
-      if (!_updating)
-      {
-        ValueChanged?.Invoke(this, EventArgs.Empty);
-      }
+      PublishValueChanged();
     };
+    _showRolledBackCheckBox.CheckedChanged += (_, _) => PublishValueChanged();
 
     Paint += PaintBorder;
   }
@@ -155,19 +168,26 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
   public event EventHandler? DismissRequested;
 
   public int QueueCapacity => _queueCapacitySlider.Value;
+  public bool ShowRolledBackHistory => _showRolledBackCheckBox.Checked;
 
-  public void SetQueueCapacity(int capacity)
+  public void SetSettings(int capacity, bool showRolledBackHistory)
   {
     _updating = true;
     try
     {
       _queueCapacitySlider.Value = Math.Clamp(capacity, 1, 16);
+      _showRolledBackCheckBox.Checked = showRolledBackHistory;
       UpdateValueText();
     }
     finally
     {
       _updating = false;
     }
+  }
+
+  public void SetQueueCapacity(int capacity)
+  {
+    SetSettings(capacity, ShowRolledBackHistory);
   }
 
   public void ApplyTheme(bool dark)
@@ -225,6 +245,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       RecalculateLayout(force: true);
     }
     base.OnVisibleChanged(eventArgs);
+  }
+
+  private void PublishValueChanged()
+  {
+    if (!_updating)
+    {
+      ValueChanged?.Invoke(this, EventArgs.Empty);
+    }
   }
 
   private void RecalculateLayout(bool force)
@@ -309,6 +337,4 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       this,
       eventArgs.ClipRectangle);
   }
-
-
 }
