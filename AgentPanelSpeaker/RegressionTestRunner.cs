@@ -220,6 +220,7 @@ internal static class RegressionTestRunner
 
   private static void TestCoreBridgeCodexContract()
   {
+    const string userText = "arbitrary context\nsome heading\nCodex request — café 東京";
     string record = JsonSerializer.Serialize(new
     {
       type = "event_msg",
@@ -227,13 +228,13 @@ internal static class RegressionTestRunner
       payload = new
       {
         type = "user_message",
-        message = "context\n## My request for Codex:\nCodex request — café 東京"
+        message = userText
       }
     });
     using var client = new AIConversationCoreClient();
     AIConversationProjection projection = client.Project(AgentSource.Codex, new[] { record });
     RequireCoreContract(projection);
-    RequireProjectionText(projection, "Codex request — café 東京");
+    RequireProjectionText(projection, userText);
   }
 
   private static void TestMarkdownUnicode()
