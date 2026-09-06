@@ -19,7 +19,8 @@ internal static class CoreRegressionTestRunner
       ("core/claude-leading-injected-context", TestClaudeLeadingInjectedContext),
       ("core/codex-revision-default-hidden", TestCodexRevisionDefaultHidden),
       ("core/codex-revision-opt-in", TestCodexRevisionOptIn),
-      ("core/codex-session-index-title", TestCodexSessionIndexTitle)
+      ("core/codex-session-index-title", TestCodexSessionIndexTitle),
+      ("core/codex-session-title-worker-reuse", TestCodexSessionTitleWorkerReuse)
     };
 
     int failed = 0;
@@ -213,6 +214,79 @@ internal static class CoreRegressionTestRunner
     {
       Directory.Delete(root, recursive: true);
     }
+  }
+
+  /// <summary>
+  /// Verifies that repeated latest-session discovery does not start a fresh core
+  /// worker while neither the rollout nor its supplementary session index changed.
+  /// A changed session index must invalidate the title cache exactly once.
+  /// </summary>
+  private static void TestCodexSessionTitleWorkerReuse()
+  {
+    const string sessionId = "01a07804-bcf3-7af3-8321-bdcf0c1ddc89";
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-codex-home-{Guid.NewGuid():N}");
+    string sessionDirectory = Path.Combine(root, "sessions", "2026", "09", "06");
+    Directory.CreateDirectory(sessionDirectory);
+    string sessionPath = Path.Combine(
+      sessionDirectory,
+      "rollout-2026-09-06T15-17-01-" + sessionId + ".jsonl");
+    string indexPath = Path.Combine(root, "session_index.jsonl");
+    string? previousCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
+
+    try
+    {
+      File.WriteAllLines(sessionPath, CodexRevisionRecords());
+      File.WriteAllText(indexPath, JsonSerializer.Serialize(new
+      {
+        id = sessionId,
+        thread_name = "Cached title"
+      }) + Environment.NewLine);
+      Environment.SetEnvironmentVariable("CODEX_HOME", root);
+
+      int before = CountDiagnosticEvents("core.worker_started");
+      LocatedSession first = SessionLocator.FindLatest(AgentSource.Codex);
+      LocatedSession second = SessionLocator.FindLatest(AgentSource.Codex);
+      int unchangedStarts = CountDiagnosticEvents("core.worker_started") - before;
+
+      Require(first.Title == "Cached title" && second.Title == "Cached title",
+        "Repeated Codex discovery did not resolve the expected title.");
+      Require(unchangedStarts == 1,
+        $"Expected one core worker start for unchanged repeated discovery, got {unchangedStarts}.");
+
+      File.AppendAllText(indexPath, JsonSerializer.Serialize(new
+      {
+        id = sessionId,
+        thread_name = "Renamed title"
+      }) + Environment.NewLine);
+      LocatedSession renamed = SessionLocator.FindLatest(AgentSource.Codex);
+      int totalStarts = CountDiagnosticEvents("core.worker_started") - before;
+
+      Require(renamed.Title == "Renamed title",
+        $"Changed Codex session index did not refresh title: {renamed.Title}.");
+      Require(totalStarts == 2,
+        $"Expected one additional core worker start after index change, got {totalStarts} total.");
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable("CODEX_HOME", previousCodexHome);
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Counts one diagnostic event in the current process log.
+  /// </summary>
+  private static int CountDiagnosticEvents(string eventName)
+  {
+    if (!File.Exists(DiagnosticLog.FilePath))
+    {
+      return 0;
+    }
+    string needle = $"\"Event\":\"{eventName}\"";
+    return File.ReadLines(DiagnosticLog.FilePath)
+      .Count(line => line.Contains(needle, StringComparison.Ordinal));
   }
 
   /// <summary>
