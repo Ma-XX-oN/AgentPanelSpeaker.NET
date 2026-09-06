@@ -11,7 +11,7 @@ namespace AgentPanelSpeaker;
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "f9cb569eaeb2fe0de820ff1942dada100bfdb1fa";
+    "b7161f198a204f18d12d896689f6553d76161102";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
