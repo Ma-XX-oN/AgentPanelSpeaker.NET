@@ -50,6 +50,10 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
+      - name: Run built-in AgentPanelSpeaker regression suite
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
+
       - name: Verify bundled runtime from built output
         shell: pwsh
         run: |
@@ -61,15 +65,17 @@ jobs:
           if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
           if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
           if (-not (Test-Path $package)) { throw "Bundled core package metadata missing: $package" }
-          $request = '{"operation":"project","provider":"claude","records":[{"type":"user","uuid":"bundled-ci","timestamp":"2026-09-05T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Bundled runtime check"}]}}]}'
+          $probe = 'Bundled runtime check — café 東京 😀'
+          $record = @{ type = 'user'; uuid = 'bundled-ci'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = $probe }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
           $response = $request | node $worker
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
           if ($decoded.core_commit -ne '2255b6603ef5f2ccbd4111a891375c9c4c246d3e') {
             throw "Unexpected bundled core commit: $($decoded.core_commit)"
           }
-          if ($decoded.projection.units[0].block.text -ne 'Bundled runtime check') {
-            throw 'Bundled projection returned unexpected text.'
+          if ($decoded.projection.units[0].block.text -ne $probe) {
+            throw 'Bundled projection corrupted Unicode text.'
           }
           if ($decoded.projection.presentation.schema_version -ne 2) {
             throw 'Bundled projection returned unexpected presentation schema.'
