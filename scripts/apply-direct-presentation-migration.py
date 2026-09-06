@@ -5,7 +5,7 @@ final_core = '2255b6603ef5f2ccbd4111a891375c9c4c246d3e'
 # Switch TranscriptView from whole-transcript Markdown reparsing to direct
 # structural HTML from the presentation tree.
 path = Path('AgentPanelSpeaker/TranscriptView.cs')
-text = path.read_text()
+text = path.read_text(encoding='utf-8')
 old = '''        string markdown = string.Empty;
         IReadOnlyList<TranscriptNodeIdentity> identities =
           Array.Empty<TranscriptNodeIdentity>();
@@ -46,11 +46,11 @@ new = '''        string html = string.Empty;
         token.ThrowIfCancellationRequested();'''
 if old not in text:
   raise SystemExit('TranscriptView render pipeline snippet not found')
-path.write_text(text.replace(old, new, 1))
+path.write_text(text.replace(old, new, 1), encoding='utf-8')
 
 # Keep each complete direct-rendered turn atomic during virtualization.
 path = Path('AgentPanelSpeaker/TranscriptVirtualDocument.cs')
-text = path.read_text()
+text = path.read_text(encoding='utf-8')
 marker = '''  private static readonly Regex StructuralUnitMarkerRegex = new('''
 insert = '''  private static readonly Regex TranscriptTurnRegex = new(
     "<section\\s+class=\\\"transcript-turn\\\"\\b[^>]*>.*?</section>",
@@ -124,24 +124,25 @@ if 'FindTranscriptTurnRanges(string html)' not in text:
   if method_marker not in text:
     raise SystemExit('Virtual document method insertion point not found')
   text = text.replace(method_marker, method + method_marker, 1)
-path.write_text(text)
+path.write_text(text, encoding='utf-8')
 
 # Update runtime pin constants to the clean core head.
 path = Path('AgentPanelSpeaker/AIConversationCoreClient.cs')
-text = path.read_text().replace(
+text = path.read_text(encoding='utf-8').replace(
   '2c92bf3fe4b41a56051517ec47c5938243f5264a', final_core)
-path.write_text(text)
+path.write_text(text, encoding='utf-8')
 
 path = Path('tools/AIConversationCore-worker.mjs')
-text = path.read_text().replace(
+text = path.read_text(encoding='utf-8').replace(
   'c9c618ab1181109a2cf16f6d5596e886513799ba', final_core)
-path.write_text(text)
-Path('tools/AIConversationCore-runtime/CORE_COMMIT').write_text(final_core + '\n')
+path.write_text(text, encoding='utf-8')
+Path('tools/AIConversationCore-runtime/CORE_COMMIT').write_text(
+  final_core + '\n', encoding='utf-8')
 
 # Update integration assertions from schema-v1 Markdown structure to schema-v2
 # presentation-tree structure.
 path = Path('.github/workflows/core-integration-validation.yml')
-text = path.read_text()
+text = path.read_text(encoding='utf-8')
 text = text.replace('c9c618ab1181109a2cf16f6d5596e886513799ba', final_core)
 text = text.replace(
   "$decoded.projection.presentation.schema_version -ne 1",
@@ -155,4 +156,4 @@ text = text.replace(
 marker_check = "          if ($decoded.projection.presentation.structural_unit_marker_class -ne 'aicore-structural-unit') { throw 'Unexpected structural unit marker class.' }\n"
 tree_check = "          if ($decoded.projection.presentation.tree.kind -ne 'conversation') { throw 'Presentation tree was not returned.' }\n"
 text = text.replace(marker_check, tree_check)
-path.write_text(text)
+path.write_text(text, encoding='utf-8')
