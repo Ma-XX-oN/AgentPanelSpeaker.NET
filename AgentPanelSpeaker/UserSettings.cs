@@ -20,7 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 16;
+  public const int CurrentVersion = 17;
 
   /// <summary>
   /// Gets the main speech profile used for background-agent results.
