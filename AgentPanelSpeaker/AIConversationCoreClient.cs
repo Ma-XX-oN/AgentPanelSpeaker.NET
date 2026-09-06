@@ -20,6 +20,8 @@ internal sealed class AIConversationCoreClient : IDisposable
   {
     PropertyNameCaseInsensitive = false
   };
+  private static readonly Encoding Utf8NoBom =
+    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
   private readonly object _sync = new();
   private readonly string _workerPath;
@@ -202,9 +204,9 @@ internal sealed class AIConversationCoreClient : IDisposable
       RedirectStandardInput = true,
       RedirectStandardOutput = true,
       RedirectStandardError = true,
-      StandardInputEncoding = Encoding.UTF8,
-      StandardOutputEncoding = Encoding.UTF8,
-      StandardErrorEncoding = Encoding.UTF8,
+      StandardInputEncoding = Utf8NoBom,
+      StandardOutputEncoding = Utf8NoBom,
+      StandardErrorEncoding = Utf8NoBom,
       CreateNoWindow = true
     };
     startInfo.ArgumentList.Add(_workerPath);
