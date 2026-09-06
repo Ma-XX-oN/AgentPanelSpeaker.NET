@@ -37,3 +37,4 @@ jobs:
           git add AgentPanelSpeaker tools dependencies/AIConversationCore .github/workflows/core-integration-validation.yml
           git commit -m "feat: integrate Codex revision history through core"
           git push origin HEAD:feature/aiconversationcore-integration
+          # Retry after aligning the helper with the current popup implementation.
