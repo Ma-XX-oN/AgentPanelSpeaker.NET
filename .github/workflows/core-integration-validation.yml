@@ -32,7 +32,7 @@ jobs:
       - name: Verify AIConversationCore submodule pin
         shell: pwsh
         run: |
-          $expected = 'c9c618ab1181109a2cf16f6d5596e886513799ba'
+          $expected = '2255b6603ef5f2ccbd4111a891375c9c4c246d3e'
           $actual = git -C dependencies/AIConversationCore rev-parse HEAD
           if ($actual.Trim() -ne $expected) {
             throw "Unexpected AIConversationCore submodule revision: $actual"
@@ -65,16 +65,16 @@ jobs:
           $response = $request | node $worker
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne 'c9c618ab1181109a2cf16f6d5596e886513799ba') {
+          if ($decoded.core_commit -ne '2255b6603ef5f2ccbd4111a891375c9c4c246d3e') {
             throw "Unexpected bundled core commit: $($decoded.core_commit)"
           }
           if ($decoded.projection.units[0].block.text -ne 'Bundled runtime check') {
             throw 'Bundled projection returned unexpected text.'
           }
-          if ($decoded.projection.presentation.schema_version -ne 1) {
+          if ($decoded.projection.presentation.schema_version -ne 2) {
             throw 'Bundled projection returned unexpected presentation schema.'
           }
-          if ($decoded.projection.presentation.split_policy -ne 'record-anchor-except-declared-atomic-unit') {
+          if ($decoded.projection.presentation.split_policy -ne 'presentation-tree') {
             throw 'Bundled projection returned unexpected presentation split policy.'
           }
 
@@ -91,7 +91,7 @@ jobs:
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne 'c9c618ab1181109a2cf16f6d5596e886513799ba') {
+          if ($decoded.core_commit -ne '2255b6603ef5f2ccbd4111a891375c9c4c246d3e') {
             throw "Unexpected core commit: $($decoded.core_commit)"
           }
 
@@ -105,13 +105,13 @@ jobs:
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
-          if ($decoded.projection.schema_version -ne 1) { throw 'Unexpected projection schema.' }
+          if ($decoded.projection.schema_version -ne 2) { throw 'Unexpected projection schema.' }
           if ($decoded.projection.units.Count -ne 1) { throw 'Expected one projected unit.' }
           if ($decoded.projection.units[0].source_record_id -ne 'ci-user') { throw 'Source identity was not preserved.' }
           if ($decoded.projection.units[0].block.text -ne 'CI projection check') { throw 'Interactive Claude cleanup was not applied.' }
-          if ($decoded.projection.presentation.schema_version -ne 1) { throw 'Unexpected presentation schema.' }
-          if ($decoded.projection.presentation.split_policy -ne 'record-anchor-except-declared-atomic-unit') { throw 'Unexpected presentation split policy.' }
-          if ($decoded.projection.presentation.structural_unit_marker_class -ne 'aicore-structural-unit') { throw 'Unexpected structural unit marker class.' }
+          if ($decoded.projection.presentation.schema_version -ne 2) { throw 'Unexpected presentation schema.' }
+          if ($decoded.projection.presentation.split_policy -ne 'presentation-tree') { throw 'Unexpected presentation split policy.' }
+          if ($decoded.projection.presentation.tree.kind -ne 'conversation') { throw 'Canonical presentation tree is missing.' }
 
       - name: Verify structured Codex lifecycle projection
         shell: pwsh
