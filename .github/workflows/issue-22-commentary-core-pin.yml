@@ -48,15 +48,12 @@ jobs:
           }
           $worker = 'tools/AIConversationCore-worker.mjs'
           $workerText = [IO.File]::ReadAllText($worker)
-          $brokenSuccess = 'process.stdout.write(`${JSON.stringify(execute(JSON.parse(line)))\n`);'
+          $brokenSuccess = 'process.stdout.write(`${JSON.stringify(execute(JSON.parse(line))}\n`);'
           $fixedSuccess = 'process.stdout.write(`${JSON.stringify(execute(JSON.parse(line)))}\n`);'
-          $brokenError = '    })}\n`);'
-          $fixedError = '    })}\n`);'
           if (-not $workerText.Contains($brokenSuccess)) {
             throw 'Expected malformed worker success response statement not found.'
           }
           $workerText = $workerText.Replace($brokenSuccess, $fixedSuccess)
-          $workerText = $workerText.Replace('    })}\n`);', '    })}\n`);')
           [IO.File]::WriteAllText($worker, $workerText, $utf8)
           [IO.File]::WriteAllText('tools/AIConversationCore-runtime/CORE_COMMIT', "$new`n", $utf8)
           foreach ($file in $files) {
