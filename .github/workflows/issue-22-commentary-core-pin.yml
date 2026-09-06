@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Pin corrected AIConversationCore and runtime guards
+      - name: Pin corrected AIConversationCore and repair runtime seam
         shell: pwsh
         run: |
           $old = '9dde5331bd0ba959c2c381abbc3476added18c08'
@@ -46,11 +46,26 @@ jobs:
             }
             [IO.File]::WriteAllText($file, $text.Replace($old, $new), $utf8)
           }
+          $worker = 'tools/AIConversationCore-worker.mjs'
+          $workerText = [IO.File]::ReadAllText($worker)
+          $brokenSuccess = 'process.stdout.write(`${JSON.stringify(execute(JSON.parse(line)))\n`);'
+          $fixedSuccess = 'process.stdout.write(`${JSON.stringify(execute(JSON.parse(line)))}\n`);'
+          $brokenError = '    })}\n`);'
+          $fixedError = '    })}\n`);'
+          if (-not $workerText.Contains($brokenSuccess)) {
+            throw 'Expected malformed worker success response statement not found.'
+          }
+          $workerText = $workerText.Replace($brokenSuccess, $fixedSuccess)
+          $workerText = $workerText.Replace('    })}\n`);', '    })}\n`);')
+          [IO.File]::WriteAllText($worker, $workerText, $utf8)
+          [IO.File]::WriteAllText('tools/AIConversationCore-runtime/CORE_COMMIT', "$new`n", $utf8)
           foreach ($file in $files) {
             if ([IO.File]::ReadAllText($file).Contains($old)) {
               throw "Stale core pin remains in $file"
             }
           }
+          node --check tools/AIConversationCore-worker.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Worker syntax validation failed.' }
       - name: Run pinned core regression suite
         shell: pwsh
         run: npm test --prefix dependencies/AIConversationCore
@@ -80,7 +95,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git rm .github/workflows/issue-22-commentary-core-pin.yml
-          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs .github/workflows/core-integration-validation.yml dependencies/AIConversationCore
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT .github/workflows/core-integration-validation.yml dependencies/AIConversationCore
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { throw 'Staged diff hygiene failed.' }
           git commit -m "fix: consume corrected commentary grouping core"
