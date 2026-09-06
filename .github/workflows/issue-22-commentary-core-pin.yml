@@ -1,0 +1,89 @@
+name: Finalize issue 22 commentary core pin
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Pin corrected AIConversationCore and runtime guards
+        shell: pwsh
+        run: |
+          $old = '9dde5331bd0ba959c2c381abbc3476added18c08'
+          $new = '5f85e5e3d8ea6c7d2937b4606034101ce57fa935'
+          git -C dependencies/AIConversationCore fetch origin $new
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch corrected core commit.' }
+          git -C dependencies/AIConversationCore checkout $new
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to checkout corrected core commit.' }
+          $files = @(
+            'AgentPanelSpeaker/AIConversationCoreClient.cs',
+            'tools/AIConversationCore-worker.mjs',
+            '.github/workflows/core-integration-validation.yml'
+          )
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          foreach ($file in $files) {
+            $text = [IO.File]::ReadAllText($file)
+            if (-not $text.Contains($old)) {
+              throw "Expected old core pin not found in $file"
+            }
+            [IO.File]::WriteAllText($file, $text.Replace($old, $new), $utf8)
+          }
+          foreach ($file in $files) {
+            if ([IO.File]::ReadAllText($file).Contains($old)) {
+              throw "Stale core pin remains in $file"
+            }
+          }
+      - name: Run pinned core regression suite
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+      - name: Validate Phase 2 baseline
+        shell: pwsh
+        run: python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+      - name: Run AgentPanelSpeaker regression suite
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+      - name: Diff hygiene
+        shell: pwsh
+        run: git diff --check
+      - name: Commit issue 22 fix and remove temporary workflow
+        shell: pwsh
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/issue-22-commentary-core-pin.yml
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs .github/workflows/core-integration-validation.yml dependencies/AIConversationCore
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Staged diff hygiene failed.' }
+          git commit -m "fix: consume corrected commentary grouping core"
+          if ($LASTEXITCODE -ne 0) { throw 'Issue 22 commit failed.' }
+          git push
+          if ($LASTEXITCODE -ne 0) { throw 'Issue 22 push failed.' }
