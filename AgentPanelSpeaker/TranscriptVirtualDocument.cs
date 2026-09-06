@@ -69,12 +69,30 @@ internal sealed class TranscriptVirtualDocument
       });
     }
 
-    // AIConversationCore explicitly marks renderer-owned disclosures that must
-    // remain atomic. Only details ranges containing one of those declarations
-    // suppress ordinary record-anchor boundaries. Generic <details> markup is
-    // no longer treated as a shared-core structural decision by this consumer.
-    IReadOnlyList<HtmlRange> structuralRanges =
+    // Prefer AIConversationCore's explicit atomic-unit declarations.  As a
+    // compatibility guard, also keep any complete <details> that owns multiple
+    // canonical record anchors atomic.  The latter is not a provider-semantic
+    // inference: the record anchors are injected from canonical provenance and
+    // prove that splitting this HTML container would put one DOM element across
+    // multiple virtual <section> siblings, which WebView2 repairs by ending the
+    // disclosure early.
+    IReadOnlyList<HtmlRange> declaredRanges =
       FindDeclaredStructuralRanges(html);
+    IReadOnlyList<HtmlRange> fallbackRanges =
+      FindMultiRecordDetailsRanges(html, anchors, declaredRanges);
+    HtmlRange[] structuralRanges = declaredRanges
+      .Concat(fallbackRanges)
+      .OrderBy(range => range.Start)
+      .ToArray();
+
+    DiagnosticLog.Write("transcript.virtual-structure", new
+    {
+      anchorCount = anchors.Count,
+      declaredDetailsCount = declaredRanges.Count,
+      fallbackDetailsCount = fallbackRanges.Count,
+      structuralDetailsCount = structuralRanges.Length
+    });
+
     var starts = new SortedSet<int>();
     foreach (HtmlRange structuralRange in structuralRanges)
     {
@@ -225,9 +243,8 @@ internal sealed class TranscriptVirtualDocument
   }
 
   /// <summary>
-  /// Returns only details ranges containing an explicit AIConversationCore
-  /// atomic-unit declaration. The generic HTML scan is used solely to locate
-  /// the enclosing range for a core marker; it no longer decides atomicity.
+  /// Returns details ranges containing an explicit AIConversationCore
+  /// atomic-unit declaration.
   /// </summary>
   private static IReadOnlyList<HtmlRange> FindDeclaredStructuralRanges(string html)
   {
@@ -244,8 +261,44 @@ internal sealed class TranscriptVirtualDocument
   }
 
   /// <summary>
-  /// Finds complete outermost details elements so a declared atomic marker can
-  /// be mapped to the complete HTML container that owns it.
+  /// Returns undeclared details ranges that contain multiple canonical record
+  /// anchors.  Such a range cannot be split into independently wrapped virtual
+  /// sections without changing the browser DOM structure.
+  /// </summary>
+  private static IReadOnlyList<HtmlRange> FindMultiRecordDetailsRanges(
+    string html,
+    MatchCollection anchors,
+    IReadOnlyList<HtmlRange> declaredRanges)
+  {
+    var result = new List<HtmlRange>();
+    foreach (HtmlRange range in FindOutermostDetailsRanges(html))
+    {
+      if (declaredRanges.Any(declared => declared.Equals(range)))
+      {
+        continue;
+      }
+
+      int anchorCount = 0;
+      foreach (Match anchor in anchors)
+      {
+        if (!range.Contains(anchor.Index))
+        {
+          continue;
+        }
+        ++anchorCount;
+        if (anchorCount >= 2)
+        {
+          result.Add(range);
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// Finds complete outermost details elements so a declared or proven
+  /// multi-record atomic range can be mapped to the complete HTML container.
   /// </summary>
   private static IReadOnlyList<HtmlRange> FindOutermostDetailsRanges(string html)
   {
