@@ -1,0 +1,57 @@
+name: Migrate transcript to canonical DOM rendering
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Update AIConversationCore submodule
+        shell: pwsh
+        run: |
+          git -C dependencies/AIConversationCore fetch origin 2255b6603ef5f2ccbd4111a891375c9c4c246d3e
+          git -C dependencies/AIConversationCore checkout 2255b6603ef5f2ccbd4111a891375c9c4c246d3e
+      - name: Apply DOM migration
+        shell: pwsh
+        run: python scripts/migrate-presentation-dom.py
+      - name: Run pinned AIConversationCore tests
+        shell: pwsh
+        working-directory: dependencies/AIConversationCore
+        run: npm test
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+      - name: Build DisplayParity
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+      - name: Run DisplayParity
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+      - name: Commit DOM migration
+        shell: pwsh
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptVirtualDocument.cs AgentPanelSpeaker/TranscriptView.cs tools/AIConversationCore-worker.mjs tools/AgentPanelSpeaker.DisplayParity/Program.cs dependencies/AIConversationCore
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "render canonical presentation with DOM objects"
+          git push
