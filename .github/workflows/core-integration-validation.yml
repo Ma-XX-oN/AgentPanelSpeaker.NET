@@ -54,6 +54,23 @@ jobs:
         shell: pwsh
         run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
 
+      - name: Publish and test deployed application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $dll = Join-Path $publish 'AgentPanelSpeaker.dll'
+          if (-not (Test-Path $dll)) { throw "Published application missing: $dll" }
+          Push-Location $publish
+          try {
+            dotnet $dll --test
+            if ($LASTEXITCODE -ne 0) { throw 'Published regression suite failed.' }
+          }
+          finally {
+            Pop-Location
+          }
+
       - name: Verify bundled runtime from built output
         shell: pwsh
         run: |
