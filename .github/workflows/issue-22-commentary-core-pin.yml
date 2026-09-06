@@ -35,8 +35,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Failed to checkout corrected core commit.' }
           $files = @(
             'AgentPanelSpeaker/AIConversationCoreClient.cs',
-            'tools/AIConversationCore-worker.mjs',
-            '.github/workflows/core-integration-validation.yml'
+            'tools/AIConversationCore-worker.mjs'
           )
           $utf8 = [System.Text.UTF8Encoding]::new($false)
           foreach ($file in $files) {
@@ -86,13 +85,12 @@ jobs:
       - name: Diff hygiene
         shell: pwsh
         run: git diff --check
-      - name: Commit issue 22 fix and remove temporary workflow
+      - name: Commit issue 22 product files
         shell: pwsh
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm .github/workflows/issue-22-commentary-core-pin.yml
-          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT .github/workflows/core-integration-validation.yml dependencies/AIConversationCore
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT dependencies/AIConversationCore
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { throw 'Staged diff hygiene failed.' }
           git commit -m "fix: consume corrected commentary grouping core"
