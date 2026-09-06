@@ -142,6 +142,12 @@ internal static partial class TranscriptHtmlRenderer
     return foundQuotedContent;
   }
 
+  /// <summary>
+  /// Finds one balanced details disclosure. Nested disclosure tags may be
+  /// blockquoted in the canonical Markdown, so balancing deliberately scans
+  /// both quoted and unquoted details tags while the outer search remains
+  /// restricted to an unquoted opening tag.
+  /// </summary>
   private static bool TryFindDetails(
     string markdown,
     int start,
