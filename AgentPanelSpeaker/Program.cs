@@ -30,8 +30,23 @@ internal static class Program
         Environment.ExitCode = 2;
         return;
       }
-      Environment.ExitCode = RegressionTestRunner.Run(
-        args.Length == 2 ? args[1] : null);
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "extended", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = ExtendedRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2)
+      {
+        Environment.ExitCode = RegressionTestRunner.Run(args[1]);
+        return;
+      }
+
+      int primary = RegressionTestRunner.Run();
+      int extended = ExtendedRegressionTestRunner.Run();
+      Environment.ExitCode = primary == 0 && extended == 0 ? 0 : 1;
       return;
     }
 
