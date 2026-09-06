@@ -17,21 +17,15 @@ internal static class RegressionTestRunner
 
   private sealed record TestCase(string Suite, string Name, Action Body);
 
-  /// <summary>
-  /// Runs all built-in regression tests, or one named suite, and returns a
-  /// process exit code.
-  /// </summary>
   public static int Run(string? requestedSuite = null)
   {
     TestCase[] allTests = BuildTests();
     TestCase[] tests = string.IsNullOrWhiteSpace(requestedSuite)
       ? allTests
-      : allTests
-        .Where(test => string.Equals(
+      : allTests.Where(test => string.Equals(
           test.Suite,
           requestedSuite,
-          StringComparison.OrdinalIgnoreCase))
-        .ToArray();
+          StringComparison.OrdinalIgnoreCase)).ToArray();
 
     var output = new List<string>();
     if (tests.Length == 0)
@@ -69,11 +63,9 @@ internal static class RegressionTestRunner
     }
 
     Write(output, string.Empty);
-    Write(
-      output,
-      failures == 0
-        ? $"PASS: {tests.Length}/{tests.Length} regression tests passed."
-        : $"FAIL: {failures}/{tests.Length} regression tests failed.");
+    Write(output, failures == 0
+      ? $"PASS: {tests.Length}/{tests.Length} regression tests passed."
+      : $"FAIL: {failures}/{tests.Length} regression tests failed.");
     WriteReport(output);
     return failures == 0 ? 0 : 1;
   }
@@ -130,10 +122,7 @@ internal static class RegressionTestRunner
       Require(!lines[0].Contains("â€”", StringComparison.Ordinal),
         "JSONL tail reader produced em-dash mojibake.");
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static void TestJsonlTailReaderPartialLine()
@@ -153,10 +142,7 @@ internal static class RegressionTestRunner
       Require(lines.Count == 1 && lines[0] == record,
         "Completed partial JSONL record was not reconstructed exactly.");
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static void TestJsonlTailReaderCrLf()
@@ -172,10 +158,7 @@ internal static class RegressionTestRunner
       Require(lines.Count == 1 && lines[0] == record,
         "CRLF terminator was not removed correctly.");
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static void TestJsonlTailReaderTruncate()
@@ -194,10 +177,7 @@ internal static class RegressionTestRunner
       Require(lines.Count == 1 && lines[0] == record,
         "Tail reader failed to resume after truncation.");
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static void TestCoreBridgeUnicode()
@@ -235,7 +215,7 @@ internal static class RegressionTestRunner
       AgentSource.Claude,
       new[] { CreateClaudeUserRecord("contract", "contract check") });
     RequireCoreContract(projection);
-    Require(projection.Events.Count != 0, "Claude projection returned no canonical events.");
+    Require(projection.Events.Length != 0, "Claude projection returned no canonical events.");
   }
 
   private static void TestCoreBridgeCodexContract()
@@ -269,10 +249,7 @@ internal static class RegressionTestRunner
       Require(markdown.Contains("---", StringComparison.Ordinal),
         "Markdown horizontal-rule source text was lost.");
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static void TestMarkdownMalformedJson()
@@ -284,10 +261,7 @@ internal static class RegressionTestRunner
       RequireThrows<JsonException>(() =>
         TranscriptMarkdownFormatter.Format(path, AgentSource.Claude));
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static void TestPresentationDom()
@@ -331,16 +305,11 @@ internal static class RegressionTestRunner
   private static void TestVirtualizationIdentityLookup()
   {
     TranscriptVirtualDocument document = BuildVirtualFixture();
-    Require(document.TryGetIndex(1, "regression-user", out _),
-      "User identity was not indexed.");
-    Require(document.TryGetIndex(2, "thought-one", out _),
-      "First thought identity was not indexed.");
-    Require(document.TryGetIndex(3, "thought-two", out _),
-      "Second thought identity was not indexed.");
-    Require(document.TryGetIndex(4, "regression-final", out _),
-      "Final response identity was not indexed.");
-    Require(!document.TryGetIndex(999, "missing", out _),
-      "Unknown identity incorrectly resolved.");
+    Require(document.TryGetIndex(1, "regression-user", out _), "User identity was not indexed.");
+    Require(document.TryGetIndex(2, "thought-one", out _), "First thought identity was not indexed.");
+    Require(document.TryGetIndex(3, "thought-two", out _), "Second thought identity was not indexed.");
+    Require(document.TryGetIndex(4, "regression-final", out _), "Final response identity was not indexed.");
+    Require(!document.TryGetIndex(999, "missing", out _), "Unknown identity incorrectly resolved.");
   }
 
   private static void TestVirtualizationFullWindow()
@@ -446,7 +415,9 @@ internal static class RegressionTestRunner
     PronunciationMatch? exact = set.FindNext("A cat and catalog.", 0);
     Require(exact is not null && exact.Rule.Value == "exact",
       "Exact-case pronunciation did not beat equal-length /i match.");
-    PronunciationMatch? second = set.FindNext("A cat and catalog.", exact!.Match.Index + exact.Match.Length);
+    PronunciationMatch? second = set.FindNext(
+      "A cat and catalog.",
+      exact!.Match.Index + exact.Match.Length);
     Require(second is not null && second.Rule.Token == "catalog",
       "Whole-token pronunciation matching failed for later token.");
   }
@@ -558,10 +529,7 @@ internal static class RegressionTestRunner
       var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
       return TranscriptPresentationDomFormatter.Format(path, AgentSource.Claude, pipeline);
     }
-    finally
-    {
-      DeleteTemporaryFile(path);
-    }
+    finally { DeleteTemporaryFile(path); }
   }
 
   private static TranscriptVirtualDocument BuildVirtualFixture()
@@ -669,13 +637,8 @@ internal static class RegressionTestRunner
 
   private static void DeleteTemporaryFile(string path)
   {
-    try
-    {
-      File.Delete(path);
-    }
-    catch (IOException)
-    {
-    }
+    try { File.Delete(path); }
+    catch (IOException) { }
   }
 
   private static int CountOccurrences(string text, string value)
@@ -693,23 +656,14 @@ internal static class RegressionTestRunner
   private static void RequireThrows<TException>(Action action)
     where TException : Exception
   {
-    try
-    {
-      action();
-    }
-    catch (TException)
-    {
-      return;
-    }
+    try { action(); }
+    catch (TException) { return; }
     throw new InvalidOperationException($"Expected {typeof(TException).Name} was not thrown.");
   }
 
   private static void Require(bool condition, string message)
   {
-    if (!condition)
-    {
-      throw new InvalidOperationException(message);
-    }
+    if (!condition) throw new InvalidOperationException(message);
   }
 
   private static void WriteReport(IReadOnlyCollection<string> output)
