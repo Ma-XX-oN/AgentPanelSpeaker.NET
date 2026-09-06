@@ -1,3 +1,4 @@
+using Markdig;
 using System.Text;
 using System.Text.Json;
 
@@ -134,7 +135,7 @@ internal static class ExtendedRegressionTestRunner
       TranscriptPresentationDomResult result = TranscriptPresentationDomFormatter.Format(
         path,
         AgentSource.Claude,
-        new Markdig.MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
+        new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
       Require(result.Nodes.Count == 0 && result.Html.Length == 0,
         "Empty transcript produced presentation nodes or HTML.");
     }
@@ -314,7 +315,8 @@ internal static class ExtendedRegressionTestRunner
 
   private static void TestSpeechProfileNormalization()
   {
-    SpeechProfileSettings profile = new("  Hazel  ", 99, -99) { Volume = 150 }.Normalize();
+    SpeechProfileSettings profile = new SpeechProfileSettings(
+      "  Hazel  ", 99, -99) { Volume = 150 }.Normalize();
     Require(profile.VoiceName == "Hazel", "Speech voice name was not trimmed.");
     Require(profile.Rate == 10 && profile.Pitch == -10 && profile.Volume == 100,
       "Speech profile bounds are incorrect.");
@@ -325,7 +327,8 @@ internal static class ExtendedRegressionTestRunner
 
   private static void TestAudioWakeNormalization()
   {
-    AudioWakeSettings settings = new(true, -1, 99999, 101, 0, 99999, -1).Normalize();
+    AudioWakeSettings settings = new AudioWakeSettings(
+      true, -1, 99999, 101, 0, 99999, -1).Normalize();
     Require(settings.QuietDurationMilliseconds == 0,
       "Audio-wake quiet duration lower bound failed.");
     Require(settings.FrequencyHertz == 22000 && settings.ToneVolume == 100,
