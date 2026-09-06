@@ -130,16 +130,21 @@ method = r'''static void ValidateClaudeInterleavedReasoningTool(
       markdown,
       new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
 
-    Reject(
-      html,
-      "<blockquote>\n<details>\n</blockquote>",
-      "misnested nested-details opening",
-      failures);
-    Reject(
-      html,
-      "<blockquote>\n</details>\n</blockquote>",
-      "misnested details closing",
-      failures);
+    const string badOpen = "<blockquote>\n<details>\n</blockquote>";
+    const string badClose = "<blockquote>\n</details>\n</blockquote>";
+    if (html.Contains(badOpen, StringComparison.Ordinal) ||
+        html.Contains(badClose, StringComparison.Ordinal))
+    {
+      Console.Error.WriteLine("INTERLEAVED_MARKDOWN_BEGIN");
+      Console.Error.WriteLine(markdown);
+      Console.Error.WriteLine("INTERLEAVED_MARKDOWN_END");
+      Console.Error.WriteLine("INTERLEAVED_HTML_BEGIN");
+      Console.Error.WriteLine(html);
+      Console.Error.WriteLine("INTERLEAVED_HTML_END");
+    }
+
+    Reject(html, badOpen, "misnested nested-details opening", failures);
+    Reject(html, badClose, "misnested details closing", failures);
 
     int outerStart = html.IndexOf("<details>", StringComparison.Ordinal);
     int outerEnd = outerStart < 0
