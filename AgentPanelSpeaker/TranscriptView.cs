@@ -2368,7 +2368,9 @@ function postStructureStage(
   expectedMap,
   previousMap,
   previousStage,
-  rawInputHtml = '') {
+  rawInputHtml = '',
+  exactAssignedHtml = '',
+  exactParsedHtml = '') {
   if (!probeId) return previousMap;
   const snapshot = captureStructureDom();
   const currentMap = normalizeStructureEntries(snapshot.entries);
@@ -2391,7 +2393,15 @@ function postStructureStage(
     divergenceContexts:
       previousDifferences.length === 0 || !rawInputHtml
         ? []
-        : buildStructureDivergenceContexts(rawInputHtml, previousDifferences)
+        : buildStructureDivergenceContexts(rawInputHtml, previousDifferences),
+    exactAssignedHtml:
+      previousDifferences.length === 0 ? '' : exactAssignedHtml,
+    exactParsedHtml:
+      previousDifferences.length === 0 ? '' : exactParsedHtml,
+    exactAssignedHtmlLength:
+      previousDifferences.length === 0 ? 0 : exactAssignedHtml.length,
+    exactParsedHtmlLength:
+      previousDifferences.length === 0 ? 0 : exactParsedHtml.length
   });
   return currentMap;
 }
@@ -2423,18 +2433,22 @@ function replaceTranscriptWindow(
   const openDetails = preserve
     ? [...transcript.querySelectorAll('details')].map(x => x.open)
     : [];
-  transcript.innerHTML =
+  const exactAssignedHtml =
     '<div class="virtual-spacer" data-virtual-spacer="top" style="height:' +
     Math.max(0, Number(topSpacerHeight) || 0) + 'px"></div>' + html +
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
+  transcript.innerHTML = exactAssignedHtml;
+  const exactParsedHtml = transcript.innerHTML;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-inner-html',
     expectedStructureMap,
     previousStructureMap,
     previousStructureStage,
-    html);
+    html,
+    exactAssignedHtml,
+    exactParsedHtml);
   previousStructureStage = 'after-inner-html';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
