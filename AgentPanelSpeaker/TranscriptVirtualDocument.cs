@@ -53,6 +53,28 @@ internal sealed class TranscriptVirtualDocument
 
   public int Count => _records.Length;
 
+  /// <summary>
+  /// Returns the complete rendered record inventory.
+  /// </summary>
+  public IReadOnlyList<TranscriptVirtualRecord> Records => _records;
+
+  /// <summary>
+  /// Returns the complete transcript as one unsplit window. This is used by the
+  /// canonical DOM renderer so structural elements are created as DOM objects
+  /// and are never divided across independently parsed HTML fragments.
+  /// </summary>
+  public TranscriptWindow CreateFullWindow()
+  {
+    string html = string.Concat(_records.Select(record => record.Html));
+    return new TranscriptWindow(
+      html,
+      0,
+      _records.Length - 1,
+      0,
+      0,
+      _records);
+  }
+
   public static TranscriptVirtualDocument Build(string html)
   {
     MatchCollection anchors = AnchorRegex.Matches(html);

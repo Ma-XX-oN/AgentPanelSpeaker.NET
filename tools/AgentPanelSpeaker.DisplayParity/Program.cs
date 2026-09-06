@@ -225,19 +225,19 @@ static void ValidateClaudeInterleavedReasoningTool(
   try
   {
     File.WriteAllLines(tempPath, records);
-    string markdown = TranscriptMarkdownFormatter.Format(
+    var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+    TranscriptPresentationDomResult dom = TranscriptPresentationDomFormatter.Format(
       tempPath,
-      AgentSource.Claude);
-    string html = TranscriptHtmlRenderer.ToHtml(
-      markdown,
-      new MarkdownPipelineBuilder().UseAdvancedExtensions().Build());
+      AgentSource.Claude,
+      pipeline);
+    string html = dom.Html;
 
     const string badOpen = "<blockquote>\n<details>\n</blockquote>";
     const string badClose = "<blockquote>\n</details>\n</blockquote>";
     Reject(html, badOpen, "misnested nested-details opening", failures);
     Reject(html, badClose, "misnested details closing", failures);
 
-    int outerStart = html.IndexOf("<details>", StringComparison.Ordinal);
+    int outerStart = html.IndexOf("<details", StringComparison.Ordinal);
     int outerEnd = outerStart < 0
       ? -1
       : html.LastIndexOf("</details>", StringComparison.Ordinal);

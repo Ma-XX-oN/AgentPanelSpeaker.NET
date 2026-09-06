@@ -48,6 +48,7 @@ internal sealed class TranscriptView : UserControl
     Array.Empty<TranscriptNodeIdentity>();
   private int _windowStartIndex = -1;
   private int _windowEndIndex = -1;
+  private bool _domPresentationMode;
   private CancellationTokenSource? _findCancellation;
   private PendingFindRequest? _pendingFindRequest;
   private long _latestFindWindowNavigationGeneration;
@@ -209,6 +210,7 @@ internal sealed class TranscriptView : UserControl
     _identities = Array.Empty<TranscriptNodeIdentity>();
     _windowStartIndex = -1;
     _windowEndIndex = -1;
+    _domPresentationMode = false;
     CancelFindSearch();
     _lastWriteUtc = DateTime.MinValue;
     _lastLength = -1;
@@ -229,6 +231,7 @@ internal sealed class TranscriptView : UserControl
     _identities = Array.Empty<TranscriptNodeIdentity>();
     _windowStartIndex = -1;
     _windowEndIndex = -1;
+    _domPresentationMode = false;
     CancelFindSearch();
     _sessionPath = null;
     _sessionDisplayName = string.Empty;
@@ -595,7 +598,7 @@ internal sealed class TranscriptView : UserControl
       CancellationToken token = cancellation.Token;
       TranscriptRenderPayload payload = await Task.Run(() =>
       {
-        string markdown = string.Empty;
+        TranscriptPresentationDomResult presentation = null!;
         IReadOnlyList<TranscriptNodeIdentity> identities =
           Array.Empty<TranscriptNodeIdentity>();
         var options = new ParallelOptions
@@ -608,16 +611,17 @@ internal sealed class TranscriptView : UserControl
             path,
             source,
             token),
-          () => markdown = TranscriptMarkdownFormatter.Format(
+          () => presentation = TranscriptPresentationDomFormatter.Format(
             path,
             source,
+            _pipeline,
             token));
         token.ThrowIfCancellationRequested();
-        string html = TranscriptHtmlRenderer.ToHtml(markdown, _pipeline);
+        string html = presentation.Html;
         TranscriptStructureSnapshot rendererStructure =
           TranscriptStructureProbe.CaptureHtml(
             structureProbeId,
-            "renderer-html",
+            "dom-model-html",
             html);
         TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
           html,
@@ -628,7 +632,8 @@ internal sealed class TranscriptView : UserControl
           document,
           identities,
           searchIndex,
-          rendererStructure);
+          rendererStructure,
+          presentation.Nodes);
       }, token);
 
       long preparationMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -643,19 +648,19 @@ internal sealed class TranscriptView : UserControl
       _identities = payload.Identities;
       _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
-      TranscriptWindow window = payload.Document.CreateWindow(focalIndex);
+      TranscriptWindow window = payload.Document.CreateFullWindow();
       TranscriptStructureSnapshot virtualStructure =
         TranscriptStructureProbe.CaptureHtml(
           structureProbeId,
-          "virtual-window-html",
+          "dom-model-serialized-html",
           window.Html);
       TranscriptStructureProbe.Compare(
         payload.RendererStructure,
         virtualStructure);
-      string script = BuildReplaceWindowScript(
+      string script = BuildReplaceDomScript(
         window,
+        payload.DomNodes,
         preserve: !force,
-        focusVirtualIndex: focalIndex,
         structureProbeId: structureProbeId,
         expectedStructure: virtualStructure);
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -666,6 +671,7 @@ internal sealed class TranscriptView : UserControl
       }
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
+      _domPresentationMode = true;
       TranscriptStructureSnapshot? webViewStructure =
         await CaptureWebViewStructureAsync(structureProbeId);
       if (webViewStructure is not null)
@@ -1653,7 +1659,8 @@ internal sealed class TranscriptView : UserControl
     TranscriptVirtualDocument Document,
     IReadOnlyList<TranscriptNodeIdentity> Identities,
     TranscriptSearchIndex SearchIndex,
-    TranscriptStructureSnapshot RendererStructure);
+    TranscriptStructureSnapshot RendererStructure,
+    IReadOnlyList<TranscriptDomNode> DomNodes);
 
 
   private int ResolveInitialWindowIndex(
@@ -1677,6 +1684,32 @@ internal sealed class TranscriptView : UserControl
       item => item.NodeId == position.NodeId);
     return identity is not null &&
       document.TryGetIndex(identity.RecordNumber, identity.SourceId, out index);
+  }
+
+  private string BuildReplaceDomScript(
+    TranscriptWindow window,
+    IReadOnlyList<TranscriptDomNode> domNodes,
+    bool preserve,
+    string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null)
+  {
+    var keys = window.Records
+      .Select(record => record.SourceId + "\0" + record.RecordNumber)
+      .ToHashSet(StringComparer.Ordinal);
+    IReadOnlyList<TranscriptNodeIdentity> identities = _identities
+      .Where(identity => keys.Contains(
+        identity.SourceId + "\0" + identity.RecordNumber))
+      .ToArray();
+    IReadOnlyList<TranscriptRecordWordMap> wordMaps = _searchIndex?.GetWordMaps(
+      window.Records) ?? Array.Empty<TranscriptRecordWordMap>();
+    return "replaceTranscriptDom(" +
+      JsonSerializer.Serialize(domNodes) + "," +
+      JsonSerializer.Serialize(preserve) + "," +
+      JsonSerializer.Serialize(identities) + "," +
+      JsonSerializer.Serialize(wordMaps) + "," +
+      JsonSerializer.Serialize(expectedStructure?.Entries ??
+        Array.Empty<TranscriptStructureEntry>()) + "," +
+      JsonSerializer.Serialize(structureProbeId ?? string.Empty) + ");";
   }
 
   private string BuildReplaceWindowScript(
@@ -1808,6 +1841,13 @@ internal sealed class TranscriptView : UserControl
 
   private async Task RenderWindowForEdgeAsync(string edge)
   {
+    if (_domPresentationMode)
+    {
+      await ExecuteAsync(edge == "start"
+        ? "window.scrollTo(0, 0);"
+        : "window.scrollTo(0, document.documentElement.scrollHeight);");
+      return;
+    }
     TranscriptVirtualDocument? document = _virtualDocument;
     if (document is null || document.Count == 0)
     {
@@ -1849,6 +1889,10 @@ internal sealed class TranscriptView : UserControl
     string anchorSourceId,
     double? anchorOffset)
   {
+    if (_domPresentationMode)
+    {
+      return;
+    }
     TranscriptVirtualDocument? document = _virtualDocument;
     if (document is null)
     {
@@ -2404,6 +2448,124 @@ function postStructureStage(
       previousDifferences.length === 0 ? 0 : exactParsedHtml.length
   });
   return currentMap;
+}
+
+function buildTranscriptDomNode(spec) {
+  if (!spec) return document.createDocumentFragment();
+  const kind = String(spec.Kind ?? spec.kind ?? '');
+  if (kind === 'text') {
+    return document.createTextNode(String(spec.Text ?? spec.text ?? ''));
+  }
+  if (kind === 'html') {
+    // Markdown parsing ends at the leaf boundary. Structural transcript nodes
+    // never enter innerHTML/template parsing.
+    const template = document.createElement('template');
+    template.innerHTML = String(spec.Html ?? spec.html ?? '');
+    return template.content.cloneNode(true);
+  }
+  if (kind !== 'element') return document.createDocumentFragment();
+
+  const tag = String(spec.Tag ?? spec.tag ?? 'div');
+  const element = document.createElement(tag);
+  const attributes = spec.Attributes ?? spec.attributes ?? {};
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, String(value));
+  }
+  const children = spec.Children ?? spec.children ?? [];
+  for (const child of children) {
+    element.append(buildTranscriptDomNode(child));
+  }
+  return element;
+}
+
+function replaceTranscriptDom(
+  domNodes,
+  preserve,
+  nodeMap,
+  wordMap,
+  expectedStructure = [],
+  structureProbeId = '') {
+  const expectedStructureMap = normalizeStructureEntries(expectedStructure);
+  clearFindHighlights();
+  findCurrentWords = [];
+  const nearBottom = document.documentElement.scrollHeight -
+    (window.scrollY + window.innerHeight) < 80;
+  const previousY = window.scrollY;
+  const openDetails = new Map();
+  if (preserve) {
+    for (const details of transcript.querySelectorAll('details')) {
+      openDetails.set(structureDetailsKey(details), details.open);
+    }
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const spec of domNodes || []) {
+    fragment.append(buildTranscriptDomNode(spec));
+  }
+  transcript.replaceChildren(fragment);
+
+  let currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-dom-construction',
+    expectedStructureMap,
+    expectedStructureMap,
+    'dom-model-serialized-html');
+  for (const details of transcript.querySelectorAll('details')) {
+    const key = structureDetailsKey(details);
+    if (openDetails.has(key)) details.open = openDetails.get(key);
+  }
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-details-restore',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-dom-construction');
+
+  wrapWords();
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-wrap-words',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-details-restore');
+  assignRecordScopes();
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-record-scopes',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-wrap-words');
+  assignNodeScopes(nodeMap || []);
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-node-scopes',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-record-scopes');
+  assignStableWordScopes(wordMap || []);
+  postStructureStage(
+    structureProbeId,
+    'replace-dom-exit',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-node-scopes');
+
+  windowStartIndex = 0;
+  windowEndIndex = Number.MAX_SAFE_INTEGER;
+  virtualShiftPending = false;
+  currentIndex = -1;
+  currentEndIndex = -1;
+  voiceMarkerIndex = -1;
+  currentNode = -1;
+  currentFragmentText = null;
+  currentFragmentStart = -1;
+  currentFragmentEnd = -1;
+  currentBoundaryWordIndex = -1;
+  liveEndMarker.style.display = 'none';
+  if (preserve) {
+    if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
+    else window.scrollTo(0, previousY);
+  }
 }
 
 function replaceTranscriptWindow(
