@@ -274,7 +274,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
           recentFingerprintQueue,
           recentFingerprintSet,
           preview,
-          pendingInputRequests);
+          pendingInputRequests,
+          settings.IncludeRolledBackTurns);
         HistoryLoaded?.Invoke(initialHistory);
         MessagesChanged?.Invoke(preview.ToArray());
       }
@@ -314,7 +315,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
               recentFingerprintSet,
               preview,
               pendingInputRequests,
-            settings.IncludeRolledBackTurns);
+              settings.IncludeRolledBackTurns);
             HistoryLoaded?.Invoke(switchedHistory);
             MessagesChanged?.Invoke(preview.ToArray());
           }
