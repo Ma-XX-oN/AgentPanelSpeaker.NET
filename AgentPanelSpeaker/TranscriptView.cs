@@ -655,7 +655,9 @@ internal sealed class TranscriptView : UserControl
       string script = BuildReplaceWindowScript(
         window,
         preserve: !force,
-        focusVirtualIndex: focalIndex);
+        focusVirtualIndex: focalIndex,
+        structureProbeId: structureProbeId,
+        expectedStructure: virtualStructure);
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
       {
@@ -706,7 +708,9 @@ internal sealed class TranscriptView : UserControl
         if (!await ExecuteAsync(BuildReplaceWindowScript(
               window,
               preserve: false,
-              focusVirtualIndex: latestIndex)))
+              focusVirtualIndex: latestIndex,
+              structureProbeId: structureProbeId,
+              expectedStructure: virtualStructure)))
         {
           ShowLoading("Unable to position transcript at the voice marker. " +
             "See diagnostic log.");
@@ -899,6 +903,15 @@ internal sealed class TranscriptView : UserControl
           sourceId = ReadOptionalString(root, "sourceId"),
           text = ReadOptionalString(root, "text")
         });
+        return;
+      }
+      if (type is "structure-js-equivalent" or "structure-js-divergence")
+      {
+        DiagnosticLog.Write(
+          type == "structure-js-equivalent"
+            ? "transcript.structure_js_equivalent"
+            : "transcript.structure_js_divergence",
+          root.Clone());
         return;
       }
       if (type == "find-query")
@@ -1673,7 +1686,9 @@ internal sealed class TranscriptView : UserControl
     string? anchorSourceId = null,
     double? anchorOffset = null,
     int? focusVirtualIndex = null,
-    string? focusEdge = null)
+    string? focusEdge = null,
+    string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null)
   {
     var keys = window.Records
       .Select(record => record.SourceId + "\0" + record.RecordNumber)
@@ -1696,7 +1711,10 @@ internal sealed class TranscriptView : UserControl
       JsonSerializer.Serialize(anchorSourceId) + "," +
       JsonSerializer.Serialize(anchorOffset) + "," +
       JsonSerializer.Serialize(focusVirtualIndex) + "," +
-      JsonSerializer.Serialize(focusEdge) + ");";
+      JsonSerializer.Serialize(focusEdge) + "," +
+      JsonSerializer.Serialize(expectedStructure?.Entries ??
+        Array.Empty<TranscriptStructureEntry>()) + "," +
+      JsonSerializer.Serialize(structureProbeId ?? string.Empty) + ");";
   }
 
   private async Task RenderWindowForRecordAsync(
@@ -2187,6 +2205,146 @@ function wrapWords() {
   }
 }
 
+function structureDetailsKey(details) {
+  const presentation = details.getAttribute('data-presentation-id');
+  if (presentation) return 'presentation:' + presentation;
+  const marker = details.querySelector('[data-aicore-unit-id]');
+  if (marker) return 'core-unit:' + marker.getAttribute('data-aicore-unit-id');
+  const summary = Array.from(details.children).find(
+    child => child.tagName === 'SUMMARY');
+  const summaryText = summary
+    ? summary.textContent.trim().replace(/\s+/g, ' ')
+    : '';
+  return 'summary:' + summaryText;
+}
+
+function normalizeStructureEntries(entries) {
+  const result = new Map();
+  for (const entry of entries || []) {
+    const recordNumber = Number(entry.RecordNumber ?? entry.recordNumber ?? 0);
+    const sourceId = String(entry.SourceId ?? entry.sourceId ?? '');
+    const turnId = String(entry.TurnId ?? entry.turnId ?? '');
+    const detailsChain = Array.from(
+      entry.DetailsChain ?? entry.detailsChain ?? [],
+      value => String(value));
+    result.set(sourceId + '\u0000' + recordNumber, {
+      recordNumber,
+      sourceId,
+      turnId,
+      detailsChain
+    });
+  }
+  return result;
+}
+
+function captureStructureDom() {
+  const detailsKeys = new Map(
+    Array.from(transcript.querySelectorAll('details'))
+      .map(details => [details, structureDetailsKey(details)]));
+  const entries = [];
+  for (const anchor of transcript.querySelectorAll('.record-anchor')) {
+    const chain = [];
+    let element = anchor.parentElement;
+    while (element) {
+      if (element.tagName === 'DETAILS') {
+        chain.unshift(detailsKeys.get(element) || 'details:?');
+      }
+      element = element.parentElement;
+    }
+    const turn = anchor.closest('section.transcript-turn');
+    entries.push({
+      recordNumber: Number(anchor.getAttribute('data-jsonl-record') || 0),
+      sourceId: anchor.getAttribute('data-source-id') || '',
+      turnId: turn
+        ? 'presentation:' + (turn.getAttribute('data-presentation-id') || '')
+        : '',
+      detailsChain: chain
+    });
+  }
+  return {
+    entries,
+    detailsCount: transcript.querySelectorAll('details').length,
+    turnCount: transcript.querySelectorAll('section.transcript-turn').length
+  };
+}
+
+function compareStructureMaps(before, after) {
+  const differences = [];
+  for (const [key, left] of before) {
+    const right = after.get(key);
+    if (!right) {
+      differences.push({
+        recordNumber: left.recordNumber,
+        sourceId: left.sourceId,
+        kind: 'missing-record',
+        beforeTurn: left.turnId,
+        afterTurn: '',
+        beforeDetails: left.detailsChain,
+        afterDetails: []
+      });
+      continue;
+    }
+    const detailsChanged =
+      left.detailsChain.length !== right.detailsChain.length ||
+      left.detailsChain.some((value, index) => value !== right.detailsChain[index]);
+    const turnChanged = left.turnId && right.turnId && left.turnId !== right.turnId;
+    if (detailsChanged || turnChanged) {
+      differences.push({
+        recordNumber: left.recordNumber,
+        sourceId: left.sourceId,
+        kind: 'containment-changed',
+        beforeTurn: left.turnId,
+        afterTurn: right.turnId,
+        beforeDetails: left.detailsChain,
+        afterDetails: right.detailsChain
+      });
+    }
+  }
+  for (const [key, right] of after) {
+    if (!before.has(key)) {
+      differences.push({
+        recordNumber: right.recordNumber,
+        sourceId: right.sourceId,
+        kind: 'unexpected-record',
+        beforeTurn: '',
+        afterTurn: right.turnId,
+        beforeDetails: [],
+        afterDetails: right.detailsChain
+      });
+    }
+  }
+  return differences;
+}
+
+function postStructureStage(
+  probeId,
+  stage,
+  expectedMap,
+  previousMap,
+  previousStage) {
+  if (!probeId) return previousMap;
+  const snapshot = captureStructureDom();
+  const currentMap = normalizeStructureEntries(snapshot.entries);
+  const expectedDifferences = compareStructureMaps(expectedMap, currentMap);
+  const previousDifferences = compareStructureMaps(previousMap, currentMap);
+  chrome.webview.postMessage({
+    type: previousDifferences.length === 0
+      ? 'structure-js-equivalent'
+      : 'structure-js-divergence',
+    probeId,
+    stage,
+    previousStage,
+    anchorCount: snapshot.entries.length,
+    detailsCount: snapshot.detailsCount,
+    turnCount: snapshot.turnCount,
+    expectedDifferenceCount: expectedDifferences.length,
+    previousDifferenceCount: previousDifferences.length,
+    differencesFromExpected: expectedDifferences,
+    differencesFromPrevious: previousDifferences
+  });
+  return currentMap;
+}
+
 function replaceTranscriptWindow(
   html,
   preserve,
@@ -2200,7 +2358,12 @@ function replaceTranscriptWindow(
   anchorSourceId = null,
   anchorOffset = null,
   focusVirtualIndex = null,
-  focusEdge = null) {
+  focusEdge = null,
+  expectedStructure = [],
+  structureProbeId = '') {
+  const expectedStructureMap = normalizeStructureEntries(expectedStructure);
+  let previousStructureMap = expectedStructureMap;
+  let previousStructureStage = 'virtual-window-html';
   clearFindHighlights();
   findCurrentWords = [];
   const nearBottom = document.documentElement.scrollHeight -
@@ -2214,15 +2377,57 @@ function replaceTranscriptWindow(
     Math.max(0, Number(topSpacerHeight) || 0) + 'px"></div>' + html +
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-inner-html',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-inner-html';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
   [...transcript.querySelectorAll('details')].forEach((item, index) => {
     if (index < openDetails.length) item.open = openDetails[index];
   });
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-details-restore',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-details-restore';
   wrapWords();
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-wrap-words',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-wrap-words';
   assignRecordScopes();
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-record-scopes',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-record-scopes';
   assignNodeScopes(nodeMap || []);
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-node-scopes',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-node-scopes';
   assignStableWordScopes(wordMap || []);
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-stable-word-scopes',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-stable-word-scopes';
   const measurements = [...transcript.querySelectorAll('.virtual-record')]
     .map(record => ({
       index:Number(record.dataset.virtualIndex || -1),
@@ -2271,6 +2476,12 @@ function replaceTranscriptWindow(
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
   }
+  postStructureStage(
+    structureProbeId,
+    'replace-window-exit',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
 }
 
 function replaceTranscript(html, preserve, nodeMap, wordMap = []) {
