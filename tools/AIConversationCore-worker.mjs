@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = '9dde5331bd0ba959c2c381abbc3476added18c08';
+const CORE_COMMIT = '5f85e5e3d8ea6c7d2937b4606034101ce57fa935';
 
 /**
  * Returns the configured development checkout or the runtime bundled beside
@@ -138,7 +138,7 @@ const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of input) {
   if (!line.trim()) continue;
   try {
-    process.stdout.write(`${JSON.stringify(execute(JSON.parse(line))}\n`);
+    process.stdout.write(`${JSON.stringify(execute(JSON.parse(line)))}\n`);
   } catch (error) {
     process.stdout.write(`${JSON.stringify({
       ok: false,
