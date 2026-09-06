@@ -20,8 +20,8 @@ workflow.write_text(text, encoding='utf-8', newline='\n')
 popup = Path('AgentPanelSpeaker/TranscriptSettingsPopup.cs')
 text = popup.read_text(encoding='utf-8')
 old_call = 'advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);'
-if text.count(old_call) != 3:
-  raise SystemExit(f'expected 3 advanced popup queue calls, got {text.count(old_call)}')
+if text.count(old_call) != 2:
+  raise SystemExit(f'expected 2 advanced popup queue calls, got {text.count(old_call)}')
 text = text.replace(
   old_call,
   'advancedPopup.SetSettings(\n        Settings.HighlightQueueCapacity,\n        Settings.ShowRolledBackHistory);')
