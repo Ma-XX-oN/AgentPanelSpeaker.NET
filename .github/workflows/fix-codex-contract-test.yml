@@ -1,0 +1,49 @@
+name: Fix Codex bridge contract regression expectation
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/fix-codex-contract-test.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          fetch-depth: 0
+      - name: Update Codex contract expectation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/RegressionTestRunner.cs')
+          text = path.read_text(encoding='utf-8')
+          old = '''    RequireCoreContract(projection);
+    RequireProjectionText(projection, "Codex request — café 東京");
+  }
+'''
+          new = '''    RequireCoreContract(projection);
+    RequireProjectionText(
+      projection,
+      "context\\n## My request for Codex:\\nCodex request — café 東京");
+  }
+'''
+          if text.count(old) != 1:
+            raise SystemExit('Codex bridge contract assertion did not match exactly once')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+          git diff --check
+          git config user.name "Ma-XX-oN"
+          git config user.email "Ma-XX-oN@users.noreply.github.com"
+          git add AgentPanelSpeaker/RegressionTestRunner.cs
+          git commit -m "test: preserve Codex IDE context in bridge contract"
+          git push origin HEAD:feature/aiconversationcore-integration
