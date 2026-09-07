@@ -164,4 +164,6 @@ jobs:
 
       - name: Validate whitespace and patch integrity
         shell: pwsh
-        run: git diff --check origin/main...HEAD
+        run: |
+          git fetch origin main --depth=1
+          git diff --check FETCH_HEAD...HEAD
