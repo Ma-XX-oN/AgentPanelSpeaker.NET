@@ -39,12 +39,10 @@ jobs:
             raise SystemExit('AddTranscript patch target did not match exactly')
           text = text.replace(old, new, 1)
 
-          old = '''        HighlightQueueCapacity = Pick("Transcript/QueueCapacity", saved.Transcript.HighlightQueueCapacity, working.Transcript.HighlightQueueCapacity),
-                Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized)'''
-          new = '''        HighlightQueueCapacity = Pick("Transcript/QueueCapacity", saved.Transcript.HighlightQueueCapacity, working.Transcript.HighlightQueueCapacity),
-                Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized),
-                ShowRolledBackHistory = Pick("Transcript/ShowRolledBackHistory", saved.Transcript.ShowRolledBackHistory, working.Transcript.ShowRolledBackHistory),
-                SpeakUserContext = Pick("Transcript/SpeakUserContext", saved.Transcript.SpeakUserContext, working.Transcript.SpeakUserContext)'''
+          old = '        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized)'
+          new = '''        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized),
+                  ShowRolledBackHistory = Pick("Transcript/ShowRolledBackHistory", saved.Transcript.ShowRolledBackHistory, working.Transcript.ShowRolledBackHistory),
+                  SpeakUserContext = Pick("Transcript/SpeakUserContext", saved.Transcript.SpeakUserContext, working.Transcript.SpeakUserContext)'''
           if text.count(old) != 1:
             raise SystemExit('MergeSelected Transcript patch target did not match exactly')
           changes.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
