@@ -16,6 +16,7 @@ jobs:
         with:
           ref: feature/aiconversationcore-integration
           fetch-depth: 0
+          submodules: recursive
 
       - uses: actions/setup-dotnet@v4
         with:
