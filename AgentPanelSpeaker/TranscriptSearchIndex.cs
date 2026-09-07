@@ -199,12 +199,24 @@ internal sealed class TranscriptSearchIndex
     IEnumerable<TranscriptVirtualRecord> records)
   {
     var result = new List<TranscriptRecordWordMap>();
+    var emittedKeys = new HashSet<string>(StringComparer.Ordinal);
     foreach (TranscriptVirtualRecord record in records)
     {
-      string key = MakeKey(record.RecordNumber, record.SourceId);
-      if (_wordMaps.TryGetValue(key, out TranscriptRecordWordMap? map))
+      IReadOnlyList<TranscriptVirtualIdentity> identities =
+        record.Identities.Count != 0
+          ? record.Identities
+          : new[]
+          {
+            new TranscriptVirtualIdentity(record.RecordNumber, record.SourceId)
+          };
+      foreach (TranscriptVirtualIdentity identity in identities)
       {
-        result.Add(map);
+        string key = MakeKey(identity.RecordNumber, identity.SourceId);
+        if (emittedKeys.Add(key) &&
+            _wordMaps.TryGetValue(key, out TranscriptRecordWordMap? map))
+        {
+          result.Add(map);
+        }
       }
     }
     return result;

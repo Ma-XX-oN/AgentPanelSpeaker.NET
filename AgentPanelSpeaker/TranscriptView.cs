@@ -1694,7 +1694,13 @@ internal sealed class TranscriptView : UserControl
     TranscriptStructureSnapshot? expectedStructure = null)
   {
     var keys = window.Records
-      .Select(record => record.SourceId + "\0" + record.RecordNumber)
+      .SelectMany(record => record.Identities.Count != 0
+        ? record.Identities
+        : new[]
+        {
+          new TranscriptVirtualIdentity(record.RecordNumber, record.SourceId)
+        })
+      .Select(identity => identity.SourceId + "\0" + identity.RecordNumber)
       .ToHashSet(StringComparer.Ordinal);
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
       .Where(identity => keys.Contains(
@@ -1724,7 +1730,13 @@ internal sealed class TranscriptView : UserControl
     TranscriptStructureSnapshot? expectedStructure = null)
   {
     var keys = window.Records
-      .Select(record => record.SourceId + "\0" + record.RecordNumber)
+      .SelectMany(record => record.Identities.Count != 0
+        ? record.Identities
+        : new[]
+        {
+          new TranscriptVirtualIdentity(record.RecordNumber, record.SourceId)
+        })
+      .Select(identity => identity.SourceId + "\0" + identity.RecordNumber)
       .ToHashSet(StringComparer.Ordinal);
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
       .Where(identity => keys.Contains(identity.SourceId + "\0" + identity.RecordNumber))
