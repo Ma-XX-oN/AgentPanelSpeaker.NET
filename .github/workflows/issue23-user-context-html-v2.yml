@@ -1,0 +1,250 @@
+name: Issue 23 user context HTML parity v2
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/issue23-user-context-html-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Configure git
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Apply implementation and paired regression
+        shell: pwsh
+        run: |
+          $old = '5f85e5e3d8ea6c7d2937b4606034101ce57fa935'
+          $new = '54a70c2989de0c02f03b28a2f8d8c6986b974141'
+          git -C dependencies/AIConversationCore fetch origin $new
+          if ($LASTEXITCODE -ne 0) { throw 'Core fetch failed.' }
+          git -C dependencies/AIConversationCore checkout $new
+          if ($LASTEXITCODE -ne 0) { throw 'Core checkout failed.' }
+          foreach ($path in @('AgentPanelSpeaker/AIConversationCoreClient.cs','tools/AIConversationCore-worker.mjs','.github/workflows/core-integration-validation.yml')) {
+            $text = Get-Content $path -Raw
+            if (-not $text.Contains($old)) { throw "Old core SHA missing from $path" }
+            Set-Content $path ($text.Replace($old, $new)) -NoNewline
+          }
+          Remove-Item 'tools/AIConversationCore-runtime/src' -Recurse -Force
+          Copy-Item 'dependencies/AIConversationCore/src' 'tools/AIConversationCore-runtime/src' -Recurse
+          Copy-Item 'dependencies/AIConversationCore/package.json' 'tools/AIConversationCore-runtime/package.json' -Force
+          Set-Content 'tools/AIConversationCore-runtime/CORE_COMMIT' $new -NoNewline
+
+          @'
+          from pathlib import Path
+
+          formatter = Path('AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs')
+          text = formatter.read_text()
+          old = '''      case "attachments":
+                EmitAnchors(output, node, emittedSourceIndexes);
+                RenderAttachments(output, node);
+                break;
+              case "reasoning":'''.replace('              ', '')
+          new = '''      case "attachments":
+                EmitAnchors(output, node, emittedSourceIndexes);
+                RenderAttachments(output, node);
+                break;
+              case "user_context":
+                EmitAnchors(output, node, emittedSourceIndexes);
+                RenderUserContext(output, node, pipeline);
+                break;
+              case "reasoning":'''.replace('              ', '')
+          if old not in text:
+            raise SystemExit('formatter switch anchor not found: ' + repr(old))
+          text = text.replace(old, new, 1)
+
+          insert_at = text.index('  private static void RenderAttachments(')
+          method = r'''  /// <summary>
+          /// Renders semantic User context as a nested blockquote/details disclosure.
+          /// </summary>
+          private static void RenderUserContext(
+            StringBuilder output,
+            JsonElement node,
+            MarkdownPipeline pipeline)
+          {
+            output.AppendLine("<blockquote class=\"user-context\">");
+            if (node.TryGetProperty("blocks", out JsonElement blocks) &&
+                blocks.ValueKind == JsonValueKind.Array)
+            {
+              foreach (JsonElement block in blocks.EnumerateArray())
+              {
+                string summary = GetString(block, "summary");
+                if (string.IsNullOrWhiteSpace(summary))
+                {
+                  summary = "# Context from my IDE setup:";
+                }
+                output.Append("<details class=\"user-context-details\" data-presentation-id=\"")
+                  .Append(Html(GetString(node, "id")))
+                  .AppendLine("\">");
+                output.Append("<summary>").Append(Html(summary)).AppendLine("</summary>");
+                string body = GetString(block, "text");
+                if (!string.IsNullOrWhiteSpace(body))
+                {
+                  output.Append(Markdown.ToHtml(body, pipeline));
+                }
+                output.AppendLine("</details>");
+              }
+            }
+            output.AppendLine("</blockquote>");
+          }
+
+          '''
+          text = text[:insert_at] + method + text[insert_at:]
+          formatter.write_text(text)
+
+          runner = Path('AgentPanelSpeaker/CoreRegressionTestRunner.cs')
+          text = runner.read_text()
+          text = text.replace('using System.Text.Json;\n', 'using Markdig;\nusing System.Text.Json;\n', 1)
+          tuple_anchor = '      ("core/codex-revision-opt-in", TestCodexRevisionOptIn),\n'
+          if tuple_anchor not in text:
+            raise SystemExit('runner tuple anchor not found')
+          text = text.replace(tuple_anchor, tuple_anchor + '      ("core/codex-user-context-markdown-html-parity", TestCodexUserContextMarkdownHtmlParity),\n', 1)
+
+          marker = '  private static void TestCodexCommentaryInsideReasoningGroup()'
+          marker_at = text.index(marker)
+          comment_at = text.rfind('  /// <summary>', 0, marker_at)
+          if comment_at < 0:
+            raise SystemExit('commentary method documentation anchor not found')
+          method = r'''  /// <summary>
+          /// Verifies the same Codex IDE-context source record in canonical Markdown
+          /// and the direct presentation-tree HTML renderer.
+          /// </summary>
+          private static void TestCodexUserContextMarkdownHtmlParity()
+          {
+            const string prompt = "I'm doing some testing. What time is it in Paris?";
+            const string sourceMessage =
+              "# Context from my IDE setup:\n\n" +
+              "## Active file: sessions/example.jsonl\n\n" +
+              "## Active selection of the file:\n" +
+              " the repo instructions and the current transcript script first\n" +
+              "## Open tabs:\n" +
+              "- example.jsonl: sessions/example.jsonl\n\n" +
+              "## My request for Codex:\n" + prompt;
+            string record = JsonSerializer.Serialize(new
+            {
+              type = "event_msg",
+              timestamp = "2026-09-06T15:17:11.000Z",
+              payload = new { type = "user_message", message = sourceMessage }
+            });
+
+            using var client = new AIConversationCoreClient();
+            AIConversationProjection projection = client.Project(AgentSource.Codex, new[] { record });
+            string markdown = projection.Markdown;
+            int mdStart = markdown.IndexOf("> <details><summary># Context from my IDE setup:</summary>", StringComparison.Ordinal);
+            int mdEnd = markdown.IndexOf("> </details>", mdStart, StringComparison.Ordinal);
+            int mdPrompt = markdown.IndexOf(prompt, StringComparison.Ordinal);
+            Require(mdStart >= 0, "Markdown omitted blockquoted IDE-context details.");
+            Require(mdEnd > mdStart && mdPrompt > mdEnd, "Markdown prompt is not outside/after context details.");
+            Require(!markdown.Contains("## My request for Codex:", StringComparison.Ordinal), "Request marker leaked into Markdown.");
+            Require(markdown.IndexOf("## Active file:", StringComparison.Ordinal) < markdown.IndexOf("## Active selection of the file:", StringComparison.Ordinal) &&
+                    markdown.IndexOf("## Active selection of the file:", StringComparison.Ordinal) < markdown.IndexOf("## Open tabs:", StringComparison.Ordinal),
+              "Markdown changed IDE-context section order.");
+
+            string root = Path.Combine(Path.GetTempPath(), $"AgentPanelSpeaker-user-context-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            try
+            {
+              string path = Path.Combine(root, "context.jsonl");
+              File.WriteAllText(path, record + Environment.NewLine);
+              var pipeline = new MarkdownPipelineBuilder().Build();
+              string html = TranscriptPresentationHtmlFormatter.Format(path, AgentSource.Codex, pipeline);
+              int htmlStart = html.IndexOf("<details class=\"user-context-details\"", StringComparison.Ordinal);
+              int htmlEnd = html.IndexOf("</details>", htmlStart, StringComparison.Ordinal);
+              int quoteEnd = html.IndexOf("</blockquote>", htmlEnd, StringComparison.Ordinal);
+              int htmlPrompt = html.IndexOf(prompt, StringComparison.Ordinal);
+              Require(html.Contains("<blockquote class=\"user-context\">", StringComparison.Ordinal), "HTML omitted User-context blockquote.");
+              Require(htmlStart >= 0, "HTML omitted User-context details.");
+              Require(html.Contains("<summary># Context from my IDE setup:</summary>", StringComparison.Ordinal), "HTML changed context summary.");
+              Require(htmlEnd > htmlStart && quoteEnd > htmlEnd && htmlPrompt > quoteEnd, "HTML prompt is not outside/after context details.");
+              Require(!html.Contains("## My request for Codex:", StringComparison.Ordinal), "Request marker leaked into HTML.");
+              Require(html.IndexOf("Active file:", StringComparison.Ordinal) < html.IndexOf("Active selection of the file:", StringComparison.Ordinal) &&
+                      html.IndexOf("Active selection of the file:", StringComparison.Ordinal) < html.IndexOf("Open tabs:", StringComparison.Ordinal),
+                "HTML changed IDE-context section order.");
+
+              string plainRecord = JsonSerializer.Serialize(new
+              {
+                type = "event_msg",
+                timestamp = "2026-09-06T15:18:00.000Z",
+                payload = new { type = "user_message", message = "Plain user prompt." }
+              });
+              string plainPath = Path.Combine(root, "plain.jsonl");
+              File.WriteAllText(plainPath, plainRecord + Environment.NewLine);
+              string plainHtml = TranscriptPresentationHtmlFormatter.Format(plainPath, AgentSource.Codex, pipeline);
+              Require(!plainHtml.Contains("user-context", StringComparison.Ordinal), "No-context User emitted context HTML.");
+            }
+            finally
+            {
+              Directory.Delete(root, recursive: true);
+            }
+          }
+
+          '''
+          text = text[:comment_at] + method + text[comment_at:]
+          runner.write_text(text)
+          '@ | python -
+
+      - name: Build and run application regressions
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+          dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
+          if ($LASTEXITCODE -ne 0) { throw 'App regressions failed.' }
+      - name: Run pinned core tests and gates
+        shell: pwsh
+        run: |
+          npm test --prefix dependencies/AIConversationCore
+          if ($LASTEXITCODE -ne 0) { throw 'Core tests failed.' }
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          if ($LASTEXITCODE -ne 0) { throw 'Phase2 gate failed.' }
+          python dependencies/AIConversationCore/tests/validate-canonical-golden.py
+          if ($LASTEXITCODE -ne 0) { throw 'ChatGPT golden failed.' }
+          python dependencies/AIConversationCore/tests/validate-claude-canonical-golden.py
+          if ($LASTEXITCODE -ne 0) { throw 'Claude golden failed.' }
+          python dependencies/AIConversationCore/tests/validate-codex-canonical-golden.py
+          if ($LASTEXITCODE -ne 0) { throw 'Codex golden failed.' }
+      - name: Run DisplayParity
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+          if ($LASTEXITCODE -ne 0) { throw 'DisplayParity failed.' }
+      - name: Publish and retest
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'issue23-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
+          & (Join-Path $publish 'AgentPanelSpeaker.exe') --test
+          if ($LASTEXITCODE -ne 0) { throw 'Published tests failed.' }
+      - name: Verify pin, whitespace, commit, push
+        shell: pwsh
+        run: |
+          $expected = '54a70c2989de0c02f03b28a2f8d8c6986b974141'
+          if ((git -C dependencies/AIConversationCore rev-parse HEAD).Trim() -ne $expected) { throw 'Submodule pin mismatch.' }
+          if ((Get-Content tools/AIConversationCore-runtime/CORE_COMMIT -Raw).Trim() -ne $expected) { throw 'Runtime pin mismatch.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Whitespace check failed.' }
+          git add dependencies/AIConversationCore AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs AgentPanelSpeaker/CoreRegressionTestRunner.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime .github/workflows/core-integration-validation.yml
+          git commit -m "fix: render Codex user context in HTML"
+          git push origin HEAD:feature/aiconversationcore-integration
