@@ -64,7 +64,9 @@ internal static class Program
       if (args.Length == 2 &&
           string.Equals(args[1], "speech-ordinals", StringComparison.OrdinalIgnoreCase))
       {
-        Environment.ExitCode = Issue24SpeechOrdinalRegressionTestRunner.Run();
+        int focused = Issue24SpeechOrdinalRegressionTestRunner.Run();
+        int production = Issue24ProductionPathRegressionTestRunner.Run();
+        Environment.ExitCode = focused == 0 && production == 0 ? 0 : 1;
         return;
       }
 
@@ -86,6 +88,7 @@ internal static class Program
       int additional = AdditionalRegressionTestRunner.Run();
       int core = CoreRegressionTestRunner.Run();
       int speechOrdinals = Issue24SpeechOrdinalRegressionTestRunner.Run();
+      int speechOrdinalProduction = Issue24ProductionPathRegressionTestRunner.Run();
       int userContextSpeech = Issue26UserContextSpeechRegressionTestRunner.Run();
       int environment = EnvironmentRegressionTestRunner.Run();
       Environment.ExitCode = primary == 0 &&
@@ -93,6 +96,7 @@ internal static class Program
                              additional == 0 &&
                              core == 0 &&
                              speechOrdinals == 0 &&
+                             speechOrdinalProduction == 0 &&
                              userContextSpeech == 0 &&
                              environment == 0
         ? 0
