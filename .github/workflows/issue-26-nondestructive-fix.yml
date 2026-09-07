@@ -86,28 +86,23 @@ jobs:
             '    _speakUserContext = settings.SpeakUserContext;',
             'transcript settings policy')
 
-          marker = '''  /// <summary>
-          /// Chooses the first currently spoken profile for IPA previews.
-          /// </summary>
-          private SpeechProfileSettings GetIpaPreviewProfile()
-          '''
-          helper = '''  /// <summary>
-          /// Resolves the final playback profile without changing indexed
-          /// canonical speech history. User Context stays indexed so toggling
-          /// its setting is an O(1) policy change rather than a session rebuild.
-          /// </summary>
-          private SpeechProfileSettings GetPlaybackProfile(ContentCategory category)
-          {
-            SpeechProfileSettings profile = _settingsStore.GetProfile(category);
-            return category == ContentCategory.UserContext && !_speakUserContext
-              ? profile with { VoiceName = SpeechProfileSettings.NotSpoken }
-              : profile;
-          }
-
-          '''
-          if text.count(marker) != 1:
-            raise SystemExit(f'playback profile insertion: expected 1 match, got {text.count(marker)}')
-          text = text.replace(marker, helper + marker, 1)
+          signature = '  private SpeechProfileSettings GetIpaPreviewProfile()\n'
+          helper = (
+            '  /// <summary>\n'
+            '  /// Resolves the final playback profile without changing indexed\n'
+            '  /// canonical speech history. User Context stays indexed so toggling\n'
+            '  /// its setting is an O(1) policy change rather than a session rebuild.\n'
+            '  /// </summary>\n'
+            '  private SpeechProfileSettings GetPlaybackProfile(ContentCategory category)\n'
+            '  {\n'
+            '    SpeechProfileSettings profile = _settingsStore.GetProfile(category);\n'
+            '    return category == ContentCategory.UserContext && !_speakUserContext\n'
+            '      ? profile with { VoiceName = SpeechProfileSettings.NotSpoken }\n'
+            '      : profile;\n'
+            '  }\n\n')
+          if text.count(signature) != 1:
+            raise SystemExit(f'playback profile insertion: expected 1 signature, got {text.count(signature)}')
+          text = text.replace(signature, helper + signature, 1)
           main.write_text(text, encoding='utf-8', newline='\n')
           '@ | python -
 
