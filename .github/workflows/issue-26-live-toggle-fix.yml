@@ -27,35 +27,39 @@ jobs:
           @'
           from pathlib import Path
 
+          def replace_once(text, old, new, label):
+            if text.count(old) != 1:
+              raise SystemExit(f'{label} patch target count={text.count(old)}')
+            return text.replace(old, new, 1)
+
           changes = Path('AgentPanelSpeaker/SettingsChangeSet.cs')
           text = changes.read_text(encoding='utf-8')
-          old = '''      AddScalar("Transcript/QueueCapacity", ["Transcript", "Highlight queue capacity"], oldValue.HighlightQueueCapacity, newValue.HighlightQueueCapacity);
-                AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);'''
-          new = '''      AddScalar("Transcript/QueueCapacity", ["Transcript", "Highlight queue capacity"], oldValue.HighlightQueueCapacity, newValue.HighlightQueueCapacity);
-                AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);
+          text = replace_once(
+            text,
+            '      AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);',
+            '''      AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);
                 AddScalar("Transcript/ShowRolledBackHistory", ["Transcript", "Show rolled-back Codex history"], oldValue.ShowRolledBackHistory, newValue.ShowRolledBackHistory);
-                AddScalar("Transcript/SpeakUserContext", ["Transcript", "Speak User / IDE context"], oldValue.SpeakUserContext, newValue.SpeakUserContext);'''
-          if text.count(old) != 1:
-            raise SystemExit('AddTranscript patch target did not match exactly')
-          text = text.replace(old, new, 1)
-
-          old = '        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized)'
-          new = '''        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized),
+                AddScalar("Transcript/SpeakUserContext", ["Transcript", "Speak User / IDE context"], oldValue.SpeakUserContext, newValue.SpeakUserContext);''',
+            'AddTranscript')
+          text = replace_once(
+            text,
+            '        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized)',
+            '''        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized),
                   ShowRolledBackHistory = Pick("Transcript/ShowRolledBackHistory", saved.Transcript.ShowRolledBackHistory, working.Transcript.ShowRolledBackHistory),
-                  SpeakUserContext = Pick("Transcript/SpeakUserContext", saved.Transcript.SpeakUserContext, working.Transcript.SpeakUserContext)'''
-          if text.count(old) != 1:
-            raise SystemExit('MergeSelected Transcript patch target did not match exactly')
-          changes.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+                  SpeakUserContext = Pick("Transcript/SpeakUserContext", saved.Transcript.SpeakUserContext, working.Transcript.SpeakUserContext)''',
+            'MergeSelected Transcript')
+          changes.write_text(text, encoding='utf-8', newline='\n')
 
           main = Path('AgentPanelSpeaker/MainForm.cs')
           text = main.read_text(encoding='utf-8')
-          old = '  private async Task StartMonitoringAsync()\n'
-          new = '  private async Task StartMonitoringAsync(bool resumePreindexedHistory = true)\n'
-          if text.count(old) != 1:
-            raise SystemExit('StartMonitoringAsync signature target did not match exactly')
-          text = text.replace(old, new, 1)
-
-          old = '''      if (reusePausedHistory)
+          text = replace_once(
+            text,
+            '  private async Task StartMonitoringAsync()\n',
+            '  private async Task StartMonitoringAsync(bool resumePreindexedHistory = true)\n',
+            'StartMonitoringAsync signature')
+          text = replace_once(
+            text,
+            '''      if (reusePausedHistory)
                 {
                   PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
                   AppendLog(result == PauseToggleResult.Resumed
@@ -65,8 +69,8 @@ jobs:
                 else
                 {
                   AppendLog("Monitoring started; existing history is being indexed.");
-                }'''
-          new = '''      if (reusePausedHistory && resumePreindexedHistory)
+                }''',
+            '''      if (reusePausedHistory && resumePreindexedHistory)
                 {
                   PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
                   AppendLog(result == PauseToggleResult.Resumed
@@ -80,55 +84,26 @@ jobs:
                 else
                 {
                   AppendLog("Monitoring started; existing history is being indexed.");
-                }'''
-          if text.count(old) != 1:
-            raise SystemExit('StartMonitoringAsync reuse block target did not match exactly')
-          text = text.replace(old, new, 1)
+                }''',
+            'StartMonitoringAsync reuse')
+          text = replace_once(
+            text,
+            '    if (historyProjectionChanged && !_monitor.IsRunning &&\n',
+            '    if (historyProjectionChanged &&\n',
+            'running projection gate')
+          text = replace_once(
+            text,
+            '''        _selectedSessionHistory = null;
+                _selectedSessionHistoryPath = null;
+                _ = LoadPausedHistoryPreviewAsync(session);''',
+            '        _ = RefreshHistoryProjectionAsync(session);',
+            'projection reload call')
 
-          old = '''    if (historyProjectionChanged && !_monitor.IsRunning &&
-                !string.IsNullOrWhiteSpace(_sessionPathTextBox.Text))
-              {
-                try
-                {
-                  LocatedSession session = SessionLocator.FromPath(
-                    _sessionPathTextBox.Text,
-                    GetSelectedSource());
-                  _selectedSessionHistory = null;
-                  _selectedSessionHistoryPath = null;
-                  _ = LoadPausedHistoryPreviewAsync(session);
-                }
-                catch (Exception exception) when (
-                  exception is IOException or UnauthorizedAccessException or
-                  InvalidDataException or InvalidOperationException or ArgumentException)
-                {
-                  AppendLog($"Unable to rebuild transcript history: {exception.Message}");
-                }
-              }
-            }'''
-          new = '''    if (historyProjectionChanged &&
-                !string.IsNullOrWhiteSpace(_sessionPathTextBox.Text))
-              {
-                try
-                {
-                  LocatedSession session = SessionLocator.FromPath(
-                    _sessionPathTextBox.Text,
-                    GetSelectedSource());
-                  _ = RefreshHistoryProjectionAsync(session);
-                }
-                catch (Exception exception) when (
-                  exception is IOException or UnauthorizedAccessException or
-                  InvalidDataException or InvalidOperationException or ArgumentException)
-                {
-                  AppendLog($"Unable to rebuild transcript history: {exception.Message}");
-                }
-              }
-            }
-
-            /// <summary>
-            /// Reprojects the selected session after a Core-owned history/speech
-            /// option changes.  A running monitor is restarted around the same
-            /// canonical history load so future tail records and indexed history
-            /// use the identical projection options.
+          marker = '  private async Task LoadPausedHistoryPreviewAsync(LocatedSession session)\n'
+          helper = '''  /// <summary>
+            /// Reprojects a selected session after a Core-owned history/speech
+            /// option changes, restarting a live monitor around the same canonical
+            /// history load so indexed and future records use identical options.
             /// </summary>
             private async Task RefreshHistoryProjectionAsync(LocatedSession session)
             {
@@ -154,20 +129,23 @@ jobs:
 
               await StartMonitoringAsync(
                 resumePreindexedHistory: resumePlayback);
-            }'''
-          if text.count(old) != 1:
-            raise SystemExit('TranscriptSettingsChanged target did not match exactly')
-          main.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+            }
+
+          '''
+          text = replace_once(text, marker, helper + marker, 'projection helper insertion')
+          main.write_text(text, encoding='utf-8', newline='\n')
 
           test = Path('AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs')
           text = test.read_text(encoding='utf-8')
-          old = '''      if (form is not null)
+          text = replace_once(
+            text,
+            '''      if (form is not null)
                 {
                   GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
                     "issue26-regression-cleanup");
                   form.Dispose();
-                }'''
-          new = '''      if (form is not null && !form.IsDisposed)
+                }''',
+            '''      if (form is not null && !form.IsDisposed)
                 {
                   GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
                     "issue26-regression-cleanup");
@@ -187,10 +165,9 @@ jobs:
                     });
                   form.Dispose();
                   Application.DoEvents();
-                }'''
-          if text.count(old) != 1:
-            raise SystemExit('Issue26 cleanup target did not match exactly')
-          test.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+                }''',
+            'Issue26 cleanup')
+          test.write_text(text, encoding='utf-8', newline='\n')
           '@ | python -
 
       - name: Build and run focused regression
