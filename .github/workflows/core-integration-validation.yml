@@ -38,6 +38,10 @@ jobs:
             throw "Unexpected AIConversationCore submodule revision: $actual"
           }
 
+      - name: Install pinned AIConversationCore dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
       - name: Run pinned AIConversationCore regression tests
         shell: pwsh
         run: npm test --prefix dependencies/AIConversationCore
