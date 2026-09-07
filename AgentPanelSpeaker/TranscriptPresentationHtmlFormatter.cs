@@ -187,6 +187,10 @@ internal static class TranscriptPresentationHtmlFormatter
         EmitAnchors(output, node, emittedSourceIndexes);
         RenderAttachments(output, node);
         break;
+    case "user_context":
+      EmitAnchors(output, node, emittedSourceIndexes);
+      RenderUserContext(output, node, pipeline);
+      break;
       case "reasoning":
       case "markdown":
       case "commentary":
@@ -344,6 +348,40 @@ internal static class TranscriptPresentationHtmlFormatter
     }
     output.AppendLine("</code></pre>");
     output.AppendLine("</details>");
+  }
+
+  /// <summary>
+  /// Renders semantic User context as a nested blockquote/details disclosure.
+  /// </summary>
+  private static void RenderUserContext(
+    StringBuilder output,
+    JsonElement node,
+    MarkdownPipeline pipeline)
+  {
+    output.AppendLine("<blockquote class=\"user-context\">");
+    if (node.TryGetProperty("blocks", out JsonElement blocks) &&
+        blocks.ValueKind == JsonValueKind.Array)
+    {
+      foreach (JsonElement block in blocks.EnumerateArray())
+      {
+        string summary = GetString(block, "summary");
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+          summary = "# Context from my IDE setup:";
+        }
+        output.Append("<details class=\"user-context-details\" data-presentation-id=\"")
+          .Append(Html(GetString(node, "id")))
+          .AppendLine("\">");
+        output.Append("<summary>").Append(Html(summary)).AppendLine("</summary>");
+        string body = GetString(block, "text");
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+          output.Append(Markdown.ToHtml(body, pipeline));
+        }
+        output.AppendLine("</details>");
+      }
+    }
+    output.AppendLine("</blockquote>");
   }
 
   private static void RenderAttachments(StringBuilder output, JsonElement node)

@@ -126,12 +126,17 @@ function userChildren(event) {
     block?.type === 'attachment' ||
     block?.type === 'file'
   );
-  const body = blocks.filter(block => !attachments.includes(block));
+  const contexts = blocks.filter(block => block?.type === 'user_context');
+  const body = blocks.filter(block =>
+    !attachments.includes(block) && !contexts.includes(block));
   const children = [];
   if (attachments.length) {
     children.push(contentNode(event, 'attachments', attachments));
   }
-  if (body.length || !attachments.length) {
+  if (contexts.length) {
+    children.push(contentNode(event, 'user_context', contexts));
+  }
+  if (body.length || (!attachments.length && !contexts.length)) {
     children.push(contentNode(event, 'markdown', body));
   }
   return children;
@@ -280,9 +285,10 @@ function createSubagentTurn(event, turnIndex) {
  * Builds the provider-independent canonical presentation tree.
  *
  * User/Agent turns preserve canonical event order. Consecutive reasoning and
- * ordinary tool activity form one reasoning group. Visible Assistant
- * response/commentary closes the current reasoning group but remains inside the
- * same Agent turn. Later reasoning starts a new group in that same turn.
+ * ordinary tool activity form one reasoning group. Assistant commentary emitted
+ * while that reasoning group is active is part of the thought/tool activity and
+ * remains inside the group. A visible Assistant response closes the group but
+ * remains inside the same Agent turn. Later reasoning starts a new group.
  *
  * @param {Array<Object<string, *>>} events - Ordered canonical event stream.
  * @returns {Object<string, *>} Canonical presentation tree.
@@ -297,15 +303,6 @@ export function buildCanonicalPresentation(events) {
   let reasoningGroup = null;
   let reasoningGroupIndex = 0;
   const toolsByCallId = new Map();
-
-  /**
-   * Closes the current reasoning run without ending the surrounding turn.
-   *
-   * @returns {void} The active reasoning-group reference is cleared.
-   */
-  const closeReasoning = () => {
-    reasoningGroup = null;
-  };
 
   /**
    * Ensures that an Agent turn exists for the supplied event.
@@ -323,6 +320,15 @@ export function buildCanonicalPresentation(events) {
     }
     addTurnSource(currentTurn, event);
     return currentTurn;
+  };
+
+  /**
+   * Closes the current reasoning run without ending the surrounding turn.
+   *
+   * @returns {void} The active reasoning-group reference is cleared.
+   */
+  const closeReasoning = () => {
+    reasoningGroup = null;
   };
 
   /**
@@ -395,6 +401,9 @@ export function buildCanonicalPresentation(events) {
       const callId = toolCallId(event);
       const existing = callId ? toolsByCallId.get(callId) : null;
       if (existing) {
+        if (existing.interactive) {
+          closeReasoning();
+        }
         attachToolResult(existing, event);
         addTurnSource(ensureAgentTurn(event), event);
         const group = currentTurn?.children?.find(child =>
@@ -417,14 +426,22 @@ export function buildCanonicalPresentation(events) {
       continue;
     }
 
-    if ((event.kind === 'message' || event.kind === 'commentary') &&
-        event.role === 'assistant') {
+    if (event.kind === 'commentary' && event.role === 'assistant') {
+      if (reasoningGroup) {
+        ensureAgentTurn(event);
+        reasoningGroup.children.push(contentNode(event, 'commentary'));
+        reasoningGroup.source.push(sourceRef(event));
+      } else {
+        const turn = ensureAgentTurn(event);
+        turn.children.push(contentNode(event, 'commentary'));
+      }
+      continue;
+    }
+
+    if (event.kind === 'message' && event.role === 'assistant') {
       closeReasoning();
       const turn = ensureAgentTurn(event);
-      turn.children.push(contentNode(
-        event,
-        event.kind === 'commentary' ? 'commentary' : 'markdown'
-      ));
+      turn.children.push(contentNode(event, 'markdown'));
       continue;
     }
 
@@ -434,6 +451,8 @@ export function buildCanonicalPresentation(events) {
       turn.children.push(contentNode(event, 'notice'));
     }
   }
+
+  closeReasoning();
 
   return {
     schema_version: PRESENTATION_SCHEMA_VERSION,

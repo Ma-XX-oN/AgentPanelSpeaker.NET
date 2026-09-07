@@ -24,6 +24,38 @@ function source(record, sourceIndex) {
   };
 }
 
+/** Exact heading that starts the evidenced Codex IDE-context envelope. */
+const CODEX_IDE_CONTEXT_HEADING = '# Context from my IDE setup:';
+/** Exact heading that separates Codex IDE context from the actual User prompt. */
+const CODEX_REQUEST_HEADING = '## My request for Codex:';
+
+/**
+ * Splits evidenced Codex IDE context from the actual User prompt.
+ *
+ * The split is intentionally conservative: both the leading IDE-context heading
+ * and a line-delimited request heading must be present. Otherwise the complete
+ * source message remains ordinary User text so malformed/partial context is not
+ * silently discarded.
+ *
+ * @param {string} message - Raw Codex User message text.
+ * @returns {Object<string, string>|null} Separated context/prompt fields, or null when the evidenced envelope is absent.
+ */
+function splitCodexUserMessage(message) {
+  const normalized = String(message ?? '').replaceAll('\r\n', '\n');
+  if (normalized !== CODEX_IDE_CONTEXT_HEADING &&
+      !normalized.startsWith(`${CODEX_IDE_CONTEXT_HEADING}\n`)) return null;
+
+  const marker = `\n${CODEX_REQUEST_HEADING}\n`;
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const context = normalized.slice(CODEX_IDE_CONTEXT_HEADING.length, markerIndex)
+    .replace(/^\n+/, '')
+    .replace(/\n+$/, '');
+  const prompt = normalized.slice(markerIndex + marker.length).replace(/^\n+/, '');
+  return { context, prompt };
+}
+
 /**
  * Checks whether tool call.
  *
@@ -230,6 +262,40 @@ function messageEvent(record, sourceIndex, role, kind, channel, text, contentTyp
 }
 
 /**
+ * Builds a Codex User event while preserving IDE context as a semantic block.
+ *
+ * @param {Object<string, *>} record - Codex User source record.
+ * @param {number} sourceIndex - Zero-based source-record index.
+ * @returns {Object<string, *>} Canonical User message event.
+ */
+function userMessageEvent(record, sourceIndex) {
+  const message = record?.payload?.message ?? '';
+  const split = splitCodexUserMessage(message);
+  const event = messageEvent(record, sourceIndex, 'user', 'message', null,
+    split?.prompt ?? message, 'user_message');
+  if (!split) return event;
+
+  const sourceInfo = source(record, sourceIndex);
+  event.blocks = [
+    {
+      id: `codex:record:${sourceIndex}:message:user_context`,
+      type: 'user_context',
+      context_kind: 'ide_setup',
+      summary: CODEX_IDE_CONTEXT_HEADING,
+      text: split.context,
+      source: sourceInfo
+    },
+    {
+      id: `codex:record:${sourceIndex}:message:block`,
+      type: 'text',
+      text: split.prompt,
+      source: sourceInfo
+    }
+  ];
+  return event;
+}
+
+/**
  * Adapts Codex records without applying branch-history semantics.
  *
  * @param {Array<Object<string, *>>} records - Ordered Codex source records.
@@ -249,8 +315,7 @@ function adaptBaseCodexRecords(records) {
 
     if (record.type !== 'event_msg') return;
     if (payload.type === 'user_message' && typeof payload.message === 'string') {
-      events.push(messageEvent(record, sourceIndex, 'user', 'message', null,
-        payload.message, 'user_message'));
+      events.push(userMessageEvent(record, sourceIndex));
       return;
     }
     if (payload.type === 'agent_reasoning' && typeof payload.text === 'string') {

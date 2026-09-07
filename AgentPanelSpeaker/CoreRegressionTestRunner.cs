@@ -1,3 +1,4 @@
+using Markdig;
 using System.Text.Json;
 
 namespace AgentPanelSpeaker;
@@ -19,6 +20,7 @@ internal static class CoreRegressionTestRunner
       ("core/claude-leading-injected-context", TestClaudeLeadingInjectedContext),
       ("core/codex-revision-default-hidden", TestCodexRevisionDefaultHidden),
       ("core/codex-revision-opt-in", TestCodexRevisionOptIn),
+      ("core/codex-user-context-markdown-html-parity", TestCodexUserContextMarkdownHtmlParity),
       ("core/codex-commentary-inside-reasoning-group",
         TestCodexCommentaryInsideReasoningGroup),
       ("core/codex-session-index-title", TestCodexSessionIndexTitle),
@@ -172,6 +174,80 @@ internal static class CoreRegressionTestRunner
       "Opt-in Codex history omitted the original prompt.");
     Require(projection.Markdown.Contains("## User (edited)", StringComparison.Ordinal),
       "Opt-in Codex history omitted the edited label.");
+  }
+
+  /// <summary>
+  /// Verifies one Codex IDE-context record in canonical Markdown and direct HTML.
+  /// </summary>
+  private static void TestCodexUserContextMarkdownHtmlParity()
+  {
+    const string prompt = "I'm doing some testing. What time is it in Paris?";
+    const string sourceMessage =
+      "# Context from my IDE setup:\n\n" +
+      "## Active file: sessions/example.jsonl\n\n" +
+      "## Active selection of the file:\n" +
+      " the repo instructions and the current transcript script first\n" +
+      "## Open tabs:\n" +
+      "- example.jsonl: sessions/example.jsonl\n\n" +
+      "## My request for Codex:\n" + prompt;
+    string record = JsonSerializer.Serialize(new
+    {
+      type = "event_msg",
+      timestamp = "2026-09-06T15:17:11.000Z",
+      payload = new { type = "user_message", message = sourceMessage }
+    });
+
+    using var client = new AIConversationCoreClient();
+    AIConversationProjection projection = client.Project(AgentSource.Codex, new[] { record });
+    string markdown = projection.Markdown;
+    int mdStart = markdown.IndexOf("> <details><summary># Context from my IDE setup:</summary>", StringComparison.Ordinal);
+    int mdEnd = markdown.IndexOf("> </details>", Math.Max(0, mdStart), StringComparison.Ordinal);
+    int mdPrompt = markdown.IndexOf(prompt, StringComparison.Ordinal);
+    Require(mdStart >= 0, "Markdown omitted blockquoted context details.");
+    Require(mdEnd > mdStart && mdPrompt > mdEnd, "Markdown prompt is not after/outside context details.");
+    Require(!markdown.Contains("## My request for Codex:", StringComparison.Ordinal), "Request marker leaked into Markdown.");
+    int mdFile = markdown.IndexOf("## Active file:", StringComparison.Ordinal);
+    int mdSelection = markdown.IndexOf("## Active selection of the file:", StringComparison.Ordinal);
+    int mdTabs = markdown.IndexOf("## Open tabs:", StringComparison.Ordinal);
+    Require(mdFile >= 0 && mdFile < mdSelection && mdSelection < mdTabs, "Markdown changed context order.");
+
+    string root = Path.Combine(Path.GetTempPath(), $"AgentPanelSpeaker-user-context-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+      string path = Path.Combine(root, "context.jsonl");
+      File.WriteAllText(path, record + Environment.NewLine);
+      var pipeline = new MarkdownPipelineBuilder().Build();
+      string html = TranscriptPresentationHtmlFormatter.Format(path, AgentSource.Codex, pipeline);
+      int htmlStart = html.IndexOf("<details class=\"user-context-details\"", StringComparison.Ordinal);
+      int htmlEnd = html.IndexOf("</details>", Math.Max(0, htmlStart), StringComparison.Ordinal);
+      int nestedQuote = html.IndexOf("<blockquote class=\"user-context\">", StringComparison.Ordinal);
+      int quoteEnd = html.IndexOf("</blockquote>", Math.Max(0, htmlEnd), StringComparison.Ordinal);
+      int htmlPrompt = html.IndexOf(prompt, StringComparison.Ordinal);
+      Require(nestedQuote >= 0 && htmlStart > nestedQuote, "HTML omitted context blockquote/details.");
+      Require(html.Contains("<summary># Context from my IDE setup:</summary>", StringComparison.Ordinal), "HTML changed context summary.");
+      Require(htmlEnd > htmlStart && quoteEnd > htmlEnd && htmlPrompt > quoteEnd, "HTML prompt is not after/outside context disclosure.");
+      Require(!html.Contains("## My request for Codex:", StringComparison.Ordinal), "Request marker leaked into HTML.");
+      int htmlFile = html.IndexOf("Active file:", StringComparison.Ordinal);
+      int htmlSelection = html.IndexOf("Active selection of the file:", StringComparison.Ordinal);
+      int htmlTabs = html.IndexOf("Open tabs:", StringComparison.Ordinal);
+      Require(htmlFile >= 0 && htmlFile < htmlSelection && htmlSelection < htmlTabs, "HTML changed context order.");
+
+      string plainRecord = JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-06T15:18:00.000Z",
+        payload = new { type = "user_message", message = "Plain user prompt." }
+      });
+      string plainPath = Path.Combine(root, "plain.jsonl");
+      File.WriteAllText(plainPath, plainRecord + Environment.NewLine);
+      string plainHtml = TranscriptPresentationHtmlFormatter.Format(plainPath, AgentSource.Codex, pipeline);
+      Require(!plainHtml.Contains("user-context", StringComparison.Ordinal), "No-context User emitted context HTML.");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
   }
 
   /// <summary>
