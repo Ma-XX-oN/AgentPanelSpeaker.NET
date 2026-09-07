@@ -232,7 +232,6 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
   /// </summary>
   private static void TestWholeListItemHighlight()
   {
-    ApplicationConfiguration.Initialize();
     using var host = new Form
     {
       Width = 640,
