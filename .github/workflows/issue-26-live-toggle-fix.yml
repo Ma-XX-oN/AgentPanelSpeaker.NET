@@ -10,8 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ github.event.head_commit.message != 'fix: wire live user context toggle' }}
-    runs-on: windows-2025
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,15 +205,14 @@ jobs:
           dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test environment
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Commit production fix
+      - name: Commit production fix and remove helper workflow
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/issue-26-live-toggle-fix.yml
           git add AgentPanelSpeaker/SettingsChangeSet.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (git diff --cached --quiet)) {
-            git commit -m "fix: wire live user context toggle"
-            git push origin HEAD:feature/aiconversationcore-integration
-          }
+          git commit -m "fix: wire live user context toggle"
+          git push origin HEAD:feature/aiconversationcore-integration
