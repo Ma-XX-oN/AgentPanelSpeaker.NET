@@ -228,9 +228,14 @@ private static void TestLiveMonitorToggle()
       GetField<JsonlSessionMonitor>(form, "_monitor");
     SpeechService speech = GetField<SpeechService>(form, "_speech");
     WaitUntil(
-      () => monitor.IsRunning &&
-        ReadSpeechHistoryCategories(speech).SequenceEqual(
-          new[] { ContentCategory.UserContext, ContentCategory.User }),
+      () =>
+      {
+        IReadOnlyList<ContentCategory> categories =
+          ReadSpeechHistoryCategories(speech);
+        return monitor.IsRunning &&
+          categories.Contains(ContentCategory.UserContext) &&
+          categories.Contains(ContentCategory.User);
+      },
       "SpeakUserContext OFF must retain User Context in indexed speech history.");
 
     SpeechFragment[] initialHistory = ReadSpeechHistoryFragments(speech);
