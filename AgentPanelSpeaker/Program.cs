@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace AgentPanelSpeaker;
 
 internal static class Program
@@ -62,10 +64,24 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(args[1], "speech-ordinals-focused", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue24SpeechOrdinalRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "speech-ordinals-production", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue24ProductionPathRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "speech-ordinals", StringComparison.OrdinalIgnoreCase))
       {
-        int focused = Issue24SpeechOrdinalRegressionTestRunner.Run();
-        int production = Issue24ProductionPathRegressionTestRunner.Run();
+        int focused = RunIsolatedTestSuite("speech-ordinals-focused");
+        int production = RunIsolatedTestSuite("speech-ordinals-production");
         Environment.ExitCode = focused == 0 && production == 0 ? 0 : 1;
         return;
       }
@@ -87,18 +103,22 @@ internal static class Program
       int extended = ExtendedRegressionTestRunner.Run();
       int additional = AdditionalRegressionTestRunner.Run();
       int core = CoreRegressionTestRunner.Run();
-      int speechOrdinals = Issue24SpeechOrdinalRegressionTestRunner.Run();
-      int userContextSpeech = Issue26UserContextSpeechRegressionTestRunner.Run();
-      int environment = EnvironmentRegressionTestRunner.Run();
-      // The WebView acceptance suite intentionally runs last. It constructs and
-      // tears down embedded browser instances and must not be allowed to affect
-      // otherwise independent environment-construction tests in this process.
-      int speechOrdinalProduction = Issue24ProductionPathRegressionTestRunner.Run();
+
+      // UI-bearing suites run in fresh processes. MainForm and WebView2 schedule
+      // continuations on the WinForms synchronization context; disposing one
+      // test's controls must never be able to poison another acceptance test.
+      // Process isolation makes the test boundary match the application
+      // lifecycle rather than relying on timing-sensitive message pumping.
+      int speechOrdinalsFocused = RunIsolatedTestSuite("speech-ordinals-focused");
+      int userContextSpeech = RunIsolatedTestSuite("user-context-speech");
+      int environment = RunIsolatedTestSuite("environment");
+      int speechOrdinalProduction = RunIsolatedTestSuite("speech-ordinals-production");
+
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
                              additional == 0 &&
                              core == 0 &&
-                             speechOrdinals == 0 &&
+                             speechOrdinalsFocused == 0 &&
                              userContextSpeech == 0 &&
                              environment == 0 &&
                              speechOrdinalProduction == 0
@@ -141,5 +161,38 @@ internal static class Program
 
     ApplicationConfiguration.Initialize();
     Application.Run(new MainForm());
+  }
+
+  /// <summary>
+  /// Runs one UI-bearing regression suite in a fresh copy of this executable.
+  /// The child inherits stdout/stderr so CI retains the suite's normal evidence.
+  /// </summary>
+  private static int RunIsolatedTestSuite(string suite)
+  {
+    string? executable = Environment.ProcessPath;
+    if (string.IsNullOrWhiteSpace(executable))
+    {
+      Console.Error.WriteLine(
+        $"FAIL  test-isolation/{suite}: current executable path is unavailable.");
+      return 1;
+    }
+
+    using var process = new Process
+    {
+      StartInfo = new ProcessStartInfo
+      {
+        FileName = executable,
+        UseShellExecute = false
+      }
+    };
+    process.StartInfo.ArgumentList.Add("--test");
+    process.StartInfo.ArgumentList.Add(suite);
+    if (!process.Start())
+    {
+      Console.Error.WriteLine($"FAIL  test-isolation/{suite}: process did not start.");
+      return 1;
+    }
+    process.WaitForExit();
+    return process.ExitCode;
   }
 }
