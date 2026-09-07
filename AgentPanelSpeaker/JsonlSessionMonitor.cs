@@ -773,7 +773,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
     EligibleHistory eligibleHistory = ReadEligibleHistory(
       session,
       pendingInputRequests,
-      includeRolledBackTurns);
+      includeRolledBackTurns,
+      includeUserContext);
     foreach (ExtractedNode node in eligibleHistory.Nodes)
     {
       ProcessNode(
@@ -812,6 +813,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     LocatedSession session,
     IDictionary<string, CodexInputRequest> pendingInputRequests,
     bool includeRolledBackTurns,
+    bool includeUserContext,
     DateTime? minimumTimestampUtc = null)
   {
     pendingInputRequests.Clear();
