@@ -1,5 +1,4 @@
 from pathlib import Path
-import runpy
 
 root = Path(__file__).resolve().parents[1]
 path = root / "AgentPanelSpeaker/JsonlSessionMonitor.cs"
@@ -31,4 +30,6 @@ for old, new in replacements:
   text = text.replace(old, new)
 
 path.write_text(text, encoding="utf-8", newline="\n")
-runpy.run_path(str(root / "scripts/patch-issue26-user-context-speech.py"), run_name="__main__")
+
+main_path = root / "scripts/patch-issue26-user-context-speech.py"
+main = main_path.read_text(encoding="utf-8")n
