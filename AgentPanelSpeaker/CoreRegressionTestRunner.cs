@@ -20,7 +20,7 @@ internal static class CoreRegressionTestRunner
       ("core/claude-leading-injected-context", TestClaudeLeadingInjectedContext),
       ("core/codex-revision-default-hidden", TestCodexRevisionDefaultHidden),
       ("core/codex-revision-opt-in", TestCodexRevisionOptIn),
-      ("core/codex-user-context-markdown-html-parity", TestCodexUserContextMarkdownHtmlParity),
+      ("core/codex-user-context-production-display", TestCodexUserContextMarkdownHtmlParity),
       ("core/codex-commentary-inside-reasoning-group",
         TestCodexCommentaryInsideReasoningGroup),
       ("core/codex-session-index-title", TestCodexSessionIndexTitle),
@@ -177,11 +177,13 @@ internal static class CoreRegressionTestRunner
   }
 
   /// <summary>
-  /// Verifies one Codex IDE-context record in canonical Markdown and direct HTML.
+  /// Verifies one Codex IDE-context record through canonical Markdown, the
+  /// legacy direct-HTML formatter, and the real production DOM/virtual-document
+  /// path used by TranscriptView.
   /// </summary>
   private static void TestCodexUserContextMarkdownHtmlParity()
   {
-    const string prompt = "I'm doing some testing. What time is it in Paris?";
+    const string prompt = "I'm doing some testing.  What time is it in Paris?";
     const string sourceMessage =
       "# Context from my IDE setup:\n\n" +
       "## Active file: sessions/example.jsonl\n\n" +
@@ -233,6 +235,38 @@ internal static class CoreRegressionTestRunner
       int htmlTabs = html.IndexOf("Open tabs:", StringComparison.Ordinal);
       Require(htmlFile >= 0 && htmlFile < htmlSelection && htmlSelection < htmlTabs, "HTML changed context order.");
 
+      TranscriptPresentationDomResult production =
+        TranscriptPresentationDomFormatter.Format(path, AgentSource.Codex, pipeline);
+      string productionHtml = production.Html;
+      int productionStart = productionHtml.IndexOf(
+        "<details class=\"user-context-details\"",
+        StringComparison.Ordinal);
+      int productionEnd = productionHtml.IndexOf(
+        "</details>",
+        Math.Max(0, productionStart),
+        StringComparison.Ordinal);
+      int productionPrompt = productionHtml.IndexOf(prompt, StringComparison.Ordinal);
+      Require(productionStart >= 0,
+        "Production DOM formatter omitted Codex IDE context.");
+      Require(productionHtml.Contains(
+          "<summary># Context from my IDE setup:</summary>",
+          StringComparison.Ordinal),
+        "Production DOM formatter changed context summary.");
+      Require(productionEnd > productionStart && productionPrompt > productionEnd,
+        "Production DOM formatter did not keep prompt after/outside context details.");
+      Require(!productionHtml.Contains("## My request for Codex:", StringComparison.Ordinal),
+        "Production DOM formatter leaked the removed request marker.");
+
+      TranscriptVirtualDocument virtualDocument =
+        TranscriptVirtualDocument.Build(productionHtml);
+      string displayedHtml = virtualDocument.CreateFullWindow().Html;
+      Require(displayedHtml.Contains(
+          "<details class=\"user-context-details\"",
+          StringComparison.Ordinal),
+        "Production virtual document dropped Codex IDE context.");
+      Require(displayedHtml.Contains(prompt, StringComparison.Ordinal),
+        "Production virtual document dropped the actual User prompt.");
+
       string plainRecord = JsonSerializer.Serialize(new
       {
         type = "event_msg",
@@ -243,6 +277,10 @@ internal static class CoreRegressionTestRunner
       File.WriteAllText(plainPath, plainRecord + Environment.NewLine);
       string plainHtml = TranscriptPresentationHtmlFormatter.Format(plainPath, AgentSource.Codex, pipeline);
       Require(!plainHtml.Contains("user-context", StringComparison.Ordinal), "No-context User emitted context HTML.");
+      TranscriptPresentationDomResult plainProduction =
+        TranscriptPresentationDomFormatter.Format(plainPath, AgentSource.Codex, pipeline);
+      Require(!plainProduction.Html.Contains("user-context", StringComparison.Ordinal),
+        "No-context User emitted context in the production DOM path.");
     }
     finally
     {
