@@ -15,12 +15,17 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     "Shows Codex turns that were rolled back or superseded. Historical " +
     "revisions are hidden by default; enabling this includes original, " +
     "superseded, edited, and aborted revision state in the transcript.";
+  private const string UserContextDescription =
+    "Includes Core-identified User/IDE context in speech before the actual " +
+    "User prompt. The context uses the User Context voice profile. This does " +
+    "not change whether the context is shown in the transcript.";
 
   private readonly Label _description;
   private readonly TableLayoutPanel _layout;
   private readonly TrackBar _queueCapacitySlider = new();
   private readonly Label _queueCapacityValue = new();
   private readonly CheckBox _showRolledBackCheckBox = new();
+  private readonly CheckBox _speakUserContextCheckBox = new();
   private bool _adjustingLayout;
   private int _lastMeasuredTextWidth = -1;
   private int _lastMeasuredDpi = -1;
@@ -93,6 +98,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     _showRolledBackCheckBox.AccessibleName = "Show rolled-back Codex history";
     _showRolledBackCheckBox.AccessibleDescription = RolledBackDescription;
 
+    _speakUserContextCheckBox.AutoSize = true;
+    _speakUserContextCheckBox.Dock = DockStyle.Top;
+    _speakUserContextCheckBox.Margin = new Padding(0, 8, 0, 0);
+    _speakUserContextCheckBox.Text = "Speak User / IDE context";
+    _speakUserContextCheckBox.TabIndex = 2;
+    _speakUserContextCheckBox.AccessibleName = "Speak User or IDE context";
+    _speakUserContextCheckBox.AccessibleDescription = UserContextDescription;
+
     var scaleLabels = new TableLayoutPanel
     {
       ColumnCount = 2,
@@ -134,7 +147,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       ColumnCount = 1,
-      RowCount = 6,
+      RowCount = 7,
       Dock = DockStyle.Top,
       Padding = new Padding(14)
     };
@@ -145,12 +158,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
     _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
     _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _layout.Controls.Add(title, 0, 0);
     _layout.Controls.Add(settingTitle, 0, 1);
     _layout.Controls.Add(_description, 0, 2);
     _layout.Controls.Add(sliderLayout, 0, 3);
     _layout.Controls.Add(scaleLabels, 0, 4);
     _layout.Controls.Add(_showRolledBackCheckBox, 0, 5);
+    _layout.Controls.Add(_speakUserContextCheckBox, 0, 6);
     Controls.Add(_layout);
     RecalculateLayout(force: true);
 
@@ -160,6 +175,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       PublishValueChanged();
     };
     _showRolledBackCheckBox.CheckedChanged += (_, _) => PublishValueChanged();
+    _speakUserContextCheckBox.CheckedChanged += (_, _) => PublishValueChanged();
 
     Paint += PaintBorder;
   }
@@ -169,14 +185,19 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
 
   public int QueueCapacity => _queueCapacitySlider.Value;
   public bool ShowRolledBackHistory => _showRolledBackCheckBox.Checked;
+  public bool SpeakUserContext => _speakUserContextCheckBox.Checked;
 
-  public void SetSettings(int capacity, bool showRolledBackHistory)
+  public void SetSettings(
+    int capacity,
+    bool showRolledBackHistory,
+    bool speakUserContext)
   {
     _updating = true;
     try
     {
       _queueCapacitySlider.Value = Math.Clamp(capacity, 1, 16);
       _showRolledBackCheckBox.Checked = showRolledBackHistory;
+      _speakUserContextCheckBox.Checked = speakUserContext;
       UpdateValueText();
     }
     finally
@@ -187,7 +208,7 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
 
   public void SetQueueCapacity(int capacity)
   {
-    SetSettings(capacity, ShowRolledBackHistory);
+    SetSettings(capacity, ShowRolledBackHistory, SpeakUserContext);
   }
 
   public void ApplyTheme(bool dark)
