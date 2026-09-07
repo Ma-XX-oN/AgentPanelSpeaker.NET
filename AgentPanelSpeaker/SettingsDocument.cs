@@ -5,7 +5,7 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed record SettingsDocument
 {
-  public const int CurrentSchemaVersion = 16;
+  public const int CurrentSchemaVersion = 17;
 
   public int SchemaVersion { get; init; } = CurrentSchemaVersion;
   public SessionSettingsDocument Session { get; init; } = new();

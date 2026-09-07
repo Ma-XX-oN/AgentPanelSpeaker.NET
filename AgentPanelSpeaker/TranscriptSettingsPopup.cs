@@ -152,7 +152,9 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
         8);
       if (_advancedPopup is { IsDisposed: false } advancedPopup)
       {
-        advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);
+        advancedPopup.SetSettings(
+        Settings.HighlightQueueCapacity,
+        Settings.ShowRolledBackHistory);
       }
       UpdateDisplays();
     }
@@ -216,7 +218,9 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     if (_advancedPopup is { IsDisposed: false } advancedPopup)
     {
       advancedPopup.ApplyTheme(dark);
-      advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);
+      advancedPopup.SetSettings(
+        Settings.HighlightQueueCapacity,
+        Settings.ShowRolledBackHistory);
     }
     UpdateDisplays();
     Invalidate(true);
@@ -458,7 +462,8 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     {
       Settings = (Settings with
       {
-        HighlightQueueCapacity = popup.QueueCapacity
+        HighlightQueueCapacity = popup.QueueCapacity,
+        ShowRolledBackHistory = popup.ShowRolledBackHistory
       }).Normalize();
       SettingsChanged?.Invoke(this, EventArgs.Empty);
     };

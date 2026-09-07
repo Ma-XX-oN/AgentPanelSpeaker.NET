@@ -11,7 +11,7 @@ internal static class Program
     Volatile.Read(ref _externalTerminationRequested) != 0;
 
   /// <summary>
-  /// Starts the Windows Forms application.
+  /// Starts the Windows Forms application or a command-line worker/test mode.
   /// </summary>
   [STAThread]
   private static void Main(string[] args)
@@ -19,6 +19,64 @@ internal static class Program
     if (args.Length == 1 && args[0] == "--regex-search-worker")
     {
       Environment.ExitCode = RegexSearchWorker.Run();
+      return;
+    }
+
+    if (args.Length >= 1 && args[0] == "--test")
+    {
+      if (args.Length > 2)
+      {
+        Console.Error.WriteLine("Usage: AgentPanelSpeaker.exe --test [suite]");
+        Environment.ExitCode = 2;
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "extended", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = ExtendedRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "additional", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = AdditionalRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "environment", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = EnvironmentRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "core", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = CoreRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2)
+      {
+        Environment.ExitCode = RegressionTestRunner.Run(args[1]);
+        return;
+      }
+
+      int primary = RegressionTestRunner.Run();
+      int extended = ExtendedRegressionTestRunner.Run();
+      int additional = AdditionalRegressionTestRunner.Run();
+      int core = CoreRegressionTestRunner.Run();
+      int environment = EnvironmentRegressionTestRunner.Run();
+      Environment.ExitCode = primary == 0 &&
+                             extended == 0 &&
+                             additional == 0 &&
+                             core == 0 &&
+                             environment == 0
+        ? 0
+        : 1;
       return;
     }
 

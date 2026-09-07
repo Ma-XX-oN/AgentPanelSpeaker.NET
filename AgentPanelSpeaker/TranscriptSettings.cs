@@ -11,7 +11,8 @@ internal sealed record TranscriptSettings(
   int FadeMilliseconds,
   int HighlightUpdateMilliseconds,
   int HighlightQueueCapacity,
-  bool Maximized)
+  bool Maximized,
+  bool ShowRolledBackHistory)
 {
   public static TranscriptSettings Default { get; } = new(
     FollowSpeech: true,
@@ -20,7 +21,8 @@ internal sealed record TranscriptSettings(
     FadeMilliseconds: 250,
     HighlightUpdateMilliseconds: 10,
     HighlightQueueCapacity: 1,
-    Maximized: false);
+    Maximized: false,
+    ShowRolledBackHistory: false);
 
   public TranscriptSettings Normalize()
   {
