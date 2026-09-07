@@ -176,104 +176,140 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
   }
 
   /// <summary>
-  /// Reproduces the user-visible failure: changing Speak User / IDE context
-  /// while the real MainForm monitor is already running must rebuild the live
-  /// speech history immediately, without requiring an application restart.
-  /// </summary>
-  private static void TestLiveMonitorToggle()
+/// Verifies User Context is always indexed once Core has classified it,
+/// while the UI switch changes only final playback eligibility. Toggling
+/// must not rebuild canonical history or restart the live monitor.
+/// </summary>
+private static void TestLiveMonitorToggle()
+{
+  const string prompt = "What time is it in Paris?";
+  const string sourceMessage =
+    "# Context from my IDE setup:\n\n" +
+    "## Active file: sessions/example.jsonl\n\n" +
+    "## Open tabs:\n" +
+    "- sessions/example.jsonl\n\n" +
+    "## My request for Codex:\n" + prompt;
+  string record = JsonSerializer.Serialize(new
   {
-    const string prompt = "What time is it in Paris?";
-    const string sourceMessage =
-      "# Context from my IDE setup:\n\n" +
-      "## Active file: sessions/example.jsonl\n\n" +
-      "## Open tabs:\n" +
-      "- sessions/example.jsonl\n\n" +
-      "## My request for Codex:\n" + prompt;
-    string record = JsonSerializer.Serialize(new
+    type = "event_msg",
+    timestamp = "2026-09-07T00:00:00Z",
+    payload = new { type = "user_message", message = sourceMessage }
+  });
+
+  string directory = Path.Combine(
+    Path.GetTempPath(),
+    "AgentPanelSpeaker-Issue26-" + Guid.NewGuid().ToString("N"));
+  Directory.CreateDirectory(directory);
+  string path = Path.Combine(directory, "rollout-issue26.jsonl");
+  File.WriteAllText(path, record + Environment.NewLine);
+
+  MainForm? form = null;
+  try
+  {
+    form = new MainForm();
+    _ = form.Handle;
+
+    SetField(form, "_loadingSettings", true);
+    GetField<ComboBox>(form, "_sourceComboBox").SelectedItem =
+      AgentSource.Codex;
+    GetField<TextBox>(form, "_sessionPathTextBox").Text = path;
+    GetField<CheckBox>(form, "_followLatestCheckBox").Checked = false;
+    GetField<CheckBox>(form, "_speakExistingCheckBox").Checked = false;
+    SetField(form, "_pathIsManual", true);
+    TranscriptSettingsPopup popup =
+      GetField<TranscriptSettingsPopup>(form, "_transcriptSettingsPopup");
+    popup.SetSettings(
+      popup.Settings with { SpeakUserContext = false },
+      dark: false);
+    SetField(form, "_loadingSettings", false);
+
+    InvokeTask(form, "StartMonitoringAsync").GetAwaiter().GetResult();
+    JsonlSessionMonitor monitor =
+      GetField<JsonlSessionMonitor>(form, "_monitor");
+    SpeechService speech = GetField<SpeechService>(form, "_speech");
+    WaitUntil(
+      () => monitor.IsRunning &&
+        ReadSpeechHistoryCategories(speech).SequenceEqual(
+          new[] { ContentCategory.UserContext, ContentCategory.User }),
+      "SpeakUserContext OFF must retain User Context in indexed speech history.");
+
+    SpeechFragment[] initialHistory = ReadSpeechHistoryFragments(speech);
+    SpeechFragment context = initialHistory.First(fragment =>
+      fragment.Category == ContentCategory.UserContext);
+    SpeechFragment user = initialHistory.First(fragment =>
+      fragment.Category == ContentCategory.User);
+    int monitorSession = GetField<int>(form, "_monitorSession");
+    int previewGeneration = GetField<int>(form, "_historyPreviewGeneration");
+
+    Require(
+      !speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
+      "SpeakUserContext OFF left indexed User Context eligible for playback.");
+    Require(
+      speech.TrySeekToTranscriptWord(user.NodeId, 0, out _),
+      "SpeakUserContext OFF made the actual User prompt ineligible.");
+    speech.MoveToPausedLiveEnd();
+
+    popup.SetSettings(
+      popup.Settings with { SpeakUserContext = true },
+      dark: false);
+    InvokeVoid(form, "TranscriptSettingsChanged");
+    Application.DoEvents();
+
+    Require(monitor.IsRunning,
+      "Enabling SpeakUserContext stopped the live monitor.");
+    Require(GetField<int>(form, "_monitorSession") == monitorSession,
+      "Enabling SpeakUserContext restarted the live monitor.");
+    Require(
+      GetField<int>(form, "_historyPreviewGeneration") == previewGeneration,
+      "Enabling SpeakUserContext rebuilt canonical history.");
+    Require(
+      ReadSpeechHistoryFragments(speech)
+        .Select(fragment => (fragment.NodeId, fragment.Category, fragment.Text))
+        .SequenceEqual(initialHistory.Select(fragment =>
+          (fragment.NodeId, fragment.Category, fragment.Text))),
+      "Enabling SpeakUserContext changed already-indexed speech history.");
+    Require(
+      speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
+      "SpeakUserContext ON did not make retained User Context playback-eligible.");
+    speech.MoveToPausedLiveEnd();
+
+    popup.SetSettings(
+      popup.Settings with { SpeakUserContext = false },
+      dark: false);
+    InvokeVoid(form, "TranscriptSettingsChanged");
+    Application.DoEvents();
+
+    Require(monitor.IsRunning,
+      "Disabling SpeakUserContext stopped the live monitor.");
+    Require(GetField<int>(form, "_monitorSession") == monitorSession,
+      "Disabling SpeakUserContext restarted the live monitor.");
+    Require(
+      GetField<int>(form, "_historyPreviewGeneration") == previewGeneration,
+      "Disabling SpeakUserContext rebuilt canonical history.");
+    Require(
+      !speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
+      "SpeakUserContext OFF did not immediately suppress retained User Context.");
+  }
+  finally
+  {
+    if (form is not null)
     {
-      type = "event_msg",
-      timestamp = "2026-09-07T00:00:00Z",
-      payload = new { type = "user_message", message = sourceMessage }
-    });
-
-    string directory = Path.Combine(
-      Path.GetTempPath(),
-      "AgentPanelSpeaker-Issue26-" + Guid.NewGuid().ToString("N"));
-    Directory.CreateDirectory(directory);
-    string path = Path.Combine(directory, "rollout-issue26.jsonl");
-    File.WriteAllText(path, record + Environment.NewLine);
-
-    MainForm? form = null;
+      GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
+        "issue26-regression-cleanup");
+      form.Dispose();
+    }
     try
     {
-      form = new MainForm();
-      _ = form.Handle;
-
-      SetField(form, "_loadingSettings", true);
-      GetField<ComboBox>(form, "_sourceComboBox").SelectedItem =
-        AgentSource.Codex;
-      GetField<TextBox>(form, "_sessionPathTextBox").Text = path;
-      GetField<CheckBox>(form, "_followLatestCheckBox").Checked = false;
-      GetField<CheckBox>(form, "_speakExistingCheckBox").Checked = false;
-      SetField(form, "_pathIsManual", true);
-      TranscriptSettingsPopup popup =
-        GetField<TranscriptSettingsPopup>(form, "_transcriptSettingsPopup");
-      popup.SetSettings(
-        popup.Settings with { SpeakUserContext = false },
-        dark: false);
-      SetField(form, "_loadingSettings", false);
-
-      InvokeTask(form, "StartMonitoringAsync").GetAwaiter().GetResult();
-      JsonlSessionMonitor monitor =
-        GetField<JsonlSessionMonitor>(form, "_monitor");
-      SpeechService speech = GetField<SpeechService>(form, "_speech");
-      WaitUntil(
-        () => monitor.IsRunning &&
-          ReadSpeechHistoryCategories(speech).SequenceEqual(
-            new[] { ContentCategory.User }),
-        "Initial running monitor did not load prompt-only speech history.");
-
-      popup.SetSettings(
-        popup.Settings with { SpeakUserContext = true },
-        dark: false);
-      InvokeVoid(form, "TranscriptSettingsChanged");
-      WaitUntil(
-        () => monitor.IsRunning &&
-          ReadSpeechHistoryCategories(speech).SequenceEqual(
-            new[] { ContentCategory.UserContext, ContentCategory.User }),
-        "Enabling SpeakUserContext while monitoring did not rebuild live speech history.");
-
-      InvokeVoid(form, "SaveControlsToSettings");
-      popup.SetSettings(
-        popup.Settings with { SpeakUserContext = false },
-        dark: false);
-      InvokeVoid(form, "TranscriptSettingsChanged");
-      WaitUntil(
-        () => monitor.IsRunning &&
-          ReadSpeechHistoryCategories(speech).SequenceEqual(
-            new[] { ContentCategory.User }),
-        "Disabling SpeakUserContext while monitoring did not rebuild live speech history.");
+      Directory.Delete(directory, recursive: true);
     }
-    finally
+    catch (IOException)
     {
-      if (form is not null)
-      {
-        GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
-          "issue26-regression-cleanup");
-        form.Dispose();
-      }
-      try
-      {
-        Directory.Delete(directory, recursive: true);
-      }
-      catch (IOException)
-      {
-      }
-      catch (UnauthorizedAccessException)
-      {
-      }
+    }
+    catch (UnauthorizedAccessException)
+    {
     }
   }
+}
 
   /// <summary>
   /// Creates project options by the production record constructor while keeping
@@ -333,6 +369,25 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
   /// <summary>
   /// Reads the actual SpeechService history used by playback.
   /// </summary>
+  /// <summary>
+/// Reads the actual retained SpeechService fragments used by playback.
+/// </summary>
+private static SpeechFragment[] ReadSpeechHistoryFragments(
+  SpeechService speech)
+{
+  FieldInfo historyField = typeof(SpeechService).GetField(
+    "_history",
+    BindingFlags.Instance | BindingFlags.NonPublic) ??
+    throw new InvalidOperationException(
+      "SpeechService history field was not found.");
+  if (historyField.GetValue(speech) is not IEnumerable history)
+  {
+    throw new InvalidOperationException(
+      "SpeechService history is not enumerable.");
+  }
+  return history.Cast<SpeechFragment>().ToArray();
+}
+
   private static IReadOnlyList<ContentCategory> ReadSpeechHistoryCategories(
     SpeechService speech)
   {
