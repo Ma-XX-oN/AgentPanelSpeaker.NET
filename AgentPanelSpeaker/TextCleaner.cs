@@ -784,12 +784,3 @@ internal sealed record SpeechTextPart(
   int FenceLineCount,
   bool PauseAfter,
   SpeechTextStyle Style);
-
-/// <summary>
-/// Identifies whether cleaned speech text belongs to primary or contextual UI.
-/// </summary>
-internal enum SpeechTextStyle
-{
-  Main,
-  Context
-}
