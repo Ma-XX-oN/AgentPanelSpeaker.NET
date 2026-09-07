@@ -31,6 +31,8 @@ internal static class Program
         return;
       }
 
+      ApplicationConfiguration.Initialize();
+
       if (args.Length == 2 &&
           string.Equals(args[1], "extended", StringComparison.OrdinalIgnoreCase))
       {
