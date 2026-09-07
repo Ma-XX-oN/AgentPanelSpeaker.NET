@@ -85,8 +85,8 @@ replace_once(
   """  SpeechHistorySnapshot? PreindexedHistory = null,\n  bool IncludeRolledBackTurns = false,\n  bool IncludeUserContext = false);""")
 replace_once(
   "AgentPanelSpeaker/JsonlSessionMonitor.cs",
-  """    bool speakExistingLatestTurn,\n    bool includeRolledBackTurns = false)""",
-  """    bool speakExistingLatestTurn,\n    bool includeRolledBackTurns = false,\n    bool includeUserContext = false)""")
+  """  public SpeechHistorySnapshot LoadHistoryPreview(\n    LocatedSession session,\n    bool speakExistingLatestTurn,\n    bool includeRolledBackTurns = false)""",
+  """  public SpeechHistorySnapshot LoadHistoryPreview(\n    LocatedSession session,\n    bool speakExistingLatestTurn,\n    bool includeRolledBackTurns = false,\n    bool includeUserContext = false)""")
 # LoadHistoryPreview -> LoadExistingHistory
 replace_once(
   "AgentPanelSpeaker/JsonlSessionMonitor.cs",
@@ -147,8 +147,7 @@ replace_once(
 # Snapshot the exact Core runtime used when running from the source checkout.
 core_root = ROOT / "dependencies/AIConversationCore"
 runtime = ROOT / "tools/AIConversationCore-runtime"
-if runtime.exists():
-  shutil.rmtree(runtime / "src", ignore_errors=True)
+shutil.rmtree(runtime / "src", ignore_errors=True)
 shutil.copytree(core_root / "src", runtime / "src")
 shutil.copy2(core_root / "package.json", runtime / "package.json")
 if (core_root / "package-lock.json").exists():
