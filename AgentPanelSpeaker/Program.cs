@@ -78,14 +78,14 @@ internal static class Program
       int extended = ExtendedRegressionTestRunner.Run();
       int additional = AdditionalRegressionTestRunner.Run();
       int core = CoreRegressionTestRunner.Run();
-      int environment = EnvironmentRegressionTestRunner.Run();
       int speechOrdinals = Issue24SpeechOrdinalRegressionTestRunner.Run();
+      int environment = EnvironmentRegressionTestRunner.Run();
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
                              additional == 0 &&
                              core == 0 &&
-                             environment == 0 &&
-                             speechOrdinals == 0
+                             speechOrdinals == 0 &&
+                             environment == 0
         ? 0
         : 1;
       return;
