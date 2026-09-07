@@ -45,5 +45,22 @@ if main.count(old_history_block) != 1:
   raise RuntimeError("Expected one issue-26 Run-history patch block.")
 main = main.replace(old_history_block, new_history_block)
 
+selective_marked_copy = '''marked_src = core_root / "node_modules/marked"
+marked_dst = runtime / "node_modules/marked"
+shutil.rmtree(marked_dst, ignore_errors=True)
+(marked_dst / "lib").mkdir(parents=True, exist_ok=True)
+for name in ("package.json", "LICENSE.md"):
+  shutil.copy2(marked_src / name, marked_dst / name)
+shutil.copy2(marked_src / "lib/marked.esm.js", marked_dst / "lib/marked.esm.js")
+'''
+complete_marked_copy = '''marked_src = core_root / "node_modules/marked"
+marked_dst = runtime / "node_modules/marked"
+shutil.rmtree(marked_dst, ignore_errors=True)
+shutil.copytree(marked_src, marked_dst)
+'''
+if main.count(selective_marked_copy) != 1:
+  raise RuntimeError("Expected one selective marked-runtime copy block.")
+main = main.replace(selective_marked_copy, complete_marked_copy)
+
 main_path.write_text(main, encoding="utf-8", newline="\n")
 runpy.run_path(str(main_path), run_name="__main__")
