@@ -61,7 +61,8 @@ jobs:
           dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
           if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
           $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
-          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe"
+          }
           Push-Location $publish
           try {
             & $exe --test
@@ -166,4 +167,4 @@ jobs:
         shell: pwsh
         run: |
           git fetch origin main --depth=1
-          git diff --check FETCH_HEAD...HEAD
+          git diff --check FETCH_HEAD HEAD
