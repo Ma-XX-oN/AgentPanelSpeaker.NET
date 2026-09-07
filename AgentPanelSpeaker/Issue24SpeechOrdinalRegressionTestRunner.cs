@@ -1,4 +1,6 @@
 using Markdig;
+using Microsoft.Web.WebView2.WinForms;
+using System.Reflection;
 using System.Text.Json;
 
 namespace AgentPanelSpeaker;
@@ -21,7 +23,8 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
       ("speech-ordinals/non-one-and-nested", TestNonOneAndNested),
       ("speech-ordinals/markdown-prefix-regressions", TestMarkdownPrefixRegressions),
       ("speech-ordinals/final-tts-markup", TestFinalTtsMarkup),
-      ("speech-ordinals/rendered-marker-mapping", TestRenderedMarkerMapping)
+      ("speech-ordinals/rendered-marker-mapping", TestRenderedMarkerMapping),
+      ("speech-ordinals/whole-list-item-highlight", TestWholeListItemHighlight)
     };
 
     int failures = 0;
@@ -218,6 +221,135 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
     {
       Directory.Delete(root, recursive: true);
     }
+  }
+
+  /// <summary>
+  /// Exercises the actual WebView playback JavaScript.  While the hidden
+  /// mapping token for an ordered-list ordinal is the active speech boundary,
+  /// the containing list item, including nested descendants, must carry the
+  /// visible highlight.  Once speech advances to body text, normal word
+  /// highlighting resumes and the list-item highlight is removed.
+  /// </summary>
+  private static void TestWholeListItemHighlight()
+  {
+    ApplicationConfiguration.Initialize();
+    using var host = new Form
+    {
+      Width = 640,
+      Height = 480,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    using var webView = new WebView2 { Dock = DockStyle.Fill };
+    host.Controls.Add(webView);
+    _ = host.Handle;
+    _ = webView.Handle;
+
+    Task ensure = webView.EnsureCoreWebView2Async();
+    PumpUntilCompleted(ensure, "WebView2 initialization");
+
+    MethodInfo? shellMethod = typeof(TranscriptView).GetMethod(
+      "BuildShellHtml",
+      BindingFlags.NonPublic | BindingFlags.Static);
+    Require(shellMethod is not null,
+      "TranscriptView.BuildShellHtml() could not be located.");
+    string? shell = shellMethod!.Invoke(null, null) as string;
+    Require(!string.IsNullOrWhiteSpace(shell),
+      "TranscriptView.BuildShellHtml() returned no HTML.");
+
+    var navigated = new TaskCompletionSource<bool>(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+    webView.NavigationCompleted += (_, eventArgs) =>
+    {
+      if (eventArgs.IsSuccess)
+      {
+        navigated.TrySetResult(true);
+      }
+      else
+      {
+        navigated.TrySetException(new InvalidOperationException(
+          $"WebView navigation failed: {eventArgs.WebErrorStatus}."));
+      }
+    };
+    webView.CoreWebView2.NavigateToString(shell!);
+    PumpUntilCompleted(navigated.Task, "transcript shell navigation");
+
+    const string probe = """
+(() => {
+  transcript.innerHTML =
+    '<span class="record-anchor" data-jsonl-record="1" data-source-id="ordinal-test"></span>' +
+    '<ol><li id="parent-item">' +
+    '<span class="speech-ordinal-map" aria-hidden="true" style="display:none">1. </span>' +
+    'Parent item<ul><li id="nested-item">Nested child</li></ul></li></ol>';
+  wrapWords();
+  assignRecordScopes();
+  assignNodeScopes([{
+    NodeId: 1,
+    RecordNumber: 1,
+    SourceId: 'ordinal-test',
+    Segments: ['1. Parent item']
+  }]);
+
+  setPlayback('speaking', '1. Parent item', 0, '1', 1, false);
+  const parent = document.getElementById('parent-item');
+  const nested = document.getElementById('nested-item');
+  const ordinalState = {
+    active: parent.classList.contains('speech-list-item-active'),
+    containsNested: parent.contains(nested),
+    background: getComputedStyle(parent).backgroundColor
+  };
+
+  setPlayback('speaking', '1. Parent item', 3, 'Parent', 1, false);
+  const bodyState = {
+    listActive: parent.classList.contains('speech-list-item-active'),
+    activeWord: [...parent.querySelectorAll('.word.active')]
+      .map(word => word.textContent).join('')
+  };
+
+  return JSON.stringify({ordinalState, bodyState});
+})()
+""";
+
+    Task<string> probeTask = webView.CoreWebView2.ExecuteScriptAsync(probe);
+    PumpUntilCompleted(probeTask, "list-item highlight probe");
+    string? encoded = JsonSerializer.Deserialize<string>(probeTask.Result);
+    Require(!string.IsNullOrWhiteSpace(encoded),
+      "WebView list-item highlight probe returned no result.");
+    using JsonDocument result = JsonDocument.Parse(encoded!);
+    JsonElement ordinalState = result.RootElement.GetProperty("ordinalState");
+    JsonElement bodyState = result.RootElement.GetProperty("bodyState");
+
+    Require(ordinalState.GetProperty("active").GetBoolean(),
+      "Speaking the ordinal did not highlight the containing list item.");
+    Require(ordinalState.GetProperty("containsNested").GetBoolean(),
+      "The highlighted list item did not contain its nested list content.");
+    string background = ordinalState.GetProperty("background").GetString() ?? string.Empty;
+    Require(background is not "rgba(0, 0, 0, 0)" and not "transparent" and not "",
+      $"The active list item has no visible highlight background: '{background}'.");
+    Require(!bodyState.GetProperty("listActive").GetBoolean(),
+      "The whole-list-item highlight remained after speech advanced to body text.");
+    Require(string.Equals(
+        bodyState.GetProperty("activeWord").GetString(),
+        "Parent",
+        StringComparison.Ordinal),
+      "Normal word highlighting did not resume after the ordinal.");
+  }
+
+  /// <summary>
+  /// Pumps the Windows message queue until one WebView task completes.
+  /// </summary>
+  private static void PumpUntilCompleted(Task task, string operation)
+  {
+    DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+    while (!task.IsCompleted && DateTime.UtcNow < deadline)
+    {
+      Application.DoEvents();
+      Thread.Sleep(10);
+    }
+    Require(task.IsCompleted,
+      $"Timed out waiting for {operation}.");
+    task.GetAwaiter().GetResult();
   }
 
   /// <summary>
