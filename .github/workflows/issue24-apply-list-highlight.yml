@@ -1,0 +1,34 @@
+name: Apply issue 24 list highlight patch
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+      - name: Apply production patch
+        run: python scripts/patch-issue24-list-highlight.py
+      - name: Verify patch changed only the intended production file
+        shell: bash
+        run: |
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "AgentPanelSpeaker/TranscriptView.cs"
+      - name: Commit production patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m "fix: highlight list item while speaking ordinal"
+          git push origin HEAD:feature/aiconversationcore-integration
