@@ -173,6 +173,10 @@ internal static class TranscriptPresentationDomFormatter
       "tool" => BuildTool(node, emittedSourceIndexes),
       "interaction" => BuildTool(node, emittedSourceIndexes),
       "attachments" => BuildAttachments(node, emittedSourceIndexes),
+      "user_context" => BuildUserContext(
+        node,
+        pipeline,
+        emittedSourceIndexes),
       "reasoning" or "markdown" or "commentary" or "notice" =>
         BuildMarkdownContent(node, pipeline, emittedSourceIndexes),
       "subagent_content" => BuildSubagentContent(
@@ -234,6 +238,64 @@ internal static class TranscriptPresentationDomFormatter
       },
       Element("summary", null, Text(summary)),
       Element("div", Class("reasoning-body"), bodyChildren));
+  }
+
+  /// <summary>
+  /// Builds the semantic Codex User IDE-context disclosure used by the actual
+  /// transcript DOM path. The prompt is a separate presentation sibling and is
+  /// therefore never placed inside this disclosure.
+  /// </summary>
+  private static TranscriptDomNode BuildUserContext(
+    JsonElement node,
+    MarkdownPipeline pipeline,
+    HashSet<int> emittedSourceIndexes)
+  {
+    string summary = "# Context from my IDE setup:";
+    string context = string.Empty;
+    if (node.TryGetProperty("blocks", out JsonElement blocks) &&
+        blocks.ValueKind == JsonValueKind.Array)
+    {
+      foreach (JsonElement block in blocks.EnumerateArray())
+      {
+        if (GetString(block, "type") != "user_context")
+        {
+          continue;
+        }
+
+        string blockSummary = GetString(block, "summary");
+        if (!string.IsNullOrWhiteSpace(blockSummary))
+        {
+          summary = blockSummary;
+        }
+        context = GetString(block, "text");
+        break;
+      }
+    }
+
+    var detailsChildren = new List<TranscriptDomNode>
+    {
+      Element("summary", null, Text(summary))
+    };
+    AddAnchors(detailsChildren, node, emittedSourceIndexes);
+    if (!string.IsNullOrWhiteSpace(context))
+    {
+      detailsChildren.Add(Html(Markdown.ToHtml(context, pipeline)));
+    }
+
+    var attributes = new Dictionary<string, string>
+    {
+      ["class"] = "user-context-details"
+    };
+    string id = GetString(node, "id");
+    if (!string.IsNullOrWhiteSpace(id))
+    {
+      attributes["data-presentation-id"] = id;
+    }
+
+    return Element(
+      "blockquote",
+      Class("user-context"),
+      Element("details", attributes, detailsChildren));
   }
 
   private static TranscriptDomNode BuildMarkdownContent(
