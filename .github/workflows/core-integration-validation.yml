@@ -32,7 +32,7 @@ jobs:
       - name: Verify AIConversationCore submodule pin
         shell: pwsh
         run: |
-          $expected = '54a70c2989de0c02f03b28a2f8d8c6986b974141'
+          $expected = '6c9c2eccc4df301105f4b330fb9216b90d35c5f7'
           $actual = git -C dependencies/AIConversationCore rev-parse HEAD
           if ($actual.Trim() -ne $expected) {
             throw "Unexpected AIConversationCore submodule revision: $actual"
@@ -89,7 +89,7 @@ jobs:
           $response = $request | node $worker
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne '54a70c2989de0c02f03b28a2f8d8c6986b974141') {
+          if ($decoded.core_commit -ne '6c9c2eccc4df301105f4b330fb9216b90d35c5f7') {
             throw "Unexpected bundled core commit: $($decoded.core_commit)"
           }
           if ($decoded.projection.units[0].block.text -ne $probe) {
@@ -115,7 +115,7 @@ jobs:
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne '54a70c2989de0c02f03b28a2f8d8c6986b974141') {
+          if ($decoded.core_commit -ne '6c9c2eccc4df301105f4b330fb9216b90d35c5f7') {
             throw "Unexpected core commit: $($decoded.core_commit)"
           }
 
