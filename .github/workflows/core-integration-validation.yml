@@ -161,3 +161,7 @@ jobs:
           AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
           dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate whitespace and patch integrity
+        shell: pwsh
+        run: git diff --check origin/main...HEAD
