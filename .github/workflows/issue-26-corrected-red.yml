@@ -1,0 +1,27 @@
+name: Issue 26 corrected RED
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+      - name: Run corrected issue 26 regression expecting RED
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test user-context-speech
