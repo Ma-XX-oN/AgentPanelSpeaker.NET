@@ -1,0 +1,67 @@
+name: Apply issue 26 history propagation fix
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          fetch-depth: 0
+          submodules: recursive
+      - name: Fix user-context history propagation
+        shell: pwsh
+        run: |
+          $path = 'AgentPanelSpeaker/JsonlSessionMonitor.cs'
+          $text = [IO.File]::ReadAllText($path)
+          $oldCall = @"
+    EligibleHistory eligibleHistory = ReadEligibleHistory(
+      session,
+      pendingInputRequests,
+      includeRolledBackTurns);
+"@
+          $newCall = @"
+    EligibleHistory eligibleHistory = ReadEligibleHistory(
+      session,
+      pendingInputRequests,
+      includeRolledBackTurns,
+      includeUserContext);
+"@
+          if (($text.Split($oldCall).Count - 1) -ne 1) { throw 'Expected one ReadEligibleHistory call target.' }
+          $text = $text.Replace($oldCall, $newCall)
+          $oldSignature = @"
+  private EligibleHistory ReadEligibleHistory(
+    LocatedSession session,
+    IDictionary<string, CodexInputRequest> pendingInputRequests,
+    bool includeRolledBackTurns,
+    DateTime? minimumTimestampUtc = null)
+"@
+          $newSignature = @"
+  private EligibleHistory ReadEligibleHistory(
+    LocatedSession session,
+    IDictionary<string, CodexInputRequest> pendingInputRequests,
+    bool includeRolledBackTurns,
+    bool includeUserContext,
+    DateTime? minimumTimestampUtc = null)
+"@
+          if (($text.Split($oldSignature).Count - 1) -ne 1) { throw 'Expected one ReadEligibleHistory signature target.' }
+          $text = $text.Replace($oldSignature, $newSignature)
+          [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
+          git diff --check
+      - name: Commit fix
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AgentPanelSpeaker/JsonlSessionMonitor.cs
+          git commit -m "fix: propagate user-context option through history reads"
+          git push origin HEAD:feature/aiconversationcore-integration
