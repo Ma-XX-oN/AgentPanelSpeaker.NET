@@ -35,7 +35,7 @@ jobs:
           $new = '54a70c2989de0c02f03b28a2f8d8c6986b974141'
           git -C dependencies/AIConversationCore fetch origin $new
           git -C dependencies/AIConversationCore checkout $new
-          foreach ($path in @('AgentPanelSpeaker/AIConversationCoreClient.cs','tools/AIConversationCore-worker.mjs','.github/workflows/core-integration-validation.yml')) {
+          foreach ($path in @('AgentPanelSpeaker/AIConversationCoreClient.cs','tools/AIConversationCore-worker.mjs')) {
             $text = Get-Content $path -Raw
             if (-not $text.Contains($old)) { throw "Old core SHA missing: $path" }
             Set-Content $path ($text.Replace($old, $new)) -NoNewline
@@ -234,6 +234,6 @@ jobs:
           if ((Get-Content tools/AIConversationCore-runtime/CORE_COMMIT -Raw).Trim() -ne $expected) { throw 'Runtime pin mismatch.' }
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Whitespace check failed.' }
-          git add dependencies/AIConversationCore AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs AgentPanelSpeaker/CoreRegressionTestRunner.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime .github/workflows/core-integration-validation.yml
+          git add dependencies/AIConversationCore AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs AgentPanelSpeaker/CoreRegressionTestRunner.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime
           git commit -m "fix: render Codex user context in HTML"
           git push origin HEAD:feature/aiconversationcore-integration
