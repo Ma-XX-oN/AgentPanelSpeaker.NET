@@ -29,4 +29,4 @@ SOFTWARE.
 
 Agent Panel Speaker bundles `marked` 18.0.11 through AIConversationCore for
 Core-owned Markdown-to-HTML rendering. `marked` is distributed under the MIT
-License. The package's `LICENSE.md` is included with the deployed runtime.
+License. The package's `LICENSE` file is included with the deployed runtime.
