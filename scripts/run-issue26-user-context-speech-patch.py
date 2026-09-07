@@ -1,49 +1,30 @@
 from pathlib import Path
+import runpy
 
 root = Path(__file__).resolve().parents[1]
-path = root / "AgentPanelSpeaker/JsonlSessionMonitor.cs"
-text = path.read_text(encoding="utf-8")
-
-replacements = [
-  (
-    """          pendingInputRequests,\n          settings.IncludeRolledBackTurns);""",
-    """          pendingInputRequests,\n          settings.IncludeRolledBackTurns,\n          settings.IncludeUserContext);"""
-  ),
-  (
-    """              pendingInputRequests,\n              settings.IncludeRolledBackTurns);""",
-    """              pendingInputRequests,\n              settings.IncludeRolledBackTurns,\n              settings.IncludeUserContext);"""
-  ),
-  (
-    """    EligibleHistory eligibleHistory = ReadEligibleHistory(\n      session,\n      pendingInputRequests,\n      includeRolledBackTurns);""",
-    """    EligibleHistory eligibleHistory = ReadEligibleHistory(\n      session,\n      pendingInputRequests,\n      includeRolledBackTurns,\n      includeUserContext);"""
-  ),
-  (
-    """  private EligibleHistory ReadEligibleHistory(\n    LocatedSession session,\n    IDictionary<string, CodexInputRequest> pendingInputRequests,\n    bool includeRolledBackTurns,\n    DateTime? minimumTimestampUtc = null)""",
-    """  private EligibleHistory ReadEligibleHistory(\n    LocatedSession session,\n    IDictionary<string, CodexInputRequest> pendingInputRequests,\n    bool includeRolledBackTurns,\n    bool includeUserContext,\n    DateTime? minimumTimestampUtc = null)"""
-  )
-]
-
-for old, new in replacements:
-  count = text.count(old)
-  if count != 1:
-    raise RuntimeError(
-      f"Expected one history propagation target, found {count}: {old[:80]!r}")
-  text = text.replace(old, new)
-
-path.write_text(text, encoding="utf-8", newline="\n")
-
 main_path = root / "scripts/patch-issue26-user-context-speech.py"
 main = main_path.read_text(encoding="utf-8")
-brittle = '''count = monitor_text.count(old_history)
+old = '''# Two Run() history calls.
+old_history = """            pendingInputRequests,\\n            settings.IncludeRolledBackTurns);"""
+new_history = """            pendingInputRequests,\\n            settings.IncludeRolledBackTurns,\\n            settings.IncludeUserContext);"""
+monitor_path = ROOT / "AgentPanelSpeaker/JsonlSessionMonitor.cs"
+monitor_text = monitor_path.read_text(encoding="utf-8")
+count = monitor_text.count(old_history)
 if count != 2:
   raise RuntimeError(f"JsonlSessionMonitor.cs: expected two Run history targets, found {count}")
-monitor_path.write_text(monitor_text.replace(old_history, new_history), encoding="utf-8", newline="\\n")'''
-replacement = '''count = monitor_text.count(old_history)
-if count not in (0, 2):
-  raise RuntimeError(f"JsonlSessionMonitor.cs: expected zero or two Run history targets, found {count}")
-if count:
-  monitor_path.write_text(monitor_text.replace(old_history, new_history), encoding="utf-8", newline="\\n")'''
-if main.count(brittle) != 1:
-  raise RuntimeError("Expected one prehandled history replacement guard.")
-main = main.replace(brittle, replacement)
-exec(compile(main, str(main_path), "exec"), {"__name__": "__main__", "__file__": str(main_path)})
+monitor_path.write_text(monitor_text.replace(old_history, new_history), encoding="utf-8", newline="\\n")
+'''
+new = '''# Run() history calls use different indentation at the initial and switched-session sites.
+replace_once(
+  "AgentPanelSpeaker/JsonlSessionMonitor.cs",
+  """          pendingInputRequests,\\n          settings.IncludeRolledBackTurns);""",
+  """          pendingInputRequests,\\n          settings.IncludeRolledBackTurns,\\n          settings.IncludeUserContext);""")
+replace_once(
+  "AgentPanelSpeaker/JsonlSessionMonitor.cs",
+  """              pendingInputRequests,\\n              settings.IncludeRolledBackTurns);""",
+  """              pendingInputRequests,\\n              settings.IncludeRolledBackTurns,\\n              settings.IncludeUserContext);""")
+'''
+if main.count(old) != 1:
+  raise RuntimeError("Expected one issue-26 Run-history patch block.")
+main_path.write_text(main.replace(old, new), encoding="utf-8", newline="\n")
+runpy.run_path(str(main_path), run_name="__main__")
