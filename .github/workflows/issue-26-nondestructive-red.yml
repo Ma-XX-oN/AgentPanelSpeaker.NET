@@ -27,19 +27,11 @@ jobs:
 
           path = Path('AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs')
           text = path.read_text(encoding='utf-8')
-          pattern = re.compile(
-            r'  /// <summary>\n'
-            r'  /// Reproduces the user-visible failure: changing Speak User / IDE context\n'
-            r'.*?'
-            r'  private static void TestLiveMonitorToggle\(\)\n'
-            r'  \{.*?\n'
-            r'  \}\n\n'
-            r'  /// <summary>\n'
-            r'  /// Creates project options',
-            re.DOTALL)
+          start = text.index('  /// <summary>\n  /// Reproduces the user-visible failure: changing Speak User / IDE context')
+          end = text.index('  /// <summary>\n  /// Creates project options', start)
           replacement = '''  /// <summary>
           /// Verifies User Context is always indexed once Core has classified it,
-          /// while the UI switch changes only final playback eligibility.  Toggling
+          /// while the UI switch changes only final playback eligibility. Toggling
           /// must not rebuild canonical history or restart the live monitor.
           /// </summary>
           private static void TestLiveMonitorToggle()
@@ -173,17 +165,10 @@ jobs:
             }
           }
 
-          /// <summary>
-          /// Creates project options'''
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-            raise SystemExit(f'live-toggle replacement count={count}')
-
-          marker = '''  /// <summary>
-          /// Reads the actual SpeechService history used by playback.
-          /// </summary>
-          private static IReadOnlyList<ContentCategory> ReadSpeechHistoryCategories(
           '''
+          text = text[:start] + replacement + text[end:]
+
+          marker = '  private static IReadOnlyList<ContentCategory> ReadSpeechHistoryCategories(\n'
           helper = '''  /// <summary>
           /// Reads the actual retained SpeechService fragments used by playback.
           /// </summary>
@@ -193,10 +178,12 @@ jobs:
             FieldInfo historyField = typeof(SpeechService).GetField(
               "_history",
               BindingFlags.Instance | BindingFlags.NonPublic) ??
-              throw new InvalidOperationException("SpeechService history field was not found.");
+              throw new InvalidOperationException(
+                "SpeechService history field was not found.");
             if (historyField.GetValue(speech) is not IEnumerable history)
             {
-              throw new InvalidOperationException("SpeechService history is not enumerable.");
+              throw new InvalidOperationException(
+                "SpeechService history is not enumerable.");
             }
             return history.Cast<SpeechFragment>().ToArray();
           }
@@ -204,7 +191,8 @@ jobs:
           '''
           if text.count(marker) != 1:
             raise SystemExit(f'history helper marker count={text.count(marker)}')
-          text = text.replace(marker, helper + marker, 1)
+          insert = text.index(marker)
+          text = text[:insert] + helper + text[insert:]
           path.write_text(text, encoding='utf-8', newline='\n')
           '@ | python -
 
