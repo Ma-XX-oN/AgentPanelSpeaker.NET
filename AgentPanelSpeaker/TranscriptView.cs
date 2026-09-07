@@ -2050,6 +2050,15 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
 }
+li.speech-list-item-active {
+  background: var(--highlight);
+  border-radius: 3px;
+}
+li.speech-list-item-paused {
+  outline: 2px solid var(--highlight);
+  outline-offset: 1px;
+  animation: marker-blink 1s steps(1, end) infinite;
+}
 #find-popup {
   position: fixed;
   top: 8px;
@@ -2170,6 +2179,7 @@ let currentFragmentText = null;
 let currentFragmentStart = -1;
 let currentFragmentEnd = -1;
 let currentBoundaryWordIndex = -1;
+let currentSpeechListItem = null;
 let fadeMs = 250;
 let followSpeech = true;
 let programmaticScrollUntil = 0;
@@ -2561,6 +2571,7 @@ function replaceTranscriptDom(
   currentFragmentStart = -1;
   currentFragmentEnd = -1;
   currentBoundaryWordIndex = -1;
+  currentSpeechListItem = null;
   liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
@@ -2699,6 +2710,7 @@ function replaceTranscriptWindow(
   currentFragmentStart = -1;
   currentFragmentEnd = -1;
   currentBoundaryWordIndex = -1;
+  currentSpeechListItem = null;
   liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
@@ -3105,6 +3117,19 @@ function reveal(element) {
   }
 }
 
+function ordinalListItemForWord(word) {
+  const ordinal = word?.closest('.speech-ordinal-map');
+  return ordinal ? ordinal.closest('li') : null;
+}
+
+function clearSpeechListItemHighlight() {
+  if (!currentSpeechListItem) return;
+  currentSpeechListItem.classList.remove(
+    'speech-list-item-active',
+    'speech-list-item-paused');
+  currentSpeechListItem = null;
+}
+
 function cancelFade(word) {
   const animation = fadingAnimations.get(word);
   if (animation) {
@@ -3216,6 +3241,7 @@ function applyRangeClass(range, className) {
 function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   setFollowSpeech(follow, false);
   clearMarkers();
+  clearSpeechListItemHighlight();
   if (state === 'none') {
     retireCurrentWord(true);
     return;
@@ -3265,23 +3291,34 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
     wordIndex,
     fragmentChanged || wordIndex < currentBoundaryWordIndex);
   const target = words[range.start];
-  openAncestors(target);
+  const listItem = ordinalListItemForWord(target);
+  openAncestors(listItem || target);
   if (state === 'paused') {
     retireCurrentWord(false);
-    applyRangeClass(range, 'paused');
+    if (listItem) {
+      listItem.classList.add('speech-list-item-paused');
+      currentSpeechListItem = listItem;
+    } else {
+      applyRangeClass(range, 'paused');
+    }
   } else {
     if (currentIndex >= 0 &&
         (currentIndex !== range.start || currentEndIndex !== range.end)) {
       retireCurrentWord(true);
     }
-    applyRangeClass(range, 'active');
+    if (listItem) {
+      listItem.classList.add('speech-list-item-active');
+      currentSpeechListItem = listItem;
+    } else {
+      applyRangeClass(range, 'active');
+    }
   }
   currentIndex = range.start;
   currentEndIndex = range.end;
   voiceMarkerIndex = range.start;
   currentBoundaryWordIndex = wordIndex;
   currentNode = nodeId;
-  reveal(target);
+  reveal(listItem || target);
 }
 
 
