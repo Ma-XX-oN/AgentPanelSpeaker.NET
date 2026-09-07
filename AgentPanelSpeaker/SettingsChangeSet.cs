@@ -149,6 +149,7 @@ internal static class SettingsChangeSet
       AddScalar("Transcript/UpdateInterval", ["Transcript", "Highlight timing", "Update interval"], oldValue.HighlightUpdateMilliseconds, newValue.HighlightUpdateMilliseconds);
       AddScalar("Transcript/QueueCapacity", ["Transcript", "Highlight queue capacity"], oldValue.HighlightQueueCapacity, newValue.HighlightQueueCapacity);
       AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);
+      AddScalar("Transcript/SpeakUserContext", ["Transcript", "Speak User / IDE context"], oldValue.SpeakUserContext, newValue.SpeakUserContext);
     }
 
     void AddAudioWake(AudioWakeSettings oldValue, AudioWakeSettings newValue)
@@ -298,7 +299,8 @@ internal static class SettingsChangeSet
         FadeMilliseconds = Pick("Transcript/Fade", saved.Transcript.FadeMilliseconds, working.Transcript.FadeMilliseconds),
         HighlightUpdateMilliseconds = Pick("Transcript/UpdateInterval", saved.Transcript.HighlightUpdateMilliseconds, working.Transcript.HighlightUpdateMilliseconds),
         HighlightQueueCapacity = Pick("Transcript/QueueCapacity", saved.Transcript.HighlightQueueCapacity, working.Transcript.HighlightQueueCapacity),
-        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized)
+        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized),
+        SpeakUserContext = Pick("Transcript/SpeakUserContext", saved.Transcript.SpeakUserContext, working.Transcript.SpeakUserContext)
       },
       AudioWake = saved.AudioWake with
       {
