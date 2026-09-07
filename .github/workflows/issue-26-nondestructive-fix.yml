@@ -87,9 +87,9 @@ jobs:
             'transcript settings policy')
 
           marker = '''  /// <summary>
-          /// Reads one profile from its table row.
+          /// Chooses the first currently spoken profile for IPA previews.
           /// </summary>
-          private SpeechProfileSettings ReadVoiceProfile(ContentCategory category)
+          private SpeechProfileSettings GetIpaPreviewProfile()
           '''
           helper = '''  /// <summary>
           /// Resolves the final playback profile without changing indexed
