@@ -29,7 +29,7 @@ jobs:
           git -C dependencies/AIConversationCore checkout $commit
           npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
       - name: Apply production integration patch
-        run: python scripts/patch-issue26-user-context-speech.py
+        run: python scripts/run-issue26-user-context-speech-patch.py
       - name: Verify patch integrity
         shell: pwsh
         run: |
