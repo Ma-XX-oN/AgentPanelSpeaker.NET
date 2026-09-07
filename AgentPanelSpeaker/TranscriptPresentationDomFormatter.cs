@@ -279,7 +279,7 @@ internal static class TranscriptPresentationDomFormatter
     AddAnchors(detailsChildren, node, emittedSourceIndexes);
     if (!string.IsNullOrWhiteSpace(context))
     {
-      detailsChildren.Add(Html(Markdown.ToHtml(context, pipeline)));
+      detailsChildren.Add(Html(RenderMarkdown(context, pipeline)));
     }
 
     var attributes = new Dictionary<string, string>
@@ -418,7 +418,7 @@ internal static class TranscriptPresentationDomFormatter
       }
       if (!string.IsNullOrWhiteSpace(text))
       {
-        children.Add(Html(Markdown.ToHtml(text, pipeline)));
+        children.Add(Html(RenderMarkdown(text, pipeline)));
       }
     }
     return Element("div", Class("subagent-content"), children);
@@ -460,7 +460,18 @@ internal static class TranscriptPresentationDomFormatter
     }
     return markdown.Length == 0
       ? string.Empty
-      : Markdown.ToHtml(markdown.ToString(), pipeline);
+      : RenderMarkdown(markdown.ToString(), pipeline);
+  }
+
+  /// <summary>
+  /// Renders Markdown after adding non-visual ordered-list marker text used by
+  /// transcript word mapping.  The visible list remains browser-native.
+  /// </summary>
+  private static string RenderMarkdown(string markdown, MarkdownPipeline pipeline)
+  {
+    return Markdown.ToHtml(
+      OrderedListSpeechMap.DecorateMarkdown(markdown),
+      pipeline);
   }
 
   private static string BlockMarkdown(JsonElement block)
