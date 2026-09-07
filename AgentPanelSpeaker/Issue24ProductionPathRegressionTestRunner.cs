@@ -6,42 +6,59 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Runs the issue #24 acceptance test through the complete production mapping
-/// chain.  Unlike the focused component regressions, this test must not inject
-/// browser node scopes or stable word mappings by hand.
+/// Runs issue #24 acceptance tests through the complete production mapping
+/// chain. These tests must not inject browser node scopes or stable word maps
+/// by hand because playback highlighting depends on those production outputs.
 /// </summary>
 internal static class Issue24ProductionPathRegressionTestRunner
 {
   /// <summary>
-  /// Runs the unsplit JSONL-to-WebView playback/highlight acceptance test.
+  /// Runs the unsplit production-path acceptance tests.
   /// </summary>
   public static int Run()
   {
+    var tests = new (string Name, Action Body)[]
+    {
+      ("speech-ordinals/production-path-nested-list-table",
+        TestNestedListAndTableThroughProductionPayload),
+      ("speech-ordinals/production-path-secondary-structural-identity",
+        TestSecondaryStructuralIdentityThroughProductionPayload)
+    };
+
+    int failures = 0;
     Console.WriteLine();
-    Console.WriteLine("Issue #24 production-path acceptance suite: 1 test");
-    try
+    Console.WriteLine(
+      $"Issue #24 production-path acceptance suite: {tests.Length} tests");
+    foreach ((string name, Action body) in tests)
     {
-      TestNestedListAndTableThroughProductionPayload();
-      Console.WriteLine("PASS  speech-ordinals/production-path-nested-list-table");
-      Console.WriteLine();
-      Console.WriteLine("PASS: 1/1 issue #24 production-path acceptance tests passed.");
-      return 0;
+      try
+      {
+        body();
+        Console.WriteLine($"PASS  {name}");
+      }
+      catch (Exception exception)
+      {
+        ++failures;
+        Console.WriteLine($"FAIL  {name}");
+        Console.WriteLine(
+          $"      {exception.GetType().Name}: {exception.Message}");
+      }
     }
-    catch (Exception exception)
-    {
-      Console.WriteLine("FAIL  speech-ordinals/production-path-nested-list-table");
-      Console.WriteLine($"      {exception.GetType().Name}: {exception.Message}");
-      Console.WriteLine();
-      Console.WriteLine("FAIL: 1/1 issue #24 production-path acceptance tests failed.");
-      return 1;
-    }
+
+    Console.WriteLine();
+    Console.WriteLine(failures == 0
+      ? $"PASS: {tests.Length}/{tests.Length} issue #24 production-path " +
+        "acceptance tests passed."
+      : $"FAIL: {failures}/{tests.Length} issue #24 production-path " +
+        "acceptance tests failed.");
+    return failures == 0 ? 0 : 1;
   }
 
   /// <summary>
   /// Starts with a real Codex JSONL fixture, runs Core presentation, virtual
   /// document construction, search/stable-word mapping, the exact production
   /// replaceTranscriptDom payload builder, the actual WebView2 DOM consumer,
-  /// and finally the real playback JavaScript.  No intermediate browser scope
+  /// and finally the real playback JavaScript. No intermediate browser scope
   /// assignment is performed by the test.
   /// </summary>
   private static void TestNestedListAndTableThroughProductionPayload()
@@ -100,88 +117,229 @@ Like this:
           StringComparer.Ordinal),
         "Production speech identity omitted the nested table-header fragment.");
 
-      string replaceScript;
-      using (var productionView = new TranscriptView())
-      {
-        FieldInfo? identitiesField = typeof(TranscriptView).GetField(
-          "_identities",
-          BindingFlags.NonPublic | BindingFlags.Instance);
-        FieldInfo? searchIndexField = typeof(TranscriptView).GetField(
-          "_searchIndex",
-          BindingFlags.NonPublic | BindingFlags.Instance);
-        MethodInfo? buildReplaceDom = typeof(TranscriptView).GetMethod(
-          "BuildReplaceDomScript",
-          BindingFlags.NonPublic | BindingFlags.Instance);
-        Require(identitiesField is not null &&
-            searchIndexField is not null &&
-            buildReplaceDom is not null,
-          "Production transcript payload members could not be located.");
+      string replaceScript = BuildProductionReplaceScript(
+        window,
+        presentation.Nodes,
+        identities,
+        searchIndex);
+      RunPlaybackProbe(
+        replaceScript,
+        responseIdentity.NodeId,
+        "1. *Nested numbered item with a table inside it*",
+        "Nested",
+        3,
+        "| Column | Value | Style |",
+        "Column",
+        1,
+        "Codex JSONL production path");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
 
-        identitiesField!.SetValue(productionView, identities);
-        searchIndexField!.SetValue(productionView, searchIndex);
-        replaceScript = buildReplaceDom!.Invoke(productionView, new object?[]
-        {
-          window,
-          presentation.Nodes,
-          false,
-          null,
-          null
-        }) as string ?? string.Empty;
+  /// <summary>
+  /// Exercises the dependent failure seam as one path: an atomic virtual unit
+  /// owns two canonical record identities, the second identity is the nested
+  /// list/table speech node, production payload construction must preserve that
+  /// identity and its stable word map, and WebView playback must then resolve
+  /// and highlight the nested content. The test never injects those scopes.
+  /// </summary>
+  private static void TestSecondaryStructuralIdentityThroughProductionPayload()
+  {
+    const string html = """
+<details>
+  <summary>Having 2 thoughts</summary>
+  <span class="record-anchor" data-jsonl-record="1" data-source-id="one"></span>
+  <p>Primary thought.</p>
+  <span class="record-anchor" data-jsonl-record="2" data-source-id="two"></span>
+  <ol>
+    <li data-list-ordinal="1">
+      <span class="speech-ordinal-map" aria-hidden="true" style="display:none">1. </span>
+      <em>Nested numbered item with a table inside it</em>
+      <table>
+        <thead><tr><th>Column</th><th>Value</th><th>Style</th></tr></thead>
+        <tbody><tr><td>Alpha</td><td>1</td><td>bold</td></tr></tbody>
+      </table>
+    </li>
+  </ol>
+</details>
+""";
+
+    TranscriptNodeIdentity[] identities =
+    {
+      new(201, 1, "one", new[] { "Primary thought." }),
+      new(202, 2, "two", new[]
+      {
+        "1. *Nested numbered item with a table inside it*",
+        "| Column | Value | Style |"
+      })
+    };
+    TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
+      html,
+      identities,
+      CancellationToken.None);
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
+    Require(document.Records.Count == 1,
+      "Acceptance fixture did not create one atomic structural unit.");
+    Require(document.Records[0].Identities.Count == 2,
+      "Acceptance fixture did not retain both canonical identities.");
+
+    TranscriptDomNode[] domNodes =
+    {
+      new("html", null, null, null, html, null)
+    };
+    string replaceScript = BuildProductionReplaceScript(
+      document.CreateFullWindow(),
+      domNodes,
+      identities,
+      searchIndex);
+
+    RunPlaybackProbe(
+      replaceScript,
+      202,
+      "1. *Nested numbered item with a table inside it*",
+      "Nested",
+      3,
+      "| Column | Value | Style |",
+      "Column",
+      1,
+      "secondary structural identity production path");
+  }
+
+  /// <summary>
+  /// Uses the exact production payload builder. The view is allowed to finish
+  /// WebView initialization before disposal so its asynchronous constructor
+  /// work cannot leak into later regression tests.
+  /// </summary>
+  private static string BuildProductionReplaceScript(
+    TranscriptWindow window,
+    IReadOnlyList<TranscriptDomNode> domNodes,
+    IReadOnlyList<TranscriptNodeIdentity> identities,
+    TranscriptSearchIndex searchIndex)
+  {
+    using var host = new Form
+    {
+      Width = 320,
+      Height = 240,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    using var productionView = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(productionView);
+    _ = host.Handle;
+    _ = productionView.Handle;
+
+    FieldInfo? webViewField = typeof(TranscriptView).GetField(
+      "_webView",
+      BindingFlags.NonPublic | BindingFlags.Instance);
+    FieldInfo? identitiesField = typeof(TranscriptView).GetField(
+      "_identities",
+      BindingFlags.NonPublic | BindingFlags.Instance);
+    FieldInfo? searchIndexField = typeof(TranscriptView).GetField(
+      "_searchIndex",
+      BindingFlags.NonPublic | BindingFlags.Instance);
+    MethodInfo? buildReplaceDom = typeof(TranscriptView).GetMethod(
+      "BuildReplaceDomScript",
+      BindingFlags.NonPublic | BindingFlags.Instance);
+    Require(webViewField is not null &&
+        identitiesField is not null &&
+        searchIndexField is not null &&
+        buildReplaceDom is not null,
+      "Production transcript payload members could not be located.");
+
+    var internalWebView = (WebView2?)webViewField!.GetValue(productionView);
+    Require(internalWebView is not null,
+      "Production TranscriptView WebView could not be located.");
+    Task ensure = internalWebView!.EnsureCoreWebView2Async();
+    PumpUntilCompleted(ensure, "production payload-builder WebView initialization");
+
+    identitiesField!.SetValue(productionView, identities);
+    searchIndexField!.SetValue(productionView, searchIndex);
+    string script = buildReplaceDom!.Invoke(productionView, new object?[]
+    {
+      window,
+      domNodes,
+      false,
+      null,
+      null
+    }) as string ?? string.Empty;
+    Require(script.Length != 0,
+      "Production BuildReplaceDomScript returned no browser payload.");
+    return script;
+  }
+
+  /// <summary>
+  /// Executes the exact production replaceTranscriptDom output in the actual
+  /// transcript shell and then drives playback. Browser mapping is therefore
+  /// entirely the output of the production payload; the test supplies none.
+  /// </summary>
+  private static void RunPlaybackProbe(
+    string replaceScript,
+    long nodeId,
+    string nestedFragment,
+    string nestedWord,
+    int nestedWordIndex,
+    string tableFragment,
+    string tableWord,
+    int tableWordIndex,
+    string description)
+  {
+    using var host = new Form
+    {
+      Width = 800,
+      Height = 600,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    using var webView = new WebView2 { Dock = DockStyle.Fill };
+    host.Controls.Add(webView);
+    _ = host.Handle;
+    _ = webView.Handle;
+
+    Task ensure = webView.EnsureCoreWebView2Async();
+    PumpUntilCompleted(ensure, $"{description} WebView2 initialization");
+
+    MethodInfo? shellMethod = typeof(TranscriptView).GetMethod(
+      "BuildShellHtml",
+      BindingFlags.NonPublic | BindingFlags.Static);
+    Require(shellMethod is not null,
+      "TranscriptView.BuildShellHtml() could not be located.");
+    string shell = shellMethod!.Invoke(null, null) as string ?? string.Empty;
+    Require(shell.Length != 0,
+      "TranscriptView.BuildShellHtml() returned no HTML.");
+
+    var navigated = new TaskCompletionSource<bool>(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+    webView.NavigationCompleted += (_, eventArgs) =>
+    {
+      if (eventArgs.IsSuccess)
+      {
+        navigated.TrySetResult(true);
       }
-      Require(replaceScript.Length != 0,
-        "Production BuildReplaceDomScript returned no browser payload.");
-
-      using var host = new Form
+      else
       {
-        Width = 800,
-        Height = 600,
-        ShowInTaskbar = false,
-        StartPosition = FormStartPosition.Manual,
-        Location = new Point(-32000, -32000)
-      };
-      using var webView = new WebView2 { Dock = DockStyle.Fill };
-      host.Controls.Add(webView);
-      _ = host.Handle;
-      _ = webView.Handle;
+        navigated.TrySetException(new InvalidOperationException(
+          $"WebView navigation failed: {eventArgs.WebErrorStatus}."));
+      }
+    };
+    webView.CoreWebView2.NavigateToString(shell);
+    PumpUntilCompleted(navigated.Task, $"{description} transcript shell navigation");
 
-      Task ensure = webView.EnsureCoreWebView2Async();
-      PumpUntilCompleted(ensure, "production-path WebView2 initialization");
+    Task<string> replace = webView.CoreWebView2.ExecuteScriptAsync(replaceScript);
+    PumpUntilCompleted(replace, $"{description} replaceTranscriptDom payload");
 
-      MethodInfo? shellMethod = typeof(TranscriptView).GetMethod(
-        "BuildShellHtml",
-        BindingFlags.NonPublic | BindingFlags.Static);
-      Require(shellMethod is not null,
-        "TranscriptView.BuildShellHtml() could not be located.");
-      string shell = shellMethod!.Invoke(null, null) as string ?? string.Empty;
-      Require(shell.Length != 0,
-        "TranscriptView.BuildShellHtml() returned no HTML.");
-
-      var navigated = new TaskCompletionSource<bool>(
-        TaskCreationOptions.RunContinuationsAsynchronously);
-      webView.NavigationCompleted += (_, eventArgs) =>
-      {
-        if (eventArgs.IsSuccess)
-        {
-          navigated.TrySetResult(true);
-        }
-        else
-        {
-          navigated.TrySetException(new InvalidOperationException(
-            $"WebView navigation failed: {eventArgs.WebErrorStatus}."));
-        }
-      };
-      webView.CoreWebView2.NavigateToString(shell);
-      PumpUntilCompleted(navigated.Task, "production transcript shell navigation");
-
-      Task<string> replace = webView.CoreWebView2.ExecuteScriptAsync(replaceScript);
-      PumpUntilCompleted(replace, "production replaceTranscriptDom payload");
-
-      string nestedJson = JsonSerializer.Serialize(
-        "1. *Nested numbered item with a table inside it*");
-      string tableJson = JsonSerializer.Serialize("| Column | Value | Style |");
-      string probe = $$"""
+    string nestedJson = JsonSerializer.Serialize(nestedFragment);
+    string nestedWordJson = JsonSerializer.Serialize(nestedWord);
+    string tableJson = JsonSerializer.Serialize(tableFragment);
+    string tableWordJson = JsonSerializer.Serialize(tableWord);
+    string probe = $$"""
 (() => {
-  setPlayback('speaking', {{nestedJson}}, 3, 'Nested', {{responseIdentity.NodeId}}, false);
+  setPlayback('speaking', {{nestedJson}}, {{nestedWordIndex}},
+    {{nestedWordJson}}, {{nodeId}}, false);
   const nested = {
     fragment: currentFragmentText,
     activeWords: [...transcript.querySelectorAll('.word.active')]
@@ -189,7 +347,8 @@ Like this:
     listHighlights: transcript.querySelectorAll('.speech-list-item-active').length
   };
 
-  setPlayback('speaking', {{tableJson}}, 1, 'Column', {{responseIdentity.NodeId}}, false);
+  setPlayback('speaking', {{tableJson}}, {{tableWordIndex}},
+    {{tableWordJson}}, {{nodeId}}, false);
   const table = {
     fragment: currentFragmentText,
     activeWords: [...transcript.querySelectorAll('.word.active')]
@@ -200,45 +359,40 @@ Like this:
   return JSON.stringify({nested, table});
 })()
 """;
-      Task<string> probeTask = webView.CoreWebView2.ExecuteScriptAsync(probe);
-      PumpUntilCompleted(probeTask, "production nested-list playback probe");
-      string encoded = JsonSerializer.Deserialize<string>(probeTask.Result) ?? string.Empty;
-      Require(encoded.Length != 0,
-        "Production nested-list playback probe returned no result.");
-      using JsonDocument result = JsonDocument.Parse(encoded);
-      JsonElement nested = result.RootElement.GetProperty("nested");
-      JsonElement table = result.RootElement.GetProperty("table");
+    Task<string> probeTask = webView.CoreWebView2.ExecuteScriptAsync(probe);
+    PumpUntilCompleted(probeTask, $"{description} playback probe");
+    string encoded = JsonSerializer.Deserialize<string>(probeTask.Result) ?? string.Empty;
+    Require(encoded.Length != 0,
+      $"{description} playback probe returned no result.");
+    using JsonDocument result = JsonDocument.Parse(encoded);
+    JsonElement nested = result.RootElement.GetProperty("nested");
+    JsonElement table = result.RootElement.GetProperty("table");
 
-      Require(string.Equals(
-          nested.GetProperty("fragment").GetString(),
-          "1. *Nested numbered item with a table inside it*",
-          StringComparison.Ordinal),
-        "Production playback could not resolve the nested numbered-list fragment.");
-      Require(string.Equals(
-          nested.GetProperty("activeWords").GetString(),
-          "Nested",
-          StringComparison.Ordinal),
-        "Production payload did not highlight the nested list body word.");
-      Require(nested.GetProperty("listHighlights").GetInt32() == 0,
-        "An ancestor whole-list-item ordinal highlight remained during nested body speech.");
+    Require(string.Equals(
+        nested.GetProperty("fragment").GetString(),
+        nestedFragment,
+        StringComparison.Ordinal),
+      $"{description}: playback could not resolve the nested numbered-list fragment.");
+    Require(string.Equals(
+        nested.GetProperty("activeWords").GetString(),
+        nestedWord,
+        StringComparison.Ordinal),
+      $"{description}: nested list body word was not highlighted.");
+    Require(nested.GetProperty("listHighlights").GetInt32() == 0,
+      $"{description}: ancestor list-item highlight remained during nested body speech.");
 
-      Require(string.Equals(
-          table.GetProperty("fragment").GetString(),
-          "| Column | Value | Style |",
-          StringComparison.Ordinal),
-        "Production playback could not resolve the nested table fragment.");
-      Require(string.Equals(
-          table.GetProperty("activeWords").GetString(),
-          "Column",
-          StringComparison.Ordinal),
-        "Production payload did not highlight the nested table word.");
-      Require(table.GetProperty("listHighlights").GetInt32() == 0,
-        "An ancestor whole-list-item ordinal highlight remained during nested table speech.");
-    }
-    finally
-    {
-      Directory.Delete(root, recursive: true);
-    }
+    Require(string.Equals(
+        table.GetProperty("fragment").GetString(),
+        tableFragment,
+        StringComparison.Ordinal),
+      $"{description}: playback could not resolve the nested table fragment.");
+    Require(string.Equals(
+        table.GetProperty("activeWords").GetString(),
+        tableWord,
+        StringComparison.Ordinal),
+      $"{description}: nested table word was not highlighted.");
+    Require(table.GetProperty("listHighlights").GetInt32() == 0,
+      $"{description}: ancestor list-item highlight remained during nested table speech.");
   }
 
   private static string WriteProductionFixture(string root, string response)
