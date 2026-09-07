@@ -1,10 +1,11 @@
+using Markdig;
 using System.Text.Json;
 
 namespace AgentPanelSpeaker;
 
 /// <summary>
 /// Runs focused regressions for preserving ordered-list ordinals through the
-/// production AgentPanelSpeaker speech pipeline.
+/// production AgentPanelSpeaker speech and transcript-mapping pipelines.
 /// </summary>
 internal static class Issue24SpeechOrdinalRegressionTestRunner
 {
@@ -19,7 +20,8 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
       ("speech-ordinals/production-history", TestProductionHistory),
       ("speech-ordinals/non-one-and-nested", TestNonOneAndNested),
       ("speech-ordinals/markdown-prefix-regressions", TestMarkdownPrefixRegressions),
-      ("speech-ordinals/final-tts-markup", TestFinalTtsMarkup)
+      ("speech-ordinals/final-tts-markup", TestFinalTtsMarkup),
+      ("speech-ordinals/rendered-marker-mapping", TestRenderedMarkerMapping)
     };
 
     int failures = 0;
@@ -153,6 +155,72 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
   }
 
   /// <summary>
+  /// Verifies the production rendered-token mapping can associate each spoken
+  /// numbered-list fragment with the corresponding HTML list item.  Browser
+  /// ordered-list markers are implicit and therefore absent from text nodes;
+  /// the mapping layer must still resolve the speech node rather than leaving
+  /// the previous transcript marker active.
+  /// </summary>
+  private static void TestRenderedMarkerMapping()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue24-map-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+      string path = WriteProductionFixture(
+        root,
+        "1. First item\n2. Second item\n3. Third item");
+      var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+      TranscriptPresentationDomResult presentation =
+        TranscriptPresentationDomFormatter.Format(
+          path,
+          AgentSource.Codex,
+          pipeline);
+      IReadOnlyList<TranscriptNodeIdentity> identities =
+        TranscriptNodeIdentityMap.Build(path, AgentSource.Codex);
+      TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
+        presentation.Html,
+        identities,
+        CancellationToken.None);
+
+      string[] expectedSegments =
+      {
+        "1. First item",
+        "2. Second item",
+        "3. Third item"
+      };
+      foreach (string expectedSegment in expectedSegments)
+      {
+        TranscriptNodeIdentity? identity = identities.FirstOrDefault(item =>
+          item.Segments.Contains(expectedSegment, StringComparer.Ordinal));
+        Require(identity is not null,
+          $"No transcript identity contains speech segment '{expectedSegment}'.");
+        Require(searchIndex.TryResolveVoiceOrigin(
+            identity!.NodeId,
+            0,
+            out int recordNumber,
+            out string sourceId,
+            out int recordWordIndex),
+          $"Rendered transcript could not map speech segment '{expectedSegment}'.");
+        Require(recordNumber == identity.RecordNumber,
+          $"Speech segment '{expectedSegment}' mapped to record {recordNumber}, " +
+          $"expected {identity.RecordNumber}.");
+        Require(string.Equals(sourceId, identity.SourceId, StringComparison.Ordinal),
+          $"Speech segment '{expectedSegment}' mapped to source '{sourceId}', " +
+          $"expected '{identity.SourceId}'.");
+        Require(recordWordIndex >= 0,
+          $"Speech segment '{expectedSegment}' mapped to an invalid word index.");
+      }
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
   /// Builds speech history through the same Core projection, monitor cleanup,
   /// sentence segmentation, and fragment construction used for existing
   /// production transcript history.
@@ -165,33 +233,7 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
     Directory.CreateDirectory(root);
     try
     {
-      string path = Path.Combine(root, "rollout-issue24.jsonl");
-      string[] records =
-      {
-        JsonSerializer.Serialize(new
-        {
-          type = "event_msg",
-          timestamp = "2026-09-07T17:00:00.000Z",
-          payload = new
-          {
-            type = "user_message",
-            message = "Give me a numbered list"
-          }
-        }),
-        JsonSerializer.Serialize(new
-        {
-          type = "event_msg",
-          timestamp = "2026-09-07T17:00:01.000Z",
-          payload = new
-          {
-            type = "agent_message",
-            phase = "final",
-            message = response
-          }
-        })
-      };
-      File.WriteAllLines(path, records);
-
+      string path = WriteProductionFixture(root, response);
       LocatedSession session = SessionLocator.FromPath(path, AgentSource.Codex);
       using var monitor = new JsonlSessionMonitor();
       return monitor.LoadHistoryPreview(
@@ -202,6 +244,40 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
     {
       Directory.Delete(root, recursive: true);
     }
+  }
+
+  /// <summary>
+  /// Writes the two-record Codex fixture used by the production-path tests.
+  /// </summary>
+  private static string WriteProductionFixture(string root, string response)
+  {
+    string path = Path.Combine(root, "rollout-issue24.jsonl");
+    string[] records =
+    {
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-07T17:00:00.000Z",
+        payload = new
+        {
+          type = "user_message",
+          message = "Give me a numbered list"
+        }
+      }),
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-07T17:00:01.000Z",
+        payload = new
+        {
+          type = "agent_message",
+          phase = "final",
+          message = response
+        }
+      })
+    };
+    File.WriteAllLines(path, records);
+    return path;
   }
 
   /// <summary>
