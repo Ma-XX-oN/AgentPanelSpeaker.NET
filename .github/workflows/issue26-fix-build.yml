@@ -23,38 +23,15 @@ jobs:
         run: |
           $path = 'AgentPanelSpeaker/JsonlSessionMonitor.cs'
           $text = [IO.File]::ReadAllText($path)
-          $oldCall = @"
-    EligibleHistory eligibleHistory = ReadEligibleHistory(
-      session,
-      pendingInputRequests,
-      includeRolledBackTurns);
-"@
-          $newCall = @"
-    EligibleHistory eligibleHistory = ReadEligibleHistory(
-      session,
-      pendingInputRequests,
-      includeRolledBackTurns,
-      includeUserContext);
-"@
-          if (($text.Split($oldCall).Count - 1) -ne 1) { throw 'Expected one ReadEligibleHistory call target.' }
-          $text = $text.Replace($oldCall, $newCall)
-          $oldSignature = @"
-  private EligibleHistory ReadEligibleHistory(
-    LocatedSession session,
-    IDictionary<string, CodexInputRequest> pendingInputRequests,
-    bool includeRolledBackTurns,
-    DateTime? minimumTimestampUtc = null)
-"@
-          $newSignature = @"
-  private EligibleHistory ReadEligibleHistory(
-    LocatedSession session,
-    IDictionary<string, CodexInputRequest> pendingInputRequests,
-    bool includeRolledBackTurns,
-    bool includeUserContext,
-    DateTime? minimumTimestampUtc = null)
-"@
-          if (($text.Split($oldSignature).Count - 1) -ne 1) { throw 'Expected one ReadEligibleHistory signature target.' }
-          $text = $text.Replace($oldSignature, $newSignature)
+          $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+          $callPattern = 'EligibleHistory eligibleHistory = ReadEligibleHistory\(\r?\n      session,\r?\n      pendingInputRequests,\r?\n      includeRolledBackTurns\);'
+          if ([regex]::Matches($text, $callPattern).Count -ne 1) { throw 'Expected one ReadEligibleHistory call target.' }
+          $callReplacement = 'EligibleHistory eligibleHistory = ReadEligibleHistory(' + $nl + '      session,' + $nl + '      pendingInputRequests,' + $nl + '      includeRolledBackTurns,' + $nl + '      includeUserContext);'
+          $text = [regex]::Replace($text, $callPattern, $callReplacement)
+          $signaturePattern = 'private EligibleHistory ReadEligibleHistory\(\r?\n    LocatedSession session,\r?\n    IDictionary<string, CodexInputRequest> pendingInputRequests,\r?\n    bool includeRolledBackTurns,\r?\n    DateTime\? minimumTimestampUtc = null\)'
+          if ([regex]::Matches($text, $signaturePattern).Count -ne 1) { throw 'Expected one ReadEligibleHistory signature target.' }
+          $signatureReplacement = 'private EligibleHistory ReadEligibleHistory(' + $nl + '    LocatedSession session,' + $nl + '    IDictionary<string, CodexInputRequest> pendingInputRequests,' + $nl + '    bool includeRolledBackTurns,' + $nl + '    bool includeUserContext,' + $nl + '    DateTime? minimumTimestampUtc = null)'
+          $text = [regex]::Replace($text, $signaturePattern, $signatureReplacement)
           [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
           git diff --check
       - name: Commit fix
