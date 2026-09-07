@@ -64,7 +64,6 @@ internal static class EnvironmentRegressionTestRunner
 
   private static void TestMainFormConstruction()
   {
-    ApplicationConfiguration.Initialize();
     using var form = new MainForm();
     IntPtr handle = form.Handle;
     Require(handle != IntPtr.Zero,
