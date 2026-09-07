@@ -88,17 +88,20 @@ internal static class Program
       int additional = AdditionalRegressionTestRunner.Run();
       int core = CoreRegressionTestRunner.Run();
       int speechOrdinals = Issue24SpeechOrdinalRegressionTestRunner.Run();
-      int speechOrdinalProduction = Issue24ProductionPathRegressionTestRunner.Run();
       int userContextSpeech = Issue26UserContextSpeechRegressionTestRunner.Run();
       int environment = EnvironmentRegressionTestRunner.Run();
+      // The WebView acceptance suite intentionally runs last. It constructs and
+      // tears down embedded browser instances and must not be allowed to affect
+      // otherwise independent environment-construction tests in this process.
+      int speechOrdinalProduction = Issue24ProductionPathRegressionTestRunner.Run();
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
                              additional == 0 &&
                              core == 0 &&
                              speechOrdinals == 0 &&
-                             speechOrdinalProduction == 0 &&
                              userContextSpeech == 0 &&
-                             environment == 0
+                             environment == 0 &&
+                             speechOrdinalProduction == 0
         ? 0
         : 1;
       return;
