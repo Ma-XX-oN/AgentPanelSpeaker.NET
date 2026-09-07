@@ -58,20 +58,78 @@ function withClaudeSpeechMetadata(event, records) {
 }
 
 /**
+ * Adds block-level speech selection and voice-role metadata to a canonical
+ * Codex User message without removing or rewriting any canonical content.
+ *
+ * `user_context` is disabled by default and can be enabled with the Core-owned
+ * `includeUserContext` option.  The actual User prompt remains speech eligible
+ * regardless of that option.  Both blocks stay in the canonical event so
+ * Markdown and HTML rendering are independent of speech selection.
+ *
+ * @param {Object<string, *>} event - Interactive canonical event.
+ * @param {Object<string, *>} options - Speech-session projection options.
+ * @returns {Object<string, *>} Event clone with block-level speech metadata.
+ */
+function withCodexSpeechMetadata(event, options) {
+  if (event?.provider !== 'codex' ||
+      event?.kind !== 'message' ||
+      event?.role !== 'user') {
+    return event;
+  }
+
+  const includeUserContext = options?.includeUserContext === true;
+  return {
+    ...event,
+    blocks: (event.blocks ?? []).map(block => {
+      if (block?.type === 'user_context') {
+        return {
+          ...block,
+          speech: {
+            ...(block?.speech ?? {}),
+            eligible: includeUserContext,
+            voice_role: 'user_context'
+          }
+        };
+      }
+
+      if (block?.type === 'text') {
+        return {
+          ...block,
+          speech: {
+            ...(block?.speech ?? {}),
+            eligible: true,
+            voice_role: 'user'
+          }
+        };
+      }
+
+      return block;
+    })
+  };
+}
+
+/**
  * Adapts a provider session for speech/display consumers while preserving
  * provider-specific eligibility facts in AIConversationCore.
  *
  * This function does not create a second semantic model.  It returns the same
  * canonical interactive events and adds only projection metadata describing
- * whether a canonical event participates in speech/timing behavior.
+ * whether canonical events/blocks participate in speech/timing behaviour.
+ * `options.includeUserContext` enables Codex `user_context` speech; it defaults
+ * to false while leaving the canonical display model unchanged.
  *
  * @param {string} provider - Canonical provider identifier.
  * @param {Array<Object<string, *>>} records - Ordered provider/source records.
- * @param {Object<string, *>} options - Optional provider normalization options.
+ * @param {Object<string, *>} options - Optional provider/speech projection options.
  * @returns {Array<Object<string, *>>} Canonical events with speech metadata.
  */
 export function adaptSpeechSessionRecords(provider, records, options = {}) {
   const events = adaptInteractiveSessionRecords(provider, records, options);
-  if (provider !== 'claude') return events;
-  return events.map(event => withClaudeSpeechMetadata(event, records));
+  if (provider === 'codex') {
+    return events.map(event => withCodexSpeechMetadata(event, options));
+  }
+  if (provider === 'claude') {
+    return events.map(event => withClaudeSpeechMetadata(event, records));
+  }
+  return events;
 }

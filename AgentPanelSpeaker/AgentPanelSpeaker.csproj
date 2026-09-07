@@ -33,6 +33,10 @@
           Link="tools\AIConversationCore-runtime\src\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\tools\AIConversationCore-runtime\node_modules\marked\**\*"
+          Link="tools\AIConversationCore-runtime\node_modules\marked\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

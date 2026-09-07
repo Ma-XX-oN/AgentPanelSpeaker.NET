@@ -6,5 +6,8 @@
   "scripts": {
     "build:browser": "node scripts/build-browser-bundle.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "marked": "18.0.11"
   }
 }

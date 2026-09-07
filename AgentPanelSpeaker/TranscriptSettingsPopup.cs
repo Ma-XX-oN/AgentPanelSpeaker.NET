@@ -154,7 +154,8 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
       {
         advancedPopup.SetSettings(
         Settings.HighlightQueueCapacity,
-        Settings.ShowRolledBackHistory);
+        Settings.ShowRolledBackHistory,
+        Settings.SpeakUserContext);
       }
       UpdateDisplays();
     }
@@ -220,7 +221,8 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
       advancedPopup.ApplyTheme(dark);
       advancedPopup.SetSettings(
         Settings.HighlightQueueCapacity,
-        Settings.ShowRolledBackHistory);
+        Settings.ShowRolledBackHistory,
+        Settings.SpeakUserContext);
     }
     UpdateDisplays();
     Invalidate(true);
@@ -445,7 +447,10 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
   {
     TranscriptAdvancedSettingsPopup popup = GetOrCreateAdvancedPopup();
     popup.ApplyTheme(_dark);
-    popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
+    popup.SetSettings(
+      Settings.HighlightQueueCapacity,
+      Settings.ShowRolledBackHistory,
+      Settings.SpeakUserContext);
     PositionAdvancedPopup(popup);
     ShowOwnedPopup(popup);
   }
@@ -463,7 +468,8 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
       Settings = (Settings with
       {
         HighlightQueueCapacity = popup.QueueCapacity,
-        ShowRolledBackHistory = popup.ShowRolledBackHistory
+        ShowRolledBackHistory = popup.ShowRolledBackHistory,
+        SpeakUserContext = popup.SpeakUserContext
       }).Normalize();
       SettingsChanged?.Invoke(this, EventArgs.Empty);
     };

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = '54a70c2989de0c02f03b28a2f8d8c6986b974141';
+const CORE_COMMIT = '6c9c2eccc4df301105f4b330fb9216b90d35c5f7';
 
 /**
  * Returns the configured development checkout or the runtime bundled beside
@@ -112,7 +112,8 @@ function execute(request) {
   }
 
   const options = {
-    includeRolledBackTurns: request?.options?.includeRolledBackTurns === true
+    includeRolledBackTurns: request?.options?.includeRolledBackTurns === true,
+    includeUserContext: request?.options?.includeUserContext === true
   };
   const events = adapt(request.provider, request.records, options);
   const projection = core.projectCanonicalConversation(events);

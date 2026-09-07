@@ -10,8 +10,8 @@ namespace AgentPanelSpeaker;
 internal static class CanonicalSpeechProjection
 {
   /// <summary>
-  /// Removes canonical events explicitly marked non-speakable and applies the
-  /// core-supplied background-work identity strategy.
+  /// Removes canonical events/blocks explicitly marked non-speakable and
+  /// applies the core-supplied background-work identity strategy.
   /// </summary>
   public static AIConversationProjection Prepare(
     AIConversationProjection projection)
@@ -25,11 +25,37 @@ internal static class CanonicalSpeechProjection
         continue;
       }
 
-      events.Add(GetBackgroundIdentityKind(eventElement) == "task_timestamp"
-        ? WithoutToolCallRelationship(eventElement)
-        : eventElement.Clone());
+      JsonElement speakable = WithoutIneligibleBlocks(eventElement);
+      events.Add(GetBackgroundIdentityKind(speakable) == "task_timestamp"
+        ? WithoutToolCallRelationship(speakable)
+        : speakable);
     }
     return projection with { Events = events.ToArray() };
+  }
+
+  /// <summary>
+  /// Removes canonical blocks that Core explicitly marks ineligible for speech.
+  /// </summary>
+  private static JsonElement WithoutIneligibleBlocks(JsonElement eventElement)
+  {
+    JsonObject? root = JsonNode.Parse(eventElement.GetRawText()) as JsonObject;
+    if (root?["blocks"] is JsonArray blocks)
+    {
+      for (int index = blocks.Count - 1; index >= 0; --index)
+      {
+        if (blocks[index] is JsonObject block &&
+            block["speech"] is JsonObject speech &&
+            speech["eligible"] is JsonValue value &&
+            value.TryGetValue(out bool eligible) && !eligible)
+        {
+          blocks.RemoveAt(index);
+        }
+      }
+    }
+
+    using JsonDocument document = JsonDocument.Parse(
+      root?.ToJsonString() ?? eventElement.GetRawText());
+    return document.RootElement.Clone();
   }
 
   /// <summary>

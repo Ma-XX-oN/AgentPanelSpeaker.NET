@@ -1576,7 +1576,9 @@ internal sealed class MainForm : Form, IMessageFilter
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
         preindexedHistory,
         IncludeRolledBackTurns:
-          _transcriptSettingsPopup.Settings.ShowRolledBackHistory));
+          _transcriptSettingsPopup.Settings.ShowRolledBackHistory,
+        IncludeUserContext:
+          _transcriptSettingsPopup.Settings.SpeakUserContext));
       if (reusePausedHistory)
       {
         PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
@@ -2195,9 +2197,11 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
-    bool historyVisibilityChanged =
+    bool historyProjectionChanged =
       _settingsStore.Current.Transcript.ShowRolledBackHistory !=
-      settings.ShowRolledBackHistory;
+        settings.ShowRolledBackHistory ||
+      _settingsStore.Current.Transcript.SpeakUserContext !=
+        settings.SpeakUserContext;
     _transcriptView.ApplySettings(settings, dark);
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
@@ -2210,7 +2214,7 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     _transcriptSettingsSaveTimer.Stop();
     _transcriptSettingsSaveTimer.Start();
-    if (historyVisibilityChanged && !_monitor.IsRunning &&
+    if (historyProjectionChanged && !_monitor.IsRunning &&
         !string.IsNullOrWhiteSpace(_sessionPathTextBox.Text))
     {
       try
@@ -4043,7 +4047,8 @@ internal sealed class MainForm : Form, IMessageFilter
         _monitor.LoadHistoryPreview(
           session,
           startAtLatestTurn,
-          _transcriptSettingsPopup.Settings.ShowRolledBackHistory));
+          _transcriptSettingsPopup.Settings.ShowRolledBackHistory,
+          _transcriptSettingsPopup.Settings.SpeakUserContext));
       if (_closing || IsDisposed || generation != Volatile.Read(
             ref _historyPreviewGeneration) || _monitor.IsRunning ||
           !string.Equals(

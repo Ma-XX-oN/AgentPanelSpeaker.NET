@@ -14,9 +14,13 @@ namespace AgentPanelSpeaker;
 /// <param name="CodexSessionIndexPath">
 /// Optional caller-discovered Codex session-index path. The core reads/parses it.
 /// </param>
+/// <param name="IncludeUserContext">
+/// Whether Core-identified User/IDE context participates in speech.
+/// </param>
 internal sealed record AIConversationCoreProjectOptions(
   bool IncludeRolledBackTurns = false,
-  string? CodexSessionIndexPath = null);
+  string? CodexSessionIndexPath = null,
+  bool IncludeUserContext = false);
 
 /// <summary>
 /// Owns one persistent Node.js bridge process for AIConversationCore.
@@ -24,7 +28,7 @@ internal sealed record AIConversationCoreProjectOptions(
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "54a70c2989de0c02f03b28a2f8d8c6986b974141";
+    "6c9c2eccc4df301105f4b330fb9216b90d35c5f7";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
@@ -104,7 +108,9 @@ internal sealed class AIConversationCoreClient : IDisposable
       "project",
       provider,
       recordsDocument.RootElement.Clone(),
-      new CoreOptions(effective.IncludeRolledBackTurns),
+      new CoreOptions(
+        effective.IncludeRolledBackTurns,
+        effective.IncludeUserContext),
       supplementary);
     CoreResponse response = SendRequest(request);
     if (response.Projection is null)
@@ -392,7 +398,8 @@ internal sealed class AIConversationCoreClient : IDisposable
     [property: JsonPropertyName("supplementary_sources")] IReadOnlyDictionary<string, object>? SupplementarySources);
 
   private sealed record CoreOptions(
-    [property: JsonPropertyName("includeRolledBackTurns")] bool IncludeRolledBackTurns);
+    [property: JsonPropertyName("includeRolledBackTurns")] bool IncludeRolledBackTurns,
+    [property: JsonPropertyName("includeUserContext")] bool IncludeUserContext);
 
   private sealed record CoreResponse(
     [property: JsonPropertyName("ok")] bool Ok,

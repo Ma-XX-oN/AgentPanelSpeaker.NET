@@ -90,21 +90,21 @@ replace_once(
 # LoadHistoryPreview -> LoadExistingHistory
 replace_once(
   "AgentPanelSpeaker/JsonlSessionMonitor.cs",
-  """      pendingInputRequests,\n      includeRolledBackTurns);""",
-  """      pendingInputRequests,\n      includeRolledBackTurns,\n      includeUserContext);""")
+  """    return LoadExistingHistory(\n      session,\n      speakExistingLatestTurn,\n      ref nextNodeId,\n      recentFingerprintQueue,\n      recentFingerprintSet,\n      preview,\n      pendingInputRequests,\n      includeRolledBackTurns);""",
+  """    return LoadExistingHistory(\n      session,\n      speakExistingLatestTurn,\n      ref nextNodeId,\n      recentFingerprintQueue,\n      recentFingerprintSet,\n      preview,\n      pendingInputRequests,\n      includeRolledBackTurns,\n      includeUserContext);""")
 replace_once(
   "AgentPanelSpeaker/JsonlSessionMonitor.cs",
   """          ProjectionOptions(session, settings.IncludeRolledBackTurns));""",
   """          ProjectionOptions(\n            session,\n            settings.IncludeRolledBackTurns,\n            settings.IncludeUserContext));""")
-# Two Run() history calls.
-old_history = """            pendingInputRequests,\n            settings.IncludeRolledBackTurns);"""
-new_history = """            pendingInputRequests,\n            settings.IncludeRolledBackTurns,\n            settings.IncludeUserContext);"""
-monitor_path = ROOT / "AgentPanelSpeaker/JsonlSessionMonitor.cs"
-monitor_text = monitor_path.read_text(encoding="utf-8")
-count = monitor_text.count(old_history)
-if count != 2:
-  raise RuntimeError(f"JsonlSessionMonitor.cs: expected two Run history targets, found {count}")
-monitor_path.write_text(monitor_text.replace(old_history, new_history), encoding="utf-8", newline="\n")
+# Run() history calls use different indentation at the initial and switched-session sites.
+replace_once(
+  "AgentPanelSpeaker/JsonlSessionMonitor.cs",
+  """          pendingInputRequests,\n          settings.IncludeRolledBackTurns);""",
+  """          pendingInputRequests,\n          settings.IncludeRolledBackTurns,\n          settings.IncludeUserContext);""")
+replace_once(
+  "AgentPanelSpeaker/JsonlSessionMonitor.cs",
+  """              pendingInputRequests,\n              settings.IncludeRolledBackTurns);""",
+  """              pendingInputRequests,\n              settings.IncludeRolledBackTurns,\n              settings.IncludeUserContext);""")
 # LoadExistingHistory signature gets user-context option.
 replace_once(
   "AgentPanelSpeaker/JsonlSessionMonitor.cs",
@@ -156,10 +156,7 @@ if (core_root / "package-lock.json").exists():
 marked_src = core_root / "node_modules/marked"
 marked_dst = runtime / "node_modules/marked"
 shutil.rmtree(marked_dst, ignore_errors=True)
-(marked_dst / "lib").mkdir(parents=True, exist_ok=True)
-for name in ("package.json", "LICENSE.md"):
-  shutil.copy2(marked_src / name, marked_dst / name)
-shutil.copy2(marked_src / "lib/marked.esm.js", marked_dst / "lib/marked.esm.js")
+shutil.copytree(marked_src, marked_dst)
 
 # AgentPanel's third-party notice explicitly covers the newly deployed package.
 notice = ROOT / "THIRD-PARTY-NOTICES.md"

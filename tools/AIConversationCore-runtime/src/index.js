@@ -12,6 +12,7 @@ export {
 } from './projections/turn-header.js';
 
 export { renderCanonicalMarkdown } from './projections/markdown-revisions.js';
+export { renderCanonicalHtml } from './projections/html.js';
 export { buildCanonicalPresentation } from './projections/presentation-revisions.js';
 export { projectCanonicalConversation } from './projections/structured.js';
 export { loadConversationSources } from './sources/conversation.js';

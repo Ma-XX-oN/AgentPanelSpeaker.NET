@@ -127,13 +127,11 @@ internal static class CanonicalProjectionExtractor
         }
         else
         {
-          AddTextBlocks(
+          AddCanonicalUserBlocks(
             nodes,
             eventElement,
             CanonicalNodeKind(source, kind, contentType, role, channel),
-            ContentCategory.User,
-            timestamp,
-            startsUserTurn: true);
+            timestamp);
         }
         continue;
       }
@@ -192,6 +190,40 @@ internal static class CanonicalProjectionExtractor
           GetString(block, "summary"))
         : GetString(block, "text");
       AddNode(nodes, nodeKind, category, text, timestamp);
+    }
+  }
+
+  /// <summary>
+  /// Maps Core-selected User blocks to the corresponding app voice category.
+  /// </summary>
+  private static void AddCanonicalUserBlocks(
+    ICollection<ExtractedNode> nodes,
+    JsonElement eventElement,
+    string nodeKind,
+    string? timestamp)
+  {
+    bool first = true;
+    foreach (JsonElement block in EnumerateBlocks(eventElement))
+    {
+      string blockType = GetString(block, "type");
+      if (blockType is not ("text" or "user_context"))
+      {
+        continue;
+      }
+
+      string voiceRole = GetNestedString(block, "speech", "voice_role") ??
+        string.Empty;
+      ContentCategory category = voiceRole == "user_context"
+        ? ContentCategory.UserContext
+        : ContentCategory.User;
+      AddNode(
+        nodes,
+        nodeKind,
+        category,
+        GetString(block, "text"),
+        timestamp,
+        startsUserTurn: first);
+      first = false;
     }
   }
 
