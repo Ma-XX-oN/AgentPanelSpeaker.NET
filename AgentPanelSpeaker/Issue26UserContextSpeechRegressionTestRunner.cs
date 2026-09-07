@@ -20,8 +20,12 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
     {
       ("user-context-speech/settings-default-and-persistence",
         TestSettingsDefaultAndPersistence),
+      ("user-context-speech/settings-change-tracking",
+        TestSettingsChangeTracking),
       ("user-context-speech/core-option-and-extraction",
-        TestCoreOptionAndExtraction)
+        TestCoreOptionAndExtraction),
+      ("user-context-speech/live-monitor-toggle",
+        TestLiveMonitorToggle)
     };
 
     int failed = 0;
@@ -65,6 +69,40 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
     Require(roundTrip is not null, "TranscriptSettings JSON round-trip failed.");
     Require(property.GetValue(roundTrip) is false,
       "SpeakUserContext did not survive the settings JSON round-trip.");
+  }
+
+  /// <summary>
+  /// Requires the switch to participate in the application's ordinary dirty
+  /// tracking and selective-save merge path.
+  /// </summary>
+  private static void TestSettingsChangeTracking()
+  {
+    UserSettings saved = UserSettings.CreateDefault(Array.Empty<string>());
+    UserSettings working = saved with
+    {
+      Transcript = saved.Transcript with { SpeakUserContext = true }
+    };
+
+    IReadOnlyList<SettingsChangeSet.Change> changes =
+      SettingsChangeSet.GetChanges(saved, working);
+    Require(
+      changes.Any(change =>
+        string.Equals(
+          change.Key,
+          "Transcript/SpeakUserContext",
+          StringComparison.Ordinal)),
+      "SpeakUserContext is not reported by SettingsChangeSet.GetChanges.");
+
+    UserSettings merged = SettingsChangeSet.MergeSelected(
+      saved,
+      working,
+      new HashSet<string>(StringComparer.Ordinal)
+      {
+        "Transcript/SpeakUserContext"
+      });
+    Require(
+      merged.Transcript.SpeakUserContext,
+      "Selective settings merge did not retain SpeakUserContext.");
   }
 
   /// <summary>
@@ -138,6 +176,106 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
   }
 
   /// <summary>
+  /// Reproduces the user-visible failure: changing Speak User / IDE context
+  /// while the real MainForm monitor is already running must rebuild the live
+  /// speech history immediately, without requiring an application restart.
+  /// </summary>
+  private static void TestLiveMonitorToggle()
+  {
+    const string prompt = "What time is it in Paris?";
+    const string sourceMessage =
+      "# Context from my IDE setup:\n\n" +
+      "## Active file: sessions/example.jsonl\n\n" +
+      "## Open tabs:\n" +
+      "- sessions/example.jsonl\n\n" +
+      "## My request for Codex:\n" + prompt;
+    string record = JsonSerializer.Serialize(new
+    {
+      type = "event_msg",
+      timestamp = "2026-09-07T00:00:00Z",
+      payload = new { type = "user_message", message = sourceMessage }
+    });
+
+    string directory = Path.Combine(
+      Path.GetTempPath(),
+      "AgentPanelSpeaker-Issue26-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    string path = Path.Combine(directory, "rollout-issue26.jsonl");
+    File.WriteAllText(path, record + Environment.NewLine);
+
+    MainForm? form = null;
+    try
+    {
+      form = new MainForm();
+      _ = form.Handle;
+
+      SetField(form, "_loadingSettings", true);
+      GetField<ComboBox>(form, "_sourceComboBox").SelectedItem =
+        AgentSource.Codex;
+      GetField<TextBox>(form, "_sessionPathTextBox").Text = path;
+      GetField<CheckBox>(form, "_followLatestCheckBox").Checked = false;
+      GetField<CheckBox>(form, "_speakExistingCheckBox").Checked = false;
+      SetField(form, "_pathIsManual", true);
+      TranscriptSettingsPopup popup =
+        GetField<TranscriptSettingsPopup>(form, "_transcriptSettingsPopup");
+      popup.SetSettings(
+        popup.Settings with { SpeakUserContext = false },
+        dark: false);
+      SetField(form, "_loadingSettings", false);
+
+      InvokeTask(form, "StartMonitoringAsync").GetAwaiter().GetResult();
+      JsonlSessionMonitor monitor =
+        GetField<JsonlSessionMonitor>(form, "_monitor");
+      SpeechService speech = GetField<SpeechService>(form, "_speech");
+      WaitUntil(
+        () => monitor.IsRunning &&
+          ReadSpeechHistoryCategories(speech).SequenceEqual(
+            new[] { ContentCategory.User }),
+        "Initial running monitor did not load prompt-only speech history.");
+
+      popup.SetSettings(
+        popup.Settings with { SpeakUserContext = true },
+        dark: false);
+      InvokeVoid(form, "TranscriptSettingsChanged");
+      WaitUntil(
+        () => monitor.IsRunning &&
+          ReadSpeechHistoryCategories(speech).SequenceEqual(
+            new[] { ContentCategory.UserContext, ContentCategory.User }),
+        "Enabling SpeakUserContext while monitoring did not rebuild live speech history.");
+
+      InvokeVoid(form, "SaveControlsToSettings");
+      popup.SetSettings(
+        popup.Settings with { SpeakUserContext = false },
+        dark: false);
+      InvokeVoid(form, "TranscriptSettingsChanged");
+      WaitUntil(
+        () => monitor.IsRunning &&
+          ReadSpeechHistoryCategories(speech).SequenceEqual(
+            new[] { ContentCategory.User }),
+        "Disabling SpeakUserContext while monitoring did not rebuild live speech history.");
+    }
+    finally
+    {
+      if (form is not null)
+      {
+        GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
+          "issue26-regression-cleanup");
+        form.Dispose();
+      }
+      try
+      {
+        Directory.Delete(directory, recursive: true);
+      }
+      catch (IOException)
+      {
+      }
+      catch (UnauthorizedAccessException)
+      {
+      }
+    }
+  }
+
+  /// <summary>
   /// Creates project options by the production record constructor while keeping
   /// this RED test compilable before IncludeUserContext exists.
   /// </summary>
@@ -190,6 +328,88 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
       result.Add((category, text));
     }
     return result;
+  }
+
+  /// <summary>
+  /// Reads the actual SpeechService history used by playback.
+  /// </summary>
+  private static IReadOnlyList<ContentCategory> ReadSpeechHistoryCategories(
+    SpeechService speech)
+  {
+    FieldInfo historyField = typeof(SpeechService).GetField(
+      "_history",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("SpeechService history field was not found.");
+    if (historyField.GetValue(speech) is not IEnumerable history)
+    {
+      throw new InvalidOperationException("SpeechService history is not enumerable.");
+    }
+
+    var result = new List<ContentCategory>();
+    foreach (object item in history)
+    {
+      PropertyInfo categoryProperty = item.GetType().GetProperty("Category") ??
+        throw new InvalidOperationException("Speech history item has no Category.");
+      result.Add((ContentCategory)(categoryProperty.GetValue(item) ??
+        throw new InvalidOperationException("Speech history category is null.")));
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// Waits for asynchronous monitor/UI work while pumping the STA message loop.
+  /// </summary>
+  private static void WaitUntil(Func<bool> condition, string failure)
+  {
+    DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+    while (DateTime.UtcNow < deadline)
+    {
+      Application.DoEvents();
+      if (condition())
+      {
+        return;
+      }
+      Thread.Sleep(20);
+    }
+    throw new InvalidOperationException(failure);
+  }
+
+  private static T GetField<T>(object target, string name)
+  {
+    FieldInfo field = target.GetType().GetField(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException($"Field {name} was not found.");
+    return (T)(field.GetValue(target) ??
+      throw new InvalidOperationException($"Field {name} was null."));
+  }
+
+  private static void SetField<T>(object target, string name, T value)
+  {
+    FieldInfo field = target.GetType().GetField(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException($"Field {name} was not found.");
+    field.SetValue(target, value);
+  }
+
+  private static void InvokeVoid(object target, string name)
+  {
+    MethodInfo method = target.GetType().GetMethod(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException($"Method {name} was not found.");
+    _ = method.Invoke(target, null);
+  }
+
+  private static Task InvokeTask(object target, string name)
+  {
+    MethodInfo method = target.GetType().GetMethod(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException($"Method {name} was not found.");
+    return method.Invoke(target, null) as Task ??
+      throw new InvalidOperationException($"Method {name} did not return Task.");
   }
 
   /// <summary>
