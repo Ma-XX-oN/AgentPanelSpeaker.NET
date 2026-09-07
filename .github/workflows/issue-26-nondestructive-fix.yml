@@ -1,0 +1,134 @@
+name: Apply issue 26 non-destructive fix
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply production fix
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def once(text, old, new, label):
+            count = text.count(old)
+            if count != 1:
+              raise SystemExit(f'{label}: expected 1 match, got {count}')
+            return text.replace(old, new, 1)
+
+          settings = Path('AgentPanelSpeaker/SettingsChangeSet.cs')
+          text = settings.read_text(encoding='utf-8')
+          text = once(
+            text,
+            '      AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);',
+            '      AddScalar("Transcript/Maximized", ["Transcript", "Maximized"], oldValue.Maximized, newValue.Maximized);\n'
+            '      AddScalar("Transcript/SpeakUserContext", ["Transcript", "Speak User / IDE context"], oldValue.SpeakUserContext, newValue.SpeakUserContext);',
+            'settings change tracking')
+          text = once(
+            text,
+            '        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized)',
+            '        Maximized = Pick("Transcript/Maximized", saved.Transcript.Maximized, working.Transcript.Maximized),\n'
+            '        SpeakUserContext = Pick("Transcript/SpeakUserContext", saved.Transcript.SpeakUserContext, working.Transcript.SpeakUserContext)',
+            'settings selective merge')
+          settings.write_text(text, encoding='utf-8', newline='\n')
+
+          main = Path('AgentPanelSpeaker/MainForm.cs')
+          text = main.read_text(encoding='utf-8')
+          text = once(
+            text,
+            '  private bool _suppressMonitorTextUntilHistoryLoaded;\n',
+            '  private bool _suppressMonitorTextUntilHistoryLoaded;\n'
+            '  private volatile bool _speakUserContext;\n',
+            'playback policy field')
+          text = once(
+            text,
+            '      _speech.SetPolicyProviders(\n        _settingsStore.GetProfile,',
+            '      _speech.SetPolicyProviders(\n        GetPlaybackProfile,',
+            'speech profile provider')
+          text = once(
+            text,
+            '      _transcriptSettingsPopup.SetSettings(\n        settings.Transcript,\n        transcriptDark);',
+            '      _transcriptSettingsPopup.SetSettings(\n        settings.Transcript,\n        transcriptDark);\n'
+            '      _speakUserContext = settings.Transcript.SpeakUserContext;',
+            'load speech policy')
+          text = once(
+            text,
+            '        IncludeUserContext:\n          _transcriptSettingsPopup.Settings.SpeakUserContext));',
+            '        IncludeUserContext: true));',
+            'live monitor full user context')
+          text = once(
+            text,
+            '          _transcriptSettingsPopup.Settings.ShowRolledBackHistory,\n          _transcriptSettingsPopup.Settings.SpeakUserContext));',
+            '          _transcriptSettingsPopup.Settings.ShowRolledBackHistory,\n          includeUserContext: true));',
+            'paused history full user context')
+          text = once(
+            text,
+            '    bool historyProjectionChanged =\n      _settingsStore.Current.Transcript.ShowRolledBackHistory !=\n        settings.ShowRolledBackHistory ||\n      _settingsStore.Current.Transcript.SpeakUserContext !=\n        settings.SpeakUserContext;',
+            '    bool historyProjectionChanged =\n      _settingsStore.Current.Transcript.ShowRolledBackHistory !=\n        settings.ShowRolledBackHistory;\n'
+            '    _speakUserContext = settings.SpeakUserContext;',
+            'transcript settings policy')
+
+          marker = '''  /// <summary>
+          /// Reads one profile from its table row.
+          /// </summary>
+          private SpeechProfileSettings ReadVoiceProfile(ContentCategory category)
+          '''
+          helper = '''  /// <summary>
+          /// Resolves the final playback profile without changing indexed
+          /// canonical speech history. User Context stays indexed so toggling
+          /// its setting is an O(1) policy change rather than a session rebuild.
+          /// </summary>
+          private SpeechProfileSettings GetPlaybackProfile(ContentCategory category)
+          {
+            SpeechProfileSettings profile = _settingsStore.GetProfile(category);
+            return category == ContentCategory.UserContext && !_speakUserContext
+              ? profile with { VoiceName = SpeechProfileSettings.NotSpoken }
+              : profile;
+          }
+
+          '''
+          if text.count(marker) != 1:
+            raise SystemExit(f'playback profile insertion: expected 1 match, got {text.count(marker)}')
+          text = text.replace(marker, helper + marker, 1)
+          main.write_text(text, encoding='utf-8', newline='\n')
+          '@ | python -
+
+      - name: Focused GREEN
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test user-context-speech
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test environment
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit fix and remove helper workflow
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/issue-26-nondestructive-fix.yml
+          git add AgentPanelSpeaker/SettingsChangeSet.cs AgentPanelSpeaker/MainForm.cs
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m "fix: gate user context at playback boundary"
+          git push origin HEAD:feature/aiconversationcore-integration
