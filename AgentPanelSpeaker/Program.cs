@@ -68,6 +68,13 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "user-context-speech", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue26UserContextSpeechRegressionTestRunner.Run();
+        return;
+      }
+
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
@@ -79,12 +86,14 @@ internal static class Program
       int additional = AdditionalRegressionTestRunner.Run();
       int core = CoreRegressionTestRunner.Run();
       int speechOrdinals = Issue24SpeechOrdinalRegressionTestRunner.Run();
+      int userContextSpeech = Issue26UserContextSpeechRegressionTestRunner.Run();
       int environment = EnvironmentRegressionTestRunner.Run();
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
                              additional == 0 &&
                              core == 0 &&
                              speechOrdinals == 0 &&
+                             userContextSpeech == 0 &&
                              environment == 0
         ? 0
         : 1;
