@@ -23,21 +23,21 @@ jobs:
           from pathlib import Path
           path = Path('AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs')
           text = path.read_text(encoding='utf-8')
-          old = '''    WaitUntil(
-      () => monitor.IsRunning &&
-        ReadSpeechHistoryCategories(speech).SequenceEqual(
-          new[] { ContentCategory.UserContext, ContentCategory.User }),
-      "SpeakUserContext OFF must retain User Context in indexed speech history.");'''
-          new = '''    WaitUntil(
-      () =>
-      {
-        IReadOnlyList<ContentCategory> categories =
-          ReadSpeechHistoryCategories(speech);
-        return monitor.IsRunning &&
-          categories.Contains(ContentCategory.UserContext) &&
-          categories.Contains(ContentCategory.User);
-      },
-      "SpeakUserContext OFF must retain User Context in indexed speech history.");'''
+          old = ('    WaitUntil(\n'
+            '      () => monitor.IsRunning &&\n'
+            '        ReadSpeechHistoryCategories(speech).SequenceEqual(\n'
+            '          new[] { ContentCategory.UserContext, ContentCategory.User }),\n'
+            '      "SpeakUserContext OFF must retain User Context in indexed speech history.");')
+          new = ('    WaitUntil(\n'
+            '      () =>\n'
+            '      {\n'
+            '        IReadOnlyList<ContentCategory> categories =\n'
+            '          ReadSpeechHistoryCategories(speech);\n'
+            '        return monitor.IsRunning &&\n'
+            '          categories.Contains(ContentCategory.UserContext) &&\n'
+            '          categories.Contains(ContentCategory.User);\n'
+            '      },\n'
+            '      "SpeakUserContext OFF must retain User Context in indexed speech history.");')
           if text.count(old) != 1:
             raise SystemExit(f'assertion target count={text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
