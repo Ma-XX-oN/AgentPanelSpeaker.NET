@@ -1,4 +1,4 @@
-name: Issue 30 live-end fix
+name: Issue 30 navigation instrumentation
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  fix:
+  instrument:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -24,24 +24,446 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Apply minimal completion-state fix
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Add targeted navigation-state diagnostics
         shell: pwsh
         run: |
-          $path = 'AgentPanelSpeaker/SpeechService.cs'
-          $text = Get-Content -Raw -Encoding UTF8 $path
-          $anchor = '      bool remainPaused = wasPaused || restorePause;'
-          $anchorIndex = $text.IndexOf($anchor)
-          if ($anchorIndex -lt 0) { throw 'EngineCompleted remainPaused anchor not found.' }
-          $pauseLine = '        SetPausedLocked(true);'
-          $pauseIndex = $text.IndexOf($pauseLine, $anchorIndex)
-          if ($pauseIndex -lt 0) { throw 'EngineCompleted pause line not found.' }
-          $elseIndex = $text.IndexOf("`n      else", $pauseIndex)
-          if ($elseIndex -lt 0) { throw 'EngineCompleted else branch not found.' }
-          $insert = "`n        if (_pendingHistoryIndex is null &&`n            _nextHistoryIndex >= _history.Count)`n        {`n          ReportPlaybackPositionLocked(`n            TranscriptPlaybackState.PausedAtLiveEnd);`n        }"
-          $insertIndex = $pauseIndex + $pauseLine.Length
-          if ($insertIndex -gt $elseIndex) { throw 'Insertion point escaped remainPaused branch.' }
-          $updated = $text.Insert($insertIndex, $insert)
-          Set-Content -Path $path -Value $updated -Encoding utf8NoBOM -NoNewline
+          @'
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/SpeechService.cs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, name: str) -> None:
+            global text
+            count = text.count(old)
+            if count != 1:
+              raise RuntimeError(f'{name}: expected 1 match, found {count}')
+            text = text.replace(old, new, 1)
+
+          replace_once(
+            '  private bool _restorePauseAfterCancellation;\n'
+            '  private Action? _pendingPreviewStart;',
+            '  private bool _restorePauseAfterCancellation;\n'
+            '  private string? _pauseRestoreReason;\n'
+            '  private Action? _pendingPreviewStart;',
+            'pause restore reason field')
+
+          replace_once(
+            '      ThrowIfDisposed();\n'
+            '      _history.Clear();\n'
+            '      _turnCompletions.Clear();',
+            '      ThrowIfDisposed();\n'
+            '      LogPendingHistoryResetLocked(\n'
+            '        "begin-live-session",\n'
+            '        incomingHistoryCount: 0);\n'
+            '      _history.Clear();\n'
+            '      _turnCompletions.Clear();',
+            'begin live session reset log')
+
+          replace_once(
+            '      ThrowIfDisposed();\n'
+            '      _pendingHistoryIndex = null;\n'
+            '      _pendingHistoryWordIndex = 0;\n'
+            '      _pendingUntracked = null;\n'
+            '      ClearProcessingTimeAnnouncementLocked();\n'
+            '      _activeHistoryIndex = -1;\n'
+            '      _lastFenceActivity = null;\n'
+            '      _history.Clear();',
+            '      ThrowIfDisposed();\n'
+            '      LogPendingHistoryResetLocked(\n'
+            '        "load-history",\n'
+            '        fragments.Count,\n'
+            '        startMode.ToString());\n'
+            '      _pendingHistoryIndex = null;\n'
+            '      _pendingHistoryWordIndex = 0;\n'
+            '      _pendingUntracked = null;\n'
+            '      ClearProcessingTimeAnnouncementLocked();\n'
+            '      _activeHistoryIndex = -1;\n'
+            '      _lastFenceActivity = null;\n'
+            '      _history.Clear();',
+            'load history reset log')
+
+          replace_once(
+            '      ThrowIfDisposed();\n'
+            '      _pendingHistoryIndex = null;\n'
+            '      _pendingHistoryWordIndex = 0;\n'
+            '      _pendingUntracked = new UntrackedSpeech(text.Trim(), profile.Normalize());',
+            '      ThrowIfDisposed();\n'
+            '      LogPendingHistoryResetLocked("speak-untracked");\n'
+            '      _pendingHistoryIndex = null;\n'
+            '      _pendingHistoryWordIndex = 0;\n'
+            '      _pendingUntracked = new UntrackedSpeech(text.Trim(), profile.Normalize());',
+            'untracked reset log')
+
+          replace_once(
+            '      int anchor = GetNavigationAnchorLocked();\n'
+            '      int candidate = FindNextEligibleLocked(anchor + 1);\n'
+            '      if (candidate < 0)\n'
+            '      {\n'
+            '        MoveToPausedLiveEndLocked();',
+            '      int anchor = GetNavigationAnchorLocked();\n'
+            '      int candidate = FindNextEligibleLocked(anchor + 1);\n'
+            '      LogNavigationLocked("forward-sentence", anchor, candidate);\n'
+            '      if (candidate < 0)\n'
+            '      {\n'
+            '        MoveToPausedLiveEndLocked();',
+            'forward sentence navigation log')
+
+          replace_once(
+            '      int anchor = GetNavigationAnchorLocked();\n'
+            '      if (anchor >= _history.Count)\n'
+            '      {\n'
+            '        MoveToPausedLiveEndLocked();\n'
+            '        text = string.Empty;\n'
+            '        return false;\n'
+            '      }\n\n'
+            '      int candidate = FindNodeEndLocked(anchor) + 1;',
+            '      int anchor = GetNavigationAnchorLocked();\n'
+            '      if (anchor >= _history.Count)\n'
+            '      {\n'
+            '        LogNavigationLocked("forward-node", anchor, candidate: -1);\n'
+            '        MoveToPausedLiveEndLocked();\n'
+            '        text = string.Empty;\n'
+            '        return false;\n'
+            '      }\n\n'
+            '      int candidate = FindNodeEndLocked(anchor) + 1;',
+            'forward node at-end log')
+
+          replace_once(
+            '        if (eligible >= 0)\n'
+            '        {\n'
+            '          text = JoinEligibleNodeLocked(candidate);\n'
+            '          RestartHistoryLocked(eligible);\n'
+            '          return true;\n'
+            '        }\n'
+            '        candidate = end + 1;\n'
+            '      }\n\n'
+            '      MoveToPausedLiveEndLocked();',
+            '        if (eligible >= 0)\n'
+            '        {\n'
+            '          LogNavigationLocked("forward-node", anchor, eligible);\n'
+            '          text = JoinEligibleNodeLocked(candidate);\n'
+            '          RestartHistoryLocked(eligible);\n'
+            '          return true;\n'
+            '        }\n'
+            '        candidate = end + 1;\n'
+            '      }\n\n'
+            '      LogNavigationLocked("forward-node", anchor, candidate: -1);\n'
+            '      MoveToPausedLiveEndLocked();',
+            'forward node destination logs')
+
+          # There are two forward methods with the same initial at-end shape.
+          old = (
+            '      int anchor = GetNavigationAnchorLocked();\n'
+            '      if (anchor >= _history.Count)\n'
+            '      {\n'
+            '        MoveToPausedLiveEndLocked();\n'
+            '        text = string.Empty;\n'
+            '        return false;\n'
+            '      }\n\n'
+            '      bool currentIsUser = IsUserSpeaker(_history[anchor].Category);')
+          count = text.count(old)
+          if count != 1:
+            raise RuntimeError(f'forward speaker at-end log: expected 1 match, found {count}')
+          text = text.replace(
+            old,
+            '      int anchor = GetNavigationAnchorLocked();\n'
+            '      if (anchor >= _history.Count)\n'
+            '      {\n'
+            '        LogNavigationLocked("forward-speaker", anchor, candidate: -1);\n'
+            '        MoveToPausedLiveEndLocked();\n'
+            '        text = string.Empty;\n'
+            '        return false;\n'
+            '      }\n\n'
+            '      bool currentIsUser = IsUserSpeaker(_history[anchor].Category);',
+            1)
+
+          replace_once(
+            '        if (IsUserSpeaker(_history[runStart].Category) != currentIsUser)\n'
+            '        {\n'
+            '          int eligible = FindNextEligibleLocked(runStart, runEnd);\n'
+            '          if (eligible >= 0)\n'
+            '          {\n'
+            '            text = JoinEligibleSpeakerRunLocked(runStart);\n'
+            '            RestartHistoryLocked(eligible);\n'
+            '            return true;\n'
+            '          }\n'
+            '        }\n'
+            '        candidate = runEnd + 1;\n'
+            '      }\n\n'
+            '      MoveToPausedLiveEndLocked();',
+            '        if (IsUserSpeaker(_history[runStart].Category) != currentIsUser)\n'
+            '        {\n'
+            '          int eligible = FindNextEligibleLocked(runStart, runEnd);\n'
+            '          if (eligible >= 0)\n'
+            '          {\n'
+            '            LogNavigationLocked("forward-speaker", anchor, eligible);\n'
+            '            text = JoinEligibleSpeakerRunLocked(runStart);\n'
+            '            RestartHistoryLocked(eligible);\n'
+            '            return true;\n'
+            '          }\n'
+            '        }\n'
+            '        candidate = runEnd + 1;\n'
+            '      }\n\n'
+            '      LogNavigationLocked("forward-speaker", anchor, candidate: -1);\n'
+            '      MoveToPausedLiveEndLocked();',
+            'forward speaker destination logs')
+
+          # Replace all three direct requests with reason-bearing helper calls.
+          replacements = [
+            ('          _restorePauseAfterCancellation = true;\n'
+             '          _engine.Cancel();',
+             '          RequestPauseRestoreAfterCancellationLocked(\n'
+             '            "seek-transcript-word");\n'
+             '          _engine.Cancel();',
+             'seek pause restore'),
+            ('      _restorePauseAfterCancellation = true;\n'
+             '      _engine.Cancel();\n'
+             '      return;',
+             '      RequestPauseRestoreAfterCancellationLocked("paused-live-end");\n'
+             '      _engine.Cancel();\n'
+             '      return;',
+             'live end pause restore'),
+            ('        _restorePauseAfterCancellation = true;\n'
+             '        _engine.Cancel();\n'
+             '      }\n'
+             '      return;\n'
+             '    }\n'
+             '    RestartPendingLocked();',
+             '        RequestPauseRestoreAfterCancellationLocked(\n'
+             '          "paused-navigation-restart");\n'
+             '        _engine.Cancel();\n'
+             '      }\n'
+             '      return;\n'
+             '    }\n'
+             '    RestartPendingLocked();',
+             'paused restart pause restore')
+          ]
+          for old, new, name in replacements:
+            replace_once(old, new, name)
+
+          replace_once(
+            '      bool restorePause = _restorePauseAfterCancellation;\n'
+            '      _restorePauseAfterCancellation = false;\n\n'
+            '      _activeKind = ActiveSpeechKind.None;',
+            '      bool restorePause = _restorePauseAfterCancellation;\n'
+            '      string? restorePauseReason = _pauseRestoreReason;\n'
+            '      _restorePauseAfterCancellation = false;\n'
+            '      _pauseRestoreReason = null;\n\n'
+            '      int completedHistoryIndex = _activeHistoryIndex;\n'
+            '      _activeKind = ActiveSpeechKind.None;',
+            'completion captures pause restore reason')
+
+          replace_once(
+            '          _processingTimeReturnToPause = false;\n'
+            '          restorePause = true;',
+            '          _processingTimeReturnToPause = false;\n'
+            '          restorePause = true;\n'
+            '          restorePauseReason ??= "processing-time-return-to-pause";',
+            'processing-time pause restore reason')
+
+          replace_once(
+            '          completedKind = completedKind.ToString(),\n'
+            '          wasPaused,\n'
+            '          restorePause,\n'
+            '          pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '          pendingHistoryWordIndex = _pendingHistoryWordIndex\n'
+            '        });',
+            '          completedKind = completedKind.ToString(),\n'
+            '          completedHistoryIndex,\n'
+            '          wasPaused,\n'
+            '          restorePause,\n'
+            '          restorePauseReason,\n'
+            '          pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '          pendingHistoryWordIndex = _pendingHistoryWordIndex,\n'
+            '          nextHistoryIndex = _nextHistoryIndex,\n'
+            '          historyCount = _history.Count\n'
+            '        });',
+            'completion diagnostic details')
+
+          replace_once(
+            '    int pendingWordIndex = 0;\n'
+            '    if (_pendingHistoryIndex is int pendingIndex)\n'
+            '    {\n'
+            '      _nextHistoryIndex = pendingIndex;\n'
+            '      pendingWordIndex = Math.Max(0, _pendingHistoryWordIndex);\n'
+            '      _pendingHistoryIndex = null;',
+            '    int pendingWordIndex = 0;\n'
+            '    if (_pendingHistoryIndex is int pendingIndex)\n'
+            '    {\n'
+            '      DiagnosticLog.Write("speech.pending_history_consumed", new\n'
+            '      {\n'
+            '        pendingHistoryIndex = pendingIndex,\n'
+            '        pendingHistoryWordIndex = _pendingHistoryWordIndex,\n'
+            '        nextHistoryIndexBefore = _nextHistoryIndex,\n'
+            '        historyCount = _history.Count,\n'
+            '        isPaused = _isPaused,\n'
+            '        activeKind = _activeKind.ToString()\n'
+            '      });\n'
+            '      _nextHistoryIndex = pendingIndex;\n'
+            '      pendingWordIndex = Math.Max(0, _pendingHistoryWordIndex);\n'
+            '      _pendingHistoryIndex = null;',
+            'pending destination consumption log')
+
+          replace_once(
+            '    _activeWordBaseIndex = 0;\n'
+            '    ReportPlaybackPositionLocked(\n'
+            '      _isPaused\n'
+            '        ? TranscriptPlaybackState.PausedAtLiveEnd\n'
+            '        : TranscriptPlaybackState.WaitingAtLiveEnd);',
+            '    _activeWordBaseIndex = 0;\n'
+            '    DiagnosticLog.Write("speech.live_end_reached", new\n'
+            '    {\n'
+            '      isPaused = _isPaused,\n'
+            '      nextHistoryIndex = _nextHistoryIndex,\n'
+            '      historyCount = _history.Count,\n'
+            '      pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '      restorePausePending = _restorePauseAfterCancellation,\n'
+            '      pauseRestoreReason = _pauseRestoreReason\n'
+            '    });\n'
+            '    ReportPlaybackPositionLocked(\n'
+            '      _isPaused\n'
+            '        ? TranscriptPlaybackState.PausedAtLiveEnd\n'
+            '        : TranscriptPlaybackState.WaitingAtLiveEnd);',
+            'live end reached log')
+
+          replace_once(
+            '  /// <summary>\n'
+            '  /// Cancels active playback and leaves a paused blank marker after the final\n'
+            '  /// fragment.\n'
+            '  /// </summary>\n'
+            '  private void MoveToPausedLiveEndLocked()',
+            '  /// <summary>\n'
+            '  /// Records which navigation path requested pause restoration before a\n'
+            '  /// cancellation callback completes.\n'
+            '  /// </summary>\n'
+            '  private void RequestPauseRestoreAfterCancellationLocked(string reason)\n'
+            '  {\n'
+            '    _restorePauseAfterCancellation = true;\n'
+            '    _pauseRestoreReason = reason;\n'
+            '    DiagnosticLog.Write("speech.pause_restore_requested", new\n'
+            '    {\n'
+            '      reason,\n'
+            '      activeKind = _activeKind.ToString(),\n'
+            '      activeHistoryIndex = _activeHistoryIndex,\n'
+            '      activeNodeId = GetHistoryNodeIdLocked(_activeHistoryIndex),\n'
+            '      pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '      pendingHistoryWordIndex = _pendingHistoryWordIndex,\n'
+            '      pendingNodeId = GetHistoryNodeIdLocked(_pendingHistoryIndex),\n'
+            '      nextHistoryIndex = _nextHistoryIndex,\n'
+            '      historyCount = _history.Count,\n'
+            '      isPaused = _isPaused\n'
+            '    });\n'
+            '  }\n\n'
+            '  /// <summary>\n'
+            '  /// Records state that is about to discard a retained navigation target.\n'
+            '  /// </summary>\n'
+            '  private void LogPendingHistoryResetLocked(\n'
+            '    string reason,\n'
+            '    int? incomingHistoryCount = null,\n'
+            '    string? startMode = null)\n'
+            '  {\n'
+            '    if (!_restorePauseAfterCancellation && _pendingHistoryIndex is null)\n'
+            '    {\n'
+            '      return;\n'
+            '    }\n'
+            '    DiagnosticLog.Write("speech.pending_history_reset", new\n'
+            '    {\n'
+            '      reason,\n'
+            '      restorePausePending = _restorePauseAfterCancellation,\n'
+            '      pauseRestoreReason = _pauseRestoreReason,\n'
+            '      pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '      pendingHistoryWordIndex = _pendingHistoryWordIndex,\n'
+            '      pendingNodeId = GetHistoryNodeIdLocked(_pendingHistoryIndex),\n'
+            '      activeKind = _activeKind.ToString(),\n'
+            '      activeHistoryIndex = _activeHistoryIndex,\n'
+            '      activeNodeId = GetHistoryNodeIdLocked(_activeHistoryIndex),\n'
+            '      nextHistoryIndex = _nextHistoryIndex,\n'
+            '      historyCount = _history.Count,\n'
+            '      incomingHistoryCount,\n'
+            '      startMode,\n'
+            '      isPaused = _isPaused\n'
+            '    });\n'
+            '  }\n\n'
+            '  /// <summary>\n'
+            '  /// Records one user-visible forward navigation request and its resolved\n'
+            '  /// destination before playback state changes.\n'
+            '  /// </summary>\n'
+            '  private void LogNavigationLocked(string action, int anchor, int candidate)\n'
+            '  {\n'
+            '    DiagnosticLog.Write("speech.navigation_request", new\n'
+            '    {\n'
+            '      action,\n'
+            '      anchor,\n'
+            '      anchorNodeId = GetHistoryNodeIdLocked(anchor),\n'
+            '      candidate,\n'
+            '      candidateNodeId = GetHistoryNodeIdLocked(candidate),\n'
+            '      activeKind = _activeKind.ToString(),\n'
+            '      activeHistoryIndex = _activeHistoryIndex,\n'
+            '      activeNodeId = GetHistoryNodeIdLocked(_activeHistoryIndex),\n'
+            '      pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '      pendingHistoryWordIndex = _pendingHistoryWordIndex,\n'
+            '      nextHistoryIndex = _nextHistoryIndex,\n'
+            '      historyCount = _history.Count,\n'
+            '      isPaused = _isPaused,\n'
+            '      restorePausePending = _restorePauseAfterCancellation,\n'
+            '      pauseRestoreReason = _pauseRestoreReason\n'
+            '    });\n'
+            '  }\n\n'
+            '  /// <summary>\n'
+            '  /// Returns a history node id without allowing diagnostic probing to throw.\n'
+            '  /// </summary>\n'
+            '  private long GetHistoryNodeIdLocked(int? index)\n'
+            '  {\n'
+            '    return index is int value && value >= 0 && value < _history.Count\n'
+            '      ? _history[value].NodeId\n'
+            '      : -1;\n'
+            '  }\n\n'
+            '  /// <summary>\n'
+            '  /// Cancels active playback and leaves a paused blank marker after the final\n'
+            '  /// fragment.\n'
+            '  /// </summary>\n'
+            '  private void MoveToPausedLiveEndLocked()',
+            'diagnostic helpers')
+
+          replace_once(
+            '  private void MoveToLiveEndLocked()\n'
+            '  {\n'
+            '    _restorePauseAfterCancellation = false;\n'
+            '    _pendingHistoryIndex = null;',
+            '  private void MoveToLiveEndLocked()\n'
+            '  {\n'
+            '    if (_restorePauseAfterCancellation || _pendingHistoryIndex is not null)\n'
+            '    {\n'
+            '      DiagnosticLog.Write("speech.live_end_reset", new\n'
+            '      {\n'
+            '        restorePausePending = _restorePauseAfterCancellation,\n'
+            '        pauseRestoreReason = _pauseRestoreReason,\n'
+            '        pendingHistoryIndex = _pendingHistoryIndex,\n'
+            '        pendingHistoryWordIndex = _pendingHistoryWordIndex,\n'
+            '        nextHistoryIndex = _nextHistoryIndex,\n'
+            '        historyCount = _history.Count,\n'
+            '        activeKind = _activeKind.ToString(),\n'
+            '        activeHistoryIndex = _activeHistoryIndex\n'
+            '      });\n'
+            '    }\n'
+            '    _restorePauseAfterCancellation = false;\n'
+            '    _pauseRestoreReason = null;\n'
+            '    _pendingHistoryIndex = null;',
+            'live end reset log')
+
+          if '_restorePauseAfterCancellation = true;' not in text:
+            raise RuntimeError('pause restore helper assignment disappeared')
+          if text.count('_restorePauseAfterCancellation = true;') != 1:
+            raise RuntimeError('pause restore assignments were not centralized')
+
+          path.write_text(text, encoding='utf-8', newline='')
+          '@ | python -
+
           git diff --check
           git diff -- AgentPanelSpeaker/SpeechService.cs
 
@@ -49,7 +471,7 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Require issue 30 regression GREEN
+      - name: Require issue 30 suite GREEN
         shell: pwsh
         run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test live-end
 
@@ -57,12 +479,12 @@ jobs:
         shell: pwsh
         run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
 
-      - name: Commit production fix
+      - name: Commit diagnostics
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/SpeechService.cs
           git diff --cached --check
-          git commit -m 'fix: publish paused live-end state after skip'
+          git commit -m 'diagnostic: trace live-end navigation state'
           git push origin HEAD:feature/aiconversationcore-integration
