@@ -29,34 +29,22 @@ jobs:
         run: |
           $path = 'AgentPanelSpeaker/SpeechService.cs'
           $text = Get-Content -Raw -Encoding UTF8 $path
-          $old = @'
-                SetPausedLocked(true);
-              }
-              else
-              {
-                SetPausedLocked(false);
-                StartPendingOrNextLocked();
-              }
-          '@
-          $new = @'
-                SetPausedLocked(true);
-                if (_pendingHistoryIndex is null &&
-                    _nextHistoryIndex >= _history.Count)
-                {
-                  ReportPlaybackPositionLocked(
-                    TranscriptPlaybackState.PausedAtLiveEnd);
-                }
-              }
-              else
-              {
-                SetPausedLocked(false);
-                StartPendingOrNextLocked();
-              }
-          '@
-          if (-not $text.Contains($old)) {
-            throw 'Expected EngineCompleted remainPaused block was not found exactly once.'
+          $pattern = '(?ms)(      bool remainPaused = wasPaused \|\| restorePause;\r?\n      if \(remainPaused\)\r?\n      \{\r?\n.*?        SetPausedLocked\(true\);)(\r?\n      \}\r?\n      else)'
+          $matches = [regex]::Matches($text, $pattern)
+          if ($matches.Count -ne 1) {
+            throw "Expected exactly one EngineCompleted remainPaused block, found $($matches.Count)."
           }
-          $updated = $text.Replace($old, $new)
+          $insert = @'
+
+        if (_pendingHistoryIndex is null &&
+            _nextHistoryIndex >= _history.Count)
+        {
+          ReportPlaybackPositionLocked(
+            TranscriptPlaybackState.PausedAtLiveEnd);
+        }
+'@
+          $replacement = '${1}' + $insert + '${2}'
+          $updated = [regex]::Replace($text, $pattern, $replacement, 1)
           if ($updated -eq $text) {
             throw 'SpeechService patch made no change.'
           }
