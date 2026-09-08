@@ -27,7 +27,8 @@ internal static class AdditionalRegressionTestRunner
       ("search/zero-length-block-anchors", TestZeroLengthRegexAnchors),
       ("mapping/repeated-text-stays-record-scoped", TestRepeatedTextMapping),
       ("mapping/word-id-round-trip", TestWordIdRoundTrip),
-      ("mapping/unknown-word-id-rejected", TestUnknownWordId)
+      ("mapping/unknown-word-id-rejected", TestUnknownWordId),
+      ("ui/transcript-settings-placement", TestTranscriptSettingsPlacement)
     };
 
     int failures = 0;
@@ -296,6 +297,73 @@ internal static class AdditionalRegressionTestRunner
       "Unknown word id unexpectedly resolved.");
     Require(nodeId == 0 && nodeWordIndex == -1,
       "Unknown word id returned non-sentinel speech coordinates.");
+  }
+
+  private static void TestTranscriptSettingsPlacement()
+  {
+    using var main = new TranscriptSettingsPopup();
+    using var advanced = new TranscriptAdvancedSettingsPopup();
+
+    System.Windows.Forms.CheckBox? rolledBack = Descendants(main)
+      .OfType<System.Windows.Forms.CheckBox>()
+      .SingleOrDefault(control => string.Equals(
+        control.Text,
+        "Show rolled-back Codex history",
+        StringComparison.Ordinal));
+    System.Windows.Forms.CheckBox? userContext = Descendants(main)
+      .OfType<System.Windows.Forms.CheckBox>()
+      .SingleOrDefault(control => string.Equals(
+        control.Text,
+        "Speak User / IDE context",
+        StringComparison.Ordinal));
+    Require(rolledBack is not null,
+      "Main Transcript Settings is missing rolled-back-history control.");
+    Require(userContext is not null,
+      "Main Transcript Settings is missing User/IDE-context control.");
+
+    string[] advancedCheckBoxes = Descendants(advanced)
+      .OfType<System.Windows.Forms.CheckBox>()
+      .Select(control => control.Text)
+      .ToArray();
+    Require(!advancedCheckBoxes.Contains(
+        "Show rolled-back Codex history",
+        StringComparer.Ordinal),
+      "Advanced Transcript Settings still contains rolled-back-history control.");
+    Require(!advancedCheckBoxes.Contains(
+        "Speak User / IDE context",
+        StringComparer.Ordinal),
+      "Advanced Transcript Settings still contains User/IDE-context control.");
+
+    main.SetSettings(
+      TranscriptSettings.Default with
+      {
+        ShowRolledBackHistory = false,
+        SpeakUserContext = false
+      },
+      dark: false);
+    rolledBack!.Checked = true;
+    userContext!.Checked = true;
+    Require(main.Settings.ShowRolledBackHistory,
+      "Moved rolled-back-history control did not update TranscriptSettings.");
+    Require(main.Settings.SpeakUserContext,
+      "Moved User/IDE-context control did not update TranscriptSettings.");
+
+    advanced.SetQueueCapacity(7);
+    Require(advanced.QueueCapacity == 7,
+      "Advanced highlight buffering no longer updates its queue capacity.");
+  }
+
+  private static IEnumerable<System.Windows.Forms.Control> Descendants(
+    System.Windows.Forms.Control root)
+  {
+    foreach (System.Windows.Forms.Control child in root.Controls)
+    {
+      yield return child;
+      foreach (System.Windows.Forms.Control descendant in Descendants(child))
+      {
+        yield return descendant;
+      }
+    }
   }
 
   private static TranscriptSearchIndex BuildSearchIndex(

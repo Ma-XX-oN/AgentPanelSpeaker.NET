@@ -7,12 +7,22 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class TranscriptSettingsPopup : PopupFormBase
 {
+  private const string RolledBackDescription =
+    "Shows Codex turns that were rolled back or superseded. Historical " +
+    "revisions are hidden by default; enabling this includes original, " +
+    "superseded, edited, and aborted revision state in the transcript.";
+  private const string UserContextDescription =
+    "Includes Core-identified User/IDE context in speech before the actual " +
+    "User prompt. The context uses the User Context voice profile. This does " +
+    "not change whether the context is shown in the transcript.";
   private readonly Button _previousSwatch = new();
   private readonly Button _currentSwatch = new();
   private readonly TrackBar _fadeSlider = new();
   private readonly Label _fadeValue = new();
   private readonly TrackBar _trackingSlider = new();
   private readonly Label _trackingValue = new();
+  private readonly CheckBox _showRolledBackCheckBox = new();
+  private readonly CheckBox _speakUserContextCheckBox = new();
   private readonly Button _advancedButton = new();
   private readonly System.Windows.Forms.Timer _colourNotificationTimer = new();
   private TranscriptColourPopup? _colourPopup;
@@ -31,7 +41,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     FormBorderStyle = FormBorderStyle.None;
     ShowInTaskbar = false;
     StartPosition = FormStartPosition.Manual;
-    Size = new Size(430, 196);
+    Size = new Size(430, 256);
     TabStop = false;
 
     var title = new Label
@@ -60,12 +70,25 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     _trackingSlider.TabIndex = 3;
     ConfigureValueLabel(_trackingValue);
 
+    ConfigureCheckBox(
+      _showRolledBackCheckBox,
+      "Show rolled-back Codex history",
+      "Show rolled-back Codex history",
+      RolledBackDescription,
+      tabIndex: 4);
+    ConfigureCheckBox(
+      _speakUserContextCheckBox,
+      "Speak User / IDE context",
+      "Speak User or IDE context",
+      UserContextDescription,
+      tabIndex: 5);
+
     _advancedButton.AutoSize = false;
     _advancedButton.Dock = DockStyle.Left;
     _advancedButton.Size = new Size(104, 28);
     _advancedButton.Text = "Advanced >";
     _advancedButton.TextAlign = ContentAlignment.MiddleLeft;
-    _advancedButton.TabIndex = 4;
+    _advancedButton.TabIndex = 6;
     _advancedButton.AccessibleName = "Advanced transcript settings";
 
     var swatchLayout = new FlowLayoutPanel
@@ -85,7 +108,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     var layout = new TableLayoutPanel
     {
       ColumnCount = 3,
-      RowCount = 5,
+      RowCount = 7,
       Dock = DockStyle.Fill,
       Padding = new Padding(10)
     };
@@ -96,6 +119,8 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
     layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
     layout.Controls.Add(title, 0, 0);
     layout.SetColumnSpan(title, 3);
@@ -103,13 +128,19 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     layout.SetColumnSpan(swatchLayout, 3);
     AddSliderRow(layout, 2, "Fade Duration", _fadeSlider, _fadeValue);
     AddSliderRow(layout, 3, "Tracking Update", _trackingSlider, _trackingValue);
-    layout.Controls.Add(_advancedButton, 0, 4);
+    layout.Controls.Add(_showRolledBackCheckBox, 0, 4);
+    layout.SetColumnSpan(_showRolledBackCheckBox, 3);
+    layout.Controls.Add(_speakUserContextCheckBox, 0, 5);
+    layout.SetColumnSpan(_speakUserContextCheckBox, 3);
+    layout.Controls.Add(_advancedButton, 0, 6);
     layout.SetColumnSpan(_advancedButton, 3);
     Controls.Add(layout);
 
     _previousSwatch.Click += (_, _) => RestorePreviousColour();
     _fadeSlider.ValueChanged += ValueChanged;
     _trackingSlider.ValueChanged += ValueChanged;
+    _showRolledBackCheckBox.CheckedChanged += ValueChanged;
+    _speakUserContextCheckBox.CheckedChanged += ValueChanged;
 
     _colourNotificationTimer.Interval = 75;
     _colourNotificationTimer.Tick += (_, _) =>
@@ -150,12 +181,11 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
         Settings.HighlightUpdateMilliseconds / 5,
         1,
         8);
+      _showRolledBackCheckBox.Checked = Settings.ShowRolledBackHistory;
+      _speakUserContextCheckBox.Checked = Settings.SpeakUserContext;
       if (_advancedPopup is { IsDisposed: false } advancedPopup)
       {
-        advancedPopup.SetSettings(
-        Settings.HighlightQueueCapacity,
-        Settings.ShowRolledBackHistory,
-        Settings.SpeakUserContext);
+        advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);
       }
       UpdateDisplays();
     }
@@ -219,10 +249,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     if (_advancedPopup is { IsDisposed: false } advancedPopup)
     {
       advancedPopup.ApplyTheme(dark);
-      advancedPopup.SetSettings(
-        Settings.HighlightQueueCapacity,
-        Settings.ShowRolledBackHistory,
-        Settings.SpeakUserContext);
+      advancedPopup.SetQueueCapacity(Settings.HighlightQueueCapacity);
     }
     UpdateDisplays();
     Invalidate(true);
@@ -447,10 +474,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
   {
     TranscriptAdvancedSettingsPopup popup = GetOrCreateAdvancedPopup();
     popup.ApplyTheme(_dark);
-    popup.SetSettings(
-      Settings.HighlightQueueCapacity,
-      Settings.ShowRolledBackHistory,
-      Settings.SpeakUserContext);
+    popup.SetQueueCapacity(Settings.HighlightQueueCapacity);
     PositionAdvancedPopup(popup);
     ShowOwnedPopup(popup);
   }
@@ -467,9 +491,7 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     {
       Settings = (Settings with
       {
-        HighlightQueueCapacity = popup.QueueCapacity,
-        ShowRolledBackHistory = popup.ShowRolledBackHistory,
-        SpeakUserContext = popup.SpeakUserContext
+        HighlightQueueCapacity = popup.QueueCapacity
       }).Normalize();
       SettingsChanged?.Invoke(this, EventArgs.Empty);
     };
@@ -663,7 +685,9 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     {
       FadeMilliseconds = FadeMillisecondsFromStep(_fadeSlider.Value),
       HighlightUpdateMilliseconds = _trackingSlider.Value * 5,
-      HighlightQueueCapacity = Settings.HighlightQueueCapacity
+      HighlightQueueCapacity = Settings.HighlightQueueCapacity,
+      ShowRolledBackHistory = _showRolledBackCheckBox.Checked,
+      SpeakUserContext = _speakUserContextCheckBox.Checked
     }).Normalize();
     UpdateDisplays();
     if (_colourPopup is { IsDisposed: false, Visible: true } popup)
@@ -769,6 +793,22 @@ internal sealed class TranscriptSettingsPopup : PopupFormBase
     label.AutoSize = false;
     label.Dock = DockStyle.Fill;
     label.TextAlign = ContentAlignment.MiddleRight;
+  }
+
+  private static void ConfigureCheckBox(
+    CheckBox checkBox,
+    string text,
+    string accessibleName,
+    string accessibleDescription,
+    int tabIndex)
+  {
+    checkBox.AutoSize = true;
+    checkBox.Dock = DockStyle.Fill;
+    checkBox.Margin = new Padding(0, 4, 0, 0);
+    checkBox.Text = text;
+    checkBox.TabIndex = tabIndex;
+    checkBox.AccessibleName = accessibleName;
+    checkBox.AccessibleDescription = accessibleDescription;
   }
 
   private static void AddSliderRow(
