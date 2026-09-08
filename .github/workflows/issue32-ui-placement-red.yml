@@ -1,17 +1,19 @@
-name: Issue 32 transcript settings placement RED
+name: Issue 32 transcript settings placement
 
 on:
   push:
     branches:
       - feature/aiconversationcore-integration
     paths:
+      - AgentPanelSpeaker/TranscriptSettingsPopup.cs
+      - AgentPanelSpeaker/TranscriptAdvancedSettingsPopup.cs
       - .github/workflows/issue32-ui-placement-red.yml
 
 permissions:
   contents: read
 
 jobs:
-  red:
+  placement:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
