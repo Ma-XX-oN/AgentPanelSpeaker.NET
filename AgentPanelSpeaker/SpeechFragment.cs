@@ -20,6 +20,10 @@ namespace AgentPanelSpeaker;
 /// <param name="StartsUserTurn">
 /// Whether this fragment belongs to an actual User prompt that starts a turn.
 /// </param>
+/// <param name="RevisionStatus">
+/// Core-owned Codex revision status (`original`, `superseded`, `edited`), or
+/// null for ordinary/non-revision content.
+/// </param>
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -31,7 +35,8 @@ internal sealed record SpeechFragment(
   int FenceLineCount = 0,
   bool PauseAfter = false,
   DateTimeOffset? NodeTimestampUtc = null,
-  bool StartsUserTurn = false);
+  bool StartsUserTurn = false,
+  string? RevisionStatus = null);
 
 /// <summary>
 /// Identifies how existing history should begin playback.
