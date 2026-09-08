@@ -81,10 +81,11 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     var results = new List<ExtractionResult>(_jsonLines.Count);
     for (int sourceIndex = 0; sourceIndex < _jsonLines.Count; ++sourceIndex)
     {
-      results.Add(CanonicalProjectionExtractor.ExtractRecord(
+      ExtractionResult result = CanonicalProjectionExtractor.ExtractRecord(
         projection,
         source,
-        sourceIndex));
+        sourceIndex);
+      results.Add(ApplyRevisionStatus(result, projection, sourceIndex));
     }
     return results;
   }
@@ -142,10 +143,11 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     LogSessionDiagnostics("append", appended.Diagnostics);
     AIConversationProjection speechProjection = CanonicalSpeechProjection.Prepare(
       _projection);
-    return CanonicalProjectionExtractor.ExtractRecord(
+    ExtractionResult result = CanonicalProjectionExtractor.ExtractRecord(
       speechProjection,
       source,
       sourceIndex);
+    return ApplyRevisionStatus(result, speechProjection, sourceIndex);
   }
 
   /// <summary>
@@ -164,6 +166,49 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     _source = null;
     _options = new();
     _projection = null;
+  }
+
+  /// <summary>
+  /// Copies Core-owned revision status onto app speech nodes from the canonical
+  /// event inventory. No provider-native rollback interpretation occurs here.
+  /// </summary>
+  private static ExtractionResult ApplyRevisionStatus(
+    ExtractionResult result,
+    AIConversationProjection projection,
+    int sourceIndex)
+  {
+    string? revisionStatus = null;
+    foreach (JsonElement eventElement in projection.Events)
+    {
+      if (!eventElement.TryGetProperty("source_index", out JsonElement index) ||
+          index.ValueKind != JsonValueKind.Number ||
+          !index.TryGetInt32(out int value) ||
+          value != sourceIndex ||
+          !eventElement.TryGetProperty(
+            "revision_status",
+            out JsonElement status) ||
+          status.ValueKind != JsonValueKind.String)
+      {
+        continue;
+      }
+      string? candidate = status.GetString();
+      if (!string.IsNullOrWhiteSpace(candidate))
+      {
+        revisionStatus = candidate;
+        break;
+      }
+    }
+
+    if (revisionStatus is null || result.Nodes.Count == 0)
+    {
+      return result;
+    }
+    return result with
+    {
+      Nodes = result.Nodes
+        .Select(node => node with { RevisionStatus = revisionStatus })
+        .ToArray()
+    };
   }
 
   private void CloseRetainedSession()
