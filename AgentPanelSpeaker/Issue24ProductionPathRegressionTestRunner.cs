@@ -303,6 +303,28 @@ Like this:
     Task ensure = webView.EnsureCoreWebView2Async();
     PumpUntilCompleted(ensure, $"{description} WebView2 initialization");
 
+    var fragmentRangeMisses = new List<JsonElement>();
+    webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+    {
+      try
+      {
+        using JsonDocument message = JsonDocument.Parse(
+          eventArgs.WebMessageAsJson);
+        JsonElement root = message.RootElement;
+        if (root.TryGetProperty("type", out JsonElement type) &&
+            string.Equals(
+              type.GetString(),
+              "fragment-range-miss",
+              StringComparison.Ordinal))
+        {
+          fragmentRangeMisses.Add(root.Clone());
+        }
+      }
+      catch (JsonException)
+      {
+      }
+    };
+
     MethodInfo? shellMethod = typeof(TranscriptView).GetMethod(
       "BuildShellHtml",
       BindingFlags.NonPublic | BindingFlags.Static);
@@ -393,6 +415,40 @@ Like this:
       $"{description}: nested table word was not highlighted.");
     Require(table.GetProperty("listHighlights").GetInt32() == 0,
       $"{description}: ancestor list-item highlight remained during nested table speech.");
+
+    string missingFragment = "__issue24_diagnostic_missing_fragment__";
+    string missingJson = JsonSerializer.Serialize(missingFragment);
+    string missingWordJson = JsonSerializer.Serialize("missing");
+    Task<string> diagnosticProbe = webView.CoreWebView2.ExecuteScriptAsync(
+      $"setPlayback('speaking', {missingJson}, 0, {missingWordJson}, " +
+      $"{nodeId}, false);");
+    PumpUntilCompleted(
+      diagnosticProbe,
+      $"{description} unmatched-fragment diagnostic probe");
+    DateTime diagnosticDeadline = DateTime.UtcNow.AddSeconds(5);
+    while (fragmentRangeMisses.Count == 0 &&
+           DateTime.UtcNow < diagnosticDeadline)
+    {
+      Application.DoEvents();
+      Thread.Sleep(10);
+    }
+    Require(fragmentRangeMisses.Count != 0,
+      $"{description}: unmatched playback emitted no fragment-range diagnostic.");
+    JsonElement diagnostic = fragmentRangeMisses[^1];
+    Require(diagnostic.GetProperty("knownNode").GetBoolean(),
+      $"{description}: diagnostic did not report the known node.");
+    Require(diagnostic.GetProperty("mappingGeneration").GetInt32() > 0,
+      $"{description}: diagnostic omitted mapping generation.");
+    Require(diagnostic.GetProperty("storedRangeCount").GetInt32() > 0,
+      $"{description}: diagnostic omitted the node's stored ranges.");
+    Require(diagnostic.GetProperty("nodeWordCount").GetInt32() > 0,
+      $"{description}: diagnostic omitted node-scoped words.");
+    Require(!string.IsNullOrEmpty(
+        diagnostic.GetProperty("displayKey").GetString()),
+      $"{description}: diagnostic omitted requested display tokens.");
+    Require(!string.IsNullOrEmpty(
+        diagnostic.GetProperty("lexicalKey").GetString()),
+      $"{description}: diagnostic omitted requested lexical tokens.");
   }
 
   private static string WriteProductionFixture(string root, string response)

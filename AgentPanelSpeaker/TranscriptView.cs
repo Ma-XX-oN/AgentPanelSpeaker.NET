@@ -902,13 +902,16 @@ internal sealed class TranscriptView : UserControl
       }
       if (type == "mapping-failure" || type == "playback-unmatched")
       {
-        DiagnosticLog.Write($"transcript.{type}", new
-        {
-          nodeId = ReadOptionalInt64(root, "nodeId"),
-          recordNumber = ReadOptionalInt32(root, "recordNumber"),
-          sourceId = ReadOptionalString(root, "sourceId"),
-          text = ReadOptionalString(root, "text")
-        });
+        DiagnosticLog.Write($"transcript.{type}", root.Clone());
+        return;
+      }
+      if (type is "mapping-node-summary" or
+          "mapping-install-summary" or
+          "fragment-range-miss")
+      {
+        DiagnosticLog.Write(
+          $"transcript.{type.Replace('-', '_')}",
+          root.Clone());
         return;
       }
       if (type is "structure-js-equivalent" or "structure-js-divergence")
@@ -2206,6 +2209,7 @@ let displayWordsByRecord = new Map();
 let displayWordsById = new Map();
 let lexicalWordsByRecord = new Map();
 let segmentRangesByNode = new Map();
+let mappingGeneration = 0;
 const reportedMappingFailures = new Set();
 const reportedPlaybackFailures = new Set();
 let findMatches = [];
@@ -2565,6 +2569,7 @@ function replaceTranscriptDom(
     currentStructureMap,
     'after-record-scopes');
   assignStableWordScopes(wordMap || []);
+  postMappingInstallSummary(nodeMap || []);
   postStructureStage(
     structureProbeId,
     'replace-dom-exit',
@@ -2672,6 +2677,7 @@ function replaceTranscriptWindow(
     previousStructureStage);
   previousStructureStage = 'after-node-scopes';
   assignStableWordScopes(wordMap || []);
+  postMappingInstallSummary(nodeMap || []);
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-stable-word-scopes',
@@ -2917,7 +2923,84 @@ function rememberSegmentRange(
   });
 }
 
+function diagnosticRanges(ranges) {
+  return (ranges || []).slice(0, 64).map(range => ({
+    start: range.start,
+    end: range.end,
+    displayKey: String(range.displayKey || '').slice(0, 1000),
+    lexicalKey: String(range.lexicalKey || '').slice(0, 1000)
+  }));
+}
+
+function postMappingInstallSummary(nodeMap) {
+  const nodes = [];
+  for (const item of nodeMap || []) {
+    const nodeId = String(item.NodeId ?? item.nodeId ?? '');
+    const recordNumber = Number(
+      item.RecordNumber ?? item.recordNumber ?? 0);
+    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
+    const segments = item.Segments ?? item.segments ?? [];
+    const ranges = segmentRangesByNode.get(nodeId) || [];
+    const scopedWords = words.filter(word => word.dataset.nodeId === nodeId);
+    nodes.push({
+      nodeId: Number(nodeId),
+      recordNumber,
+      sourceId,
+      segmentCount: segments.length,
+      rangeCount: ranges.length,
+      scopedWordCount: scopedWords.length,
+      stableWordCount: scopedWords.filter(word => !!word.dataset.wordId).length
+    });
+  }
+  chrome.webview.postMessage({
+    type: 'mapping-install-summary',
+    mappingGeneration,
+    nodeCount: nodes.length,
+    totalWordCount: words.length,
+    nodes
+  });
+}
+
+function postFragmentRangeMiss(
+  text,
+  nodeId,
+  nodeKey,
+  displayKey,
+  lexicalKey,
+  mapped,
+  knownNode) {
+  const nodeWords = words.filter(word => word.dataset.nodeId === nodeKey);
+  chrome.webview.postMessage({
+    type: 'fragment-range-miss',
+    mappingGeneration,
+    nodeId,
+    knownNode,
+    text: String(text || '').slice(0, 500),
+    displayKey: String(displayKey || '').slice(0, 1000),
+    lexicalKey: String(lexicalKey || '').slice(0, 1000),
+    storedRangeCount: mapped.length,
+    storedRanges: diagnosticRanges(mapped),
+    currentNode,
+    currentIndex,
+    currentEndIndex,
+    currentFragmentText: String(currentFragmentText || '').slice(0, 500),
+    currentFragmentStart,
+    currentFragmentEnd,
+    currentBoundaryWordIndex,
+    nodeWordCount: nodeWords.length,
+    nodeWordSample: nodeWords.slice(0, 80).map(word => ({
+      index: Number(word.dataset.index ?? -1),
+      normalized: word.dataset.normalized || '',
+      recordNumber: word.dataset.recordNumber || '',
+      sourceId: word.dataset.sourceId || '',
+      recordIndex: word.dataset.recordIndex || '',
+      wordId: word.dataset.wordId || ''
+    }))
+  });
+}
+
 function assignNodeScopes(nodeMap) {
+  ++mappingGeneration;
   knownNodeIds = new Set();
   segmentRangesByNode = new Map();
   const displayCursors = new Map();
@@ -3023,13 +3106,43 @@ function assignNodeScopes(nodeMap) {
         reportedMappingFailures.add(failureKey);
         chrome.webview.postMessage({
           type: 'mapping-failure',
+          mappingGeneration,
           nodeId: Number(nodeId),
           recordNumber: Number(recordNumber),
           sourceId,
-          text: segment.slice(0, 240)
+          text: segment.slice(0, 500),
+          displayKey: displayTarget.join('\u0000').slice(0, 1000),
+          lexicalKey: lexicalTarget.join('\u0000').slice(0, 1000),
+          displayCursor,
+          lexicalCursor,
+          recordWordCount: recordWords.length,
+          recordLexicalWordCount: recordLexicalWords.length,
+          recordWordSample: recordWords.slice(0, 80)
+            .map(word => word.dataset.normalized || ''),
+          recordLexicalWordSample: recordLexicalWords.slice(0, 80)
+            .map(word => word.dataset.normalized || '')
         });
       }
     }
+    const ranges = segmentRangesByNode.get(nodeId) || [];
+    chrome.webview.postMessage({
+      type: 'mapping-node-summary',
+      mappingGeneration,
+      nodeId: Number(nodeId),
+      recordNumber: Number(recordNumber),
+      sourceId,
+      segmentCount: segments.length,
+      segments: Array.from(segments).slice(0, 64).map(segment => ({
+        text: String(segment).slice(0, 500),
+        displayKey: tokenizeDisplay(segment).join('\u0000').slice(0, 1000),
+        lexicalKey: tokenize(segment).join('\u0000').slice(0, 1000)
+      })),
+      recordWordCount: recordWords.length,
+      recordLexicalWordCount: recordLexicalWords.length,
+      mappedAny,
+      rangeCount: ranges.length,
+      ranges: diagnosticRanges(ranges)
+    });
     if (!mappedAny) continue;
   }
 }
@@ -3087,7 +3200,12 @@ function findFragmentRange(text, nodeId) {
     (lexicalKey && range.lexicalKey === lexicalKey));
   const mappedRange = chooseNearestRange(matches, nodeId);
   if (mappedRange) return mappedRange;
-  if (knownNodeIds.has(nodeKey)) return null;
+  const knownNode = knownNodeIds.has(nodeKey);
+  if (knownNode) {
+    postFragmentRangeMiss(
+      text, nodeId, nodeKey, displayKey, lexicalKey, mapped, true);
+    return null;
+  }
 
   const globalStart = findSequence(
     words,
@@ -3102,6 +3220,8 @@ function findFragmentRange(text, nodeId) {
       end: globalStart + displayTarget.length - 1
     };
   }
+  postFragmentRangeMiss(
+    text, nodeId, nodeKey, displayKey, lexicalKey, mapped, false);
   return null;
 }
 
