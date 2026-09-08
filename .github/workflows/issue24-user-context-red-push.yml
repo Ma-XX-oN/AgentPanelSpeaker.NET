@@ -47,3 +47,5 @@ jobs:
           git add AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs
           git commit -m "test: reproduce user-context node ID divergence"
           git push origin HEAD:feature/aiconversationcore-integration
+
+# trigger production-shaped RED fixture
