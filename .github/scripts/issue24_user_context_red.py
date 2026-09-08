@@ -82,6 +82,12 @@ helper = r'''  private static string WriteUserContextProductionFixture(
     string response)
   {
     string path = Path.Combine(root, "rollout-issue24-user-context.jsonl");
+    const string contextPrefix =
+      "# Context from my IDE setup:\n\n" +
+      "## Active file: sessions/example.jsonl\n\n" +
+      "## Open tabs:\n" +
+      "- sessions/example.jsonl\n\n" +
+      "## My request for Codex:\n";
     string[] records =
     {
       JsonSerializer.Serialize(new
@@ -91,7 +97,7 @@ helper = r'''  private static string WriteUserContextProductionFixture(
         payload = new
         {
           type = "user_message",
-          message = "Active file: sample.cs\n## My request for Codex:\nWarm-up request"
+          message = contextPrefix + "Warm-up request"
         }
       }),
       JsonSerializer.Serialize(new
@@ -112,7 +118,8 @@ helper = r'''  private static string WriteUserContextProductionFixture(
         payload = new
         {
           type = "user_message",
-          message = "Active file: sample.cs\n## My request for Codex:\nGive me a nested numbered list with a table"
+          message = contextPrefix +
+            "Give me a nested numbered list with a table"
         }
       }),
       JsonSerializer.Serialize(new
