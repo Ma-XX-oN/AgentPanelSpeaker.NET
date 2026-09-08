@@ -100,6 +100,13 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "rolled-back-visibility", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue35RolledBackVisibilityRegressionTestRunner.Run();
+        return;
+      }
+
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
@@ -120,6 +127,7 @@ internal static class Program
       int environment = RunIsolatedTestSuite("environment");
       int speechOrdinalProduction = RunIsolatedTestSuite("speech-ordinals-production");
       int liveEnd = RunIsolatedTestSuite("live-end");
+      int rolledBackVisibility = RunIsolatedTestSuite("rolled-back-visibility");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -129,7 +137,8 @@ internal static class Program
                              userContextSpeech == 0 &&
                              environment == 0 &&
                              speechOrdinalProduction == 0 &&
-                             liveEnd == 0
+                             liveEnd == 0 &&
+                             rolledBackVisibility == 0
         ? 0
         : 1;
       return;
