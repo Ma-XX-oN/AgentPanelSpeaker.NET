@@ -10,12 +10,17 @@ namespace AgentPanelSpeaker;
 /// <param name="StartsUserTurn">
 /// Whether this node is an actual User prompt that starts a timed turn.
 /// </param>
+/// <param name="RevisionStatus">
+/// Core-owned Codex revision status (`original`, `superseded`, `edited`), or
+/// null for ordinary/non-revision content.
+/// </param>
 internal sealed record ExtractedNode(
   string Kind,
   ContentCategory Category,
   string Text,
   string? Timestamp,
-  bool StartsUserTurn = false);
+  bool StartsUserTurn = false,
+  string? RevisionStatus = null);
 
 /// <summary>
 /// Describes one labelled option in a Codex input question.
