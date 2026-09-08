@@ -29,25 +29,18 @@ jobs:
         run: |
           $path = 'AgentPanelSpeaker/SpeechService.cs'
           $text = Get-Content -Raw -Encoding UTF8 $path
-          $pattern = '(?ms)(      bool remainPaused = wasPaused \|\| restorePause;\r?\n      if \(remainPaused\)\r?\n      \{\r?\n.*?        SetPausedLocked\(true\);)(\r?\n      \}\r?\n      else)'
-          $matches = [regex]::Matches($text, $pattern)
-          if ($matches.Count -ne 1) {
-            throw "Expected exactly one EngineCompleted remainPaused block, found $($matches.Count)."
-          }
-          $insert = @'
-
-        if (_pendingHistoryIndex is null &&
-            _nextHistoryIndex >= _history.Count)
-        {
-          ReportPlaybackPositionLocked(
-            TranscriptPlaybackState.PausedAtLiveEnd);
-        }
-'@
-          $replacement = '${1}' + $insert + '${2}'
-          $updated = [regex]::Replace($text, $pattern, $replacement, 1)
-          if ($updated -eq $text) {
-            throw 'SpeechService patch made no change.'
-          }
+          $anchor = '      bool remainPaused = wasPaused || restorePause;'
+          $anchorIndex = $text.IndexOf($anchor)
+          if ($anchorIndex -lt 0) { throw 'EngineCompleted remainPaused anchor not found.' }
+          $pauseLine = '        SetPausedLocked(true);'
+          $pauseIndex = $text.IndexOf($pauseLine, $anchorIndex)
+          if ($pauseIndex -lt 0) { throw 'EngineCompleted pause line not found.' }
+          $elseIndex = $text.IndexOf("`n      else", $pauseIndex)
+          if ($elseIndex -lt 0) { throw 'EngineCompleted else branch not found.' }
+          $insert = "`n        if (_pendingHistoryIndex is null &&`n            _nextHistoryIndex >= _history.Count)`n        {`n          ReportPlaybackPositionLocked(`n            TranscriptPlaybackState.PausedAtLiveEnd);`n        }"
+          $insertIndex = $pauseIndex + $pauseLine.Length
+          if ($insertIndex -gt $elseIndex) { throw 'Insertion point escaped remainPaused branch.' }
+          $updated = $text.Insert($insertIndex, $insert)
           Set-Content -Path $path -Value $updated -Encoding utf8NoBOM -NoNewline
           git diff --check
           git diff -- AgentPanelSpeaker/SpeechService.cs
