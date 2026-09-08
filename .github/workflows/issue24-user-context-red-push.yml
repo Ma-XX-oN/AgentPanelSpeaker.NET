@@ -1,4 +1,4 @@
-name: Issue 24 user-context node ID RED push
+name: Issue 24 user-context node ID fix push
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  add-red-regression:
-    if: "github.event.head_commit.message == 'chore trigger issue 24 user-context RED'"
+  fix-and-validate:
+    if: "github.event.head_commit.message == 'chore trigger issue 24 production fix'"
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -21,31 +21,21 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Add exact user-context node-ID divergence regression
+      - name: Apply node-ID namespace fix
         shell: pwsh
-        run: python .github/scripts/issue24_user_context_red.py
-      - name: Build and require the exact regression to be RED
+        run: python .github/scripts/issue24_node_id_fix.py
+      - name: Require exact RED regression to turn GREEN
         shell: pwsh
         run: |
           dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
-          $output = dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test 2>&1 | Out-String
-          $code = $LASTEXITCODE
-          $output | Write-Host
-          if ($code -eq 0) { throw 'Expected the new issue #24 regression to fail before the production fix.' }
-          if ($output -notmatch 'production-path-user-context-node-id-parity') {
-            throw 'Regression failed, but not at the required user-context node-ID parity seam.'
-          }
-          if ($output -notmatch 'assigned different node IDs') {
-            throw 'Regression did not report the demonstrated speech/display node-ID mismatch.'
-          }
+          dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
+          if ($LASTEXITCODE -ne 0) { throw 'Regression suite failed after node-ID namespace fix.' }
           git diff --check
-      - name: Commit RED regression
+      - name: Commit production fix
         shell: bash
         run: |
           git config user.name "Ma-XX-oN"
           git config user.email "Ma-XX-oN@users.noreply.github.com"
-          git add AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs
-          git commit -m "test: reproduce user-context node ID divergence"
+          git add AgentPanelSpeaker/TranscriptNodeIdentityMap.cs AgentPanelSpeaker/TranscriptView.cs
+          git commit -m "fix: align transcript and speech node IDs"
           git push origin HEAD:feature/aiconversationcore-integration
-
-# trigger production-shaped RED fixture
