@@ -202,13 +202,13 @@ internal static class Issue35SpeechTransitionRegressionTestRunner
 
   private static void TestNormalPrefixPause()
   {
-    MethodInfo? build = typeof(SpeechSapiXmlBuilder).GetMethods(
+    MethodInfo build = typeof(SpeechSapiXmlBuilder).GetMethods(
         BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
       .Where(method => method.Name == "Build")
       .FirstOrDefault(method => method.GetParameters().Any(parameter =>
-        string.Equals(parameter.Name, "pauseBefore", StringComparison.OrdinalIgnoreCase)));
-    Require(build is not null,
-      "SpeechSapiXmlBuilder has no prefix form of the normal 250 ms structural pause.");
+        string.Equals(parameter.Name, "pauseBefore", StringComparison.OrdinalIgnoreCase)))
+      ?? throw new InvalidOperationException(
+        "SpeechSapiXmlBuilder has no prefix form of the normal 250 ms structural pause.");
 
     object?[] arguments = build.GetParameters().Select(parameter => parameter.Name switch
     {
@@ -262,10 +262,11 @@ internal static class Issue35SpeechTransitionRegressionTestRunner
 
   private static void RequireProperty<T>(string name)
   {
-    PropertyInfo? property = typeof(SpeechFragment).GetProperty(
+    PropertyInfo property = typeof(SpeechFragment).GetProperty(
       name,
-      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-    Require(property is not null, $"SpeechFragment does not expose {name}.");
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+      ?? throw new InvalidOperationException(
+        $"SpeechFragment does not expose {name}.");
     Require(property.PropertyType == typeof(T),
       $"SpeechFragment.{name} is {property.PropertyType}, expected {typeof(T)}.");
   }
