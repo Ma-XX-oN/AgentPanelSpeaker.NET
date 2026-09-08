@@ -3,8 +3,9 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Owns the accumulated valid JSONL record set used by the persistent
-/// AIConversationCore bridge for initial history and live appends.
+/// Owns one retained AIConversationCore session for initial history and live
+/// appends. Projection changes and appended records never resend the unchanged
+/// provider prefix.
 /// </summary>
 internal sealed class CanonicalSessionExtractor : IDisposable
 {
@@ -12,14 +13,15 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   private readonly List<string> _jsonLines = new();
   private AgentSource? _source;
   private AIConversationCoreProjectOptions _options = new();
+  private string? _sessionId;
+  private AIConversationProjection? _projection;
   private bool _disposed;
 
   /// <summary>
-  /// Primes the accumulated session without producing extraction output.
+  /// Primes the retained canonical session without producing extraction output.
+  /// Re-priming the exact same source inventory only changes projection options;
+  /// it does not normalize the provider records again.
   /// </summary>
-  /// <param name="source">Selected provider.</param>
-  /// <param name="jsonLines">Existing source records.</param>
-  /// <param name="options">Canonical provider projection options.</param>
   public void Prime(
     AgentSource source,
     IEnumerable<string> jsonLines,
@@ -27,38 +29,55 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   {
     ArgumentNullException.ThrowIfNull(jsonLines);
     ThrowIfDisposed();
-    _source = source;
-    _options = options ?? new();
-    _jsonLines.Clear();
-    foreach (string line in jsonLines)
+    AIConversationCoreProjectOptions effective = options ?? new();
+    string[] validLines = jsonLines.Where(IsValidJsonRecord).ToArray();
+
+    if (_sessionId is not null &&
+        _source == source &&
+        _jsonLines.SequenceEqual(validLines, StringComparer.Ordinal))
     {
-      if (IsValidJsonRecord(line))
-      {
-        _jsonLines.Add(line);
-      }
+      _options = effective;
+      AIConversationCoreRetainedSession projected =
+        _client.ProjectRetainedSession(_sessionId, _options);
+      _projection = projected.Projection;
+      LogSessionDiagnostics("reproject", projected.Diagnostics);
+      return;
     }
+
+    CloseRetainedSession();
+    _source = source;
+    _options = effective;
+    _jsonLines.Clear();
+    _jsonLines.AddRange(validLines);
+    if (_jsonLines.Count == 0)
+    {
+      _projection = null;
+      return;
+    }
+
+    AIConversationCoreRetainedSession retained =
+      _client.CreateRetainedSession(source, _jsonLines, _options);
+    _sessionId = retained.Id;
+    _projection = retained.Projection;
+    LogSessionDiagnostics("create", retained.Diagnostics);
   }
 
   /// <summary>
   /// Loads and canonically extracts one complete current session.
   /// </summary>
-  /// <param name="source">Selected provider.</param>
-  /// <param name="jsonLines">Existing source records.</param>
-  /// <param name="options">Canonical provider projection options.</param>
-  /// <returns>One extraction result per valid source record.</returns>
   public IReadOnlyList<ExtractionResult> Load(
     AgentSource source,
     IEnumerable<string> jsonLines,
     AIConversationCoreProjectOptions? options = null)
   {
     Prime(source, jsonLines, options);
-    if (_jsonLines.Count == 0)
+    if (_projection is null)
     {
       return Array.Empty<ExtractionResult>();
     }
 
     AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
-      _client.Project(source, _jsonLines, _options));
+      _projection);
     var results = new List<ExtractionResult>(_jsonLines.Count);
     for (int sourceIndex = 0; sourceIndex < _jsonLines.Count; ++sourceIndex)
     {
@@ -71,18 +90,37 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   }
 
   /// <summary>
-  /// Adds one newly appended valid record and returns its canonical extraction.
+  /// Reprojects the already-normalized session with new presentation/speech
+  /// options. Provider records are not resent or adapted again.
   /// </summary>
-  /// <param name="source">Selected provider.</param>
-  /// <param name="line">New complete JSONL record.</param>
-  /// <returns>
-  /// Canonical extraction for the appended record, or null when the line is
-  /// malformed/blank and therefore is not added to the canonical record set.
-  /// </returns>
+  public AIConversationProjection? Reproject(
+    AIConversationCoreProjectOptions options)
+  {
+    ArgumentNullException.ThrowIfNull(options);
+    ThrowIfDisposed();
+    _options = options;
+    if (_sessionId is null)
+    {
+      return null;
+    }
+
+    AIConversationCoreRetainedSession projected =
+      _client.ProjectRetainedSession(_sessionId, _options);
+    _projection = projected.Projection;
+    LogSessionDiagnostics("reproject", projected.Diagnostics);
+    return _projection;
+  }
+
+  /// <summary>
+  /// Adds one newly appended valid record and returns its canonical extraction.
+  /// Only this new record is sent to Core; the unchanged prefix remains retained
+  /// by the worker session.
+  /// </summary>
   public ExtractionResult? Append(AgentSource source, string line)
   {
     ThrowIfDisposed();
-    if (_source is not AgentSource currentSource || currentSource != source)
+    if (_source is not AgentSource currentSource || currentSource != source ||
+        _sessionId is null)
     {
       throw new InvalidOperationException(
         "Canonical session extraction must be primed for the selected source " +
@@ -93,13 +131,21 @@ internal sealed class CanonicalSessionExtractor : IDisposable
       return null;
     }
 
+    int sourceIndex = _jsonLines.Count;
+    AIConversationCoreRetainedSession appended =
+      _client.AppendRetainedSession(
+        _sessionId,
+        new[] { line },
+        _options);
     _jsonLines.Add(line);
-    AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
-      _client.Project(source, _jsonLines, _options));
+    _projection = appended.Projection;
+    LogSessionDiagnostics("append", appended.Diagnostics);
+    AIConversationProjection speechProjection = CanonicalSpeechProjection.Prepare(
+      _projection);
     return CanonicalProjectionExtractor.ExtractRecord(
-      projection,
+      speechProjection,
       source,
-      _jsonLines.Count - 1);
+      sourceIndex);
   }
 
   /// <summary>
@@ -111,11 +157,41 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     {
       return;
     }
+    CloseRetainedSession();
     _disposed = true;
     _client.Dispose();
     _jsonLines.Clear();
     _source = null;
     _options = new();
+    _projection = null;
+  }
+
+  private void CloseRetainedSession()
+  {
+    if (_sessionId is not null)
+    {
+      _client.CloseRetainedSession(_sessionId);
+      _sessionId = null;
+    }
+    _projection = null;
+  }
+
+  private static void LogSessionDiagnostics(
+    string operation,
+    AIConversationCoreSessionDiagnostics? diagnostics)
+  {
+    if (diagnostics is null)
+    {
+      return;
+    }
+    DiagnosticLog.Write("core.retained_session", new
+    {
+      operation,
+      diagnostics.InitialNormalizationPasses,
+      diagnostics.FullRenormalizationPasses,
+      diagnostics.AppendedRecordsProcessed,
+      diagnostics.ProjectionCount
+    });
   }
 
   /// <summary>
@@ -138,9 +214,6 @@ internal sealed class CanonicalSessionExtractor : IDisposable
     }
   }
 
-  /// <summary>
-  /// Throws after disposal.
-  /// </summary>
   private void ThrowIfDisposed()
   {
     ObjectDisposedException.ThrowIf(_disposed, this);
