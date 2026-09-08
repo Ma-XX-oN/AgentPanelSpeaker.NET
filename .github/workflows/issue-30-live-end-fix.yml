@@ -1,0 +1,87 @@
+name: Issue 30 live-end fix
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+    paths:
+      - .github/workflows/issue-30-live-end-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply minimal completion-state fix
+        shell: pwsh
+        run: |
+          $path = 'AgentPanelSpeaker/SpeechService.cs'
+          $text = Get-Content -Raw -Encoding UTF8 $path
+          $old = @'
+                SetPausedLocked(true);
+              }
+              else
+              {
+                SetPausedLocked(false);
+                StartPendingOrNextLocked();
+              }
+          '@
+          $new = @'
+                SetPausedLocked(true);
+                if (_pendingHistoryIndex is null &&
+                    _nextHistoryIndex >= _history.Count)
+                {
+                  ReportPlaybackPositionLocked(
+                    TranscriptPlaybackState.PausedAtLiveEnd);
+                }
+              }
+              else
+              {
+                SetPausedLocked(false);
+                StartPendingOrNextLocked();
+              }
+          '@
+          if (-not $text.Contains($old)) {
+            throw 'Expected EngineCompleted remainPaused block was not found exactly once.'
+          }
+          $updated = $text.Replace($old, $new)
+          if ($updated -eq $text) {
+            throw 'SpeechService patch made no change.'
+          }
+          Set-Content -Path $path -Value $updated -Encoding utf8NoBOM -NoNewline
+          git diff --check
+          git diff -- AgentPanelSpeaker/SpeechService.cs
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Require issue 30 regression GREEN
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test live-end
+
+      - name: Run full built-in regression suite
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
+
+      - name: Commit production fix
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/SpeechService.cs
+          git diff --cached --check
+          git commit -m 'fix: publish paused live-end state after skip'
+          git push origin HEAD:feature/aiconversationcore-integration
