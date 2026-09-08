@@ -39,3 +39,5 @@ jobs:
           git add AgentPanelSpeaker/TranscriptNodeIdentityMap.cs AgentPanelSpeaker/TranscriptView.cs
           git commit -m "fix: align transcript and speech node IDs"
           git push origin HEAD:feature/aiconversationcore-integration
+
+# trigger
