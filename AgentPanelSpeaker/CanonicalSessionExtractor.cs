@@ -85,7 +85,7 @@ internal sealed class CanonicalSessionExtractor : IDisposable
         projection,
         source,
         sourceIndex);
-      results.Add(ApplyRevisionStatus(result, projection, sourceIndex));
+      results.Add(ApplyRevisionMetadata(result, projection, sourceIndex));
     }
     return results;
   }
@@ -147,7 +147,7 @@ internal sealed class CanonicalSessionExtractor : IDisposable
       speechProjection,
       source,
       sourceIndex);
-    return ApplyRevisionStatus(result, speechProjection, sourceIndex);
+    return ApplyRevisionMetadata(result, speechProjection, sourceIndex);
   }
 
   /// <summary>
@@ -169,46 +169,123 @@ internal sealed class CanonicalSessionExtractor : IDisposable
   }
 
   /// <summary>
-  /// Copies Core-owned revision status onto app speech nodes from the canonical
-  /// event inventory. No provider-native rollback interpretation occurs here.
+  /// Copies Core-owned revision/projection metadata onto app speech nodes from
+  /// the canonical event inventory. No provider-native rollback interpretation
+  /// occurs here.
   /// </summary>
-  private static ExtractionResult ApplyRevisionStatus(
+  private static ExtractionResult ApplyRevisionMetadata(
     ExtractionResult result,
     AIConversationProjection projection,
     int sourceIndex)
   {
     string? revisionStatus = null;
+    int? revisionDepth = null;
+    bool projectionVisible = true;
+    bool revisionHistoryControlled = false;
+    bool historicalRevision = false;
+    bool foundRevisionMetadata = false;
+
     foreach (JsonElement eventElement in projection.Events)
     {
       if (!eventElement.TryGetProperty("source_index", out JsonElement index) ||
           index.ValueKind != JsonValueKind.Number ||
           !index.TryGetInt32(out int value) ||
-          value != sourceIndex ||
-          !eventElement.TryGetProperty(
-            "revision_status",
-            out JsonElement status) ||
-          status.ValueKind != JsonValueKind.String)
+          value != sourceIndex)
       {
         continue;
       }
-      string? candidate = status.GetString();
-      if (!string.IsNullOrWhiteSpace(candidate))
+
+      if (eventElement.TryGetProperty(
+            "revision_status",
+            out JsonElement status) &&
+          status.ValueKind == JsonValueKind.String)
       {
-        revisionStatus = candidate;
+        string? candidate = status.GetString();
+        if (!string.IsNullOrWhiteSpace(candidate))
+        {
+          revisionStatus = candidate;
+          foundRevisionMetadata = true;
+        }
+      }
+
+      if (eventElement.TryGetProperty(
+            "revision_depth",
+            out JsonElement depth) &&
+          depth.ValueKind == JsonValueKind.Number &&
+          depth.TryGetInt32(out int depthValue))
+      {
+        revisionDepth = depthValue;
+        foundRevisionMetadata = true;
+      }
+
+      if (eventElement.TryGetProperty(
+            "projection",
+            out JsonElement projectionElement) &&
+          projectionElement.ValueKind == JsonValueKind.Object)
+      {
+        if (TryGetBoolean(projectionElement, "visible", out bool visible))
+        {
+          projectionVisible = visible;
+          foundRevisionMetadata = true;
+        }
+        if (TryGetBoolean(
+              projectionElement,
+              "revision_history_controlled",
+              out bool controlled))
+        {
+          revisionHistoryControlled = controlled;
+          foundRevisionMetadata = true;
+        }
+        if (TryGetBoolean(
+              projectionElement,
+              "historical_revision",
+              out bool historical))
+        {
+          historicalRevision = historical;
+          foundRevisionMetadata = true;
+        }
+      }
+
+      if (revisionStatus is not null || revisionHistoryControlled ||
+          historicalRevision || !projectionVisible)
+      {
         break;
       }
     }
 
-    if (revisionStatus is null || result.Nodes.Count == 0)
+    if (!foundRevisionMetadata || result.Nodes.Count == 0)
     {
       return result;
     }
+
     return result with
     {
       Nodes = result.Nodes
-        .Select(node => node with { RevisionStatus = revisionStatus })
+        .Select(node => node with
+        {
+          RevisionStatus = revisionStatus,
+          RevisionDepth = revisionDepth,
+          ProjectionVisible = projectionVisible,
+          RevisionHistoryControlled = revisionHistoryControlled,
+          HistoricalRevision = historicalRevision
+        })
         .ToArray()
     };
+  }
+
+  private static bool TryGetBoolean(
+    JsonElement element,
+    string propertyName,
+    out bool value)
+  {
+    value = false;
+    if (!element.TryGetProperty(propertyName, out JsonElement property) ||
+        property.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+    {
+      return false;
+    }
+    value = property.GetBoolean();
+    return true;
   }
 
   private void CloseRetainedSession()
