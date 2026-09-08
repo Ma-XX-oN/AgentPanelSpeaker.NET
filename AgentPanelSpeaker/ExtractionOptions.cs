@@ -14,13 +14,30 @@ namespace AgentPanelSpeaker;
 /// Core-owned Codex revision status (`original`, `superseded`, `edited`), or
 /// null for ordinary/non-revision content.
 /// </param>
+/// <param name="RevisionDepth">
+/// Core-owned zero-based revision depth, or null for non-revision content.
+/// </param>
+/// <param name="ProjectionVisible">
+/// Core-owned effective visibility for the projection that produced this node.
+/// </param>
+/// <param name="RevisionHistoryControlled">
+/// Whether Core marks this node as belonging to a revision lineage whose
+/// historical visibility can be changed without changing canonical identity.
+/// </param>
+/// <param name="HistoricalRevision">
+/// Whether Core classifies this node as historical revision content.
+/// </param>
 internal sealed record ExtractedNode(
   string Kind,
   ContentCategory Category,
   string Text,
   string? Timestamp,
   bool StartsUserTurn = false,
-  string? RevisionStatus = null);
+  string? RevisionStatus = null,
+  int? RevisionDepth = null,
+  bool ProjectionVisible = true,
+  bool RevisionHistoryControlled = false,
+  bool HistoricalRevision = false);
 
 /// <summary>
 /// Describes one labelled option in a Codex input question.
