@@ -316,7 +316,8 @@ internal static class Issue35RolledBackVisibilityRegressionTestRunner
     };
     return string.Join(
       Environment.NewLine,
-      records.Select(JsonSerializer.Serialize)) + Environment.NewLine;
+      records.Select(record => JsonSerializer.Serialize(record))) +
+      Environment.NewLine;
   }
 
   private static (long NodeId, ContentCategory Category, string Text)
