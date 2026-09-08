@@ -1,0 +1,41 @@
+name: Issue 24 node ID namespace fix
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    if: "github.event.head_commit.message == 'chore trigger issue 24 node ID fix'"
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Apply node-ID namespace fix
+        shell: pwsh
+        run: python .github/scripts/issue24_node_id_fix.py
+      - name: Require exact RED regression to turn GREEN
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --no-build -- --test
+          if ($LASTEXITCODE -ne 0) { throw 'Regression suite failed after node-ID namespace fix.' }
+          git diff --check
+      - name: Commit production fix
+        shell: bash
+        run: |
+          git config user.name "Ma-XX-oN"
+          git config user.email "Ma-XX-oN@users.noreply.github.com"
+          git add AgentPanelSpeaker/TranscriptNodeIdentityMap.cs AgentPanelSpeaker/TranscriptView.cs
+          git commit -m "fix: align transcript and speech node IDs"
+          git push origin HEAD:feature/aiconversationcore-integration
