@@ -595,6 +595,7 @@ internal sealed class TranscriptView : UserControl
     try
     {
       AgentSource source = _source;
+      bool includeRolledBackTurns = _settings.ShowRolledBackHistory;
       CancellationToken token = cancellation.Token;
       TranscriptRenderPayload payload = await Task.Run(() =>
       {
@@ -610,7 +611,8 @@ internal sealed class TranscriptView : UserControl
           () => identities = TranscriptNodeIdentityMap.Build(
             path,
             source,
-            token),
+            token,
+            includeRolledBackTurns),
           () => presentation = TranscriptPresentationDomFormatter.Format(
             path,
             source,

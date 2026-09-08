@@ -21,7 +21,8 @@ internal static class TranscriptNodeIdentityMap
   public static IReadOnlyList<TranscriptNodeIdentity> Build(
     string path,
     AgentSource source,
-    CancellationToken cancellationToken = default)
+    CancellationToken cancellationToken = default,
+    bool includeRolledBackTurns = false)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
     var jsonLines = new List<string>();
@@ -47,8 +48,16 @@ internal static class TranscriptNodeIdentityMap
     }
 
     using var client = new AIConversationCoreClient();
+    var projectOptions = new AIConversationCoreProjectOptions(
+      IncludeRolledBackTurns: includeRolledBackTurns,
+      CodexSessionIndexPath: source == AgentSource.Codex
+        ? SessionLocator.GetCodexSessionIndexPath()
+        : null,
+      // User Context is always part of the indexed speech-history namespace.
+      // The UI setting controls playback eligibility, not node numbering.
+      IncludeUserContext: true);
     AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
-      client.Project(source, jsonLines));
+      client.Project(source, jsonLines, projectOptions));
     cancellationToken.ThrowIfCancellationRequested();
 
     IReadOnlyDictionary<int, string> sourceIds = BuildCanonicalSourceIds(
