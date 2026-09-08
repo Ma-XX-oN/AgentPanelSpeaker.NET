@@ -93,6 +93,13 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "live-end", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue30LiveEndRegressionTestRunner.Run();
+        return;
+      }
+
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
@@ -104,15 +111,15 @@ internal static class Program
       int additional = AdditionalRegressionTestRunner.Run();
       int core = CoreRegressionTestRunner.Run();
 
-      // UI-bearing suites run in fresh processes. MainForm and WebView2 schedule
-      // continuations on the WinForms synchronization context; disposing one
-      // test's controls must never be able to poison another acceptance test.
-      // Process isolation makes the test boundary match the application
-      // lifecycle rather than relying on timing-sensitive message pumping.
+      // UI-bearing and real-engine suites run in fresh processes. MainForm,
+      // WebView2, and the speech worker own lifecycle-sensitive resources;
+      // process isolation prevents one suite's teardown from contaminating the
+      // next acceptance test.
       int speechOrdinalsFocused = RunIsolatedTestSuite("speech-ordinals-focused");
       int userContextSpeech = RunIsolatedTestSuite("user-context-speech");
       int environment = RunIsolatedTestSuite("environment");
       int speechOrdinalProduction = RunIsolatedTestSuite("speech-ordinals-production");
+      int liveEnd = RunIsolatedTestSuite("live-end");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -121,7 +128,8 @@ internal static class Program
                              speechOrdinalsFocused == 0 &&
                              userContextSpeech == 0 &&
                              environment == 0 &&
-                             speechOrdinalProduction == 0
+                             speechOrdinalProduction == 0 &&
+                             liveEnd == 0
         ? 0
         : 1;
       return;
@@ -164,8 +172,8 @@ internal static class Program
   }
 
   /// <summary>
-  /// Runs one UI-bearing regression suite in a fresh copy of this executable.
-  /// The child inherits stdout/stderr so CI retains the suite's normal evidence.
+  /// Runs one lifecycle-sensitive regression suite in a fresh copy of this
+  /// executable. The child inherits stdout/stderr so CI retains normal evidence.
   /// </summary>
   private static int RunIsolatedTestSuite(string suite)
   {
