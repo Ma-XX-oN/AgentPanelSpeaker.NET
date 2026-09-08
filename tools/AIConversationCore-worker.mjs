@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = '731d08754fd3fb9cd9a22c55391c486afd27084f';
+const CORE_COMMIT = 'df89ac80fca687a9eeadb347224e45aa0d1d2ae3';
 const sessions = new Map();
 
 /**
