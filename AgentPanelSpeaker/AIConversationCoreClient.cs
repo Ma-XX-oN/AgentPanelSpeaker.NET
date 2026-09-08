@@ -23,12 +23,33 @@ internal sealed record AIConversationCoreProjectOptions(
   bool IncludeUserContext = false);
 
 /// <summary>
+/// Identifies one worker-retained canonical conversation and its latest projection.
+/// </summary>
+internal sealed record AIConversationCoreRetainedSession(
+  string Id,
+  AIConversationProjection Projection,
+  AIConversationCoreSessionDiagnostics? Diagnostics);
+
+/// <summary>
+/// Counters reported by Core's retained-session API.
+/// </summary>
+internal sealed record AIConversationCoreSessionDiagnostics(
+  [property: JsonPropertyName("initial_normalization_passes")]
+    int InitialNormalizationPasses,
+  [property: JsonPropertyName("full_renormalization_passes")]
+    int FullRenormalizationPasses,
+  [property: JsonPropertyName("appended_records_processed")]
+    int AppendedRecordsProcessed,
+  [property: JsonPropertyName("projection_count")]
+    int ProjectionCount);
+
+/// <summary>
 /// Owns one persistent Node.js bridge process for AIConversationCore.
 /// </summary>
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "6c9c2eccc4df301105f4b330fb9216b90d35c5f7";
+    "731d08754fd3fb9cd9a22c55391c486afd27084f";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
@@ -68,58 +89,121 @@ internal sealed class AIConversationCoreClient : IDisposable
 
   /// <summary>
   /// Projects one ordered provider session through AIConversationCore.
+  ///
+  /// This compatibility operation sends all records. Interactive session paths
+  /// should use the retained-session methods so projection settings and live
+  /// append do not re-normalize the unchanged provider prefix.
   /// </summary>
-  /// <param name="source">Selected provider.</param>
-  /// <param name="jsonLines">Ordered raw JSONL records.</param>
-  /// <param name="options">Optional canonical provider options.</param>
-  /// <returns>The canonical structured projection.</returns>
   public AIConversationProjection Project(
     AgentSource source,
     IReadOnlyList<string> jsonLines,
     AIConversationCoreProjectOptions? options = null)
   {
     ArgumentNullException.ThrowIfNull(jsonLines);
-    string provider = source switch
-    {
-      AgentSource.Claude => "claude",
-      AgentSource.Codex => "codex",
-      _ => throw new ArgumentOutOfRangeException(
-        nameof(source),
-        source,
-        "AIConversationCore projection requires an explicit provider.")
-    };
-
-    using var recordsDocument = JsonDocument.Parse(
-      "[" + string.Join(",", jsonLines.Where(line =>
-        !string.IsNullOrWhiteSpace(line))) + "]");
-
     AIConversationCoreProjectOptions effective = options ?? new();
-    var supplementary = new Dictionary<string, object>();
-    if (source == AgentSource.Codex &&
-        !string.IsNullOrWhiteSpace(effective.CodexSessionIndexPath))
-    {
-      supplementary["codexSessionIndex"] = new
-      {
-        path = Path.GetFullPath(effective.CodexSessionIndexPath)
-      };
-    }
-
     var request = new CoreRequest(
       "project",
-      provider,
-      recordsDocument.RootElement.Clone(),
-      new CoreOptions(
-        effective.IncludeRolledBackTurns,
-        effective.IncludeUserContext),
-      supplementary);
+      null,
+      ProviderName(source),
+      ParseRecords(jsonLines),
+      ToCoreOptions(effective),
+      SupplementarySources(source, effective));
     CoreResponse response = SendRequest(request);
-    if (response.Projection is null)
+    return RequireProjection(response);
+  }
+
+  /// <summary>
+  /// Creates one worker-retained canonical session from the complete initial
+  /// provider record inventory. Provider normalization occurs at this boundary.
+  /// </summary>
+  public AIConversationCoreRetainedSession CreateRetainedSession(
+    AgentSource source,
+    IReadOnlyList<string> jsonLines,
+    AIConversationCoreProjectOptions? options = null)
+  {
+    ArgumentNullException.ThrowIfNull(jsonLines);
+    string sessionId = Guid.NewGuid().ToString("N");
+    AIConversationCoreProjectOptions effective = options ?? new();
+    var request = new CoreRequest(
+      "session_create",
+      sessionId,
+      ProviderName(source),
+      ParseRecords(jsonLines),
+      ToCoreOptions(effective),
+      null);
+    CoreResponse response = SendRequest(request);
+    return new AIConversationCoreRetainedSession(
+      sessionId,
+      RequireProjection(response),
+      response.Diagnostics);
+  }
+
+  /// <summary>
+  /// Projects one already-normalized worker session with new visibility/speech
+  /// options without resending provider records.
+  /// </summary>
+  public AIConversationCoreRetainedSession ProjectRetainedSession(
+    string sessionId,
+    AIConversationCoreProjectOptions? options = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+    AIConversationCoreProjectOptions effective = options ?? new();
+    var request = new CoreRequest(
+      "session_project",
+      sessionId,
+      null,
+      null,
+      ToCoreOptions(effective),
+      null);
+    CoreResponse response = SendRequest(request);
+    return new AIConversationCoreRetainedSession(
+      sessionId,
+      RequireProjection(response),
+      response.Diagnostics);
+  }
+
+  /// <summary>
+  /// Appends only newly observed provider records to an already-normalized Core
+  /// session and returns the resulting projection.
+  /// </summary>
+  public AIConversationCoreRetainedSession AppendRetainedSession(
+    string sessionId,
+    IReadOnlyList<string> appendedJsonLines,
+    AIConversationCoreProjectOptions? options = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+    ArgumentNullException.ThrowIfNull(appendedJsonLines);
+    AIConversationCoreProjectOptions effective = options ?? new();
+    var request = new CoreRequest(
+      "session_append",
+      sessionId,
+      null,
+      ParseRecords(appendedJsonLines),
+      ToCoreOptions(effective),
+      null);
+    CoreResponse response = SendRequest(request);
+    return new AIConversationCoreRetainedSession(
+      sessionId,
+      RequireProjection(response),
+      response.Diagnostics);
+  }
+
+  /// <summary>
+  /// Releases one worker-retained canonical session.
+  /// </summary>
+  public void CloseRetainedSession(string sessionId)
+  {
+    if (string.IsNullOrWhiteSpace(sessionId))
     {
-      throw new InvalidOperationException(
-        "AIConversationCore returned no structured projection.");
+      return;
     }
-    ValidateProjectionContract(response.Projection);
-    return response.Projection;
+    _ = SendRequest(new CoreRequest(
+      "session_close",
+      sessionId,
+      null,
+      null,
+      null,
+      null));
   }
 
   /// <summary>
@@ -136,6 +220,64 @@ internal sealed class AIConversationCoreClient : IDisposable
       _disposed = true;
       StopProcess();
     }
+  }
+
+  private static string ProviderName(AgentSource source)
+  {
+    return source switch
+    {
+      AgentSource.Claude => "claude",
+      AgentSource.Codex => "codex",
+      _ => throw new ArgumentOutOfRangeException(
+        nameof(source),
+        source,
+        "AIConversationCore projection requires an explicit provider.")
+    };
+  }
+
+  private static JsonElement ParseRecords(IReadOnlyList<string> jsonLines)
+  {
+    using JsonDocument recordsDocument = JsonDocument.Parse(
+      "[" + string.Join(",", jsonLines.Where(line =>
+        !string.IsNullOrWhiteSpace(line))) + "]");
+    return recordsDocument.RootElement.Clone();
+  }
+
+  private static CoreOptions ToCoreOptions(
+    AIConversationCoreProjectOptions options)
+  {
+    return new CoreOptions(
+      options.IncludeRolledBackTurns,
+      options.IncludeUserContext);
+  }
+
+  private static IReadOnlyDictionary<string, object>? SupplementarySources(
+    AgentSource source,
+    AIConversationCoreProjectOptions options)
+  {
+    if (source != AgentSource.Codex ||
+        string.IsNullOrWhiteSpace(options.CodexSessionIndexPath))
+    {
+      return null;
+    }
+    return new Dictionary<string, object>
+    {
+      ["codexSessionIndex"] = new
+      {
+        path = Path.GetFullPath(options.CodexSessionIndexPath)
+      }
+    };
+  }
+
+  private static AIConversationProjection RequireProjection(CoreResponse response)
+  {
+    if (response.Projection is null)
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore returned no structured projection.");
+    }
+    ValidateProjectionContract(response.Projection);
+    return response.Projection;
   }
 
   private static void ValidateProjectionContract(AIConversationProjection projection)
@@ -274,7 +416,13 @@ internal sealed class AIConversationCoreClient : IDisposable
       _input = process.StandardInput;
       _output = process.StandardOutput;
 
-      var ping = new CoreRequest("ping", null, null, null, null);
+      var ping = new CoreRequest(
+        "ping",
+        null,
+        null,
+        null,
+        null,
+        null);
       CoreResponse response = SendRequestWithoutStartup(ping);
       if (!response.Ok ||
           !string.Equals(
@@ -392,19 +540,26 @@ internal sealed class AIConversationCoreClient : IDisposable
 
   private sealed record CoreRequest(
     [property: JsonPropertyName("operation")] string Operation,
+    [property: JsonPropertyName("session_id")] string? SessionId,
     [property: JsonPropertyName("provider")] string? Provider,
     [property: JsonPropertyName("records")] JsonElement? Records,
     [property: JsonPropertyName("options")] CoreOptions? Options,
-    [property: JsonPropertyName("supplementary_sources")] IReadOnlyDictionary<string, object>? SupplementarySources);
+    [property: JsonPropertyName("supplementary_sources")]
+      IReadOnlyDictionary<string, object>? SupplementarySources);
 
   private sealed record CoreOptions(
-    [property: JsonPropertyName("includeRolledBackTurns")] bool IncludeRolledBackTurns,
-    [property: JsonPropertyName("includeUserContext")] bool IncludeUserContext);
+    [property: JsonPropertyName("includeRolledBackTurns")]
+      bool IncludeRolledBackTurns,
+    [property: JsonPropertyName("includeUserContext")]
+      bool IncludeUserContext);
 
   private sealed record CoreResponse(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("core_commit")] string? CoreCommit,
-    [property: JsonPropertyName("projection")] AIConversationProjection? Projection,
+    [property: JsonPropertyName("projection")]
+      AIConversationProjection? Projection,
+    [property: JsonPropertyName("diagnostics")]
+      AIConversationCoreSessionDiagnostics? Diagnostics,
     [property: JsonPropertyName("error")] string? Error);
 }
 
@@ -416,9 +571,11 @@ internal sealed record AIConversationProjection(
   [property: JsonPropertyName("events")] JsonElement[] Events,
   [property: JsonPropertyName("turns")] CanonicalTurnProjection[] Turns,
   [property: JsonPropertyName("units")] CanonicalUnitProjection[] Units,
-  [property: JsonPropertyName("presentation")] AIConversationPresentation? Presentation,
+  [property: JsonPropertyName("presentation")]
+    AIConversationPresentation? Presentation,
   [property: JsonPropertyName("markdown")] string Markdown,
-  [property: JsonPropertyName("session_metadata")] AIConversationSessionMetadata? SessionMetadata = null);
+  [property: JsonPropertyName("session_metadata")]
+    AIConversationSessionMetadata? SessionMetadata = null);
 
 /// <summary>
 /// Provider session metadata resolved by AIConversationCore.
@@ -434,7 +591,8 @@ internal sealed record AIConversationSessionMetadata(
 internal sealed record AIConversationPresentation(
   [property: JsonPropertyName("schema_version")] int SchemaVersion,
   [property: JsonPropertyName("split_policy")] string SplitPolicy,
-  [property: JsonPropertyName("structural_units")] CanonicalStructuralUnitProjection[] StructuralUnits,
+  [property: JsonPropertyName("structural_units")]
+    CanonicalStructuralUnitProjection[] StructuralUnits,
   [property: JsonPropertyName("tree")] JsonElement Tree);
 
 /// <summary>
