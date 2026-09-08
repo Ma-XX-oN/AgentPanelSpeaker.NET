@@ -50,7 +50,7 @@ internal static class Issue30LiveEndRegressionTestRunner
   /// </summary>
   private static void TestNaturalCompletionWaits()
   {
-    using SpeechService speech = CreateSpeechService();
+    using SpeechService speech = CreateSpeechService(rate: 10);
     var positions = new List<TranscriptPlaybackPosition>();
     speech.PlaybackPositionChanged += position =>
     {
@@ -88,7 +88,7 @@ internal static class Issue30LiveEndRegressionTestRunner
   /// </summary>
   private static void TestSkipForwardWhileSpeakingPausesAtEnd()
   {
-    using SpeechService speech = CreateSpeechService();
+    using SpeechService speech = CreateSpeechService(rate: -10);
     var positions = new List<TranscriptPlaybackPosition>();
     speech.PlaybackPositionChanged += position =>
     {
@@ -104,8 +104,8 @@ internal static class Issue30LiveEndRegressionTestRunner
       ContentCategory.Assistant,
       SpeechFragmentKind.Prose,
       string.Join(' ', Enumerable.Repeat(
-        "skip-forward-live-end-regression-probe",
-        80))));
+        "skip forward live end regression probe",
+        100))));
 
     Require(speech.IsSpeaking,
       "The regression fragment did not enter active monitored speech.");
@@ -127,15 +127,17 @@ internal static class Issue30LiveEndRegressionTestRunner
       $"ended in {final.State}, expected PausedAtLiveEnd.");
   }
 
-  private static SpeechService CreateSpeechService()
+  private static SpeechService CreateSpeechService(int rate)
   {
     var speech = new SpeechService();
     InstalledSpeechVoice voice = speech.GetInstalledVoices().FirstOrDefault()
       ?? throw new InvalidOperationException(
         "No installed voice is available for the live-end regression.");
-    var profile = new SpeechProfileSettings(voice.Name, 10, 0)
+    var profile = new SpeechProfileSettings(voice.Name, rate, 0)
     {
-      Volume = 0
+      // Volume zero means Not Spoken, so keep this audible-but-minimal. The
+      // regression immediately cancels the long skip-forward utterance.
+      Volume = 1
     };
     speech.SetPolicyProviders(
       _ => profile,
