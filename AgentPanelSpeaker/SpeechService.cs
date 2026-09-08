@@ -1252,6 +1252,12 @@ internal sealed class SpeechService : IDisposable
           pendingHistoryWordIndex = _pendingHistoryWordIndex
         });
         SetPausedLocked(true);
+        if (_pendingHistoryIndex is null &&
+            _nextHistoryIndex >= _history.Count)
+        {
+          ReportPlaybackPositionLocked(
+            TranscriptPlaybackState.PausedAtLiveEnd);
+        }
       }
       else
       {
