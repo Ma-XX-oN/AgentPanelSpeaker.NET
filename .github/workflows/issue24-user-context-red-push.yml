@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   add-red-regression:
-    if: github.event.head_commit.message == 'chore: trigger issue 24 user-context RED'
+    if: "github.event.head_commit.message == 'chore trigger issue 24 user-context RED'"
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
