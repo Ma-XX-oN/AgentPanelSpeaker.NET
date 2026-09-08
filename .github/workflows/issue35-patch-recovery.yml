@@ -1,0 +1,50 @@
+name: Issue 35 patch recovery
+
+on:
+  push:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/aiconversationcore-integration
+      - name: Extract and execute staged implementation script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/issue35-implementation-patch.yml')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          name_index = next(i for i, line in enumerate(lines)
+                            if 'Apply issue 35 production implementation' in line)
+          run_index = next(i for i in range(name_index + 1, len(lines))
+                           if lines[i].strip() == 'run: |')
+          end_index = next(i for i in range(run_index + 1, len(lines))
+                           if lines[i].startswith('      - name:'))
+          source = []
+          for line in lines[run_index + 1:end_index]:
+            source.append(line[10:] if line.startswith('          ') else line)
+          out = Path('/tmp/issue35-implementation.py')
+          out.write_text('\n'.join(source) + '\n', encoding='utf-8')
+          PY
+          python /tmp/issue35-implementation.py
+      - name: Commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "feat: make rollback history an in-place visibility policy"
+          git push origin HEAD:feature/aiconversationcore-integration
