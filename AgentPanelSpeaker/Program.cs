@@ -107,6 +107,13 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "rolled-back-speech", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue35SpeechTransitionRegressionTestRunner.Run();
+        return;
+      }
+
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
@@ -128,6 +135,7 @@ internal static class Program
       int speechOrdinalProduction = RunIsolatedTestSuite("speech-ordinals-production");
       int liveEnd = RunIsolatedTestSuite("live-end");
       int rolledBackVisibility = RunIsolatedTestSuite("rolled-back-visibility");
+      int rolledBackSpeech = RunIsolatedTestSuite("rolled-back-speech");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -138,7 +146,8 @@ internal static class Program
                              environment == 0 &&
                              speechOrdinalProduction == 0 &&
                              liveEnd == 0 &&
-                             rolledBackVisibility == 0
+                             rolledBackVisibility == 0 &&
+                             rolledBackSpeech == 0
         ? 0
         : 1;
       return;
@@ -172,7 +181,8 @@ internal static class Program
         "app.unobserved_task_exception",
         eventArgs.Exception,
         source: "TaskScheduler",
-        isTerminating: false);
+        isTerminating: false,
+        rawException: eventArgs.Exception);
       eventArgs.SetObserved();
     };
 
