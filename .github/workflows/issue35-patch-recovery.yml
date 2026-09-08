@@ -32,8 +32,15 @@ jobs:
           end_index = next(i for i in range(run_index + 1, len(lines))
                            if lines[i].startswith('      - name:'))
           source = []
+          in_triple = False
           for line in lines[run_index + 1:end_index]:
-            source.append(line[10:] if line.startswith('          ') else line)
+            emitted = line if in_triple else (
+              line[10:] if line.startswith('          ') else line)
+            source.append(emitted)
+            if line.count("'''") % 2 == 1:
+              in_triple = not in_triple
+          if in_triple:
+            raise SystemExit('unterminated triple-quoted literal in staged patch script')
           out = Path('/tmp/issue35-implementation.py')
           out.write_text('\n'.join(source) + '\n', encoding='utf-8')
           PY
