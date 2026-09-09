@@ -23,6 +23,8 @@ internal static class Issue46IndependentRegressionOracleTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
+      ("independent-oracle/mainform-lease-completes-shown-before-return",
+        TestMainFormLeaseCompletesShownBeforeReturn),
       ("independent-oracle/test-runner-rejects-partial-completion",
         TestRunnerRejectsPartialCompletion),
       ("independent-oracle/issue24-provider-to-browser-playback",
@@ -60,6 +62,26 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       : $"FAIL: {failed}/{tests.Length} issue #46 independent " +
         "regression-oracle tests failed.");
     return failed == 0 ? 0 : 1;
+  }
+
+  /// <summary>
+  /// Proves the off-screen MainForm lease does not return while the production
+  /// MainForm Shown event is still queued. A late Shown event can observe test
+  /// fixture fields installed immediately after lease construction and start an
+  /// asynchronous history preview that mutates retained speech history.
+  /// </summary>
+  private static void TestMainFormLeaseCompletesShownBeforeReturn()
+  {
+    using var lease = CreateOffscreenMainForm();
+    bool shownAfterLeaseReturned = false;
+    lease.Form.Shown += (_, _) => shownAfterLeaseReturned = true;
+
+    Application.DoEvents();
+
+    Require(
+      !shownAfterLeaseReturned,
+      "MainFormTestLease returned before the production MainForm Shown " +
+      "lifecycle completed.");
   }
 
   /// <summary>
