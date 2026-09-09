@@ -24,8 +24,8 @@ internal static class Issue37VirtualWindowRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("virtual-window/single-anchor-details-is-atomic",
-        TestSingleAnchorDetailsIsAtomic),
+      ("virtual-window/core-single-anchor-user-context-unit-is-preserved",
+        TestCoreSingleAnchorUserContextUnitIsPreserved),
       ("virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded",
         TestBrowserWindowBehaviour)
     };
@@ -57,53 +57,78 @@ internal static class Issue37VirtualWindowRegressionTestRunner
     return failures == 0 ? 0 : 1;
   }
 
-  /// <summary>
-  /// A details element that owns even one canonical record anchor is an atomic
-  /// HTML unit.  Wrapping its opening and closing halves in separate virtual
-  /// sections changes browser containment, so the context record itself must
-  /// carry the complete disclosure.
-  /// </summary>
-  private static void TestSingleAnchorDetailsIsAtomic()
-  {
-    const string html = """
-<section class="transcript-turn" data-presentation-id="before">
-  <span class="record-anchor" data-jsonl-record="10" data-source-id="before"></span>
-  <p>Before context.</p>
-</section>
-<blockquote class="user-context">
-  <details class="user-context-details">
-    <summary># Context from my IDE setup:</summary>
-    <span class="record-anchor" data-jsonl-record="11" data-source-id="context"></span>
-    <h2>Active file:</h2><p>sessions/example.jsonl</p>
-    <h2>Active selection of the file:</h2><p>selected line</p>
-    <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
-  </details>
-</blockquote>
-<section class="transcript-turn" data-presentation-id="prompt">
-  <span class="record-anchor" data-jsonl-record="12" data-source-id="prompt"></span>
-  <p>Actual prompt.</p>
+/// <summary>
+/// A complete Core-rendered User Context turn containing one source anchor
+/// must remain one virtual unit.  AgentPanelSpeaker receives the legal cut
+/// and source identities from Core; this test deliberately does not infer
+/// atomicity from the unit's details markup.
+/// </summary>
+private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
+{
+  const string html = """
+<section class="transcript-turn" data-presentation-id="turn:user-context">
+  <h2>User</h2>
+  <blockquote class="transcript-turn-body">
+    <blockquote class="user-context">
+      <details class="user-context-details" data-presentation-id="context:1">
+        <summary># Context from my IDE setup:</summary>
+        <span class="record-anchor" data-jsonl-record="11" data-source-id="context"></span>
+        <h2>Active file:</h2><p>sessions/example.jsonl</p>
+        <h2>Active selection of the file:</h2><p>selected line</p>
+        <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
+      </details>
+    </blockquote>
+    <div class="presentation-content"><p>Actual prompt.</p></div>
+  </blockquote>
 </section>
 """;
 
-    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
-    Require(
-      document.TryGetIndex(11, "context", out int contextIndex),
-      "Virtual document did not retain the fixed User Context identity.");
+  CanonicalHtmlUnitProjection[] units =
+  {
+    new(
+      "turn:user-context",
+      "turn",
+      true,
+      new[]
+      {
+        new CanonicalHtmlSourceProjection(
+          "event:user-context",
+          "codex",
+          "context",
+          10,
+          new[] { 0, 1 })
+      },
+      html)
+  };
 
-    TranscriptVirtualRecord contextRecord = document.Records[contextIndex];
-    Require(
-      contextRecord.Html.Contains(
-        "<details class=\"user-context-details\">",
-        StringComparison.Ordinal),
-      "Single-anchor User Context record starts inside its details disclosure.");
-    Require(
-      contextRecord.Html.Contains("</details>", StringComparison.Ordinal),
-      "Single-anchor User Context record ends before its details disclosure closes.");
-    Require(
-      contextRecord.Html.Contains("Active selection of the file:", StringComparison.Ordinal) &&
-      contextRecord.Html.Contains("Open tabs:", StringComparison.Ordinal),
-      "Atomic User Context record dropped independently expected context content.");
-  }
+  MethodInfo? build = typeof(TranscriptVirtualDocument).GetMethod(
+    "Build",
+    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+    binder: null,
+    types: new[] { typeof(IReadOnlyList<CanonicalHtmlUnitProjection>) },
+    modifiers: null);
+  Require(
+    build is not null,
+    "TranscriptVirtualDocument has no Core-unit Build overload; " +
+    "the production path still discovers boundaries from completed HTML.");
+
+  object? built = build!.Invoke(null, new object[] { units });
+  TranscriptVirtualDocument document = built as TranscriptVirtualDocument ??
+    throw new InvalidOperationException(
+      "Core-unit Build overload did not return a TranscriptVirtualDocument.");
+  Require(document.Count == 1,
+    $"Expected one Core unit to remain one virtual record, got {document.Count}.");
+  Require(
+    document.TryGetIndex(11, "context", out int contextIndex),
+    "Virtual document did not map Core source metadata to the one-based record identity.");
+  TranscriptVirtualRecord contextRecord = document.Records[contextIndex];
+  Require(
+    string.Equals(contextRecord.Html, html, StringComparison.Ordinal),
+    "Virtualization changed or split the already-rendered Core HTML unit.");
+  Require(
+    contextRecord.Html.Contains("Actual prompt.", StringComparison.Ordinal),
+    "Core User Context turn lost its prompt while entering virtualization.");
+}
 
   /// <summary>
   /// Loads a transcript large enough to exceed one virtual window through the
