@@ -6,7 +6,7 @@ on:
       - issue-37-directional-prefetch-blank-viewport
     paths:
       - '.github/workflows/issue-37-directional-red.yml'
-      - 'tools/adjust_issue37_tall_turn_preplay_geometry.py'
+      - 'tools/adjust_issue37_manual_intent_regression.py'
 
 permissions:
   contents: write
@@ -36,9 +36,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Stage pre-playback physical tall-turn oracle
+      - name: Stage manual-scroll intent regression
         shell: pwsh
-        run: python tools/adjust_issue37_tall_turn_preplay_geometry.py
+        run: python tools/adjust_issue37_manual_intent_regression.py
 
       - name: Validate staged test patch
         shell: pwsh
@@ -91,25 +91,18 @@ jobs:
           if ($failLines.Count -ne 5) {
             throw "Expected exactly 5 physical RED failures, observed $($failLines.Count)."
           }
-          foreach ($invalidPrecondition in @(
-            'speech map could not resolve the exact target word before playback',
-            'test window did not meet the physical minimum height',
-            'test has no unloaded content below the materialized window',
-            'cursor target did not enter the lower physical trigger zone'
-          )) {
-            if ($text.Contains($invalidPrecondition)) {
-              throw "Tall-turn oracle failed its own precondition: $invalidPrecondition"
-            }
+          if (-not $text.Contains('manual wheel input to override the active programmatic-scroll guard')) {
+            throw 'Manual-scroll RED did not fail at the intended active-guard condition.'
           }
-          Write-Host 'RED-PROVEN issue-37 pre-playback physical cursor oracle reproduces production failures.'
+          Write-Host 'RED-PROVEN issue-37 user scroll overrides active programmatic guard.'
 
-      - name: Commit corrected tall-turn RED regression
+      - name: Commit strengthened RED regression
         shell: pwsh
         run: |
           git config user.name 'chatgpt-codex-connector'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          if (git diff --cached --quiet) { throw 'Tall-turn oracle patch produced no source change.' }
-          git commit -m 'test: measure tall-turn cursor before playback shift (#37) [skip ci]'
+          if (git diff --cached --quiet) { throw 'Manual-scroll regression patch produced no source change.' }
+          git commit -m 'test: require manual scroll to override follow guard (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'Pre-playback tall-turn RED regression committed after intended failure was proven.'
+          Write-Host 'Manual-scroll RED regression committed after intended failure was proven.'
