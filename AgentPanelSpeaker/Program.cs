@@ -117,7 +117,8 @@ internal static class Program
       if (args.Length == 2 &&
           string.Equals(args[1], "output-oracle", StringComparison.OrdinalIgnoreCase))
       {
-        Environment.ExitCode = Issue44IndependentOutputOracleRegressionTestRunner.Run();
+        Environment.ExitCode = RunWithWinFormsMessageLoop(
+          Issue44IndependentOutputOracleRegressionTestRunner.Run);
         return;
       }
 
@@ -196,6 +197,54 @@ internal static class Program
 
     ApplicationConfiguration.Initialize();
     Application.Run(new MainForm());
+  }
+
+  /// <summary>
+  /// Runs a browser-output test suite while an actual WinForms message loop is
+  /// active. Production TranscriptView rendering awaits background preparation
+  /// and must resume on its owning UI thread, just as it does in the real app.
+  /// </summary>
+  /// <param name="suite">Test suite to execute on the WinForms UI thread.</param>
+  /// <returns>The suite exit code, or one if the harness itself fails.</returns>
+  private static int RunWithWinFormsMessageLoop(Func<int> suite)
+  {
+    ArgumentNullException.ThrowIfNull(suite);
+
+    int exitCode = 1;
+    Exception? harnessFailure = null;
+    using var host = new Form
+    {
+      Width = 1,
+      Height = 1,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    host.Shown += (_, _) => host.BeginInvoke(new Action(() =>
+    {
+      try
+      {
+        exitCode = suite();
+      }
+      catch (Exception exception)
+      {
+        harnessFailure = exception;
+      }
+      finally
+      {
+        host.Close();
+      }
+    }));
+
+    Application.Run(host);
+    if (harnessFailure is not null)
+    {
+      Console.Error.WriteLine("FAIL  test-harness/winforms-message-loop");
+      Console.Error.WriteLine(
+        $"      {harnessFailure.GetType().Name}: {harnessFailure.Message}");
+      return 1;
+    }
+    return exitCode;
   }
 
   /// <summary>
