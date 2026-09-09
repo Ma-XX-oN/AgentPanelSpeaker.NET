@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - issue-37-directional-prefetch-blank-viewport
+    paths:
+      - '.github/workflows/issue-37-directional-red.yml'
+      - 'tools/apply_issue37_manual_scroll_follow_regression.py'
 
 permissions:
   contents: write
@@ -32,9 +35,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Stage minimal physical-window regression
+      - name: Stage manual-scroll follow regression
         shell: pwsh
-        run: python tools/apply_issue37_minimal_physical_window_regression.py
+        run: python tools/apply_issue37_manual_scroll_follow_regression.py
 
       - name: Validate staged test patch
         shell: pwsh
@@ -75,6 +78,7 @@ jobs:
           foreach ($requiredRed in @(
             'FAIL  virtual-window/spacer-shift-restores-materialized-content',
             'FAIL  virtual-window/directional-prefetch-follows-scroll-direction',
+            'FAIL  virtual-window/manual-scroll-disables-follow-before-vwindow-shift',
             'FAIL  virtual-window/physical-window-keeps-five-viewports-materialized',
             'FAIL  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
           )) {
@@ -83,21 +87,24 @@ jobs:
             }
           }
           $failLines = @($output | Where-Object { $_ -match '^FAIL  ' })
-          if ($failLines.Count -ne 4) {
-            throw "Expected exactly 4 physical RED failures, observed $($failLines.Count)."
+          if ($failLines.Count -ne 5) {
+            throw "Expected exactly 5 physical RED failures, observed $($failLines.Count)."
           }
           if (-not $text.Contains('Physical vwindow retains a removable')) {
             throw 'Minimal-window regression failed for an unexpected reason.'
           }
-          Write-Host 'RED-PROVEN issue-37 physical minimum/minimality, direction, spacer, and voice-cursor requirements reproduced.'
+          if (-not $text.Contains('Follow mode remained enabled')) {
+            throw 'Manual-scroll follow regression failed for an unexpected reason.'
+          }
+          Write-Host 'RED-PROVEN issue-37 physical vwindow and manual-follow failures reproduced.'
 
-      - name: Commit minimal physical RED regression
+      - name: Commit manual-scroll RED regression
         shell: pwsh
         run: |
           git config user.name 'chatgpt-codex-connector'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          if (git diff --cached --quiet) { throw 'Minimal physical regression patch produced no source change.' }
-          git commit -m 'test: require minimal five-viewport window (#37) [skip ci]'
+          if (git diff --cached --quiet) { throw 'Manual-scroll regression patch produced no source change.' }
+          git commit -m 'test: require manual scroll to disable follow (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'Minimal physical RED regression committed after intended failure was proven.'
+          Write-Host 'Manual-scroll RED regression committed after intended failure was proven.'
