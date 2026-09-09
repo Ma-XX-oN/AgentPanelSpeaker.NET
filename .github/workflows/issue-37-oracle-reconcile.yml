@@ -40,72 +40,55 @@ jobs:
           path = Path('AgentPanelSpeaker/Issue44IndependentOutputOracleRegressionTestRunner.cs')
           text = path.read_text(encoding='utf-8')
 
-          # A virtual-record wrapper is an implementation detail required by the
-          # intended vwindow. The independent output oracle must protect semantic
-          # containment, not forbid virtualization itself.
           assertion = '    RequireBoolean(actual, "virtualSectionPresent", false);\n'
           count = text.count(assertion)
           if count != 2:
             raise SystemExit(f'virtualSectionPresent assertion count={count}, expected 2')
           text = text.replace(assertion, '')
 
-          old_name = '("output-oracle/bounded-user-context-reproducer-is-rejected",\n        TestBoundedUserContextReproducerIsRejected)'
-          new_name = '("output-oracle/user-context-containment-mutation-is-rejected",\n        TestUserContextContainmentMutationIsRejected)'
-          if text.count(old_name) != 1:
-            raise SystemExit('negative test registration anchor mismatch')
-          text = text.replace(old_name, new_name, 1)
+          old = 'output-oracle/bounded-user-context-reproducer-is-rejected'
+          new = 'output-oracle/user-context-containment-mutation-is-rejected'
+          if text.count(old) != 1:
+            raise SystemExit(f'negative test name count={text.count(old)}')
+          text = text.replace(old, new, 1)
 
-          old_method = '''  /// <summary>
-            /// Replays the exact bounded-window composition that produced the issue #37
-            /// regression and proves the independent oracle rejects its browser result.
-            /// This is a negative reproducer, not an expected production output.
-            /// </summary>
-            private static void TestBoundedUserContextReproducerIsRejected()
-          '''
-          new_method = '''  /// <summary>
-            /// Applies an independently-authored structural mutation equivalent to the
-            /// historical failure: context content escapes the details disclosure.
-            /// The semantic oracle must reject this regardless of whether the browser
-            /// happens to use virtual-record wrappers.
-            /// </summary>
-            private static void TestUserContextContainmentMutationIsRejected()
-          '''
-          if text.count(old_method) != 1:
-            raise SystemExit('negative test method anchor mismatch')
-          text = text.replace(old_method, new_method, 1)
+          old = 'TestBoundedUserContextReproducerIsRejected'
+          new = 'TestUserContextContainmentMutationIsRejected'
+          if text.count(old) != 2:
+            raise SystemExit(f'negative method-name count={text.count(old)}')
+          text = text.replace(old, new)
 
-          old_html = '''      <details class="user-context-details">
-                    <summary># Context from my IDE setup:</summary>
-                    <span class="record-anchor" data-jsonl-record="11" data-source-id="context"></span>
-                    <h2>Active file:</h2><p>sessions/example.jsonl</p>
+          old = '''        <h2>Active file:</h2><p>sessions/example.jsonl</p>
                     <h2>Active selection of the file:</h2><p>selected line</p>
                     <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
-                  </details>
-          '''
-          new_html = '''      <details class="user-context-details">
-                    <summary># Context from my IDE setup:</summary>
-                    <span class="record-anchor" data-jsonl-record="11" data-source-id="context"></span>
-                    <h2>Active file:</h2><p>sessions/example.jsonl</p>
+                  </details>'''
+          new = '''        <h2>Active file:</h2><p>sessions/example.jsonl</p>
                   </details>
                   <h2>Active selection of the file:</h2><p>selected line</p>
-                  <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
-          '''
-          if text.count(old_html) != 1:
-            raise SystemExit('negative containment fixture anchor mismatch')
-          text = text.replace(old_html, new_html, 1)
+                  <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>'''
+          if text.count(old) != 1:
+            raise SystemExit(f'negative fixture fragment count={text.count(old)}')
+          text = text.replace(old, new, 1)
 
-          old_message = '''      "Independent User Context oracle accepted the known-bad bounded-window " +
-                "browser composition.");
-          '''
-          new_message = '''      "Independent User Context oracle accepted a deliberately broken " +
-                "context-containment composition.");
-          '''
-          if text.count(old_message) != 1:
-            raise SystemExit('negative failure-message anchor mismatch')
-          text = text.replace(old_message, new_message, 1)
+          text = text.replace(
+            '  /// Replays the exact bounded-window composition that produced the issue #37\n'
+            '  /// regression and proves the independent oracle rejects its browser result.\n'
+            '  /// This is a negative reproducer, not an expected production output.\n',
+            '  /// Applies an independently-authored structural mutation in which User\n'
+            '  /// Context content escapes its details disclosure, and proves the semantic\n'
+            '  /// oracle rejects the resulting browser output.\n')
+
+          old = ('      "Independent User Context oracle accepted the known-bad bounded-window " +\n'
+                 '      "browser composition.");')
+          new = ('      "Independent User Context oracle accepted deliberately broken " +\n'
+                 '      "context containment.");')
+          if text.count(old) != 1:
+            raise SystemExit(f'negative failure message count={text.count(old)}')
+          text = text.replace(old, new, 1)
 
           path.write_text(text, encoding='utf-8')
           '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           git config user.name 'Ma-XX-oN'
           git config user.email 'Ma-XX-oN@users.noreply.github.com'
