@@ -8,18 +8,16 @@ from pathlib import Path
 search_path = Path("AgentPanelSpeaker/TranscriptSearchIndex.cs")
 text = search_path.read_text(encoding="utf-8")
 
-regex_anchor = '''  private static readonly Regex RecordRegex = new(
-    "class=\\\\\"record-anchor\\\\\"[^>]*data-jsonl-record=\\\\\"(?<record>[^\\\\\"]*)\\\\\"[^>]*data-source-id=\\\\\"(?<source>[^\\\\\"]*)\\\\\"",
-    RegexOptions.Compiled | RegexOptions.CultureInvariant);
+regex_anchor = '''  private static readonly HashSet<string> BlockTags = new(
 '''
-regex_add = regex_anchor + '''  private static readonly Regex ListItemTagRegex = new(
-    @"<li\\b[^>]*\\bdata-list-ordinal\\s*=\\s*\"(?<ordinal>-?\\d+)\"[^>]*>",
+regex = r'''  private static readonly Regex ListItemTagRegex = new(
+    "<li\\b[^>]*\\bdata-list-ordinal\\s*=\\s*\"(?<ordinal>-?\\d+)\"[^>]*>",
     RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 '''
 if "ListItemTagRegex" not in text:
   if text.count(regex_anchor) != 1:
-    raise SystemExit(f"RecordRegex anchor count={text.count(regex_anchor)}")
-  text = text.replace(regex_anchor, regex_add, 1)
+    raise SystemExit(f"BlockTags anchor count={text.count(regex_anchor)}")
+  text = text.replace(regex_anchor, regex + regex_anchor, 1)
 
 loop_anchor = '''    foreach (Match part in HtmlPartRegex.Matches(html))
 '''
