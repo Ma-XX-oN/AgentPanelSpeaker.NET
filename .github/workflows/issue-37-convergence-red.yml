@@ -32,33 +32,68 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Correct test-only token helper call
+      - name: Make convergence trigger deterministic
         shell: pwsh
         run: |
           @'
-          import re
           from pathlib import Path
           path = Path('AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs')
           text = path.read_text(encoding='utf-8')
-          if 'using System.Diagnostics;' not in text:
-            text = text.replace(
-              'using System.Reflection;\n',
-              'using System.Diagnostics;\nusing System.Reflection;\n',
-              1)
-          text, count = re.subn(
-            r'SpeechTokenization\.TokenizeDisplay\(playbackFragment\)\s*\.First\(\)',
-            'SpeechTokenization.First(playbackFragment)',
-            text,
-            count=1)
-          if count != 1:
-            raise SystemExit(f'playback token substitution count={count}')
+          old = '''      ExecuteVoidScript(webView, "requestVirtualShift(-1);");
+                PumpUntil(
+                  () =>
+                    ReadField<int>(view, "_windowStartIndex") != initialStart ||
+                    ReadField<int>(view, "_windowEndIndex") != initialEnd,
+                  "manual scroll window to replace the initial playback window");
+          '''
+          new = '''      Task shiftTask = InvokeTask(
+                view,
+                "RenderWindowForIndexAsync",
+                0,
+                "scroll-up",
+                null,
+                string.Empty,
+                null);
+              PumpUntilCompleted(
+                shiftTask,
+                "manual scroll window to replace the initial playback window");
+              Require(
+                ReadField<int>(view, "_windowStartIndex") != initialStart ||
+                ReadField<int>(view, "_windowEndIndex") != initialEnd,
+                "Manual scroll render did not leave the initial playback window.");
+          '''
+          if text.count(old) != 1:
+            raise SystemExit(f'convergence trigger anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          marker = '''  private static T ReadField<T>(object target, string fieldName)
+          '''
+          helper = '''  private static Task InvokeTask(
+            object target,
+            string methodName,
+            params object?[] arguments)
+          {
+            MethodInfo method = target.GetType().GetMethod(
+              methodName,
+              BindingFlags.Instance | BindingFlags.NonPublic) ??
+              throw new InvalidOperationException(
+                $"Method '{methodName}' was not found on {target.GetType().Name}.");
+            return method.Invoke(target, arguments) as Task ??
+              throw new InvalidOperationException(
+                $"Method '{methodName}' did not return a Task.");
+          }
+
+          '''
+          if helper.strip() not in text:
+            if text.count(marker) != 1:
+              raise SystemExit(f'helper insertion anchor count={text.count(marker)}')
+            text = text.replace(marker, helper + marker, 1)
           path.write_text(text, encoding='utf-8')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git config user.name 'Ma-XX-oN'
           git config user.email 'Ma-XX-oN@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          git commit -m 'test: correct issue 37 playback token fixture'
+          git commit -m 'test: make vwindow convergence oracle deterministic (#37)'
           git push origin HEAD:issue-37-vwindow-convergence-containment
 
       - name: Install pinned Core dependencies
@@ -81,4 +116,5 @@ jobs:
           if ($p.ExitCode -eq 0) { throw 'Expected issue #37 virtual-window regressions to be RED before production fix.' }
           if ($text -notmatch 'FAIL  virtual-window/single-anchor-details-is-atomic') { throw 'Containment regression did not reproduce.' }
           if ($text -notmatch 'FAIL  virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded') { throw 'Convergence/diagnostic regression did not reproduce.' }
+          if ($text -notmatch 'Manual scroll window did not converge|per-node diagnostic') { throw 'Convergence/diagnostic RED failed for an unexpected reason.' }
           if ($text -notmatch 'TEST-SUITE-COMPLETE virtual-window exit=1') { throw 'RED suite did not reach completion sentinel.' }
