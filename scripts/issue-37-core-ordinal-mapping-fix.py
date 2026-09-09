@@ -113,16 +113,20 @@ if "function ensureCoreOrdinalSpeechMaps()" not in text:
     raise SystemExit(f"wrapWordsForRecordKeys anchor count={text.count(wrap_anchor)}")
   text = text.replace(wrap_anchor, helper + wrap_anchor, 1)
 
-call_anchor = '''  setAvailableWordMaps(wordMap || []);
-  wrapWords(nodeMap || []);
+wrap_call_anchor = '''function wrapWords(nodeMap = null) {
+  words = [];
+  lexicalWords = [];
+  wrapWordsForRecordKeys(
 '''
-call_new = '''  setAvailableWordMaps(wordMap || []);
+wrap_call_new = '''function wrapWords(nodeMap = null) {
+  words = [];
+  lexicalWords = [];
   ensureCoreOrdinalSpeechMaps();
-  wrapWords(nodeMap || []);
+  wrapWordsForRecordKeys(
 '''
-count = text.count(call_anchor)
-if count != 2:
-  raise SystemExit(f"word-map install anchor count={count}")
-text = text.replace(call_anchor, call_new)
+if "ensureCoreOrdinalSpeechMaps();\n  wrapWordsForRecordKeys(" not in text:
+  if text.count(wrap_call_anchor) != 1:
+    raise SystemExit(f"wrapWords call anchor count={text.count(wrap_call_anchor)}")
+  text = text.replace(wrap_call_anchor, wrap_call_new, 1)
 
 view_path.write_text(text, encoding="utf-8")
