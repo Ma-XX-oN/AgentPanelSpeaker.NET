@@ -222,7 +222,28 @@ internal static class Issue37WordMaterializationRegressionTestRunner
     IReadOnlyList<TranscriptNodeIdentity> identities,
     TranscriptSearchIndex searchIndex)
   {
-    using var productionView = new TranscriptView();
+    using var host = new Form
+    {
+      Width = 320,
+      Height = 240,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    using var productionView = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(productionView);
+    host.Show();
+    Application.DoEvents();
+    FieldInfo webViewField = typeof(TranscriptView).GetField(
+      "_webView",
+      BindingFlags.NonPublic | BindingFlags.Instance) ??
+      throw new InvalidOperationException("TranscriptView._webView was not found.");
+    var productionWebView = (WebView2?)webViewField.GetValue(productionView) ??
+      throw new InvalidOperationException("TranscriptView WebView was unavailable.");
+    PumpUntilCompleted(
+      productionWebView.EnsureCoreWebView2Async(),
+      "production payload-builder WebView initialization");
+
     FieldInfo identitiesField = typeof(TranscriptView).GetField(
       "_identities",
       BindingFlags.NonPublic | BindingFlags.Instance) ??
