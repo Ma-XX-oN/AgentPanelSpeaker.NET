@@ -1,0 +1,107 @@
+name: Issue 37 convergence and diagnostics GREEN
+
+on:
+  push:
+    branches:
+      - issue-37-vwindow-convergence-containment
+    paths:
+      - '.github/workflows/issue-37-convergence-green.yml'
+      - 'scripts/issue-37-convergence-diagnostics-fix.py'
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-37-vwindow-convergence-containment
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Apply convergence and bounded-diagnostics fix
+        shell: pwsh
+        run: |
+          python scripts/issue-37-convergence-diagnostics-fix.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build patched application
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Require virtual-window RED regression GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Require word-materialization GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
+
+      - name: Require Core boundary GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core
+
+      - name: Require output oracle GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite output-oracle
+
+      - name: Require rolled-back visibility GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rolled-back-visibility
+
+      - name: Validate patch integrity
+        shell: pwsh
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff -- AgentPanelSpeaker/TranscriptView.cs
+
+      - name: Commit verified convergence fix
+        shell: pwsh
+        run: |
+          git config user.name 'Ma-XX-oN'
+          git config user.email 'Ma-XX-oN@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m 'fix: converge manual transcript windows and bound diagnostics (#37)'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:issue-37-vwindow-convergence-containment
