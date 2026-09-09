@@ -2314,6 +2314,20 @@ function setAvailableWordMaps(wordMap) {
   }
 }
 
+function ensureCoreOrdinalSpeechMaps() {
+  for (const item of transcript.querySelectorAll('li[data-list-ordinal]')) {
+    if (item.querySelector(':scope > .speech-ordinal-map')) continue;
+    const ordinal = String(item.dataset.listOrdinal || '').trim();
+    if (!/^-?\d+$/.test(ordinal)) continue;
+    const marker = document.createElement('span');
+    marker.className = 'speech-ordinal-map';
+    marker.setAttribute('aria-hidden', 'true');
+    marker.style.display = 'none';
+    marker.textContent = ordinal + '. ';
+    item.insertBefore(marker, item.firstChild);
+  }
+}
+
 function wrapWordsForRecordKeys(recordKeys, reset) {
   if (reset) {
     words = [];
@@ -2374,6 +2388,7 @@ function wrapWordsForRecordKeys(recordKeys, reset) {
 function wrapWords(nodeMap = null) {
   words = [];
   lexicalWords = [];
+  ensureCoreOrdinalSpeechMaps();
   wrapWordsForRecordKeys(
     nodeMap === null ? null : nodeRecordKeys(nodeMap),
     false);
