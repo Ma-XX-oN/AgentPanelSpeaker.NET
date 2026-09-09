@@ -1,0 +1,135 @@
+name: Issue 37 programmatic-scroll GREEN
+
+on:
+  push:
+    branches:
+      - issue-37-programmatic-scroll-window-loop
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify exact AIConversationCore pin
+        shell: pwsh
+        run: |
+          $expected = '6c92799c1b14693001e8b913465f4a12b0b1e1ab'
+          $actual = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($actual -ne $expected) { throw "Unexpected Core pin: $actual" }
+
+      - name: Stage production fix
+        shell: pwsh
+        run: python tools/apply_issue37_programmatic_scroll_fix.py
+
+      - name: Validate patch integrity before tests
+        shell: pwsh
+        run: git diff --check
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Run pinned Core suite
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Validate Phase 2 baseline
+        shell: pwsh
+        run: python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+
+      - name: Build AgentPanelSpeaker Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify test-runner completion guard
+        shell: pwsh
+        run: '& tools/Invoke-TestSuite.ps1 -SelfTest'
+
+      - name: Prove exact #37 regression GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Prove selective word materialization GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
+
+      - name: Run complete built regression suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and run complete deployed regression suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published executable missing: $exe" }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Verify bundled Core runtime from built output
+        shell: pwsh
+        run: |
+          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
+          $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
+          $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
+          $marker = Join-Path $outputTools 'AIConversationCore-runtime\CORE_COMMIT'
+          if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
+          if (-not (Test-Path $marker)) { throw "Bundled Core marker missing: $marker" }
+          $actual = (Get-Content $marker -Raw).Trim()
+          if ($actual -ne '6c92799c1b14693001e8b913465f4a12b0b1e1ab') {
+            throw "Unexpected bundled Core pin: $actual"
+          }
+          $request = '{"operation":"ping"}'
+          $response = $request | node $worker | ConvertFrom-Json
+          if (-not $response.ok) { throw "Bundled worker ping failed: $($response.error)" }
+          if ($response.core_commit -ne '6c92799c1b14693001e8b913465f4a12b0b1e1ab') {
+            throw "Unexpected bundled worker Core pin: $($response.core_commit)"
+          }
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Validate canonical display parity
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Commit production fix after GREEN gates
+        shell: pwsh
+        run: |
+          git diff --check
+          git config user.name 'chatgpt-codex-connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          if (git diff --cached --quiet) { throw 'Production fix produced no source change.' }
+          git commit -m 'fix: ignore programmatic scroll for virtual-window shifts (#37) [skip ci]'
+          git push origin HEAD:issue-37-programmatic-scroll-window-loop
+          Write-Host 'GREEN-PROVEN issue-37 programmatic-scroll production fix committed.'
