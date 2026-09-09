@@ -1,13 +1,12 @@
 name: Issue 37 physical vwindow RED
 
-# Stable-head RED gate: do not advance this branch until the regression commit lands.
 on:
   push:
     branches:
       - issue-37-directional-prefetch-blank-viewport
     paths:
       - '.github/workflows/issue-37-directional-red.yml'
-      - 'tools/apply_issue37_manual_scroll_follow_regression.py'
+      - 'tools/adjust_issue37_tall_turn_physical_fixture.py'
 
 permissions:
   contents: write
@@ -37,9 +36,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Stage manual-scroll follow regression
+      - name: Stage physically positioned tall-turn regression
         shell: pwsh
-        run: python tools/apply_issue37_manual_scroll_follow_regression.py
+        run: python tools/adjust_issue37_tall_turn_physical_fixture.py
 
       - name: Validate staged test patch
         shell: pwsh
@@ -98,15 +97,21 @@ jobs:
           if (-not $text.Contains('Follow mode remained enabled')) {
             throw 'Manual-scroll follow regression failed for an unexpected reason.'
           }
-          Write-Host 'RED-PROVEN issue-37 physical vwindow and manual-follow failures reproduced.'
+          if (-not $text.Contains('no playback-down shift was requested')) {
+            throw 'Tall-turn voice-cursor regression failed for an unexpected reason.'
+          }
+          if ($text.Contains('did not enter the lower physical trigger zone')) {
+            throw 'Tall-turn oracle still failed its own physical trigger precondition.'
+          }
+          Write-Host 'RED-PROVEN issue-37 corrected physical tall-turn oracle reproduces production failures.'
 
-      - name: Commit manual-scroll RED regression
+      - name: Commit corrected tall-turn RED regression
         shell: pwsh
         run: |
           git config user.name 'chatgpt-codex-connector'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          if (git diff --cached --quiet) { throw 'Manual-scroll regression patch produced no source change.' }
-          git commit -m 'test: require manual scroll to disable follow (#37) [skip ci]'
+          if (git diff --cached --quiet) { throw 'Tall-turn oracle patch produced no source change.' }
+          git commit -m 'test: position tall-turn cursor by physical geometry (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'Manual-scroll RED regression committed after intended failure was proven.'
+          Write-Host 'Corrected tall-turn RED regression committed after intended failure was proven.'
