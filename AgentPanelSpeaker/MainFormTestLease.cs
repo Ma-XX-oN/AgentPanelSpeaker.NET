@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 
 namespace AgentPanelSpeaker;
@@ -10,10 +11,13 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class MainFormTestLease : IDisposable
 {
+  private const int ShownTimeoutMilliseconds = 10000;
+
   private bool _disposed;
 
   /// <summary>
-  /// Creates and shows an off-screen production MainForm.
+  /// Creates and shows an off-screen production MainForm, then drains its
+  /// initial Shown lifecycle before allowing a test to install fixture state.
   /// </summary>
   public MainFormTestLease()
   {
@@ -24,8 +28,30 @@ internal sealed class MainFormTestLease : IDisposable
       Location = new Point(-32000, -32000)
     };
     SuppressPersistedSessionRestore(Form);
-    Form.Show();
-    _ = Form.Handle;
+
+    bool shown = false;
+    void ShownObserved(object? sender, EventArgs eventArgs) => shown = true;
+    Form.Shown += ShownObserved;
+    try
+    {
+      Form.Show();
+      _ = Form.Handle;
+      var timer = Stopwatch.StartNew();
+      while (!shown)
+      {
+        if (timer.ElapsedMilliseconds >= ShownTimeoutMilliseconds)
+        {
+          throw new TimeoutException(
+            "Timed out waiting for the off-screen MainForm Shown lifecycle.");
+        }
+        Application.DoEvents();
+        Thread.Sleep(1);
+      }
+    }
+    finally
+    {
+      Form.Shown -= ShownObserved;
+    }
   }
 
   /// <summary>
@@ -36,8 +62,9 @@ internal sealed class MainFormTestLease : IDisposable
   /// <summary>
   /// Prevents the test host from asynchronously restoring a developer/user
   /// session when MainForm raises Shown. Acceptance fixtures install their own
-  /// deterministic session after the form is visible; allowing persisted state
-  /// here can race those fixtures and falsely look like a history rebuild.
+  /// deterministic session only after that lifecycle has completed; allowing
+  /// persisted state or a delayed Shown event here can race those fixtures and
+  /// falsely look like a history rebuild.
   /// </summary>
   private static void SuppressPersistedSessionRestore(MainForm form)
   {
