@@ -1,0 +1,1 @@
+Launch the physical-vwindow GREEN gate after the permanent eight-test RED suite was committed at a40f01e0c8659116226ce85a35131a7ffc8b94fb.
