@@ -6,12 +6,14 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// End-to-end transcript output regressions whose expectations are fixed test
-/// oracles rather than output produced by the rendering code under test.
+/// Browser-output regressions whose input and expected semantic result are
+/// independently authored. Production virtualization/payload/browser code is
+/// used only to produce the actual value being tested.
 /// </summary>
 internal static class Issue44IndependentOutputOracleRegressionTestRunner
 {
-  private const string UserContextPrompt = "Actual user prompt.";
+  private const string ContextSummary = "# Context from my IDE setup:";
+  private const string Prompt = "Actual user prompt.";
 
   /// <summary>
   /// Runs the independent browser-output oracle suite.
@@ -20,10 +22,10 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("output-oracle/codex-user-context-browser-dom",
-        TestCodexUserContextBrowserDom),
-      ("output-oracle/claude-grouped-thought-browser-dom",
-        TestClaudeGroupedThoughtBrowserDom),
+      ("output-oracle/codex-user-context-window-browser-dom",
+        TestUserContextWindowBrowserDom),
+      ("output-oracle/claude-grouped-thought-window-browser-dom",
+        TestGroupedThoughtWindowBrowserDom),
       ("output-oracle/rejects-escaped-context-mutation",
         TestUserContextOracleRejectsEscapedMutation)
     };
@@ -57,56 +59,74 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     return failures == 0 ? 0 : 1;
   }
 
-  private static void TestCodexUserContextBrowserDom()
+  /// <summary>
+  /// Sends a fixed, valid User Context document through the exact bounded-window
+  /// payload and real browser parser. The expected containment is specified by
+  /// this test and is never derived from production output.
+  /// </summary>
+  private static void TestUserContextWindowBrowserDom()
   {
-    string[] records =
-    {
-      CodexUserMessage("2026-09-06T15:16:00.000Z", "Earlier prompt."),
-      JsonSerializer.Serialize(new
-      {
-        type = "event_msg",
-        timestamp = "2026-09-06T15:16:01.000Z",
-        payload = new
-        {
-          type = "agent_message",
-          phase = "final",
-          message = "Earlier answer."
-        }
-      }),
-      CodexUserMessage(
-        "2026-09-06T15:17:11.000Z",
-        "# Context from my IDE setup:\n\n" +
-        "## Active file: sessions/example.jsonl\n\n" +
-        "## Active selection of the file:\n" +
-        "selected line\n\n" +
-        "## Open tabs:\n" +
-        "- example.jsonl: sessions/example.jsonl\n\n" +
-        "## My request for Codex:\n" +
-        UserContextPrompt)
-    };
+    const string sourceHtml = """
+<section class="transcript-turn">
+  <span class="record-anchor" data-jsonl-record="10" data-source-id="previous"></span>
+  <p>Previous visible content.</p>
+  <blockquote class="transcript-turn-body">
+    <blockquote class="user-context">
+      <details class="user-context-details">
+        <summary># Context from my IDE setup:</summary>
+        <span class="record-anchor" data-jsonl-record="11" data-source-id="context"></span>
+        <h2>Active file:</h2><p>sessions/example.jsonl</p>
+        <h2>Active selection of the file:</h2><p>selected line</p>
+        <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
+      </details>
+    </blockquote>
+    <div class="presentation-content">
+      <span class="record-anchor" data-jsonl-record="12" data-source-id="prompt"></span>
+      <p>Actual user prompt.</p>
+    </div>
+  </blockquote>
+</section>
+""";
 
-    JsonElement actual = RenderAndProbe(
-      AgentSource.Codex,
-      records,
-      UserContextProbeScript());
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(sourceHtml);
+    Require(document.TryGetIndex(11, "context", out int contextIndex),
+      "Fixed User Context input did not expose its context identity.");
+    TranscriptWindow window = document.CreateWindow(contextIndex);
+    JsonElement actual = ExecuteWindowAndProbe(window, UserContextProbeScript());
     AssertUserContextOracle(actual);
   }
 
-  private static void TestClaudeGroupedThoughtBrowserDom()
+  /// <summary>
+  /// Sends a fixed grouped-thought disclosure through the same production
+  /// window/browser path and checks independently-authored containment facts.
+  /// </summary>
+  private static void TestGroupedThoughtWindowBrowserDom()
   {
-    string[] records =
-    {
-      "{\"type\":\"user\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:01.000Z\",\"uuid\":\"thought-user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Please reason through this.\"}]}}",
-      "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:02.000Z\",\"uuid\":\"thought-one\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"First thought has unique alpha words.\"}]}}",
-      "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:03.000Z\",\"uuid\":\"thought-two\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Second thought has unique beta words.\"}]}}",
-      "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:04.000Z\",\"uuid\":\"thought-three\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Third thought has unique gamma words.\"}]}}",
-      "{\"type\":\"assistant\",\"isSidechain\":false,\"timestamp\":\"2026-01-05T12:00:05.000Z\",\"uuid\":\"thought-final\",\"message\":{\"model\":\"claude-test\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Final Claude answer after thoughts.\"}]}}"
-    };
+    const string sourceHtml = """
+<section class="transcript-turn">
+  <span class="record-anchor" data-jsonl-record="20" data-source-id="previous"></span>
+  <p>Previous visible content.</p>
+  <details class="reasoning">
+    <summary>Having 3 thoughts</summary>
+    <div class="reasoning-body">
+      <span class="record-anchor" data-jsonl-record="21" data-source-id="thought-one"></span>
+      <p>First thought has unique alpha words.</p>
+      <span class="record-anchor" data-jsonl-record="22" data-source-id="thought-two"></span>
+      <p>Second thought has unique beta words.</p>
+      <span class="record-anchor" data-jsonl-record="23" data-source-id="thought-three"></span>
+      <p>Third thought has unique gamma words.</p>
+    </div>
+  </details>
+  <span class="record-anchor" data-jsonl-record="24" data-source-id="final"></span>
+  <p>Final Claude answer after thoughts.</p>
+</section>
+""";
 
-    JsonElement actual = RenderAndProbe(
-      AgentSource.Claude,
-      records,
-      ClaudeThoughtProbeScript());
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(sourceHtml);
+    Require(document.TryGetIndex(22, "thought-two", out int thoughtIndex),
+      "Fixed grouped-thought input did not expose its middle thought identity.");
+    TranscriptWindow window = document.CreateWindow(thoughtIndex);
+    JsonElement actual = ExecuteWindowAndProbe(window, GroupedThoughtProbeScript());
 
     RequireBoolean(actual, "detailsExists", true);
     RequireString(actual, "summary", "Having 3 thoughts");
@@ -119,6 +139,10 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     RequireIntegerAtLeast(actual, "anchorCountInside", 3);
   }
 
+  /// <summary>
+  /// Proves the fixed oracle rejects the exact semantic mutation observed on the
+  /// user's machine instead of merely accepting whatever production emitted.
+  /// </summary>
   private static void TestUserContextOracleRejectsEscapedMutation()
   {
     using JsonDocument document = JsonDocument.Parse("""
@@ -149,20 +173,10 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
       "Independent User Context oracle accepted escaped disclosure content.");
   }
 
-  private static string CodexUserMessage(string timestamp, string message)
-  {
-    return JsonSerializer.Serialize(new
-    {
-      type = "event_msg",
-      timestamp,
-      payload = new { type = "user_message", message }
-    });
-  }
-
   private static void AssertUserContextOracle(JsonElement actual)
   {
     RequireBoolean(actual, "detailsExists", true);
-    RequireString(actual, "summary", "# Context from my IDE setup:");
+    RequireString(actual, "summary", ContextSummary);
     RequireBoolean(actual, "activeFileInside", true);
     RequireBoolean(actual, "selectionInside", true);
     RequireBoolean(actual, "tabsInside", true);
@@ -175,7 +189,7 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
 
   private static string UserContextProbeScript()
   {
-    string prompt = JsonSerializer.Serialize(UserContextPrompt);
+    string prompt = JsonSerializer.Serialize(Prompt);
     return $$"""
 (() => {
   const root = document.querySelector('#transcript');
@@ -203,7 +217,7 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
 """;
   }
 
-  private static string ClaudeThoughtProbeScript()
+  private static string GroupedThoughtProbeScript()
   {
     return """
 (() => {
@@ -229,95 +243,126 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
 """;
   }
 
-  private static JsonElement RenderAndProbe(
-    AgentSource source,
-    IReadOnlyList<string> records,
+  /// <summary>
+  /// Uses the exact production bounded-window payload builder and actual WebView2
+  /// shell. The test supplies the expected semantic result, never node scopes,
+  /// browser repair results, or a production-derived expected document.
+  /// </summary>
+  private static JsonElement ExecuteWindowAndProbe(
+    TranscriptWindow window,
     string probeScript)
   {
-    string root = Path.Combine(
-      Path.GetTempPath(),
-      $"AgentPanelSpeaker-output-oracle-{Guid.NewGuid():N}");
-    Directory.CreateDirectory(root);
-    try
+    string replaceScript = BuildProductionWindowScript(window);
+
+    using var host = new Form
     {
-      string path = Path.Combine(root, "fixture.jsonl");
-      File.WriteAllLines(path, records);
+      Width = 800,
+      Height = 600,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    using var webView = new WebView2 { Dock = DockStyle.Fill };
+    host.Controls.Add(webView);
+    _ = host.Handle;
+    _ = webView.Handle;
 
-      using var host = new Form
-      {
-        Width = 900,
-        Height = 700,
-        ShowInTaskbar = false,
-        StartPosition = FormStartPosition.Manual,
-        Location = new Point(-32000, -32000)
-      };
-      using var view = new TranscriptView { Dock = DockStyle.Fill };
-      host.Controls.Add(view);
-      _ = host.Handle;
-      _ = view.Handle;
+    Task ensure = webView.EnsureCoreWebView2Async();
+    PumpUntilCompleted(ensure, "independent-oracle WebView2 initialization");
 
-      WebView2 webView = ReadField<WebView2>(view, "_webView");
-      Task ensure = webView.EnsureCoreWebView2Async();
-      PumpUntilCompleted(ensure, "TranscriptView WebView initialization request");
-      PumpUntil(
-        () => ReadField<bool>(view, "_initialized"),
-        "TranscriptView shell navigation");
+    MethodInfo? shellMethod = typeof(TranscriptView).GetMethod(
+      "BuildShellHtml",
+      BindingFlags.NonPublic | BindingFlags.Static);
+    Require(shellMethod is not null,
+      "TranscriptView.BuildShellHtml() could not be located.");
+    string shell = shellMethod!.Invoke(null, null) as string ?? string.Empty;
+    Require(shell.Length != 0,
+      "TranscriptView.BuildShellHtml() returned no browser shell.");
 
-      view.SelectSession(path, source, "Independent output oracle fixture");
-      PumpUntil(
-        () =>
-        {
-          bool refreshInProgress = ReadField<bool>(view, "_refreshInProgress");
-          Label loading = ReadField<Label>(view, "_loadingLabel");
-          Label failure = ReadField<Label>(view, "_failureLabel");
-          if (failure.Visible)
-          {
-            throw new InvalidOperationException(
-              "TranscriptView reported render failure: " + failure.Text);
-          }
-          return !refreshInProgress && webView.Visible && !loading.Visible;
-        },
-        "TranscriptView fixture render");
-
-      Task<string> probe = webView.CoreWebView2.ExecuteScriptAsync(probeScript);
-      PumpUntilCompleted(probe, "browser output-oracle probe");
-      string encoded = JsonSerializer.Deserialize<string>(probe.Result) ??
-        throw new InvalidOperationException("Browser probe returned no JSON string.");
-      using JsonDocument document = JsonDocument.Parse(encoded);
-      return document.RootElement.Clone();
-    }
-    finally
+    var navigated = new TaskCompletionSource<bool>(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+    webView.NavigationCompleted += (_, eventArgs) =>
     {
-      try
+      if (eventArgs.IsSuccess)
       {
-        Directory.Delete(root, recursive: true);
+        navigated.TrySetResult(true);
       }
-      catch (IOException)
+      else
       {
+        navigated.TrySetException(new InvalidOperationException(
+          $"WebView navigation failed: {eventArgs.WebErrorStatus}."));
       }
-    }
+    };
+    webView.CoreWebView2.NavigateToString(shell);
+    PumpUntilCompleted(navigated.Task, "independent-oracle shell navigation");
+
+    Task<string> replace = webView.CoreWebView2.ExecuteScriptAsync(replaceScript);
+    PumpUntilCompleted(replace, "production bounded-window payload");
+
+    Task<string> probe = webView.CoreWebView2.ExecuteScriptAsync(probeScript);
+    PumpUntilCompleted(probe, "independent browser-output probe");
+    string encoded = JsonSerializer.Deserialize<string>(probe.Result) ??
+      throw new InvalidOperationException("Browser output probe returned no JSON.");
+    using JsonDocument document = JsonDocument.Parse(encoded);
+    return document.RootElement.Clone();
   }
 
-  private static T ReadField<T>(object target, string name)
+  private static string BuildProductionWindowScript(TranscriptWindow window)
   {
-    FieldInfo? field = target.GetType().GetField(
-      name,
-      BindingFlags.NonPublic | BindingFlags.Instance);
-    if (field?.GetValue(target) is not T value)
+    using var host = new Form
     {
-      throw new InvalidOperationException(
-        $"Could not read production field {name} as {typeof(T).Name}.");
-    }
-    return value;
+      Width = 320,
+      Height = 240,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-32000, -32000)
+    };
+    using var productionView = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(productionView);
+    _ = host.Handle;
+    _ = productionView.Handle;
+
+    FieldInfo? webViewField = typeof(TranscriptView).GetField(
+      "_webView",
+      BindingFlags.NonPublic | BindingFlags.Instance);
+    MethodInfo? buildReplaceWindow = typeof(TranscriptView).GetMethod(
+      "BuildReplaceWindowScript",
+      BindingFlags.NonPublic | BindingFlags.Instance);
+    Require(webViewField is not null && buildReplaceWindow is not null,
+      "Production bounded-window payload members could not be located.");
+
+    var internalWebView = (WebView2?)webViewField!.GetValue(productionView);
+    Require(internalWebView is not null,
+      "Production TranscriptView WebView could not be located.");
+    Task ensure = internalWebView!.EnsureCoreWebView2Async();
+    PumpUntilCompleted(ensure, "production window-payload WebView initialization");
+
+    object?[] arguments =
+    {
+      window,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    };
+    string script = buildReplaceWindow!.Invoke(productionView, arguments)
+      as string ?? string.Empty;
+    Require(script.Length != 0,
+      "Production BuildReplaceWindowScript returned no browser payload.");
+    return script;
   }
 
-  private static void PumpUntil(
-    Func<bool> predicate,
+  private static void PumpUntilCompleted(
+    Task task,
     string description,
     int timeoutMilliseconds = 30000)
   {
     var timer = Stopwatch.StartNew();
-    while (!predicate())
+    while (!task.IsCompleted)
     {
       if (timer.ElapsedMilliseconds >= timeoutMilliseconds)
       {
@@ -327,12 +372,15 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
       Application.DoEvents();
       Thread.Sleep(10);
     }
+    task.GetAwaiter().GetResult();
   }
 
-  private static void PumpUntilCompleted(Task task, string description)
+  private static void Require(bool condition, string message)
   {
-    PumpUntil(() => task.IsCompleted, description);
-    task.GetAwaiter().GetResult();
+    if (!condition)
+    {
+      throw new InvalidOperationException(message);
+    }
   }
 
   private static void RequireBoolean(
