@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/issue-37-core-units-green.yml'
       - 'scripts/issue-37-core-unit-integration.py'
+      - 'scripts/issue-37-core-unit-constructor-compat.py'
 
 permissions:
   contents: write
@@ -42,6 +43,8 @@ jobs:
         shell: pwsh
         run: |
           python scripts/issue-37-core-unit-integration.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-core-unit-constructor-compat.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Pin verified AIConversationCore
