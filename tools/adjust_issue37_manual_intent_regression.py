@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# This helper stages only the already-proven manual-scroll ownership oracle.
+# Production files remain unchanged during the RED gate.
 path = Path("AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs")
 text = path.read_text(encoding="utf-8")
 
