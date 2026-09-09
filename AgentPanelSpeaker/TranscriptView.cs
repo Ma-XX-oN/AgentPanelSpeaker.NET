@@ -659,9 +659,7 @@ internal sealed class TranscriptView : UserControl
       _identities = payload.Identities;
       _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
-      TranscriptWindow window = SelectInitialPresentationWindow(
-        payload.Document,
-        focalIndex);
+      TranscriptWindow window = payload.Document.CreateFullWindow();
       TranscriptStructureSnapshot virtualStructure =
         TranscriptStructureProbe.CaptureHtml(
           structureProbeId,
@@ -670,22 +668,10 @@ internal sealed class TranscriptView : UserControl
       TranscriptStructureProbe.Compare(
         payload.RendererStructure,
         virtualStructure);
-      DiagnosticLog.Write("transcript.initial_window_selected", new
-      {
-        focalIndex,
-        window.StartIndex,
-        window.EndIndex,
-        recordCount = window.Records.Count,
-        totalRecordCount = payload.Document.Count,
-        htmlCharacters = window.Html.Length,
-        window.TopSpacerHeight,
-        window.BottomSpacerHeight,
-        preparationMilliseconds
-      });
-      string script = BuildReplaceWindowScript(
+      string script = BuildReplaceDomScript(
         window,
+        payload.DomNodes,
         preserve: !force,
-        focusVirtualIndex: force ? focalIndex : null,
         structureProbeId: structureProbeId,
         expectedStructure: virtualStructure);
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -696,7 +682,7 @@ internal sealed class TranscriptView : UserControl
       }
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
-      _domPresentationMode = false;
+      _domPresentationMode = true;
       TranscriptStructureSnapshot? webViewStructure =
         await CaptureWebViewStructureAsync(structureProbeId);
       if (webViewStructure is not null)
@@ -1720,18 +1706,6 @@ internal sealed class TranscriptView : UserControl
       TryResolvePositionIndex(document, identities, position, out int index)
         ? index
         : Math.Max(0, document.Count - 1);
-  }
-
-  /// <summary>
-  /// Selects the transcript materialization used for the first visual
-  /// presentation. Kept as a narrow production seam so the large-transcript
-  /// regression exercises the exact initial-window policy.
-  /// </summary>
-  internal static TranscriptWindow SelectInitialPresentationWindow(
-    TranscriptVirtualDocument document,
-    int focalIndex)
-  {
-    return document.CreateWindow(focalIndex);
   }
 
   private static bool TryResolvePositionIndex(
