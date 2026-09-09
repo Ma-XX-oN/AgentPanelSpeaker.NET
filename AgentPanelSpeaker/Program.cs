@@ -119,6 +119,8 @@ internal static class Program
       {
         Environment.ExitCode = RunWithWinFormsMessageLoop(
           Issue44IndependentOutputOracleRegressionTestRunner.Run);
+        Console.WriteLine(
+          $"TEST-SUITE-COMPLETE output-oracle exit={Environment.ExitCode}");
         return;
       }
 
@@ -160,6 +162,7 @@ internal static class Program
                              independentOutputOracle == 0
         ? 0
         : 1;
+      Console.WriteLine($"TEST-SUITE-COMPLETE all exit={Environment.ExitCode}");
       return;
     }
 
