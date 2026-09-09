@@ -8,6 +8,7 @@ on:
       - '.github/workflows/issue-37-core-units-green.yml'
       - 'scripts/issue-37-core-unit-integration.py'
       - 'scripts/issue-37-core-unit-constructor-compat.py'
+      - 'scripts/issue-37-core-runtime-pin.py'
 
 permissions:
   contents: write
@@ -46,6 +47,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/issue-37-core-unit-constructor-compat.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-core-runtime-pin.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Pin verified AIConversationCore
         shell: pwsh
@@ -58,6 +61,10 @@ jobs:
           if ($actual -ne '6c92799c1b14693001e8b913465f4a12b0b1e1ab') {
             throw "Core pin mismatch: $actual"
           }
+          $runtimePin = (Get-Content tools/AIConversationCore-runtime/CORE_COMMIT -Raw).Trim()
+          if ($runtimePin -ne $actual) {
+            throw "Deployed Core runtime pin mismatch: submodule=$actual runtime=$runtimePin"
+          }
 
       - name: Install Core dependencies
         shell: pwsh
@@ -67,33 +74,30 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Run Core boundary regressions
+      - name: Run required GREEN regression suites
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test core
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          function Run-GreenSuite([string]$suite) {
+            $safe = $suite.Replace('-', '_')
+            $stdout = Join-Path $env:RUNNER_TEMP "$safe-out.txt"
+            $stderr = Join-Path $env:RUNNER_TEMP "$safe-err.txt"
+            $p = Start-Process -FilePath $exe -ArgumentList '--test',$suite -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
+            Write-Host "===== $suite ====="
+            Write-Host $text
+            if ($p.ExitCode -ne 0) {
+              throw "$suite exited $($p.ExitCode)."
+            }
+            if ($text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
+              throw "$suite did not reach its GREEN completion sentinel."
+            }
+          }
 
-      - name: Run rolled-back visibility regressions
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test rolled-back-visibility
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Run independent output oracle
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test output-oracle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Run word-materialization regressions
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test word-materialization
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Run-GreenSuite 'core'
+          Run-GreenSuite 'rolled-back-visibility'
+          Run-GreenSuite 'output-oracle'
+          Run-GreenSuite 'word-materialization'
 
       - name: Require Core-unit containment GREEN with only known browser defect remaining
         shell: pwsh
@@ -134,7 +138,8 @@ jobs:
             AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs `
             AgentPanelSpeaker/TranscriptVirtualDocument.cs `
             AgentPanelSpeaker/TranscriptView.cs `
-            tools/AIConversationCore-worker.mjs
+            tools/AIConversationCore-worker.mjs `
+            tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m 'fix: consume Core-owned HTML virtualization units (#37)'
