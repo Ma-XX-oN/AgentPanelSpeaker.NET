@@ -10,6 +10,7 @@ on:
       - 'scripts/issue-37-core-unit-constructor-compat.py'
       - 'scripts/issue-37-core-runtime-pin.py'
       - 'scripts/issue-37-core-parity-html-entity-test.py'
+      - 'scripts/issue-37-search-deadlock-fix.py'
 
 permissions:
   contents: write
@@ -51,6 +52,8 @@ jobs:
           python scripts/issue-37-core-runtime-pin.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/issue-37-core-parity-html-entity-test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-search-deadlock-fix.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Pin verified AIConversationCore
@@ -146,6 +149,7 @@ jobs:
             AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs `
             AgentPanelSpeaker/TranscriptVirtualDocument.cs `
             AgentPanelSpeaker/TranscriptView.cs `
+            AgentPanelSpeaker/TranscriptSearchIndex.cs `
             tools/AIConversationCore-worker.mjs `
             tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
