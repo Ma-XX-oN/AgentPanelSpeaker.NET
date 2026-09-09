@@ -13,6 +13,8 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal static class Issue46IndependentRegressionOracleTestRunner
 {
+  private static readonly Dictionary<SpeechService, IEnumerator<SpeechFragment>>
+    SpeechHistoryMutationSentinels = new();
   /// <summary>
   /// Runs the independent acceptance-oracle suite.
   /// </summary>
@@ -255,7 +257,6 @@ internal static class Issue46IndependentRegressionOracleTestRunner
         speech.TrySeekToTranscriptWord(historical.NodeId, 0, out _),
         "Historical speech was not eligible while Show rolled-back history was ON.");
 
-      int generation = ReadField<int>(form, "_historyPreviewGeneration");
       int monitorSession = ReadField<int>(form, "_monitorSession");
       CheckBox control = ReadField<CheckBox>(popup, "_showRolledBackCheckBox");
       Require(control.Checked,
@@ -272,7 +273,6 @@ internal static class Issue46IndependentRegressionOracleTestRunner
         "Real OFF control event hid the active edited speech fragment.");
       RequireUnchangedSessionState(
         form,
-        generation,
         monitorSession,
         retainedBefore,
         speech,
@@ -298,7 +298,6 @@ internal static class Issue46IndependentRegressionOracleTestRunner
         "Real ON control event did not restore historical speech eligibility.");
       RequireUnchangedSessionState(
         form,
-        generation,
         monitorSession,
         retainedBefore,
         speech,
@@ -353,7 +352,6 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       SpeechFragment user = history.Fragments.First(fragment =>
         fragment.Category == ContentCategory.User);
       SpeechFragment[] retainedBefore = ReadSpeechHistory(speech);
-      int generation = ReadField<int>(form, "_historyPreviewGeneration");
       int monitorSession = ReadField<int>(form, "_monitorSession");
       CheckBox control = ReadField<CheckBox>(popup, "_speakUserContextCheckBox");
 
@@ -374,7 +372,6 @@ internal static class Issue46IndependentRegressionOracleTestRunner
         expectedContextEligible: true);
       RequireUnchangedSessionState(
         form,
-        generation,
         monitorSession,
         retainedBefore,
         speech,
@@ -402,7 +399,6 @@ internal static class Issue46IndependentRegressionOracleTestRunner
         expectedContextEligible: false);
       RequireUnchangedSessionState(
         form,
-        generation,
         monitorSession,
         retainedBefore,
         speech,
@@ -630,15 +626,12 @@ internal static class Issue46IndependentRegressionOracleTestRunner
 
   private static void RequireUnchangedSessionState(
     MainForm form,
-    int generation,
     int monitorSession,
     IReadOnlyList<SpeechFragment> retainedBefore,
     SpeechService speech,
     string description)
   {
-    Require(
-      ReadField<int>(form, "_historyPreviewGeneration") == generation,
-      $"{description} rebuilt canonical history.");
+    RequireSpeechHistoryUnmodified(speech, description);
     Require(
       ReadField<int>(form, "_monitorSession") == monitorSession,
       $"{description} restarted/replaced the monitor session.");
@@ -657,11 +650,41 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       "_history",
       BindingFlags.Instance | BindingFlags.NonPublic) ??
       throw new InvalidOperationException("SpeechService history field was not found.");
-    if (field.GetValue(speech) is not IEnumerable history)
+    if (field.GetValue(speech) is not List<SpeechFragment> history)
     {
-      throw new InvalidOperationException("SpeechService history is not enumerable.");
+      throw new InvalidOperationException("SpeechService history had an unexpected type.");
     }
-    return history.Cast<SpeechFragment>().ToArray();
+    SpeechHistoryMutationSentinels.TryAdd(speech, history.GetEnumerator());
+    return history.ToArray();
+  }
+
+  /// <summary>
+  /// Proves that the retained speech-history collection itself was not
+  /// cleared/repopulated while a settings event ran. A List enumerator
+  /// captures the collection version at baseline and throws if any later
+  /// mutation occurred, even when the rebuilt items are value-identical.
+  /// </summary>
+  private static void RequireSpeechHistoryUnmodified(
+    SpeechService speech,
+    string description)
+  {
+    if (!SpeechHistoryMutationSentinels.TryGetValue(
+          speech,
+          out IEnumerator<SpeechFragment>? sentinel))
+    {
+      throw new InvalidOperationException(
+        "Speech-history mutation sentinel was not initialized.");
+    }
+
+    try
+    {
+      _ = sentinel.MoveNext();
+    }
+    catch (InvalidOperationException)
+    {
+      throw new InvalidOperationException(
+        $"{description} rebuilt retained speech history.");
+    }
   }
 
   private static JsonElement ExecuteJsonProbe(WebView2 webView, string script)
