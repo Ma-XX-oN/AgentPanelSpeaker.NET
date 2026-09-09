@@ -1,10 +1,12 @@
+using System.Reflection;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Owns one off-screen MainForm for UI acceptance tests and closes it through
-/// the real FormClosing path before disposal. MainForm registers application-
-/// wide message and system-event hooks that are detached by that production
-/// close path; direct Dispose() would bypass that lifecycle contract.
+/// Owns one off-screen MainForm for UI acceptance tests and tears it down
+/// through the production MainFormClosing cleanup path before disposal.
+/// MainForm registers application-wide message and system-event hooks that are
+/// detached by that path; direct Dispose() would bypass the lifecycle contract.
 /// </summary>
 internal sealed class MainFormTestLease : IDisposable
 {
@@ -31,7 +33,10 @@ internal sealed class MainFormTestLease : IDisposable
   public MainForm Form { get; }
 
   /// <summary>
-  /// Runs the normal close lifecycle and then releases the form.
+  /// Runs the production immediate-termination cleanup and releases the form.
+  /// The shutdown close reason bypasses the interactive save-settings prompt,
+  /// which is not part of these acceptance tests, while exercising the same
+  /// global-hook/resource teardown used by MainFormClosing.
   /// </summary>
   public void Dispose()
   {
@@ -41,11 +46,27 @@ internal sealed class MainFormTestLease : IDisposable
     }
     _disposed = true;
 
-    if (!Form.IsDisposed)
+    if (Form.IsDisposed)
     {
-      Form.Close();
-      Application.DoEvents();
-      Form.Dispose();
+      return;
     }
+
+    MethodInfo closing = typeof(MainForm).GetMethod(
+      "MainFormClosing",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "MainForm production close handler was not found.");
+    var eventArgs = new FormClosingEventArgs(
+      CloseReason.WindowsShutDown,
+      cancel: false);
+    closing.Invoke(Form, new object?[] { Form, eventArgs });
+    if (eventArgs.Cancel)
+    {
+      throw new InvalidOperationException(
+        "MainForm production close handler cancelled immediate test teardown.");
+    }
+
+    Application.DoEvents();
+    Form.Dispose();
   }
 }
