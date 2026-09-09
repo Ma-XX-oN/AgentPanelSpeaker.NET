@@ -1,4 +1,4 @@
-name: Issue 37 directional vwindow RED
+name: Issue 37 physical vwindow RED
 
 on:
   push:
@@ -32,11 +32,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Stage exact production regressions
+      - name: Stage physical-window regressions
         shell: pwsh
-        run: |
-          python tools/apply_issue37_directional_regressions.py
-          python tools/adjust_issue37_directional_regression_fixture.py
+        run: python tools/apply_issue37_physical_window_regressions.py
 
       - name: Validate staged test patch
         shell: pwsh
@@ -46,12 +44,12 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Prove exact regressions RED
+      - name: Prove physical-window regressions RED
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          $stdout = Join-Path $env:RUNNER_TEMP 'issue37-red.stdout.txt'
-          $stderr = Join-Path $env:RUNNER_TEMP 'issue37-red.stderr.txt'
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue37-physical-red.stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue37-physical-red.stderr.txt'
           $process = Start-Process -FilePath $exe `
             -ArgumentList '--test', 'virtual-window' `
             -RedirectStandardOutput $stdout `
@@ -60,42 +58,51 @@ jobs:
           $output = @()
           if (Test-Path $stdout) { $output += Get-Content $stdout }
           if (Test-Path $stderr) { $output += Get-Content $stderr }
-          $exit = $process.ExitCode
           $output | ForEach-Object { Write-Host $_ }
           $text = $output -join "`n"
-          if ($exit -eq 0) { throw 'Expected the new #37 regressions to fail before production changes.' }
+          if ($process.ExitCode -eq 0) {
+            throw 'Expected physical #37 regressions to fail before production changes.'
+          }
           foreach ($pass in @(
             'PASS  virtual-window/core-single-anchor-user-context-unit-is-preserved',
             'PASS  virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded',
             'PASS  virtual-window/programmatic-playback-scroll-does-not-request-shift'
           )) {
-            if (-not $text.Contains($pass)) { throw "Existing GREEN regression did not stay GREEN: $pass" }
+            if (-not $text.Contains($pass)) {
+              throw "Existing GREEN regression did not stay GREEN: $pass"
+            }
           }
-          if (-not $text.Contains('FAIL  virtual-window/spacer-shift-restores-materialized-content')) {
-            throw 'Spacer-recovery regression did not fail RED.'
+          foreach ($requiredRed in @(
+            'FAIL  virtual-window/spacer-shift-restores-materialized-content',
+            'FAIL  virtual-window/directional-prefetch-follows-scroll-direction',
+            'FAIL  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
+          )) {
+            if (-not $text.Contains($requiredRed)) {
+              throw "Required physical RED regression did not fail: $requiredRed"
+            }
           }
-          if (-not $text.Contains('Completed virtual-window shift left the viewport wholly in synthetic spacer')) {
-            throw 'Spacer-recovery regression failed for an unexpected reason.'
+          $allowedFailNames = @(
+            'virtual-window/spacer-shift-restores-materialized-content',
+            'virtual-window/directional-prefetch-follows-scroll-direction',
+            'virtual-window/physical-window-keeps-five-viewports-materialized',
+            'virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
+          )
+          $unexpected = @($output | Where-Object { $_ -match '^FAIL  ' } | ForEach-Object {
+            $name = $_.Substring(6)
+            if ($allowedFailNames -notcontains $name) { $_ }
+          })
+          if ($unexpected.Count -ne 0) {
+            throw "Unexpected RED failures: $($unexpected -join '; ')"
           }
-          if (-not $text.Contains('FAIL  virtual-window/directional-prefetch-follows-scroll-direction')) {
-            throw 'Directional-prefetch regression did not fail RED.'
-          }
-          if (-not $text.Contains('Upward scrolling near the lower prefetch boundary requested a competing scroll-down virtual-window shift.')) {
-            throw 'Directional-prefetch regression failed for an unexpected reason.'
-          }
-          $failLines = @($output | Where-Object { $_ -match '^FAIL  ' })
-          if ($failLines.Count -ne 2) {
-            throw "Expected exactly 2 failing regressions, observed $($failLines.Count)."
-          }
-          Write-Host 'RED-PROVEN issue-37 spacer recovery and direction-aware prefetch failures reproduced.'
+          Write-Host 'RED-PROVEN issue-37 physical spacer/direction/voice-cursor requirements reproduced.'
 
-      - name: Commit permanent RED regressions
+      - name: Commit corrected RED regressions
         shell: pwsh
         run: |
           git config user.name 'chatgpt-codex-connector'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          if (git diff --cached --quiet) { throw 'Regression patch produced no source change.' }
-          git commit -m 'test: reproduce #37 spacer and directional vwindow failures [skip ci]'
+          if (git diff --cached --quiet) { throw 'Physical regression patch produced no source change.' }
+          git commit -m 'test: specify physical virtual-window behaviour (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'RED regressions committed after exact failure proof.'
+          Write-Host 'Physical RED regressions committed after intended failures were proven.'
