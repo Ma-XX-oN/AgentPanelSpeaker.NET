@@ -36,6 +36,7 @@ jobs:
         shell: pwsh
         run: |
           @'
+          import re
           from pathlib import Path
           path = Path('AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs')
           text = path.read_text(encoding='utf-8')
@@ -44,12 +45,13 @@ jobs:
               'using System.Reflection;\n',
               'using System.Diagnostics;\nusing System.Reflection;\n',
               1)
-          old = '''      string playbackWord = SpeechTokenization.TokenizeDisplay(playbackFragment)
-                .First();'''
-          new = '''      string playbackWord = SpeechTokenization.First(playbackFragment);'''
-          if text.count(old) != 1:
-            raise SystemExit(f'playback token anchor count={text.count(old)}')
-          text = text.replace(old, new, 1)
+          text, count = re.subn(
+            r'SpeechTokenization\.TokenizeDisplay\(playbackFragment\)\s*\.First\(\)',
+            'SpeechTokenization.First(playbackFragment)',
+            text,
+            count=1)
+          if count != 1:
+            raise SystemExit(f'playback token substitution count={count}')
           path.write_text(text, encoding='utf-8')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
