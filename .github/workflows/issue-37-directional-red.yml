@@ -34,7 +34,9 @@ jobs:
 
       - name: Stage physical-window regressions
         shell: pwsh
-        run: python tools/apply_issue37_physical_window_regressions.py
+        run: |
+          python tools/apply_issue37_physical_window_regressions.py
+          python tools/fix_issue37_physical_regression_escape.py
 
       - name: Validate staged test patch
         shell: pwsh
