@@ -242,12 +242,21 @@ internal static class Issue37VirtualWindowRegressionTestRunner
         Stopwatch.GetTimestamp()));
       PumpMessages(150);
 
-      ExecuteVoidScript(webView, "requestVirtualShift(-1);");
-      PumpUntil(
-        () =>
-          ReadField<int>(view, "_windowStartIndex") != initialStart ||
-          ReadField<int>(view, "_windowEndIndex") != initialEnd,
-        "manual scroll window to replace the initial playback window");
+      Task shiftTask = InvokeTask(
+      view,
+      "RenderWindowForIndexAsync",
+      0,
+      "scroll-up",
+      null,
+      string.Empty,
+      null);
+    PumpUntilCompleted(
+      shiftTask,
+      "manual scroll window to replace the initial playback window");
+    Require(
+      ReadField<int>(view, "_windowStartIndex") != initialStart ||
+      ReadField<int>(view, "_windowEndIndex") != initialEnd,
+      "Manual scroll render did not leave the initial playback window.");
 
       (int Start, int End) scrollWindow = (
         ReadField<int>(view, "_windowStartIndex"),
@@ -319,6 +328,21 @@ internal static class Issue37VirtualWindowRegressionTestRunner
     }
     File.WriteAllLines(path, records);
   }
+
+  private static Task InvokeTask(
+  object target,
+  string methodName,
+  params object?[] arguments)
+{
+  MethodInfo method = target.GetType().GetMethod(
+    methodName,
+    BindingFlags.Instance | BindingFlags.NonPublic) ??
+    throw new InvalidOperationException(
+      $"Method '{methodName}' was not found on {target.GetType().Name}.");
+  return method.Invoke(target, arguments) as Task ??
+    throw new InvalidOperationException(
+      $"Method '{methodName}' did not return a Task.");
+}
 
   private static T ReadField<T>(object target, string fieldName)
   {
