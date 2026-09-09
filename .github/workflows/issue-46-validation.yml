@@ -5,6 +5,10 @@ on:
     branches:
       - issue-46-independent-regression-oracles
 
+concurrency:
+  group: issue-46-independent-regression-oracles
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
