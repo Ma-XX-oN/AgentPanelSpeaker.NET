@@ -6,6 +6,7 @@ on:
       - issue-37-vwindow-convergence-containment
     paths:
       - '.github/workflows/issue-37-core-units-green.yml'
+      - 'scripts/issue-37-core-unit-integration.py'
 
 permissions:
   contents: write
