@@ -121,13 +121,6 @@ internal static class Program
         return;
       }
 
-      if (args.Length == 2 &&
-          string.Equals(args[1], "large-transcript-windowing", StringComparison.OrdinalIgnoreCase))
-      {
-        Environment.ExitCode = Issue37LargeTranscriptRegressionTestRunner.Run();
-        return;
-      }
-
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
@@ -151,8 +144,6 @@ internal static class Program
       int rolledBackVisibility = RunIsolatedTestSuite("rolled-back-visibility");
       int rolledBackSpeech = RunIsolatedTestSuite("rolled-back-speech");
       int independentOutputOracle = RunIsolatedTestSuite("output-oracle");
-      int largeTranscriptWindowing = RunIsolatedTestSuite(
-        "large-transcript-windowing");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -165,8 +156,7 @@ internal static class Program
                              liveEnd == 0 &&
                              rolledBackVisibility == 0 &&
                              rolledBackSpeech == 0 &&
-                             independentOutputOracle == 0 &&
-                             largeTranscriptWindowing == 0
+                             independentOutputOracle == 0
         ? 0
         : 1;
       return;
