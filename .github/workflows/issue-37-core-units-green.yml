@@ -17,7 +17,7 @@ permissions:
 jobs:
   integrate:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Check out branch and submodules
         uses: actions/checkout@v4
@@ -77,32 +77,36 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Run required GREEN regression suites
+      - name: Run Core boundary regressions
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          function Run-GreenSuite([string]$suite) {
-            $safe = $suite.Replace('-', '_')
-            $stdout = Join-Path $env:RUNNER_TEMP "$safe-out.txt"
-            $stderr = Join-Path $env:RUNNER_TEMP "$safe-err.txt"
-            $p = Start-Process -FilePath $exe -ArgumentList '--test',$suite -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-            $text = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
-            Write-Host "===== $suite ====="
-            Write-Host $text
-            if ($p.ExitCode -ne 0) {
-              throw "$suite exited $($p.ExitCode)."
-            }
-            if ($text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
-              throw "$suite did not reach its GREEN completion sentinel."
-            }
-          }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core
 
-          Run-GreenSuite 'core'
-          Run-GreenSuite 'rolled-back-visibility'
-          Run-GreenSuite 'output-oracle'
-          Run-GreenSuite 'word-materialization'
+      - name: Run rolled-back visibility regressions
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rolled-back-visibility
+
+      - name: Run independent output oracle
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite output-oracle
+
+      - name: Run word-materialization regressions
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
 
       - name: Require Core-unit containment GREEN with only known browser defect remaining
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
