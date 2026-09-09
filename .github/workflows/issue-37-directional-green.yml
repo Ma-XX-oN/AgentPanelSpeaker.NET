@@ -1,4 +1,4 @@
-name: Issue 37 directional vwindow GREEN
+name: Issue 37 physical vwindow GREEN
 
 on:
   push:
@@ -76,7 +76,9 @@ jobs:
             'PASS  virtual-window/programmatic-playback-scroll-does-not-request-shift',
             'PASS  virtual-window/spacer-shift-restores-materialized-content',
             'PASS  virtual-window/directional-prefetch-follows-scroll-direction',
-            'PASS: 5/5 issue #37 virtual-window tests passed.',
+            'PASS  virtual-window/physical-window-keeps-five-viewports-materialized',
+            'PASS  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn',
+            'PASS: 7/7 issue #37 virtual-window tests passed.',
             'TEST-SUITE-COMPLETE virtual-window exit=0'
           )) {
             if (-not $text.Contains($expected)) { throw "Missing GREEN evidence: $expected" }
@@ -141,8 +143,8 @@ jobs:
           git diff --check
           git config user.name 'chatgpt-codex-connector'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/TranscriptView.cs
+          git add AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/TranscriptVirtualDocument.cs
           if (git diff --cached --quiet) { throw 'Production fix produced no source change.' }
-          git commit -m 'fix: recover and prefetch virtual transcript windows (#37) [skip ci]'
+          git commit -m 'fix: use physical virtual-window geometry (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'GREEN-PROVEN issue-37 spacer recovery and direction-aware prefetch fix committed.'
+          Write-Host 'GREEN-PROVEN issue-37 physical spacer/direction/voice-cursor fix committed.'
