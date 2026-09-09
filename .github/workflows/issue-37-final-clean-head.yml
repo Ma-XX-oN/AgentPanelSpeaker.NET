@@ -1,0 +1,126 @@
+name: Issue 37 final clean-head validation
+
+on:
+  push:
+    branches:
+      - issue-37-vwindow-convergence-containment
+    paths:
+      - '.github/workflows/issue-37-final-clean-head.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out clean branch head and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-37-vwindow-convergence-containment
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify exact Core pins
+        shell: pwsh
+        run: |
+          $expected = '6c92799c1b14693001e8b913465f4a12b0b1e1ab'
+          $submodule = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          $runtime = (Get-Content tools/AIConversationCore-runtime/CORE_COMMIT -Raw).Trim()
+          if ($submodule -ne $expected) {
+            throw "Unexpected AIConversationCore submodule: $submodule"
+          }
+          if ($runtime -ne $expected) {
+            throw "Unexpected deployed Core runtime: $runtime"
+          }
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Run full pinned Core suite
+        timeout-minutes: 10
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Build committed AgentPanelSpeaker head
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify regression runner completion guard
+        shell: pwsh
+        run: '& tools/Invoke-TestSuite.ps1 -SelfTest'
+
+      - name: Re-prove virtual-window regression GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Re-prove word-materialization regression GREEN
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
+
+      - name: Run complete built AgentPanelSpeaker suite
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish committed application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          if (-not (Test-Path (Join-Path $publish 'AgentPanelSpeaker.exe'))) {
+            throw 'Published AgentPanelSpeaker.exe is missing.'
+          }
+
+      - name: Run complete published AgentPanelSpeaker suite
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Validate canonical transcript display
+        timeout-minutes: 8
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate clean-head integrity
+        shell: pwsh
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dirty = git status --porcelain --untracked-files=no
+          if ($dirty) {
+            Write-Host $dirty
+            throw 'Tracked working tree changed during clean-head validation.'
+          }
+          Write-Host 'GREEN-PROVEN issue-37 clean-head-final'
