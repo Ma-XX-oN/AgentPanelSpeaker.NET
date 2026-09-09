@@ -6,18 +6,15 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Browser-output regressions whose input and expected semantic result are
-/// independently authored. Production virtualization/payload/browser code is
-/// used only to produce the actual value being tested.
+/// Browser-output regressions whose source documents and expected semantic
+/// results are fixed independently of production rendering and virtualization.
 /// </summary>
 internal static class Issue44IndependentOutputOracleRegressionTestRunner
 {
   private const string ContextSummary = "# Context from my IDE setup:";
   private const string Prompt = "Actual user prompt.";
 
-  /// <summary>
-  /// Runs the independent browser-output oracle suite.
-  /// </summary>
+  /// <summary>Runs the independent browser-output oracle suite.</summary>
   public static int Run()
   {
     var tests = new (string Name, Action Body)[]
@@ -59,11 +56,6 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     return failures == 0 ? 0 : 1;
   }
 
-  /// <summary>
-  /// Sends a fixed, valid User Context document through the exact bounded-window
-  /// payload and real browser parser. The expected containment is specified by
-  /// this test and is never derived from production output.
-  /// </summary>
   private static void TestUserContextWindowBrowserDom()
   {
     const string sourceHtml = """
@@ -91,15 +83,12 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(sourceHtml);
     Require(document.TryGetIndex(11, "context", out int contextIndex),
       "Fixed User Context input did not expose its context identity.");
-    TranscriptWindow window = document.CreateWindow(contextIndex);
-    JsonElement actual = ExecuteWindowAndProbe(window, UserContextProbeScript());
+    JsonElement actual = ExecuteWindowAndProbe(
+      document.CreateWindow(contextIndex),
+      UserContextProbeScript());
     AssertUserContextOracle(actual);
   }
 
-  /// <summary>
-  /// Sends a fixed grouped-thought disclosure through the same production
-  /// window/browser path and checks independently-authored containment facts.
-  /// </summary>
   private static void TestGroupedThoughtWindowBrowserDom()
   {
     const string sourceHtml = """
@@ -125,8 +114,9 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(sourceHtml);
     Require(document.TryGetIndex(22, "thought-two", out int thoughtIndex),
       "Fixed grouped-thought input did not expose its middle thought identity.");
-    TranscriptWindow window = document.CreateWindow(thoughtIndex);
-    JsonElement actual = ExecuteWindowAndProbe(window, GroupedThoughtProbeScript());
+    JsonElement actual = ExecuteWindowAndProbe(
+      document.CreateWindow(thoughtIndex),
+      GroupedThoughtProbeScript());
 
     RequireBoolean(actual, "detailsExists", true);
     RequireString(actual, "summary", "Having 3 thoughts");
@@ -139,10 +129,6 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     RequireIntegerAtLeast(actual, "anchorCountInside", 3);
   }
 
-  /// <summary>
-  /// Proves the fixed oracle rejects the exact semantic mutation observed on the
-  /// user's machine instead of merely accepting whatever production emitted.
-  /// </summary>
   private static void TestUserContextOracleRejectsEscapedMutation()
   {
     using JsonDocument document = JsonDocument.Parse("""
@@ -168,7 +154,6 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     {
       return;
     }
-
     throw new InvalidOperationException(
       "Independent User Context oracle accepted escaped disclosure content.");
   }
@@ -244,16 +229,14 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
   }
 
   /// <summary>
-  /// Uses the exact production bounded-window payload builder and actual WebView2
-  /// shell. The test supplies the expected semantic result, never node scopes,
-  /// browser repair results, or a production-derived expected document.
+  /// Installs the actual virtual-window HTML in the real transcript browser
+  /// shell. The JavaScript call is transport plumbing only; expected output is
+  /// specified separately by the fixed oracle above.
   /// </summary>
   private static JsonElement ExecuteWindowAndProbe(
     TranscriptWindow window,
     string probeScript)
   {
-    string replaceScript = BuildProductionWindowScript(window);
-
     using var host = new Form
     {
       Width = 800,
@@ -296,8 +279,9 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     webView.CoreWebView2.NavigateToString(shell);
     PumpUntilCompleted(navigated.Task, "independent-oracle shell navigation");
 
+    string replaceScript = BuildWindowInstallScript(window);
     Task<string> replace = webView.CoreWebView2.ExecuteScriptAsync(replaceScript);
-    PumpUntilCompleted(replace, "production bounded-window payload");
+    PumpUntilCompleted(replace, "production virtual-window install");
 
     Task<string> probe = webView.CoreWebView2.ExecuteScriptAsync(probeScript);
     PumpUntilCompleted(probe, "independent browser-output probe");
@@ -307,53 +291,15 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     return document.RootElement.Clone();
   }
 
-  private static string BuildProductionWindowScript(TranscriptWindow window)
+  private static string BuildWindowInstallScript(TranscriptWindow window)
   {
-    using var host = new Form
-    {
-      Width = 320,
-      Height = 240,
-      ShowInTaskbar = false,
-      StartPosition = FormStartPosition.Manual,
-      Location = new Point(-32000, -32000)
-    };
-    using var productionView = new TranscriptView { Dock = DockStyle.Fill };
-    host.Controls.Add(productionView);
-    _ = host.Handle;
-    _ = productionView.Handle;
-
-    FieldInfo? webViewField = typeof(TranscriptView).GetField(
-      "_webView",
-      BindingFlags.NonPublic | BindingFlags.Instance);
-    MethodInfo? buildReplaceWindow = typeof(TranscriptView).GetMethod(
-      "BuildReplaceWindowScript",
-      BindingFlags.NonPublic | BindingFlags.Instance);
-    Require(webViewField is not null && buildReplaceWindow is not null,
-      "Production bounded-window payload members could not be located.");
-
-    var internalWebView = (WebView2?)webViewField!.GetValue(productionView);
-    Require(internalWebView is not null,
-      "Production TranscriptView WebView could not be located.");
-    Task ensure = internalWebView!.EnsureCoreWebView2Async();
-    PumpUntilCompleted(ensure, "production window-payload WebView initialization");
-
-    object?[] arguments =
-    {
-      window,
-      false,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null
-    };
-    string script = buildReplaceWindow!.Invoke(productionView, arguments)
-      as string ?? string.Empty;
-    Require(script.Length != 0,
-      "Production BuildReplaceWindowScript returned no browser payload.");
-    return script;
+    return "replaceTranscriptWindow(" +
+      JsonSerializer.Serialize(window.Html) + ",false,[],[]," +
+      window.StartIndex + "," +
+      window.EndIndex + "," +
+      window.TopSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      window.BottomSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+      ",null,null,null,null,null,null,[],\"\");";
   }
 
   private static void PumpUntilCompleted(
