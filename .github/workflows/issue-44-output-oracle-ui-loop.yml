@@ -16,6 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -45,4 +46,4 @@ jobs:
 
       - name: Validate whitespace
         shell: pwsh
-        run: git diff --check HEAD~2 HEAD
+        run: git diff --check f4d4a637f7ac26056f080d14d62bc2c69786e466 HEAD
