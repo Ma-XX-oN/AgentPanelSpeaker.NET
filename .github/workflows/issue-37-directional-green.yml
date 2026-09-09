@@ -1,9 +1,7 @@
 name: Issue 37 physical vwindow GREEN
 
 on:
-  push:
-    branches:
-      - issue-37-directional-prefetch-blank-viewport
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -37,7 +35,7 @@ jobs:
 
       - name: Stage production fix
         shell: pwsh
-        run: python tools/apply_issue37_directional_fix.py
+        run: python tools/apply_issue37_physical_window_fix.py
 
       - name: Validate patch integrity before tests
         shell: pwsh
@@ -76,9 +74,10 @@ jobs:
             'PASS  virtual-window/programmatic-playback-scroll-does-not-request-shift',
             'PASS  virtual-window/spacer-shift-restores-materialized-content',
             'PASS  virtual-window/directional-prefetch-follows-scroll-direction',
+            'PASS  virtual-window/manual-scroll-disables-follow-before-vwindow-shift',
             'PASS  virtual-window/physical-window-keeps-five-viewports-materialized',
             'PASS  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn',
-            'PASS: 7/7 issue #37 virtual-window tests passed.',
+            'PASS: 8/8 issue #37 virtual-window tests passed.',
             'TEST-SUITE-COMPLETE virtual-window exit=0'
           )) {
             if (-not $text.Contains($expected)) { throw "Missing GREEN evidence: $expected" }
@@ -147,4 +146,4 @@ jobs:
           if (git diff --cached --quiet) { throw 'Production fix produced no source change.' }
           git commit -m 'fix: use physical virtual-window geometry (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'GREEN-PROVEN issue-37 physical spacer/direction/voice-cursor fix committed.'
+          Write-Host 'GREEN-PROVEN issue-37 physical vwindow/follow fix committed.'
