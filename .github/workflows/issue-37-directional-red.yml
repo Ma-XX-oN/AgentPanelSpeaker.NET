@@ -71,14 +71,14 @@ jobs:
           if (-not $text.Contains('FAIL  virtual-window/directional-prefetch-follows-scroll-direction')) {
             throw 'Directional-prefetch regression did not fail RED.'
           }
-          if (-not $text.Contains('Downward scrolling requested the wrong virtual-window direction: scroll-up.')) {
+          if (-not $text.Contains('Upward scrolling near the lower prefetch boundary requested a competing scroll-down virtual-window shift.')) {
             throw 'Directional-prefetch regression failed for an unexpected reason.'
           }
           $failLines = @($output | Where-Object { $_ -match '^FAIL  ' })
           if ($failLines.Count -ne 2) {
             throw "Expected exactly 2 failing regressions, observed $($failLines.Count)."
           }
-          Write-Host 'RED-PROVEN issue-37 spacer recovery and directional prefetch failures reproduced.'
+          Write-Host 'RED-PROVEN issue-37 spacer recovery and direction-aware prefetch failures reproduced.'
 
       - name: Commit permanent RED regressions
         shell: pwsh
