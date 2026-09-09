@@ -335,7 +335,7 @@ internal sealed class TranscriptVirtualDocument
   private static bool IsHistoricalRevisionHtml(string html)
   {
     return html.Contains(
-        "data-revision-historical="true"",
+        "data-revision-historical=\"true\"",
         StringComparison.OrdinalIgnoreCase) ||
       html.Contains("revision-original", StringComparison.OrdinalIgnoreCase) ||
       html.Contains("revision-superseded", StringComparison.OrdinalIgnoreCase);
