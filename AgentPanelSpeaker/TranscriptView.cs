@@ -659,7 +659,9 @@ internal sealed class TranscriptView : UserControl
       _identities = payload.Identities;
       _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
-      TranscriptWindow window = payload.Document.CreateFullWindow();
+      TranscriptWindow window = SelectInitialPresentationWindow(
+        payload.Document,
+        focalIndex);
       TranscriptStructureSnapshot virtualStructure =
         TranscriptStructureProbe.CaptureHtml(
           structureProbeId,
@@ -1706,6 +1708,18 @@ internal sealed class TranscriptView : UserControl
       TryResolvePositionIndex(document, identities, position, out int index)
         ? index
         : Math.Max(0, document.Count - 1);
+  }
+
+  /// <summary>
+  /// Selects the transcript materialization used for the first visual
+  /// presentation. Kept as a narrow production seam so the large-transcript
+  /// regression exercises the exact initial-window policy.
+  /// </summary>
+  internal static TranscriptWindow SelectInitialPresentationWindow(
+    TranscriptVirtualDocument document,
+    int focalIndex)
+  {
+    return document.CreateFullWindow();
   }
 
   private static bool TryResolvePositionIndex(

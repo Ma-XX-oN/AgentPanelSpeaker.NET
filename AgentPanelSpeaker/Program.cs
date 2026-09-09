@@ -114,6 +114,13 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "large-transcript-windowing", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue37LargeTranscriptRegressionTestRunner.Run();
+        return;
+      }
+
       if (args.Length == 2)
       {
         Environment.ExitCode = RegressionTestRunner.Run(args[1]);
