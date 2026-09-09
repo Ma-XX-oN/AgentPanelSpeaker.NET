@@ -1,0 +1,54 @@
+name: Issue 37 convergence RED
+
+on:
+  push:
+    branches:
+      - issue-37-vwindow-convergence-containment
+    paths:
+      - '.github/workflows/issue-37-convergence-red.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-37-vwindow-convergence-containment
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build RED implementation
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Require virtual-window oracle to reproduce known defects
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'red-out.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'red-err.txt'
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','virtual-window' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $text = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
+          Write-Host $text
+          if ($p.ExitCode -eq 0) { throw 'Expected issue #37 virtual-window regressions to be RED before production fix.' }
+          if ($text -notmatch 'single-anchor-details-is-atomic') { throw 'Containment regression did not run.' }
+          if ($text -notmatch 'browser-is-bounded-convergent-and-diagnostics-are-bounded') { throw 'Convergence/diagnostic regression did not run.' }
+          if ($text -notmatch 'TEST-SUITE-COMPLETE virtual-window exit=1') { throw 'RED suite did not reach completion sentinel.' }
