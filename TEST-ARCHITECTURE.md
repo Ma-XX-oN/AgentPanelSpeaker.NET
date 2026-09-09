@@ -74,8 +74,10 @@ RED even if the launcher observes a zero exit code.
 
 ## UI test lifetime
 
-Acceptance tests that create a `MainForm` must close it through the real
-`FormClosing` lifecycle before disposal.  `MainForm` registers application-wide
-message/system-event hooks and detaches them in that close path.  Directly
-calling `Dispose()` is not an equivalent test environment and can contaminate a
-later UI test in the same process.
+Acceptance tests that create a `MainForm` must run its production
+`MainFormClosing` cleanup path before disposal.  `MainForm` registers
+application-wide message/system-event hooks and detaches them in that cleanup.
+The test lease invokes that production handler with the noninteractive Windows
+shutdown close reason so a save-settings dialog cannot block unattended CI.
+Directly calling `Dispose()` is not equivalent and can contaminate a later UI
+test in the same process.
