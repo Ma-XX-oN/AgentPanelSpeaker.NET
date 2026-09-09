@@ -2,6 +2,11 @@ name: Issue 37 physical vwindow GREEN
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - issue-37-directional-prefetch-blank-viewport
+    paths:
+      - 'tools/issue37_physical_green_launch.txt'
 
 permissions:
   contents: write
