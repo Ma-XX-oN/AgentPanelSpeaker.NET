@@ -211,7 +211,8 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       string path = Path.Combine(root, "fixture.jsonl");
       File.WriteAllText(path, BuildRevisionJsonl());
 
-      using var form = CreateOffscreenMainForm();
+      using var formLease = CreateOffscreenMainForm();
+      MainForm form = formLease.Form;
       ConfigureMainFormSession(form, path);
       TranscriptView view = ReadField<TranscriptView>(form, "_transcriptView");
       TranscriptSettingsPopup popup =
@@ -321,7 +322,8 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       string path = Path.Combine(root, "fixture.jsonl");
       File.WriteAllText(path, BuildUserContextJsonl());
 
-      using var form = CreateOffscreenMainForm();
+      using var formLease = CreateOffscreenMainForm();
+      MainForm form = formLease.Form;
       ConfigureMainFormSession(form, path);
       TranscriptSettingsPopup popup =
         ReadField<TranscriptSettingsPopup>(form, "_transcriptSettingsPopup");
@@ -424,17 +426,9 @@ internal static class Issue46IndependentRegressionOracleTestRunner
     };
   }
 
-  private static MainForm CreateOffscreenMainForm()
+  private static MainFormTestLease CreateOffscreenMainForm()
   {
-    var form = new MainForm
-    {
-      ShowInTaskbar = false,
-      StartPosition = FormStartPosition.Manual,
-      Location = new Point(-32000, -32000)
-    };
-    form.Show();
-    _ = form.Handle;
-    return form;
+    return new MainFormTestLease();
   }
 
   private static void ConfigureMainFormSession(MainForm form, string path)
