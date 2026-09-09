@@ -635,7 +635,8 @@ internal sealed class TranscriptView : UserControl
           html,
           identities,
           token);
-        TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
+        TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
+          presentation.Units);
         document.SetShowRolledBackHistory(
           _settings.ShowRolledBackHistory);
         document.SetLayoutGeneration(_layoutGeneration);

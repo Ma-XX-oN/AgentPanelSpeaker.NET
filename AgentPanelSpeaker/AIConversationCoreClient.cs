@@ -49,7 +49,7 @@ internal sealed record AIConversationCoreSessionDiagnostics(
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "7eb7f4fca630aa0a132e93799e878120aaf353b9";
+    "6c92799c1b14693001e8b913465f4a12b0b1e1ab";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
@@ -575,7 +575,9 @@ internal sealed record AIConversationProjection(
     AIConversationPresentation? Presentation,
   [property: JsonPropertyName("markdown")] string Markdown,
   [property: JsonPropertyName("session_metadata")]
-    AIConversationSessionMetadata? SessionMetadata = null);
+    AIConversationSessionMetadata? SessionMetadata = null,
+  [property: JsonPropertyName("html_units")]
+    CanonicalHtmlUnitProjection[]? HtmlUnits = null);
 
 /// <summary>
 /// Provider session metadata resolved by AIConversationCore.

@@ -256,10 +256,10 @@ internal sealed class TranscriptSearchIndex
           request.Query,
           request.CaseSensitive,
           request.WholeWord,
-          cancellationToken)
+          cancellationToken).ConfigureAwait(false)
       : await Task.Run(
           () => FindLiteral(records, request, cancellationToken),
-          cancellationToken);
+          cancellationToken).ConfigureAwait(false);
     return MapMatches(raw, records);
   }
 
