@@ -1,0 +1,295 @@
+name: Issue 37 selective materialization final validation
+
+on:
+  push:
+    branches:
+      - issue-37-selective-word-materialization-final
+    paths:
+      - '.github/workflows/issue-37-final-validation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out final issue branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-37-selective-word-materialization-final
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Isolate WebView acceptance cases by process
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          test_path = Path('AgentPanelSpeaker/Issue37WordMaterializationRegressionTestRunner.cs')
+          test = test_path.read_text(encoding='utf-8')
+          old = '''  /// <summary>
+            /// Runs the issue #37 selective-word-materialization acceptance suite.
+            /// </summary>
+            /// <returns>Zero when every independent browser oracle passes.</returns>
+            public static int Run()
+            {
+              var tests = new (string Name, Action Body)[]
+              {
+                ("virtual-window/unvoiced-content-is-not-eagerly-wrapped",
+                  TestUnvoicedContentIsNotEagerlyWrapped),
+                ("virtual-window/unvoiced-find-result-materializes-on-demand",
+                  TestUnvoicedFindResultMaterializesOnDemand)
+              };
+
+              int failures = 0;
+              Console.WriteLine();
+              Console.WriteLine(
+                $"Issue #37 word-materialization acceptance suite: {tests.Length} tests");
+              foreach ((string name, Action body) in tests)
+              {
+                try
+                {
+                  body();
+                  Console.WriteLine($"PASS  {name}");
+                }
+                catch (Exception exception)
+                {
+                  ++failures;
+                  Console.WriteLine($"FAIL  {name}");
+                  Console.WriteLine(
+                    $"      {exception.GetType().Name}: {exception.Message}");
+                }
+              }
+
+              Console.WriteLine();
+              Console.WriteLine(failures == 0
+                ? $"PASS: {tests.Length}/{tests.Length} issue #37 word-materialization tests passed."
+                : $"FAIL: {failures}/{tests.Length} issue #37 word-materialization tests failed.");
+              return failures == 0 ? 0 : 1;
+            }
+          '''
+          new = '''  /// <summary>
+            /// Runs the eager selective-materialization acceptance case.
+            /// </summary>
+            public static int RunEager()
+            {
+              return RunTests(
+                "eager",
+                new[]
+                {
+                  ("virtual-window/unvoiced-content-is-not-eagerly-wrapped",
+                    (Action)TestUnvoicedContentIsNotEagerlyWrapped)
+                });
+            }
+
+            /// <summary>
+            /// Runs the lazy Find materialization acceptance case.
+            /// </summary>
+            public static int RunFind()
+            {
+              return RunTests(
+                "find",
+                new[]
+                {
+                  ("virtual-window/unvoiced-find-result-materializes-on-demand",
+                    (Action)TestUnvoicedFindResultMaterializesOnDemand)
+                });
+            }
+
+            private static int RunTests(
+              string suite,
+              IReadOnlyList<(string Name, Action Body)> tests)
+            {
+              int failures = 0;
+              Console.WriteLine();
+              Console.WriteLine(
+                $"Issue #37 word-materialization {suite} suite: {tests.Count} test");
+              foreach ((string name, Action body) in tests)
+              {
+                try
+                {
+                  body();
+                  Console.WriteLine($"PASS  {name}");
+                }
+                catch (Exception exception)
+                {
+                  ++failures;
+                  Console.WriteLine($"FAIL  {name}");
+                  Console.WriteLine(
+                    $"      {exception.GetType().Name}: {exception.Message}");
+                }
+              }
+
+              Console.WriteLine();
+              Console.WriteLine(failures == 0
+                ? $"PASS: {tests.Count}/{tests.Count} issue #37 {suite} test passed."
+                : $"FAIL: {failures}/{tests.Count} issue #37 {suite} test failed.");
+              return failures == 0 ? 0 : 1;
+            }
+          '''
+          if test.count(old) != 1:
+            raise SystemExit(f'test runner block count={test.count(old)}')
+          test = test.replace(old, new, 1)
+          test_path.write_text(test, encoding='utf-8')
+
+          program_path = Path('AgentPanelSpeaker/Program.cs')
+          program = program_path.read_text(encoding='utf-8')
+          old_program = '''      if (args.Length == 2 &&
+                string.Equals(args[1], "word-materialization", StringComparison.OrdinalIgnoreCase))
+            {
+              Environment.ExitCode = RunNamedSuite(
+                "word-materialization",
+                () => RunWithWinFormsMessageLoop(
+                  Issue37WordMaterializationRegressionTestRunner.Run));
+              return;
+            }
+          '''
+          new_program = '''      if (args.Length == 2 &&
+                string.Equals(args[1], "word-materialization-eager", StringComparison.OrdinalIgnoreCase))
+            {
+              Environment.ExitCode = RunNamedSuite(
+                "word-materialization-eager",
+                () => RunWithWinFormsMessageLoop(
+                  Issue37WordMaterializationRegressionTestRunner.RunEager));
+              return;
+            }
+
+            if (args.Length == 2 &&
+                string.Equals(args[1], "word-materialization-find", StringComparison.OrdinalIgnoreCase))
+            {
+              Environment.ExitCode = RunNamedSuite(
+                "word-materialization-find",
+                () => RunWithWinFormsMessageLoop(
+                  Issue37WordMaterializationRegressionTestRunner.RunFind));
+              return;
+            }
+
+            if (args.Length == 2 &&
+                string.Equals(args[1], "word-materialization", StringComparison.OrdinalIgnoreCase))
+            {
+              Environment.ExitCode = RunNamedSuite("word-materialization", () =>
+              {
+                int eager = RunIsolatedTestSuite("word-materialization-eager");
+                int find = RunIsolatedTestSuite("word-materialization-find");
+                return eager == 0 && find == 0 ? 0 : 1;
+              });
+              return;
+            }
+          '''
+          if program.count(old_program) != 1:
+            raise SystemExit(f'Program word suite block count={program.count(old_program)}')
+          program = program.replace(old_program, new_program, 1)
+          program_path.write_text(program, encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git config user.name 'Ma-XX-oN'
+          git config user.email 'Ma-XX-oN@users.noreply.github.com'
+          git add AgentPanelSpeaker/Program.cs AgentPanelSpeaker/Issue37WordMaterializationRegressionTestRunner.cs
+          git commit -m 'test: isolate issue 37 WebView materialization oracles (#37)'
+          git push origin HEAD:issue-37-selective-word-materialization-final
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build final production implementation
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Require final selective materialization GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
+
+      - name: Prove same eager oracle RED on pre-fix production
+        shell: pwsh
+        run: |
+          $oldRoot = Join-Path $env:RUNNER_TEMP 'issue37-prefx'
+          git worktree add --detach $oldRoot 5cd3e89da20c091afed637661381765ee202bb2d
+          Copy-Item AgentPanelSpeaker\Issue37WordMaterializationRegressionTestRunner.cs (Join-Path $oldRoot 'AgentPanelSpeaker\Issue37WordMaterializationRegressionTestRunner.cs') -Force
+          Copy-Item AgentPanelSpeaker\Program.cs (Join-Path $oldRoot 'AgentPanelSpeaker\Program.cs') -Force
+          git -C $oldRoot submodule update --init --recursive
+          npm ci --prefix (Join-Path $oldRoot 'dependencies\AIConversationCore') --no-audit --no-fund
+          dotnet build (Join-Path $oldRoot 'AgentPanelSpeaker\AgentPanelSpeaker.csproj') --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Pre-fix RED build failed.' }
+          $exe = Join-Path $oldRoot 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue37-prefx-red-out.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue37-prefx-red-err.txt'
+          $process = Start-Process -FilePath $exe -ArgumentList '--test','word-materialization-eager' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $text = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
+          Write-Host $text
+          if ($process.ExitCode -eq 0) { throw 'Pre-fix eager oracle unexpectedly passed.' }
+          if ($text -notmatch 'Large unvoiced record was eagerly expanded into word spans') {
+            throw 'Pre-fix eager oracle failed for the wrong reason.'
+          }
+          if ($text -notmatch 'TEST-SUITE-COMPLETE word-materialization-eager exit=1') {
+            throw 'Pre-fix eager oracle did not reach its completion sentinel.'
+          }
+
+      - name: Require initial vwindow and independent semantic oracles GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite output-oracle
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite independent-oracles
+
+      - name: Run pinned Core suite
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Run complete built AgentPanelSpeaker suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and run complete deployed suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate whitespace and branch diff
+        shell: pwsh
+        run: |
+          git fetch origin feature/aiconversationcore-integration --depth=1
+          git diff --check FETCH_HEAD HEAD
+
+      - name: Remove all temporary issue 37 word workflows
+        if: success()
+        shell: pwsh
+        run: |
+          Get-ChildItem .github/workflows -Filter 'issue-37-word-materialization-*.yml' -ErrorAction SilentlyContinue | Remove-Item
+          Remove-Item .github/workflows/issue-37-final-validation.yml
+          git add -A
+          git commit -m 'chore: remove issue 37 selective-materialization validation workflows'
+          git push origin HEAD:issue-37-selective-word-materialization-final
