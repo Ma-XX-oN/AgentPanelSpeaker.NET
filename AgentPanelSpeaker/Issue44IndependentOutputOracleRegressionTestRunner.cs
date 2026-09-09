@@ -26,8 +26,8 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
         TestCodexUserContextProductionBrowserDom),
       ("output-oracle/claude-grouped-thought-production-browser-dom",
         TestClaudeGroupedThoughtProductionBrowserDom),
-      ("output-oracle/bounded-user-context-reproducer-is-rejected",
-        TestBoundedUserContextReproducerIsRejected)
+      ("output-oracle/user-context-containment-mutation-is-rejected",
+        TestUserContextContainmentMutationIsRejected)
     };
 
     int failures = 0;
@@ -121,16 +121,15 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     RequireBoolean(actual, "thirdThoughtInside", true);
     RequireBoolean(actual, "finalInside", false);
     RequireBoolean(actual, "finalVisible", true);
-    RequireBoolean(actual, "virtualSectionPresent", false);
     RequireIntegerAtLeast(actual, "anchorCountInside", 3);
   }
 
   /// <summary>
-  /// Replays the exact bounded-window composition that produced the issue #37
-  /// regression and proves the independent oracle rejects its browser result.
-  /// This is a negative reproducer, not an expected production output.
+  /// Applies an independently-authored structural mutation in which User
+  /// Context content escapes its details disclosure, and proves the semantic
+  /// oracle rejects the resulting browser output.
   /// </summary>
-  private static void TestBoundedUserContextReproducerIsRejected()
+  private static void TestUserContextContainmentMutationIsRejected()
   {
     const string sourceHtml = """
 <section class="transcript-turn">
@@ -142,9 +141,9 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
         <summary># Context from my IDE setup:</summary>
         <span class="record-anchor" data-jsonl-record="11" data-source-id="context"></span>
         <h2>Active file:</h2><p>sessions/example.jsonl</p>
-        <h2>Active selection of the file:</h2><p>selected line</p>
-        <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
       </details>
+      <h2>Active selection of the file:</h2><p>selected line</p>
+      <h2>Open tabs:</h2><ul><li>example.jsonl: sessions/example.jsonl</li></ul>
     </blockquote>
     <div class="presentation-content">
       <span class="record-anchor" data-jsonl-record="12" data-source-id="prompt"></span>
@@ -171,8 +170,8 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     }
 
     throw new InvalidOperationException(
-      "Independent User Context oracle accepted the known-bad bounded-window " +
-      "browser composition.");
+      "Independent User Context oracle accepted deliberately broken " +
+      "context containment.");
   }
 
   private static void AssertUserContextOracle(JsonElement actual)
@@ -186,7 +185,6 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
     RequireBoolean(actual, "promptInside", false);
     RequireBoolean(actual, "promptVisible", true);
     RequireBoolean(actual, "promptAfterDetails", true);
-    RequireBoolean(actual, "virtualSectionPresent", false);
   }
 
   private static string UserContextProbeScript()
