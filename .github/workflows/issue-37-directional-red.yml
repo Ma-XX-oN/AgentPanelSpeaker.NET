@@ -1,0 +1,90 @@
+name: Issue 37 directional vwindow RED
+
+on:
+  push:
+    branches:
+      - issue-37-directional-prefetch-blank-viewport
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Stage exact production regressions
+        shell: pwsh
+        run: python tools/apply_issue37_directional_regressions.py
+
+      - name: Validate staged test patch
+        shell: pwsh
+        run: git diff --check
+
+      - name: Build AgentPanelSpeaker Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact regressions RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window 2>&1
+          $exit = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          $text = $output -join "`n"
+          if ($exit -eq 0) { throw 'Expected the new #37 regressions to fail before production changes.' }
+          foreach ($pass in @(
+            'PASS  virtual-window/core-single-anchor-user-context-unit-is-preserved',
+            'PASS  virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded',
+            'PASS  virtual-window/programmatic-playback-scroll-does-not-request-shift'
+          )) {
+            if (-not $text.Contains($pass)) { throw "Existing GREEN regression did not stay GREEN: $pass" }
+          }
+          if (-not $text.Contains('FAIL  virtual-window/spacer-shift-restores-materialized-content')) {
+            throw 'Spacer-recovery regression did not fail RED.'
+          }
+          if (-not $text.Contains('Completed virtual-window shift left the viewport wholly in synthetic spacer')) {
+            throw 'Spacer-recovery regression failed for an unexpected reason.'
+          }
+          if (-not $text.Contains('FAIL  virtual-window/directional-prefetch-follows-scroll-direction')) {
+            throw 'Directional-prefetch regression did not fail RED.'
+          }
+          if (-not $text.Contains('Downward scrolling requested the wrong virtual-window direction: scroll-up.')) {
+            throw 'Directional-prefetch regression failed for an unexpected reason.'
+          }
+          $failLines = @($output | Where-Object { $_ -match '^FAIL  ' })
+          if ($failLines.Count -ne 2) {
+            throw "Expected exactly 2 failing regressions, observed $($failLines.Count)."
+          }
+          Write-Host 'RED-PROVEN issue-37 spacer recovery and directional prefetch failures reproduced.'
+
+      - name: Commit permanent RED regressions
+        shell: pwsh
+        run: |
+          git config user.name 'chatgpt-codex-connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
+          if (git diff --cached --quiet) { throw 'Regression patch produced no source change.' }
+          git commit -m 'test: reproduce #37 spacer and directional vwindow failures [skip ci]'
+          git push origin HEAD:issue-37-directional-prefetch-blank-viewport
+          Write-Host 'RED regressions committed after exact failure proof.'
