@@ -15,6 +15,8 @@ internal static class Issue37VirtualWindowRegressionTestRunner
 {
   private const int PairCount = 120;
   private const int SourceRecordCount = PairCount * 2;
+  private const double MinimumWindowViewportHeights = 5.0;
+  private const double EdgeTriggerViewportHeights = 2.0;
 
   /// <summary>
   /// Runs the issue #37 virtual-window acceptance suite.
@@ -29,7 +31,17 @@ internal static class Issue37VirtualWindowRegressionTestRunner
       ("virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded",
         TestBrowserWindowBehaviour),
       ("virtual-window/programmatic-playback-scroll-does-not-request-shift",
-        TestProgrammaticPlaybackScrollDoesNotRequestShift)
+        TestProgrammaticPlaybackScrollDoesNotRequestShift),
+      ("virtual-window/spacer-shift-restores-materialized-content",
+        TestSpacerShiftRestoresMaterializedContent),
+      ("virtual-window/directional-prefetch-follows-scroll-direction",
+        TestDirectionalPrefetchFollowsScrollDirection),
+      ("virtual-window/manual-scroll-disables-follow-before-vwindow-shift",
+        TestManualScrollDisablesFollowBeforeVirtualShift),
+      ("virtual-window/physical-window-keeps-five-viewports-materialized",
+        TestPhysicalWindowKeepsFiveViewportsMaterialized),
+      ("virtual-window/playback-voice-cursor-prefetches-inside-tall-turn",
+        TestPlaybackVoiceCursorPrefetchesInsideTallTurn)
     };
 
     int failures = 0;
@@ -486,6 +498,868 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
     }
   }
 
+  /// <summary>
+  /// Reproduces the real-machine blank-viewport failure.  A fast manual scroll
+  /// can enter the synthetic spacer before the next virtual window is ready.
+  /// Once that shift completes, the browser viewport must intersect actual
+  /// materialized transcript records rather than remain wholly in the spacer.
+  /// </summary>
+  private static void TestSpacerShiftRestoresMaterializedContent()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-spacer-recovery-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "rollout-issue37-spacer-recovery.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var form = new Form
+      {
+        Width = 900,
+        Height = 700,
+        ShowInTaskbar = false,
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      form.Controls.Add(view);
+      form.Show();
+      Application.DoEvents();
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => webView.CoreWebView2 is not null,
+        "WebView2 core initialization for spacer recovery regression");
+
+      view.SelectSession(
+        path,
+        AgentSource.Codex,
+        "Issue 37 spacer recovery fixture");
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") > 0 &&
+          ReadField<int>(view, "_windowEndIndex") >=
+            ReadField<int>(view, "_windowStartIndex") &&
+          webView.Visible,
+        "initial trailing virtual window for spacer recovery regression");
+
+      int initialStart = ReadField<int>(view, "_windowStartIndex");
+      int initialEnd = ReadField<int>(view, "_windowEndIndex");
+      PumpMessages(600);
+
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollTo(0, 0);");
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") != initialStart ||
+          ReadField<int>(view, "_windowEndIndex") != initialEnd,
+        "spacer scroll to install a predecessor virtual window",
+        timeoutMilliseconds: 5000);
+      PumpMessages(250);
+
+      JsonElement probe = ExecuteJsonProbe(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const intersecting = records.filter(record => {
+    const rect = record.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
+  const topSpacer = document.querySelector(
+    '.virtual-spacer[data-virtual-spacer="top"]');
+  return JSON.stringify({
+    intersectingRecordCount: intersecting.length,
+    scrollY: window.scrollY,
+    innerHeight: window.innerHeight,
+    topSpacerHeight: topSpacer?.getBoundingClientRect().height ?? 0,
+    firstRecordTop: records.length
+      ? records[0].getBoundingClientRect().top
+      : null,
+    lastRecordBottom: records.length
+      ? records[records.length - 1].getBoundingClientRect().bottom
+      : null
+  });
+})()
+""");
+
+      int intersectingRecordCount =
+        probe.GetProperty("intersectingRecordCount").GetInt32();
+      Require(
+        intersectingRecordCount > 0,
+        "Completed virtual-window shift left the viewport wholly in synthetic " +
+        "spacer instead of restoring materialized transcript content. " +
+        $"scrollY={probe.GetProperty("scrollY").GetDouble():F1}, " +
+        $"topSpacerHeight={probe.GetProperty("topSpacerHeight").GetDouble():F1}.");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Manual virtualization must follow the user's actual scroll direction and
+  /// prefetch before the viewport crosses into synthetic spacer.  The current
+  /// window can be smaller than the historical 20-record threshold, so record
+  /// index bands are not a valid direction detector.
+  /// </summary>
+  private static void TestDirectionalPrefetchFollowsScrollDirection()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-directional-prefetch-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "rollout-issue37-directional-prefetch.jsonl");
+    WriteDirectionalFixture(path);
+
+    try
+    {
+      using var form = new Form
+      {
+        Width = 900,
+        Height = 700,
+        ShowInTaskbar = false,
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      form.Controls.Add(view);
+      form.Show();
+      Application.DoEvents();
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => webView.CoreWebView2 is not null,
+        "WebView2 core initialization for directional prefetch regression");
+
+      var windowShiftReasons = new List<string>();
+      webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+      {
+        try
+        {
+          using JsonDocument message = JsonDocument.Parse(
+            eventArgs.WebMessageAsJson);
+          JsonElement rootElement = message.RootElement;
+          if (!rootElement.TryGetProperty("type", out JsonElement typeElement) ||
+              typeElement.ValueKind != JsonValueKind.String ||
+              typeElement.GetString() != "window-shift")
+          {
+            return;
+          }
+          windowShiftReasons.Add(
+            rootElement.TryGetProperty("reason", out JsonElement reasonElement) &&
+            reasonElement.ValueKind == JsonValueKind.String
+              ? reasonElement.GetString() ?? string.Empty
+              : string.Empty);
+        }
+        catch (JsonException)
+        {
+          // Production owns malformed-message handling.  This observer records
+          // only well-formed window-shift direction requests.
+        }
+      };
+
+      view.SelectSession(
+        path,
+        AgentSource.Codex,
+        "Issue 37 directional prefetch fixture");
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") >= 0 &&
+          ReadField<int>(view, "_windowEndIndex") >=
+            ReadField<int>(view, "_windowStartIndex") &&
+          webView.Visible,
+        "initial virtual window for directional prefetch regression");
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int middleIndex = document.Count / 2;
+      Task middleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        middleIndex,
+        "test-precondition",
+        null,
+        string.Empty,
+        null);
+      PumpUntilCompleted(
+        middleWindow,
+        "middle virtual-window precondition for directional prefetch");
+      Require(
+        ReadField<int>(view, "_windowStartIndex") > 0 &&
+        ReadField<int>(view, "_windowEndIndex") < document.Count - 1,
+        "Directional prefetch precondition did not leave unloaded content " +
+        "on both sides of the materialized window.");
+
+      JsonElement positioned = ExecuteJsonProbe(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const last = records[records.length - 1];
+  const bottomSpacer = document.querySelector(
+    '.virtual-spacer[data-virtual-spacer="bottom"]');
+  programmaticScrollUntil = performance.now() + 500;
+  const desiredBottom = window.innerHeight * 1.25;
+  const delta = last.getBoundingClientRect().bottom - desiredBottom;
+  window.scrollBy(0, delta);
+  return JSON.stringify({
+    recordCount: records.length,
+    bottomSpacerHeight: bottomSpacer?.getBoundingClientRect().height ?? 0,
+    innerHeight: window.innerHeight
+  });
+})()
+""");
+      Require(
+        positioned.GetProperty("recordCount").GetInt32() > 0,
+        "Directional prefetch fixture has no materialized records.");
+      Require(
+        positioned.GetProperty("bottomSpacerHeight").GetDouble() > 0,
+        "Directional prefetch precondition has no unloaded content below.");
+      PumpMessages(650);
+
+      JsonElement beforeDown = ExecuteJsonProbe(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const last = records[records.length - 1];
+  const intersecting = records.filter(record => {
+    const rect = record.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  }).length;
+  return JSON.stringify({
+    intersecting,
+    lastBottom: last.getBoundingClientRect().bottom,
+    innerHeight: window.innerHeight
+  });
+})()
+""");
+      Require(
+        beforeDown.GetProperty("intersecting").GetInt32() > 0,
+        "Downward prefetch test started after materialized content was already lost.");
+      Require(
+        beforeDown.GetProperty("lastBottom").GetDouble() >
+          beforeDown.GetProperty("innerHeight").GetDouble() + 80,
+        "Downward prefetch test did not retain visible materialized margin.");
+
+      int shiftsBeforeReverse = windowShiftReasons.Count;
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollBy(0, -80);");
+      PumpMessages(300);
+      string[] reverseReasons = windowShiftReasons
+        .Skip(shiftsBeforeReverse)
+        .ToArray();
+      Require(
+        !reverseReasons.Any(reason => reason == "scroll-down"),
+        "Upward scrolling near the lower prefetch boundary requested a " +
+        "competing scroll-down virtual-window shift.");
+
+      int shiftsBeforeDown = windowShiftReasons.Count;
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollBy(0, 160);");
+      PumpUntil(
+        () => windowShiftReasons.Count > shiftsBeforeDown,
+        "downward scroll to request predictive virtual-window movement",
+        timeoutMilliseconds: 5000);
+      string downwardReason = windowShiftReasons[shiftsBeforeDown];
+      Require(
+        string.Equals(downwardReason, "scroll-down", StringComparison.Ordinal),
+        "Downward scrolling did not request a downward prefetch: " +
+        downwardReason + ".");
+
+      PumpUntil(
+        () => !ReadBrowserBoolean(webView, "virtualShiftPending"),
+        "downward virtual-window request to settle",
+        timeoutMilliseconds: 5000);
+
+      Task resetMiddleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        middleIndex,
+        "test-precondition",
+        null,
+        string.Empty,
+        null);
+      PumpUntilCompleted(
+        resetMiddleWindow,
+        "middle virtual-window reset before upward prefetch");
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const first = records[0];
+  programmaticScrollUntil = performance.now() + 500;
+  const desiredTop = -window.innerHeight * 0.25;
+  const delta = first.getBoundingClientRect().top - desiredTop;
+  window.scrollBy(0, delta);
+})()
+""");
+      PumpMessages(650);
+
+      int shiftsBeforeUp = windowShiftReasons.Count;
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollBy(0, -80);");
+      PumpUntil(
+        () => windowShiftReasons.Count > shiftsBeforeUp,
+        "upward scroll to request predictive virtual-window movement",
+        timeoutMilliseconds: 5000);
+      string upwardReason = windowShiftReasons[shiftsBeforeUp];
+      Require(
+        string.Equals(upwardReason, "scroll-up", StringComparison.Ordinal),
+        "Upward scrolling requested the wrong virtual-window direction: " +
+        upwardReason + ".");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// A genuine user scroll has priority over speech following.  Follow mode
+  /// must be disabled before a vwindow replacement can mark its own anchor
+  /// restoration as programmatic; otherwise the delayed follow-off timer can
+  /// be suppressed and leave the UI claiming that speech is still followed.
+  /// </summary>
+  private static void TestManualScrollDisablesFollowBeforeVirtualShift()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-manual-follow-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "rollout-issue37-manual-follow.jsonl");
+    WriteDirectionalFixture(path);
+
+    try
+    {
+      using var form = new Form
+      {
+        Width = 900,
+        Height = 700,
+        ShowInTaskbar = false,
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      form.Controls.Add(view);
+      form.Show();
+      Application.DoEvents();
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => webView.CoreWebView2 is not null,
+        "WebView2 core initialization for manual-follow regression");
+
+      bool? notifiedFollowState = null;
+      view.FollowSpeechChanged += enabled => notifiedFollowState = enabled;
+      view.SelectSession(
+        path,
+        AgentSource.Codex,
+        "Issue 37 manual-follow fixture");
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") >= 0 &&
+          ReadField<int>(view, "_windowEndIndex") >=
+            ReadField<int>(view, "_windowStartIndex") &&
+          webView.Visible,
+        "initial manual-follow virtual window");
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int middleIndex = document.Count / 2;
+      Task middleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        middleIndex,
+        "test-precondition",
+        null,
+        string.Empty,
+        null);
+      PumpUntilCompleted(
+        middleWindow,
+        "middle manual-follow virtual-window precondition");
+      Require(
+        ReadField<int>(view, "_windowStartIndex") > 0 &&
+        ReadField<int>(view, "_windowEndIndex") < document.Count - 1,
+        "Manual-follow fixture did not retain unloaded content on both sides.");
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const last = records[records.length - 1];
+  programmaticScrollUntil = performance.now() + 500;
+  const desiredBottom = window.innerHeight * 1.25;
+  const delta = last.getBoundingClientRect().bottom - desiredBottom;
+  window.scrollBy(0, delta);
+})()
+""");
+      PumpMessages(650);
+      Require(
+        ReadBrowserBoolean(webView, "followSpeech"),
+        "Manual-follow precondition unexpectedly disabled Follow mode.");
+
+      int beforeStart = ReadField<int>(view, "_windowStartIndex");
+      int beforeEnd = ReadField<int>(view, "_windowEndIndex");
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  programmaticScrollUntil = performance.now() + 2000;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: 160,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollBy(0, 160);
+})()
+""");
+
+      PumpUntil(
+        () => notifiedFollowState == false,
+        "manual wheel input to override the active programmatic-scroll guard",
+        timeoutMilliseconds: 1000);
+      Require(
+        !ReadBrowserBoolean(webView, "followSpeech"),
+        "Manual user scrolling during an active programmatic-scroll guard " +
+        "did not disable Follow mode.");
+
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") != beforeStart ||
+          ReadField<int>(view, "_windowEndIndex") != beforeEnd,
+        "manual scroll to move the virtual window after disabling Follow",
+        timeoutMilliseconds: 5000);
+      PumpMessages(300);
+
+      Require(
+        notifiedFollowState == false,
+        "Manual user scrolling did not emit FollowSpeechChanged(false) before " +
+        "the vwindow replacement completed.");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// The materialized browser window is sized in physical viewport heights,
+  /// not record/turn count.  A normal compact transcript must retain at least
+  /// the configured five viewport heights when unloaded content exists on both
+  /// sides, without manufacturing giant turns to influence the result.
+  /// </summary>
+  private static void TestPhysicalWindowKeepsFiveViewportsMaterialized()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-physical-window-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "rollout-issue37-physical-window.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var form = new Form
+      {
+        Width = 900,
+        Height = 700,
+        ShowInTaskbar = false,
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      form.Controls.Add(view);
+      form.Show();
+      Application.DoEvents();
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => webView.CoreWebView2 is not null,
+        "WebView2 core initialization for physical-window regression");
+      view.SelectSession(
+        path,
+        AgentSource.Codex,
+        "Issue 37 physical-window fixture");
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") >= 0 &&
+          webView.Visible,
+        "initial physical virtual window");
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      Task middleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        document.Count / 2,
+        "test-precondition",
+        null,
+        string.Empty,
+        null);
+      PumpUntilCompleted(middleWindow, "middle physical virtual window");
+      // Let the browser's natural-height measurements reach the virtual
+      // document, then ask for the same focal window again.  A physical-window
+      // implementation must use those measurements to avoid retaining an
+      // unnecessarily large record-count window.
+      PumpMessages(150);
+      Task measuredMiddleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        document.Count / 2,
+        "test-measured-refinement",
+        null,
+        string.Empty,
+        null);
+      PumpUntilCompleted(
+        measuredMiddleWindow,
+        "measured middle physical virtual window");
+      Require(
+        ReadField<int>(view, "_windowStartIndex") > 0 &&
+        ReadField<int>(view, "_windowEndIndex") < document.Count - 1,
+        "Physical-window fixture did not retain unloaded content on both sides.");
+
+      JsonElement probe = ExecuteJsonProbe(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const firstRecord = records[0];
+  const lastRecord = records[records.length - 1];
+  const first = firstRecord?.getBoundingClientRect();
+  const last = lastRecord?.getBoundingClientRect();
+  return JSON.stringify({
+    recordCount: records.length,
+    innerHeight: window.innerHeight,
+    materializedHeight: first && last ? last.bottom - first.top : 0,
+    firstHeight: first?.height ?? 0,
+    lastHeight: last?.height ?? 0,
+    firstIndex: Number(firstRecord?.dataset.virtualIndex ?? -1),
+    lastIndex: Number(lastRecord?.dataset.virtualIndex ?? -1)
+  });
+})()
+""");
+      double innerHeight = probe.GetProperty("innerHeight").GetDouble();
+      double materializedHeight =
+        probe.GetProperty("materializedHeight").GetDouble();
+      double targetHeight = innerHeight * MinimumWindowViewportHeights;
+      Require(
+        materializedHeight >= targetHeight,
+        "Materialized vwindow is shorter than the required physical minimum: " +
+        $"height={materializedHeight:F1}, viewport={innerHeight:F1}, " +
+        $"minimumViewports={MinimumWindowViewportHeights:F1}.");
+
+      int focalIndex = document.Count / 2;
+      int firstIndex = probe.GetProperty("firstIndex").GetInt32();
+      int lastIndex = probe.GetProperty("lastIndex").GetInt32();
+      double firstHeight = probe.GetProperty("firstHeight").GetDouble();
+      double lastHeight = probe.GetProperty("lastHeight").GetDouble();
+      if (firstIndex < focalIndex)
+      {
+        Require(
+          materializedHeight - firstHeight < targetHeight,
+          "Physical vwindow retains a removable leading unit after measured " +
+          "heights are known; this unnecessarily increases render work. " +
+          $"height={materializedHeight:F1}, firstHeight={firstHeight:F1}, " +
+          $"target={targetHeight:F1}.");
+      }
+      if (lastIndex > focalIndex)
+      {
+        Require(
+          materializedHeight - lastHeight < targetHeight,
+          "Physical vwindow retains a removable trailing unit after measured " +
+          "heights are known; this unnecessarily increases render work. " +
+          $"height={materializedHeight:F1}, lastHeight={lastHeight:F1}, " +
+          $"target={targetHeight:F1}.");
+      }
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Playback inside one physically tall turn must prefetch from the voice
+  /// cursor's vertical position.  Remaining inside the same virtual record is
+  /// not a reason to wait until the cursor reaches synthetic spacer.
+  /// </summary>
+  private static void TestPlaybackVoiceCursorPrefetchesInsideTallTurn()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-tall-turn-cursor-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "rollout-issue37-tall-turn-cursor.jsonl");
+    WriteTallTurnFixture(path);
+
+    try
+    {
+      using var form = new Form
+      {
+        Width = 900,
+        Height = 700,
+        ShowInTaskbar = false,
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      form.Controls.Add(view);
+      form.Show();
+      Application.DoEvents();
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => webView.CoreWebView2 is not null,
+        "WebView2 core initialization for tall-turn cursor regression");
+
+      var windowShiftReasons = new List<string>();
+      webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+      {
+        try
+        {
+          using JsonDocument message = JsonDocument.Parse(
+            eventArgs.WebMessageAsJson);
+          JsonElement rootElement = message.RootElement;
+          if (!rootElement.TryGetProperty("type", out JsonElement typeElement) ||
+              typeElement.ValueKind != JsonValueKind.String ||
+              typeElement.GetString() != "window-shift")
+          {
+            return;
+          }
+          if (rootElement.TryGetProperty("reason", out JsonElement reasonElement) &&
+              reasonElement.ValueKind == JsonValueKind.String)
+          {
+            windowShiftReasons.Add(reasonElement.GetString() ?? string.Empty);
+          }
+        }
+        catch (JsonException)
+        {
+          // Production owns malformed-message handling.
+        }
+      };
+
+      view.SelectSession(
+        path,
+        AgentSource.Codex,
+        "Issue 37 tall-turn cursor fixture");
+      PumpUntil(
+        () =>
+          ReadField<int>(view, "_windowStartIndex") >= 0 &&
+          webView.Visible,
+        "initial tall-turn virtual window");
+
+      IReadOnlyList<TranscriptNodeIdentity> identities =
+        ReadField<IReadOnlyList<TranscriptNodeIdentity>>(view, "_identities");
+      TranscriptNodeIdentity tallIdentity = identities.First(identity =>
+        identity.Segments.Any(segment => segment.Contains(
+          "Tall marker paragraph 001.",
+          StringComparison.Ordinal)));
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      Require(
+        document.TryGetIndex(
+          tallIdentity.RecordNumber,
+          tallIdentity.SourceId,
+          out int tallIndex),
+        "Tall playback turn is absent from the virtual document.");
+
+      int physicalStart = Math.Max(0, tallIndex - 1);
+      int physicalEnd = Math.Min(document.Count - 2, tallIndex + 1);
+      Require(
+        physicalStart < tallIndex &&
+        physicalEnd > tallIndex &&
+        physicalEnd < document.Count - 1,
+        "Tall-turn physical fixture could not retain materialized neighbours " +
+        "and unloaded content below the tall Core unit.");
+
+      TranscriptVirtualRecord[] physicalRecords = document.Records
+        .Skip(physicalStart)
+        .Take(physicalEnd - physicalStart + 1)
+        .ToArray();
+      string physicalHtml = string.Concat(
+        physicalRecords.Select((record, offset) =>
+          "<section class=\"virtual-record\" data-virtual-index=\"" +
+          (physicalStart + offset) + "\">" + record.Html + "</section>"));
+      double topSpacerHeight = document.Records
+        .Take(physicalStart)
+        .Sum(record => record.EstimatedHeight);
+      double bottomSpacerHeight = document.Records
+        .Skip(physicalEnd + 1)
+        .Sum(record => record.EstimatedHeight);
+      var physicalWindow = new TranscriptWindow(
+        physicalHtml,
+        physicalStart,
+        physicalEnd,
+        topSpacerHeight,
+        bottomSpacerHeight,
+        physicalRecords);
+
+      MethodInfo? buildWindowScript = typeof(TranscriptView).GetMethod(
+        "BuildReplaceWindowScript",
+        BindingFlags.Instance | BindingFlags.NonPublic);
+      Require(
+        buildWindowScript is not null,
+        "Could not access the production virtual-window replacement builder.");
+      string script = buildWindowScript!.Invoke(
+        view,
+        new object?[]
+        {
+          physicalWindow,
+          false,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        }) as string ?? string.Empty;
+      Require(
+        !string.IsNullOrWhiteSpace(script),
+        "Production virtual-window replacement builder returned no script.");
+      ExecuteVoidScript(webView, script);
+      SetField(view, "_windowStartIndex", physicalStart);
+      SetField(view, "_windowEndIndex", physicalEnd);
+      PumpMessages(250);
+
+      string fragment = tallIdentity.Segments.Last(segment =>
+        segment.Contains("Tall marker paragraph", StringComparison.Ordinal));
+      var matches = SpeechTokenization.Matches(fragment);
+      Require(matches.Count > 0, "Tall playback fragment contained no speech words.");
+      int wordIndex = matches.Count - 1;
+      string word = matches[wordIndex].Value;
+      string fragmentJson = JsonSerializer.Serialize(fragment);
+      string wordJson = JsonSerializer.Serialize(word);
+      string targetProbeScript =
+        "(() => {" +
+        "const fragment=" + fragmentJson + ";" +
+        "const wordText=" + wordJson + ";" +
+        $"const wordIndex={wordIndex};" +
+        $"const nodeId={tallIdentity.NodeId};" +
+        "const fragmentRange=findFragmentRange(fragment,nodeId);" +
+        "const boundaryRange=fragmentRange?" +
+          "findBoundaryRange(fragmentRange,wordText,wordIndex,true):null;" +
+        "const target=boundaryRange?words[boundaryRange.start]:null;" +
+        "const records=[...document.querySelectorAll('.virtual-record')];" +
+        "const first=records[0]?.getBoundingClientRect();" +
+        "const last=records[records.length-1]?.getBoundingClientRect();" +
+        "const targetRect=target?.getBoundingClientRect();" +
+        "const bottomSpacer=document.querySelector(" +
+          "'.virtual-spacer[data-virtual-spacer=\"bottom\"]');" +
+        "return JSON.stringify({" +
+          "targetFound:Boolean(target)," +
+          "innerHeight:window.innerHeight," +
+          "materializedHeight:first&&last?last.bottom-first.top:0," +
+          "cursorDistanceToBottom:targetRect&&last?" +
+            "last.bottom-targetRect.bottom:Number.MAX_SAFE_INTEGER," +
+          "bottomSpacerHeight:bottomSpacer?.getBoundingClientRect().height??0" +
+        "});" +
+        "})()";
+      JsonElement probe = ExecuteJsonProbe(webView, targetProbeScript);
+      Require(
+        probe.GetProperty("targetFound").GetBoolean(),
+        "Tall-turn speech map could not resolve the exact target word before playback.");
+      double innerHeight = probe.GetProperty("innerHeight").GetDouble();
+      double cursorDistanceToBottom =
+        probe.GetProperty("cursorDistanceToBottom").GetDouble();
+      Require(
+        probe.GetProperty("materializedHeight").GetDouble() >=
+          innerHeight * MinimumWindowViewportHeights,
+        "Tall-turn test window did not meet the physical minimum height.");
+      Require(
+        probe.GetProperty("bottomSpacerHeight").GetDouble() > 0,
+        "Tall-turn test has no unloaded content below the materialized window.");
+      Require(
+        cursorDistanceToBottom <= innerHeight * EdgeTriggerViewportHeights,
+        "Tall-turn voice cursor target did not enter the lower physical trigger " +
+        $"zone: distance={cursorDistanceToBottom:F1}, viewport={innerHeight:F1}.");
+
+      int shiftsBeforePlayback = windowShiftReasons.Count;
+      view.ShowPlaybackPosition(new TranscriptPlaybackPosition(
+        TranscriptPlaybackState.Speaking,
+        fragment,
+        wordIndex,
+        word,
+        tallIdentity.NodeId,
+        matches[wordIndex].Index,
+        matches[wordIndex].Length,
+        Stopwatch.GetTimestamp()));
+      PumpUntil(
+        () => windowShiftReasons
+          .Skip(shiftsBeforePlayback)
+          .Any(reason => reason == "playback-down"),
+        "voice cursor to request playback-down from the lower physical trigger zone",
+        timeoutMilliseconds: 5000);
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  private static bool ReadBrowserBoolean(WebView2 webView, string expression)
+  {
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(
+      "Boolean(" + expression + ")");
+    PumpUntilCompleted(task, "browser boolean probe");
+    return string.Equals(task.Result, "true", StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static void WriteDirectionalFixture(string path)
+  {
+    WriteFixture(path);
+  }
+
+  private static void WriteTallTurnFixture(string path)
+  {
+    const int tallPair = 60;
+    const int tallParagraphCount = 240;
+    string tallResponse = string.Join(
+      "\n\n",
+      Enumerable.Range(1, tallParagraphCount).Select(
+        index => $"Tall marker paragraph {index:D3}."));
+    var records = new List<string>(SourceRecordCount);
+    for (int index = 1; index <= PairCount; ++index)
+    {
+      records.Add(JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = $"2026-09-09T03:{index % 60:D2}:00.000Z",
+        payload = new
+        {
+          type = "user_message",
+          message = $"Tall-turn issue 37 request {index:D3}."
+        }
+      }));
+      records.Add(JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = $"2026-09-09T03:{index % 60:D2}:01.000Z",
+        payload = new
+        {
+          type = "agent_message",
+          phase = "final",
+          message = index == tallPair
+            ? tallResponse
+            : $"Tall-turn issue 37 response {index:D3}."
+        }
+      }));
+    }
+    File.WriteAllLines(path, records);
+  }
+
   private static void WriteFixture(string path)
   {
     var records = new List<string>(SourceRecordCount);
@@ -530,6 +1404,22 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
     throw new InvalidOperationException(
       $"Method '{methodName}' did not return a Task.");
 }
+
+  private static void SetField<T>(
+    object target,
+    string fieldName,
+    T value)
+  {
+    FieldInfo? field = target.GetType().GetField(
+      fieldName,
+      BindingFlags.Instance | BindingFlags.NonPublic);
+    if (field is null)
+    {
+      throw new InvalidOperationException(
+        $"Field {fieldName} was not found on {target.GetType().Name}.");
+    }
+    field.SetValue(target, value);
+  }
 
   private static T ReadField<T>(object target, string fieldName)
   {

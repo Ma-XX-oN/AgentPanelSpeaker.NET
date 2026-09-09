@@ -10,9 +10,9 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed class TranscriptVirtualDocument
 {
-  private const int RegionRecordCount = 20;
-  private const int LoadedRegionRadius = 2;
-  private const int MaximumHtmlCharacters = 1_000_000;
+  internal const double MinimumWindowViewportHeights = 5.0;
+  internal const double EdgeTriggerViewportHeights = 2.0;
+  internal const double DefaultViewportHeight = 700.0;
   private const double MinimumEstimatedHeight = 72.0;
   private static readonly Regex AnchorRegex = new(
     "<span class=\\\"record-anchor\\\"[^>]*data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*data-source-id=\\\"(?<source>[^\\\"]*)\\\"[^>]*></span>",
@@ -288,58 +288,173 @@ public static TranscriptVirtualDocument Build(
     }
   }
 
+  /// <summary>
+  /// Creates the smallest practical contiguous window around one atomic Core
+  /// unit that covers at least the configured physical viewport-height floor.
+  /// </summary>
   public TranscriptWindow CreateWindow(int focalIndex)
+  {
+    return CreateWindow(focalIndex, DefaultViewportHeight);
+  }
+
+  /// <summary>
+  /// Creates a physically sized virtual window around one atomic Core unit.
+  /// Record counts and HTML byte counts do not control the materialized span.
+  /// </summary>
+  public TranscriptWindow CreateWindow(int focalIndex, double viewportHeight)
   {
     if (_records.Length == 0)
     {
-      return new TranscriptWindow(
-        string.Empty,
-        0,
-        -1,
-        0,
-        0,
-        Array.Empty<TranscriptVirtualRecord>());
+      return EmptyWindow();
     }
 
     focalIndex = ResolveVisibleFocalIndex(
       Math.Clamp(focalIndex, 0, _records.Length - 1));
-    int focalRegion = focalIndex / RegionRecordCount;
-    int firstRegion = Math.Max(0, focalRegion - LoadedRegionRadius);
-    int lastRegion = Math.Min(
-      (_records.Length - 1) / RegionRecordCount,
-      focalRegion + LoadedRegionRadius);
-    int start = firstRegion * RegionRecordCount;
-    int end = Math.Min(
-      _records.Length - 1,
-      ((lastRegion + 1) * RegionRecordCount) - 1);
-
-    int characters = 0;
+    double targetHeight = NormalizeViewportHeight(viewportHeight) *
+      MinimumWindowViewportHeights;
     int left = focalIndex;
     int right = focalIndex;
-    characters += _records[focalIndex].Html.Length;
-    while (true)
+    double totalHeight = EffectiveHeight(focalIndex);
+    double leftBufferHeight = 0.0;
+    double rightBufferHeight = 0.0;
+
+    while (totalHeight < targetHeight &&
+           (left > 0 || right < _records.Length - 1))
     {
-      bool added = false;
-      if (left > start &&
-          characters + _records[left - 1].Html.Length <= MaximumHtmlCharacters)
+      bool canGrowLeft = left > 0;
+      bool canGrowRight = right < _records.Length - 1;
+      bool growLeft = canGrowLeft &&
+        (!canGrowRight || leftBufferHeight <= rightBufferHeight);
+      if (growLeft)
       {
         --left;
-        characters += _records[left].Html.Length;
-        added = true;
+        double addedHeight = EffectiveHeight(left);
+        totalHeight += addedHeight;
+        leftBufferHeight += addedHeight;
       }
-      if (right < end &&
-          characters + _records[right + 1].Html.Length <= MaximumHtmlCharacters)
+      else
       {
         ++right;
-        characters += _records[right].Html.Length;
-        added = true;
-      }
-      if (!added)
-      {
-        break;
+        double addedHeight = EffectiveHeight(right);
+        totalHeight += addedHeight;
+        rightBufferHeight += addedHeight;
       }
     }
 
+    TrimToMinimumHeight(
+      ref left,
+      ref right,
+      focalIndex,
+      targetHeight,
+      ref totalHeight,
+      trimBothEdges: true);
+    return BuildWindow(left, right);
+  }
+
+  /// <summary>
+  /// Slides an existing physical window in one direction.  The newly exposed
+  /// edge is extended by the edge-trigger depth and the opposite edge is then
+  /// trimmed as far as possible without dropping below the five-viewport floor
+  /// or removing the focal atomic Core unit.
+  /// </summary>
+  public TranscriptWindow CreateShiftedWindow(
+    int focalIndex,
+    int currentStartIndex,
+    int currentEndIndex,
+    int direction,
+    double viewportHeight)
+  {
+    if (_records.Length == 0)
+    {
+      return EmptyWindow();
+    }
+    if (direction == 0)
+    {
+      return CreateWindow(focalIndex, viewportHeight);
+    }
+
+    focalIndex = ResolveVisibleFocalIndex(
+      Math.Clamp(focalIndex, 0, _records.Length - 1));
+    int left = Math.Clamp(currentStartIndex, 0, _records.Length - 1);
+    int right = Math.Clamp(currentEndIndex, 0, _records.Length - 1);
+    if (left > right || focalIndex < left || focalIndex > right)
+    {
+      return CreateWindow(focalIndex, viewportHeight);
+    }
+
+    double normalizedViewportHeight = NormalizeViewportHeight(viewportHeight);
+    double targetHeight = normalizedViewportHeight *
+      MinimumWindowViewportHeights;
+    double extensionHeight = normalizedViewportHeight *
+      EdgeTriggerViewportHeights;
+    double totalHeight = SumHeights(left, right + 1);
+    double addedHeight = 0.0;
+
+    if (direction < 0)
+    {
+      while (left > 0 && addedHeight < extensionHeight)
+      {
+        --left;
+        double height = EffectiveHeight(left);
+        totalHeight += height;
+        addedHeight += height;
+      }
+      EnsureMinimumHeight(
+        ref left,
+        ref right,
+        focalIndex,
+        targetHeight,
+        ref totalHeight);
+      TrimToMinimumHeight(
+        ref left,
+        ref right,
+        focalIndex,
+        targetHeight,
+        ref totalHeight,
+        trimBothEdges: false,
+        trimLeadingEdge: false);
+    }
+    else
+    {
+      while (right < _records.Length - 1 && addedHeight < extensionHeight)
+      {
+        ++right;
+        double height = EffectiveHeight(right);
+        totalHeight += height;
+        addedHeight += height;
+      }
+      EnsureMinimumHeight(
+        ref left,
+        ref right,
+        focalIndex,
+        targetHeight,
+        ref totalHeight);
+      TrimToMinimumHeight(
+        ref left,
+        ref right,
+        focalIndex,
+        targetHeight,
+        ref totalHeight,
+        trimBothEdges: false,
+        trimLeadingEdge: true);
+    }
+
+    return BuildWindow(left, right);
+  }
+
+  private TranscriptWindow EmptyWindow()
+  {
+    return new TranscriptWindow(
+      string.Empty,
+      0,
+      -1,
+      0,
+      0,
+      Array.Empty<TranscriptVirtualRecord>());
+  }
+
+  private TranscriptWindow BuildWindow(int left, int right)
+  {
     TranscriptVirtualRecord[] records = _records[left..(right + 1)];
     string windowHtml = string.Concat(records.Select((record, offset) =>
       "<section class=\"virtual-record\" data-virtual-index=\"" +
@@ -352,6 +467,83 @@ public static TranscriptVirtualDocument Build(
       SumHeights(0, left),
       SumHeights(right + 1, _records.Length),
       records);
+  }
+
+  private void EnsureMinimumHeight(
+    ref int left,
+    ref int right,
+    int focalIndex,
+    double targetHeight,
+    ref double totalHeight)
+  {
+    double leftBufferHeight = SumHeights(left, focalIndex);
+    double rightBufferHeight = SumHeights(focalIndex + 1, right + 1);
+    while (totalHeight < targetHeight &&
+           (left > 0 || right < _records.Length - 1))
+    {
+      bool canGrowLeft = left > 0;
+      bool canGrowRight = right < _records.Length - 1;
+      bool growLeft = canGrowLeft &&
+        (!canGrowRight || leftBufferHeight <= rightBufferHeight);
+      if (growLeft)
+      {
+        --left;
+        double height = EffectiveHeight(left);
+        totalHeight += height;
+        leftBufferHeight += height;
+      }
+      else
+      {
+        ++right;
+        double height = EffectiveHeight(right);
+        totalHeight += height;
+        rightBufferHeight += height;
+      }
+    }
+  }
+
+  private void TrimToMinimumHeight(
+    ref int left,
+    ref int right,
+    int focalIndex,
+    double targetHeight,
+    ref double totalHeight,
+    bool trimBothEdges,
+    bool trimLeadingEdge = true)
+  {
+    bool changed;
+    do
+    {
+      changed = false;
+      if ((trimBothEdges || trimLeadingEdge) && left < focalIndex)
+      {
+        double height = EffectiveHeight(left);
+        if (totalHeight - height >= targetHeight)
+        {
+          totalHeight -= height;
+          ++left;
+          changed = true;
+        }
+      }
+      if ((trimBothEdges || !trimLeadingEdge) && right > focalIndex)
+      {
+        double height = EffectiveHeight(right);
+        if (totalHeight - height >= targetHeight)
+        {
+          totalHeight -= height;
+          --right;
+          changed = true;
+        }
+      }
+    }
+    while (changed);
+  }
+
+  private static double NormalizeViewportHeight(double viewportHeight)
+  {
+    return double.IsFinite(viewportHeight) && viewportHeight > 0
+      ? viewportHeight
+      : DefaultViewportHeight;
   }
 
   private double SumHeights(int start, int end)
