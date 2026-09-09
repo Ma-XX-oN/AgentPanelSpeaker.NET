@@ -48,6 +48,7 @@ internal sealed class TranscriptView : UserControl
     Array.Empty<TranscriptNodeIdentity>();
   private int _windowStartIndex = -1;
   private int _windowEndIndex = -1;
+  private double _browserViewportHeight;
   private bool _domPresentationMode;
   private int _layoutGeneration = 1;
   private Size _lastLayoutSize;
@@ -660,7 +661,7 @@ internal sealed class TranscriptView : UserControl
       _identities = payload.Identities;
       _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
-      TranscriptWindow window = payload.Document.CreateWindow(focalIndex);
+      TranscriptWindow window = payload.Document.CreateWindow(focalIndex, GetVirtualViewportHeight());
       TranscriptStructureSnapshot virtualStructure =
         TranscriptStructureProbe.CaptureHtml(
           structureProbeId,
@@ -724,7 +725,7 @@ internal sealed class TranscriptView : UserControl
       if (renderAnchor is not null &&
           (latestIndex < _windowStartIndex || latestIndex > _windowEndIndex))
       {
-        window = payload.Document.CreateWindow(latestIndex);
+        window = payload.Document.CreateWindow(latestIndex, GetVirtualViewportHeight());
         virtualStructure = TranscriptStructureProbe.CaptureHtml(
           structureProbeId,
           "virtual-window-html-positioned",
@@ -995,6 +996,7 @@ internal sealed class TranscriptView : UserControl
       }
       if (type == "window-measured")
       {
+        UpdateBrowserViewportHeight(ReadOptionalDouble(root, "viewportHeight"));
         TranscriptVirtualDocument? virtualDocument = _virtualDocument;
         if (virtualDocument is not null &&
             root.TryGetProperty("measurements", out JsonElement measurements) &&
@@ -1020,6 +1022,7 @@ internal sealed class TranscriptView : UserControl
       }
       if (type == "window-shift")
       {
+        UpdateBrowserViewportHeight(ReadOptionalDouble(root, "viewportHeight"));
         int? focalIndex = ReadOptionalInt32(root, "focalIndex");
         if (focalIndex is int validFocalIndex)
         {
@@ -1536,6 +1539,7 @@ internal sealed class TranscriptView : UserControl
     if (currentSize != _lastLayoutSize)
     {
       _lastLayoutSize = currentSize;
+      _browserViewportHeight = 0.0;
       ++_layoutGeneration;
       _virtualDocument?.SetLayoutGeneration(_layoutGeneration);
       if (_initialized)
@@ -1713,6 +1717,27 @@ internal sealed class TranscriptView : UserControl
     IReadOnlyList<TranscriptDomNode> DomNodes);
 
 
+  private double GetVirtualViewportHeight()
+  {
+    if (double.IsFinite(_browserViewportHeight) && _browserViewportHeight > 0)
+    {
+      return _browserViewportHeight;
+    }
+    return _webView.ClientSize.Height > 0
+      ? _webView.ClientSize.Height
+      : TranscriptVirtualDocument.DefaultViewportHeight;
+  }
+
+  private void UpdateBrowserViewportHeight(double? viewportHeight)
+  {
+    if (viewportHeight is double value &&
+        double.IsFinite(value) &&
+        value > 0)
+    {
+      _browserViewportHeight = value;
+    }
+  }
+
   private int ResolveInitialWindowIndex(
     TranscriptVirtualDocument document,
     IReadOnlyList<TranscriptNodeIdentity> identities)
@@ -1852,7 +1877,7 @@ internal sealed class TranscriptView : UserControl
         }
         return;
       }
-      TranscriptWindow window = document.CreateWindow(focalIndex);
+      TranscriptWindow window = document.CreateWindow(focalIndex, GetVirtualViewportHeight());
       var timer = Stopwatch.StartNew();
       if (!await ExecuteAsync(BuildReplaceWindowScript(
             window,
@@ -1916,7 +1941,7 @@ internal sealed class TranscriptView : UserControl
       return;
     }
     int focalIndex = edge == "start" ? 0 : document.Count - 1;
-    TranscriptWindow window = document.CreateWindow(focalIndex);
+    TranscriptWindow window = document.CreateWindow(focalIndex, GetVirtualViewportHeight());
     var timer = Stopwatch.StartNew();
     if (!await ExecuteAsync(BuildReplaceWindowScript(
           window,
@@ -1959,7 +1984,19 @@ internal sealed class TranscriptView : UserControl
     {
       return;
     }
-    TranscriptWindow window = document.CreateWindow(focalIndex);
+    int direction = reason.EndsWith("-up", StringComparison.OrdinalIgnoreCase)
+      ? -1
+      : reason.EndsWith("-down", StringComparison.OrdinalIgnoreCase)
+        ? 1
+        : 0;
+    TranscriptWindow window = direction == 0
+      ? document.CreateWindow(focalIndex, GetVirtualViewportHeight())
+      : document.CreateShiftedWindow(
+          focalIndex,
+          _windowStartIndex,
+          _windowEndIndex,
+          direction,
+          GetVirtualViewportHeight());
     if (window.StartIndex == _windowStartIndex && window.EndIndex == _windowEndIndex)
     {
       return;
@@ -1970,7 +2007,8 @@ internal sealed class TranscriptView : UserControl
           preserve: false,
           anchorRecordNumber: anchorRecordNumber,
           anchorSourceId: anchorSourceId,
-          anchorOffset: anchorOffset)))
+          anchorOffset: anchorOffset,
+          focusVirtualIndex: focalIndex)))
     {
       return;
     }
@@ -2744,6 +2782,12 @@ function replaceTranscriptWindow(
   const openDetails = preserve
     ? [...transcript.querySelectorAll('details')].map(x => x.open)
     : [];
+  // Replacing spacer heights and materialized records can itself change
+  // scrollY.  Mark that layout-induced movement as programmatic.  Genuine
+  // wheel/touch/scroll-key/scrollbar input can explicitly override this guard.
+  programmaticScrollUntil = Math.max(
+    programmaticScrollUntil,
+    performance.now() + VW_WINDOW_REPLACEMENT_SCROLL_GUARD_MS);
   const exactAssignedHtml =
     '<div class="virtual-spacer" data-virtual-spacer="top" style="height:' +
     Math.max(0, Number(topSpacerHeight) || 0) + 'px"></div>' + html +
@@ -2818,10 +2862,35 @@ function replaceTranscriptWindow(
     chrome.webview.postMessage({
       type:'window-measured',
       layoutGeneration,
+      viewportHeight:window.innerHeight,
       measurements
     });
   }
   virtualShiftPending = false;
+  function viewportIntersectsMaterializedContent() {
+    return [...transcript.querySelectorAll('.virtual-record')].some(record => {
+      const rect = record.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < window.innerHeight;
+    });
+  }
+  function focusRequestedVirtualRecord() {
+    if (focusVirtualIndex === null) return false;
+    const focusRecord = transcript.querySelector(
+      '.virtual-record[data-virtual-index="' +
+      CSS.escape(String(focusVirtualIndex)) + '"]');
+    if (!focusRecord) return false;
+    programmaticScrollUntil = performance.now() + 2000;
+    if (focusEdge === 'start') {
+      window.scrollTo(0, 0);
+    } else if (focusEdge === 'end') {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    } else {
+      focusRecord.scrollIntoView({block:'center', behavior:'auto'});
+    }
+    return true;
+  }
+
+  let restoredAnchor = false;
   if (anchorRecordNumber !== null && anchorOffset !== null) {
     const selector = '.record-anchor[data-jsonl-record="' +
       CSS.escape(String(anchorRecordNumber)) + '"][data-source-id="' +
@@ -2831,21 +2900,12 @@ function replaceTranscriptWindow(
       const delta = anchor.getBoundingClientRect().top - Number(anchorOffset);
       programmaticScrollUntil = performance.now() + 500;
       window.scrollBy(0, delta);
+      restoredAnchor = true;
     }
-  } else if (focusVirtualIndex !== null) {
-    const focusRecord = transcript.querySelector(
-      '.virtual-record[data-virtual-index="' +
-      CSS.escape(String(focusVirtualIndex)) + '"]');
-    if (focusRecord) {
-      programmaticScrollUntil = performance.now() + 2000;
-      if (focusEdge === 'start') {
-        window.scrollTo(0, 0);
-      } else if (focusEdge === 'end') {
-        window.scrollTo(0, document.documentElement.scrollHeight);
-      } else {
-        focusRecord.scrollIntoView({block:'center', behavior:'auto'});
-      }
-    }
+  }
+  if ((!restoredAnchor || !viewportIntersectsMaterializedContent()) &&
+      focusVirtualIndex !== null) {
+    focusRequestedVirtualRecord();
   }
   currentIndex = -1;
   currentEndIndex = -1;
@@ -3394,6 +3454,78 @@ function openAncestors(element) {
   return opened;
 }
 
+const VW_MIN_VIEWPORT_HEIGHTS = 5;
+const VW_EDGE_TRIGGER_VIEWPORTS = 2;
+const VW_SCROLL_DIRECTION_EPSILON_PX = 1;
+const VW_SHIFT_PENDING_TIMEOUT_MS = 3000;
+let lastVoiceVirtualIndex = -1;
+let lastVoiceLocalY = Number.NaN;
+
+function materializedVirtualRecords() {
+  return [...transcript.querySelectorAll('.virtual-record')];
+}
+
+function materializedWindowBounds() {
+  const records = materializedVirtualRecords();
+  if (!records.length) return null;
+  return {
+    records,
+    first:records[0].getBoundingClientRect(),
+    last:records[records.length - 1].getBoundingClientRect()
+  };
+}
+
+function maybePrefetchVoiceCursor(element) {
+  if (!followSpeech || !element || virtualShiftPending) return;
+  const record = element.closest('.virtual-record');
+  const bounds = materializedWindowBounds();
+  if (!record || !bounds) return;
+
+  const virtualIndex = Number(record.dataset.virtualIndex || -1);
+  const recordRect = record.getBoundingClientRect();
+  const cursorRect = element.getBoundingClientRect();
+  const localY = cursorRect.top - recordRect.top;
+  let direction = 0;
+  if (lastVoiceVirtualIndex >= 0) {
+    if (virtualIndex > lastVoiceVirtualIndex) direction = 1;
+    else if (virtualIndex < lastVoiceVirtualIndex) direction = -1;
+    else if (Number.isFinite(lastVoiceLocalY)) {
+      if (localY > lastVoiceLocalY + VW_SCROLL_DIRECTION_EPSILON_PX) direction = 1;
+      else if (localY < lastVoiceLocalY - VW_SCROLL_DIRECTION_EPSILON_PX) direction = -1;
+    }
+  }
+  lastVoiceVirtualIndex = virtualIndex;
+  lastVoiceLocalY = localY;
+
+  const triggerDistance = window.innerHeight * VW_EDGE_TRIGGER_VIEWPORTS;
+  const nearTop = cursorRect.top - bounds.first.top <= triggerDistance;
+  const nearBottom = bounds.last.bottom - cursorRect.bottom <= triggerDistance;
+  const canMoveUp = windowStartIndex > 0;
+  const bottomSpacer = transcript.querySelector(
+    '.virtual-spacer[data-virtual-spacer="bottom"]');
+  const canMoveDown = (bottomSpacer?.getBoundingClientRect().height ?? 0) > 0;
+
+  if (nearTop && nearBottom) {
+    if (direction < 0 && canMoveUp) {
+      requestVirtualShift(-1, 'playback-up', record);
+    } else if (direction > 0 && canMoveDown) {
+      requestVirtualShift(1, 'playback-down', record);
+    } else if (canMoveDown &&
+               bounds.last.bottom - cursorRect.bottom <=
+                 cursorRect.top - bounds.first.top) {
+      requestVirtualShift(1, 'playback-down', record);
+    } else if (canMoveUp) {
+      requestVirtualShift(-1, 'playback-up', record);
+    }
+    return;
+  }
+  if (nearBottom && canMoveDown && direction >= 0) {
+    requestVirtualShift(1, 'playback-down', record);
+  } else if (nearTop && canMoveUp && direction <= 0) {
+    requestVirtualShift(-1, 'playback-up', record);
+  }
+}
+
 function reveal(element) {
   if (!followSpeech || !element) return;
   const rect = element.getBoundingClientRect();
@@ -3607,6 +3739,7 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   currentBoundaryWordIndex = wordIndex;
   currentNode = nodeId;
   reveal(listItem || target);
+  maybePrefetchVoiceCursor(target);
 }
 
 
@@ -4008,71 +4141,135 @@ followToggle.addEventListener('click', () => {
 });
 updateFollowToggle();
 
-let scrollFollowTimer = 0;
-let virtualShiftTimer = 0;
-function firstVisibleVirtualRecord() {
-  const records = transcript.querySelectorAll('.virtual-record');
-  for (const record of records) {
-    if (record.getBoundingClientRect().bottom >= 0) return record;
+const VW_USER_SCROLL_INTENT_MS = 1200;
+const VW_WINDOW_REPLACEMENT_SCROLL_GUARD_MS = 300;
+const VW_SCROLL_KEYS = new Set([
+  'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '
+]);
+let virtualShiftFrame = 0;
+let lastManualScrollY = window.scrollY;
+let userScrollIntentUntil = 0;
+
+function markUserScrollIntent() {
+  userScrollIntentUntil = performance.now() + VW_USER_SCROLL_INTENT_MS;
+}
+
+function isEditableScrollTarget(target) {
+  return target instanceof Element &&
+    (target.matches('input,textarea,select') || target.isContentEditable);
+}
+
+window.addEventListener('wheel', markUserScrollIntent, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchstart', markUserScrollIntent, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchmove', markUserScrollIntent, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
+      !VW_SCROLL_KEYS.has(event.key) || isEditableScrollTarget(event.target)) {
+    return;
   }
-  return records.length ? records[records.length - 1] : null;
+  markUserScrollIntent();
+}, {capture:true});
+window.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+  if (scrollbarWidth > 0 && event.clientX >= document.documentElement.clientWidth) {
+    markUserScrollIntent();
+  }
+}, {capture:true});
+
+function firstVisibleVirtualRecord(direction = 0) {
+  const records = materializedVirtualRecords();
+  const visible = records.filter(record => {
+    const rect = record.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
+  if (visible.length) {
+    return direction > 0 ? visible[visible.length - 1] : visible[0];
+  }
+  if (!records.length) return null;
+  const firstRect = records[0].getBoundingClientRect();
+  const lastRect = records[records.length - 1].getBoundingClientRect();
+  if (direction < 0 && firstRect.top >= window.innerHeight) return records[0];
+  if (direction > 0 && lastRect.bottom <= 0) return records[records.length - 1];
+  return null;
 }
 
-function firstVisibleRecordAnchor() {
-  const record = firstVisibleVirtualRecord();
-  return record?.querySelector('.record-anchor') || null;
-}
-
-function requestVirtualShift(direction) {
+function requestVirtualShift(direction, reason = null, referenceRecord = null) {
   if (virtualShiftPending || windowStartIndex < 0 || windowEndIndex < 0) return;
-  const visibleRecord = firstVisibleVirtualRecord();
-  const anchor = firstVisibleRecordAnchor();
+  const visibleRecord = referenceRecord || firstVisibleVirtualRecord(direction);
+  const anchor = visibleRecord?.querySelector('.record-anchor') || null;
   if (!visibleRecord || !anchor) return;
   const visibleIndex = Number(visibleRecord.dataset.virtualIndex || -1);
   if (visibleIndex < 0) return;
   virtualShiftPending = true;
-  const focalIndex = direction < 0
-    ? Math.max(0, visibleIndex - 20)
-    : visibleIndex + 20;
   chrome.webview.postMessage({
     type:'window-shift',
-    reason:direction < 0 ? 'scroll-up' : 'scroll-down',
-    focalIndex,
+    reason:reason || (direction < 0 ? 'scroll-up' : 'scroll-down'),
+    focalIndex:visibleIndex,
+    viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
     anchorSourceId:anchor.dataset.sourceId || '',
     anchorOffset:anchor.getBoundingClientRect().top
   });
-  setTimeout(() => { virtualShiftPending = false; }, 3000);
+  setTimeout(
+    () => { virtualShiftPending = false; },
+    VW_SHIFT_PENDING_TIMEOUT_MS);
+}
+
+function maybeRequestManualVirtualShift(direction) {
+  if (direction === 0 || virtualShiftPending) return;
+  const bounds = materializedWindowBounds();
+  if (!bounds) return;
+  const triggerDistance = window.innerHeight * VW_EDGE_TRIGGER_VIEWPORTS;
+  if (direction < 0 && windowStartIndex > 0 &&
+      -bounds.first.top <= triggerDistance) {
+    requestVirtualShift(-1, 'scroll-up');
+    return;
+  }
+  const bottomSpacer = transcript.querySelector(
+    '.virtual-spacer[data-virtual-spacer="bottom"]');
+  const hasContentBelow =
+    (bottomSpacer?.getBoundingClientRect().height ?? 0) > 0;
+  if (direction > 0 && hasContentBelow &&
+      bounds.last.bottom - window.innerHeight <= triggerDistance) {
+    requestVirtualShift(1, 'scroll-down');
+  }
 }
 
 window.addEventListener('scroll', () => {
   const now = performance.now();
-  if (followSpeech && now > programmaticScrollUntil) {
-    if (scrollFollowTimer) clearTimeout(scrollFollowTimer);
-    scrollFollowTimer = setTimeout(() => {
-      scrollFollowTimer = 0;
-      if (followSpeech && performance.now() > programmaticScrollUntil) {
-        setFollowSpeech(false, true);
-      }
-    }, 120);
+  const currentY = window.scrollY;
+  const delta = currentY - lastManualScrollY;
+  lastManualScrollY = currentY;
+  if (Math.abs(delta) <= VW_SCROLL_DIRECTION_EPSILON_PX) return;
+
+  const explicitUserIntent = now <= userScrollIntentUntil;
+  if (explicitUserIntent) {
+    // User navigation always wins, even if it interrupts a smooth playback
+    // scroll or a vwindow replacement whose guard is still active.
+    programmaticScrollUntil = 0;
+  } else if (now <= programmaticScrollUntil) {
+    return;
   }
-  if (virtualShiftTimer) clearTimeout(virtualShiftTimer);
-  virtualShiftTimer = setTimeout(() => {
-    virtualShiftTimer = 0;
-    // Window replacement, playback reveal, and anchor restoration all scroll
-    // programmatically.  Those scroll events must not be reinterpreted as
-    // manual edge navigation or they can bounce the virtual window away from
-    // the playback target and back indefinitely.
+
+  if (followSpeech) setFollowSpeech(false, true);
+
+  const direction = delta > 0 ? 1 : -1;
+  if (virtualShiftFrame) cancelAnimationFrame(virtualShiftFrame);
+  virtualShiftFrame = requestAnimationFrame(() => {
+    virtualShiftFrame = 0;
     if (performance.now() <= programmaticScrollUntil) return;
-    const visibleRecord = firstVisibleVirtualRecord();
-    const visibleIndex = Number(visibleRecord?.dataset.virtualIndex || -1);
-    if (visibleIndex >= 0 && visibleIndex <= windowStartIndex + 20 &&
-        windowStartIndex > 0) {
-      requestVirtualShift(-1);
-    } else if (visibleIndex >= windowEndIndex - 20) {
-      requestVirtualShift(1);
-    }
-  }, 80);
+    maybeRequestManualVirtualShift(direction);
+  });
 }, {passive:true});
 
 
