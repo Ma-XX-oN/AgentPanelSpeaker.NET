@@ -60,13 +60,24 @@ function withHtmlUnits(projection, options) {
 
 ''')
 text = text.replace(marker, helper + marker, 1)
-count = text.count("projection: session.project(options),")
-if count != 3:
+
+session_site = "projection: session.project(options),"
+if text.count(session_site) != 1:
   raise SystemExit(
-    f"expected 3 retained-session projection sites, found {count}")
+    "worker session_create projection site did not match exactly")
 text = text.replace(
-  "projection: session.project(options),",
-  "projection: withHtmlUnits(session.project(options), options),")
+  session_site,
+  "projection: withHtmlUnits(session.project(options), options),",
+  1)
+
+entry_site = "projection: entry.session.project(options),"
+if text.count(entry_site) != 2:
+  raise SystemExit(
+    "worker session_project/session_append sites did not match exactly")
+text = text.replace(
+  entry_site,
+  "projection: withHtmlUnits(entry.session.project(options), options),")
+
 final_block = dedent(r'''
   return {
     ok: true,
