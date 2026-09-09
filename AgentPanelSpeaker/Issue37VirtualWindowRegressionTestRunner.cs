@@ -914,18 +914,35 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       int beforeEnd = ReadField<int>(view, "_windowEndIndex");
       ExecuteVoidScript(
         webView,
-        "programmaticScrollUntil = 0; window.scrollBy(0, 160);");
+        """
+(() => {
+  programmaticScrollUntil = performance.now() + 2000;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: 160,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollBy(0, 160);
+})()
+""");
+
+      PumpUntil(
+        () => notifiedFollowState == false,
+        "manual wheel input to override the active programmatic-scroll guard",
+        timeoutMilliseconds: 1000);
+      Require(
+        !ReadBrowserBoolean(webView, "followSpeech"),
+        "Manual user scrolling during an active programmatic-scroll guard " +
+        "did not disable Follow mode.");
+
       PumpUntil(
         () =>
           ReadField<int>(view, "_windowStartIndex") != beforeStart ||
           ReadField<int>(view, "_windowEndIndex") != beforeEnd,
-        "manual scroll to move the virtual window",
+        "manual scroll to move the virtual window after disabling Follow",
         timeoutMilliseconds: 5000);
       PumpMessages(300);
 
-      Require(
-        !ReadBrowserBoolean(webView, "followSpeech"),
-        "Manual user scrolling moved the vwindow but Follow mode remained enabled.");
       Require(
         notifiedFollowState == false,
         "Manual user scrolling did not emit FollowSpeechChanged(false) before " +
