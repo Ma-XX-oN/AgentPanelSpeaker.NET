@@ -115,6 +115,13 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(args[1], "output-oracle", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = Issue44IndependentOutputOracleRegressionTestRunner.Run();
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "large-transcript-windowing", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = Issue37LargeTranscriptRegressionTestRunner.Run();
@@ -143,6 +150,7 @@ internal static class Program
       int liveEnd = RunIsolatedTestSuite("live-end");
       int rolledBackVisibility = RunIsolatedTestSuite("rolled-back-visibility");
       int rolledBackSpeech = RunIsolatedTestSuite("rolled-back-speech");
+      int independentOutputOracle = RunIsolatedTestSuite("output-oracle");
       int largeTranscriptWindowing = RunIsolatedTestSuite(
         "large-transcript-windowing");
 
@@ -157,6 +165,7 @@ internal static class Program
                              liveEnd == 0 &&
                              rolledBackVisibility == 0 &&
                              rolledBackSpeech == 0 &&
+                             independentOutputOracle == 0 &&
                              largeTranscriptWindowing == 0
         ? 0
         : 1;
