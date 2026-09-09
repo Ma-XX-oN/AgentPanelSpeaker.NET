@@ -1,0 +1,386 @@
+name: Issue 37 selective word materialization GREEN
+
+on:
+  push:
+    branches:
+      - issue-37-selective-word-materialization
+    paths:
+      - '.github/workflows/issue-37-word-materialization-green.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-37-selective-word-materialization
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Implement selective eager and lazy word materialization
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/TranscriptView.cs')
+          text = path.read_text(encoding='utf-8')
+
+          state_anchor = 'let lexicalWordsByRecord = new Map();\n'
+          state_add = state_anchor + 'let availableWordMapsByRecord = new Map();\n'
+          if 'let availableWordMapsByRecord = new Map();' not in text:
+            if text.count(state_anchor) != 1:
+              raise SystemExit(f'word-map state anchor count={text.count(state_anchor)}')
+            text = text.replace(state_anchor, state_add, 1)
+
+          old_wrap = r'''function wrapWords() {
+            words = [];
+            lexicalWords = [];
+            const walker = document.createTreeWalker(transcript, NodeFilter.SHOW_TEXT, {
+              acceptNode(node) {
+                const parent = node.parentElement;
+                if (!parent || /^(SCRIPT|STYLE)$/.test(parent.tagName)) return NodeFilter.FILTER_REJECT;
+                return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+              }
+            });
+            const nodes = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+            const rx = /(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)|\.+|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*|[^\s]/gu;
+            for (const node of nodes) {
+              const text = node.nodeValue;
+              let match;
+              let last = 0;
+              const fragment = document.createDocumentFragment();
+              while ((match = rx.exec(text)) !== null) {
+                fragment.append(text.slice(last, match.index));
+                const span = document.createElement('span');
+                span.className = 'word';
+                span.textContent = match[0];
+                span.dataset.normalized = match[0].toLocaleLowerCase();
+                span.dataset.index = String(words.length);
+                span.dataset.lexical = isLexical(match[0]) ? '1' : '0';
+                words.push(span);
+                if (span.dataset.lexical === '1') lexicalWords.push(span);
+                fragment.append(span);
+                last = match.index + match[0].length;
+              }
+              fragment.append(text.slice(last));
+              node.replaceWith(fragment);
+            }
+          }
+          '''
+          new_wrap = r'''function nodeRecordKeys(nodeMap) {
+            const result = new Set();
+            for (const item of nodeMap || []) {
+              const recordNumber = String(
+                item.RecordNumber ?? item.recordNumber ?? '');
+              const sourceId = String(item.SourceId ?? item.sourceId ?? '');
+              result.add(makeRecordKey(recordNumber, sourceId));
+            }
+            return result;
+          }
+
+          function setAvailableWordMaps(wordMap) {
+            availableWordMapsByRecord = new Map();
+            for (const record of wordMap || []) {
+              const recordNumber = String(
+                record.RecordNumber ?? record.recordNumber ?? '');
+              const sourceId = String(record.SourceId ?? record.sourceId ?? '');
+              availableWordMapsByRecord.set(
+                makeRecordKey(recordNumber, sourceId), record);
+            }
+          }
+
+          function wrapWordsForRecordKeys(recordKeys, reset) {
+            if (reset) {
+              words = [];
+              lexicalWords = [];
+            }
+            let currentKey = '';
+            const walker = document.createTreeWalker(
+              transcript,
+              NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (node.nodeType === Node.ELEMENT_NODE) {
+                const element = node;
+                if (element.classList.contains('record-anchor')) {
+                  currentKey = makeRecordKey(
+                    String(element.dataset.jsonlRecord || ''),
+                    element.dataset.sourceId || '');
+                }
+                continue;
+              }
+              const parent = node.parentElement;
+              if (!parent ||
+                  /^(SCRIPT|STYLE)$/.test(parent.tagName) ||
+                  parent.closest('.word') ||
+                  (recordKeys !== null && !recordKeys.has(currentKey)) ||
+                  !node.nodeValue.trim()) {
+                continue;
+              }
+              nodes.push(node);
+            }
+
+            const rx = /(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)|\.+|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*|[^\s]/gu;
+            for (const node of nodes) {
+              const value = node.nodeValue;
+              let match;
+              let last = 0;
+              rx.lastIndex = 0;
+              const fragment = document.createDocumentFragment();
+              while ((match = rx.exec(value)) !== null) {
+                fragment.append(value.slice(last, match.index));
+                const span = document.createElement('span');
+                span.className = 'word';
+                span.textContent = match[0];
+                span.dataset.normalized = match[0].toLocaleLowerCase();
+                span.dataset.index = String(words.length);
+                span.dataset.lexical = isLexical(match[0]) ? '1' : '0';
+                words.push(span);
+                if (span.dataset.lexical === '1') lexicalWords.push(span);
+                fragment.append(span);
+                last = match.index + match[0].length;
+              }
+              fragment.append(value.slice(last));
+              node.replaceWith(fragment);
+            }
+          }
+
+          function wrapWords(nodeMap = null) {
+            words = [];
+            lexicalWords = [];
+            wrapWordsForRecordKeys(
+              nodeMap === null ? null : nodeRecordKeys(nodeMap),
+              false);
+          }
+          '''
+          if 'function nodeRecordKeys(nodeMap)' not in text:
+            if text.count(old_wrap) != 1:
+              raise SystemExit(f'old wrapWords block count={text.count(old_wrap)}')
+            text = text.replace(old_wrap, new_wrap, 1)
+
+          old_call = '  wrapWords();\n'
+          new_call = '  setAvailableWordMaps(wordMap || []);\n  wrapWords(nodeMap || []);\n'
+          if text.count(old_call) != 2:
+            raise SystemExit(f'production wrapWords call count={text.count(old_call)}')
+          text = text.replace(old_call, new_call)
+
+          lazy_anchor = 'function findSequence(\n'
+          lazy_code = r'''function materializeRecordWords(recordNumber, sourceId) {
+            const key = makeRecordKey(String(recordNumber), String(sourceId || ''));
+            if (displayWordsByRecord.has(key)) return true;
+            if (!availableWordMapsByRecord.has(key)) return false;
+            const selector = '.record-anchor[data-jsonl-record="' +
+              CSS.escape(String(recordNumber)) + '"][data-source-id="' +
+              CSS.escape(String(sourceId || '')) + '"]';
+            if (!transcript.querySelector(selector)) return false;
+
+            const beforeWordCount = words.length;
+            const started = performance.now();
+            wrapWordsForRecordKeys(new Set([key]), false);
+            assignRecordScopes();
+            assignStableWordScopes([...availableWordMapsByRecord.values()]);
+            const materialized = displayWordsByRecord.has(key);
+            chrome.webview.postMessage({
+              type:'lazy-word-materialized',
+              recordNumber:Number(recordNumber),
+              sourceId:String(sourceId || ''),
+              addedWordCount:words.length - beforeWordCount,
+              totalWordCount:words.length,
+              elapsedMilliseconds:Math.round(performance.now() - started),
+              materialized
+            });
+            return materialized;
+          }
+
+          '''
+          if 'function materializeRecordWords(recordNumber, sourceId)' not in text:
+            if text.count(lazy_anchor) != 1:
+              raise SystemExit(f'findSequence anchor count={text.count(lazy_anchor)}')
+            text = text.replace(lazy_anchor, lazy_code + lazy_anchor, 1)
+
+          old_find = '''  const key = makeRecordKey(String(match.recordNumber), match.sourceId);
+            const recordWords = displayWordsByRecord.get(key);
+            if (!recordWords) {
+          '''
+          new_find = '''  const key = makeRecordKey(String(match.recordNumber), match.sourceId);
+            let recordWords = displayWordsByRecord.get(key);
+            if (!recordWords &&
+                materializeRecordWords(match.recordNumber, match.sourceId)) {
+              recordWords = displayWordsByRecord.get(key);
+            }
+            if (!recordWords) {
+          '''
+          if 'materializeRecordWords(match.recordNumber, match.sourceId)' not in text:
+            if text.count(old_find) != 1:
+              raise SystemExit(f'showFindMatch record lookup count={text.count(old_find)}')
+            text = text.replace(old_find, new_find, 1)
+
+          old_summary = '''function postMappingInstallSummary(nodeMap) {
+            const nodes = [];
+            for (const item of nodeMap || []) {
+              const nodeId = String(item.NodeId ?? item.nodeId ?? '');
+              const recordNumber = Number(
+                item.RecordNumber ?? item.recordNumber ?? 0);
+              const sourceId = String(item.SourceId ?? item.sourceId ?? '');
+              const segments = item.Segments ?? item.segments ?? [];
+              const ranges = segmentRangesByNode.get(nodeId) || [];
+              const scopedWords = words.filter(word => word.dataset.nodeId === nodeId);
+              nodes.push({
+                nodeId: Number(nodeId),
+                recordNumber,
+                sourceId,
+                segmentCount: segments.length,
+                rangeCount: ranges.length,
+                scopedWordCount: scopedWords.length,
+                stableWordCount: scopedWords.filter(word => !!word.dataset.wordId).length
+              });
+            }
+          '''
+          new_summary = '''function postMappingInstallSummary(nodeMap) {
+            const scopedCounts = new Map();
+            const stableCounts = new Map();
+            for (const word of words) {
+              const nodeId = String(word.dataset.nodeId || '');
+              if (!nodeId) continue;
+              scopedCounts.set(nodeId, (scopedCounts.get(nodeId) || 0) + 1);
+              if (word.dataset.wordId) {
+                stableCounts.set(nodeId, (stableCounts.get(nodeId) || 0) + 1);
+              }
+            }
+            const nodes = [];
+            for (const item of nodeMap || []) {
+              const nodeId = String(item.NodeId ?? item.nodeId ?? '');
+              const recordNumber = Number(
+                item.RecordNumber ?? item.recordNumber ?? 0);
+              const sourceId = String(item.SourceId ?? item.sourceId ?? '');
+              const segments = item.Segments ?? item.segments ?? [];
+              const ranges = segmentRangesByNode.get(nodeId) || [];
+              nodes.push({
+                nodeId: Number(nodeId),
+                recordNumber,
+                sourceId,
+                segmentCount: segments.length,
+                rangeCount: ranges.length,
+                scopedWordCount: scopedCounts.get(nodeId) || 0,
+                stableWordCount: stableCounts.get(nodeId) || 0
+              });
+            }
+          '''
+          if 'const scopedCounts = new Map();' not in text:
+            if text.count(old_summary) != 1:
+              raise SystemExit(f'postMappingInstallSummary block count={text.count(old_summary)}')
+            text = text.replace(old_summary, new_summary, 1)
+
+          # Surface lazy-materialization timing in normal diagnostics.
+          old_message_case = '''      if (type == "stable-word-map-failure")
+                {
+          '''
+          lazy_case = '''      if (type == "lazy-word-materialized")
+                {
+                  DiagnosticLog.Write("transcript.lazy_word_materialized", root.Clone());
+                  return;
+                }
+          '''
+          if 'transcript.lazy_word_materialized' not in text:
+            if text.count(old_message_case) != 1:
+              raise SystemExit('WebMessage lazy diagnostic anchor mismatch')
+            text = text.replace(old_message_case, lazy_case + old_message_case, 1)
+
+          path.write_text(text, encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git config user.name 'Ma-XX-oN'
+          git config user.email 'Ma-XX-oN@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'perf: materialize transcript words only when needed (#37)'
+          git push origin HEAD:issue-37-selective-word-materialization
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Require selective word-materialization GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
+
+      - name: Require initial vwindow GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Require semantic output oracles GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite output-oracle
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite independent-oracles
+
+      - name: Run pinned Core suite
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Run complete built AgentPanelSpeaker suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and run complete deployed suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate whitespace and branch diff
+        shell: pwsh
+        run: |
+          git fetch origin feature/aiconversationcore-integration --depth=1
+          git diff --check FETCH_HEAD HEAD
+
+      - name: Remove temporary issue 37 workflows
+        if: success()
+        shell: pwsh
+        run: |
+          Get-ChildItem .github/workflows -Filter 'issue-37-word-materialization-*.yml' | Remove-Item
+          git add -A
+          git commit -m 'chore: remove issue 37 word-materialization validation workflows'
+          git push origin HEAD:issue-37-selective-word-materialization
