@@ -50,11 +50,11 @@ jobs:
           for ($i = 1; $i -le 8; $i++) {
             $stdout = Join-Path $env:RUNNER_TEMP "built-$i.out"
             $stderr = Join-Path $env:RUNNER_TEMP "built-$i.err"
-            $p = Start-Process -FilePath $exe -ArgumentList '--test','independent-oracle' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+            $p = Start-Process -FilePath $exe -ArgumentList '--test','independent-oracles' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
             $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
             Write-Host "=== built iteration $i exit=$($p.ExitCode) ==="
             Write-Host $text
-            if ($p.ExitCode -ne 0 -or -not $text.Contains('TEST-SUITE-COMPLETE independent-oracle exit=0')) {
+            if ($p.ExitCode -ne 0 -or -not $text.Contains('TEST-SUITE-COMPLETE independent-oracles exit=0')) {
               throw "Built independent oracle failed on iteration $i."
             }
           }
@@ -66,11 +66,11 @@ jobs:
           for ($i = 1; $i -le 8; $i++) {
             $stdout = Join-Path $env:RUNNER_TEMP "published-$i.out"
             $stderr = Join-Path $env:RUNNER_TEMP "published-$i.err"
-            $p = Start-Process -FilePath $exe -ArgumentList '--test','independent-oracle' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+            $p = Start-Process -FilePath $exe -ArgumentList '--test','independent-oracles' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
             $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
             Write-Host "=== published iteration $i exit=$($p.ExitCode) ==="
             Write-Host $text
-            if ($p.ExitCode -ne 0 -or -not $text.Contains('TEST-SUITE-COMPLETE independent-oracle exit=0')) {
+            if ($p.ExitCode -ne 0 -or -not $text.Contains('TEST-SUITE-COMPLETE independent-oracles exit=0')) {
               throw "Published independent oracle failed on iteration $i."
             }
           }
