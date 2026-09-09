@@ -41,8 +41,13 @@ jobs:
               in_triple = not in_triple
           if in_triple:
             raise SystemExit('unterminated triple-quoted literal in staged patch script')
+          text = '\n'.join(source) + '\n'
+          text = text.replace(
+            "    if count != 1:\n      raise SystemExit(f'{path}: expected one match, found {count}: {old[:120]!r}')\n",
+            "    if count < 1:\n      raise SystemExit(f'{path}: expected a match, found {count}: {old[:120]!r}')\n",
+            1)
           out = Path('/tmp/issue35-implementation.py')
-          out.write_text('\n'.join(source) + '\n', encoding='utf-8')
+          out.write_text(text, encoding='utf-8')
           PY
           python /tmp/issue35-implementation.py
       - name: Commit implementation
