@@ -36,6 +36,8 @@ internal sealed class TranscriptVirtualDocument
   private readonly TranscriptVirtualRecord[] _records;
   private readonly Dictionary<string, int> _recordIndexes;
   private readonly double[] _heights;
+  private int _heightGeneration = -1;
+  private bool _showRolledBackHistory;
 
   private TranscriptVirtualDocument(TranscriptVirtualRecord[] records)
   {
@@ -87,7 +89,8 @@ internal sealed class TranscriptVirtualDocument
           string.Empty,
           html,
           EstimateHeight(html),
-          Array.Empty<TranscriptVirtualIdentity>())
+          Array.Empty<TranscriptVirtualIdentity>(),
+          IsHistoricalRevisionHtml(html))
       });
     }
 
@@ -155,7 +158,8 @@ internal sealed class TranscriptVirtualDocument
         primary.SourceId,
         recordHtml,
         EstimateHeight(recordHtml),
-        identities));
+        identities,
+        IsHistoricalRevisionHtml(recordHtml)));
     }
 
     return new TranscriptVirtualDocument(records.ToArray());
@@ -166,12 +170,53 @@ internal sealed class TranscriptVirtualDocument
     return _recordIndexes.TryGetValue(MakeKey(recordNumber, sourceId), out index);
   }
 
-  public void UpdateMeasuredHeights(IReadOnlyDictionary<int, double> measurements)
+  /// <summary>
+  /// Changes effective historical visibility without changing canonical record
+  /// indexes or measured natural heights.
+  /// </summary>
+  public void SetShowRolledBackHistory(bool show)
   {
+    _showRolledBackHistory = show;
+  }
+
+  /// <summary>
+  /// Returns whether one canonical source identity is currently visible.
+  /// </summary>
+  public bool IsVisible(int recordNumber, string sourceId)
+  {
+    return TryGetIndex(recordNumber, sourceId, out int index) &&
+      IsVisible(index);
+  }
+
+  /// <summary>
+  /// Invalidates natural-height measurements when width/DPI/font layout changes.
+  /// </summary>
+  public void SetLayoutGeneration(int layoutGeneration)
+  {
+    if (_heightGeneration == layoutGeneration)
+    {
+      return;
+    }
+    _heightGeneration = layoutGeneration;
+    for (int index = 0; index < _heights.Length; ++index)
+    {
+      _heights[index] = _records[index].EstimatedHeight;
+    }
+  }
+
+  /// <summary>
+  /// Applies measured natural heights only to the layout generation that
+  /// produced them.
+  /// </summary>
+  public void UpdateMeasuredHeights(
+    IReadOnlyDictionary<int, double> measurements,
+    int layoutGeneration)
+  {
+    SetLayoutGeneration(layoutGeneration);
     foreach ((int index, double height) in measurements)
     {
       if (index >= 0 && index < _heights.Length &&
-          double.IsFinite(height) && height >= MinimumEstimatedHeight)
+          double.IsFinite(height) && height >= 0)
       {
         _heights[index] = height;
       }
@@ -191,7 +236,8 @@ internal sealed class TranscriptVirtualDocument
         Array.Empty<TranscriptVirtualRecord>());
     }
 
-    focalIndex = Math.Clamp(focalIndex, 0, _records.Length - 1);
+    focalIndex = ResolveVisibleFocalIndex(
+      Math.Clamp(focalIndex, 0, _records.Length - 1));
     int focalRegion = focalIndex / RegionRecordCount;
     int firstRegion = Math.Max(0, focalRegion - LoadedRegionRadius);
     int lastRegion = Math.Min(
@@ -248,9 +294,51 @@ internal sealed class TranscriptVirtualDocument
     double result = 0;
     for (int index = start; index < end; ++index)
     {
-      result += _heights[index];
+      result += EffectiveHeight(index);
     }
     return result;
+  }
+
+  private bool IsVisible(int index)
+  {
+    return index >= 0 && index < _records.Length &&
+      (_showRolledBackHistory || !_records[index].HistoricalRevision);
+  }
+
+  private double EffectiveHeight(int index)
+  {
+    return IsVisible(index) ? _heights[index] : 0.0;
+  }
+
+  private int ResolveVisibleFocalIndex(int focalIndex)
+  {
+    if (IsVisible(focalIndex))
+    {
+      return focalIndex;
+    }
+    for (int offset = 1; offset < _records.Length; ++offset)
+    {
+      int right = focalIndex + offset;
+      if (right < _records.Length && IsVisible(right))
+      {
+        return right;
+      }
+      int left = focalIndex - offset;
+      if (left >= 0 && IsVisible(left))
+      {
+        return left;
+      }
+    }
+    return focalIndex;
+  }
+
+  private static bool IsHistoricalRevisionHtml(string html)
+  {
+    return html.Contains(
+        "data-revision-historical="true"",
+        StringComparison.OrdinalIgnoreCase) ||
+      html.Contains("revision-original", StringComparison.OrdinalIgnoreCase) ||
+      html.Contains("revision-superseded", StringComparison.OrdinalIgnoreCase);
   }
 
   private static TranscriptVirtualIdentity ReadIdentity(Match anchor)
@@ -387,7 +475,8 @@ internal sealed record TranscriptVirtualRecord(
   string SourceId,
   string Html,
   double EstimatedHeight,
-  IReadOnlyList<TranscriptVirtualIdentity> Identities);
+  IReadOnlyList<TranscriptVirtualIdentity> Identities,
+  bool HistoricalRevision = false);
 
 internal sealed record TranscriptWindow(
   string Html,

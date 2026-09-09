@@ -146,8 +146,8 @@ internal static class CoreRegressionTestRunner
 
     Require(!projection.Markdown.Contains("Original prompt", StringComparison.Ordinal),
       "Rolled-back original leaked into default Codex projection.");
-    Require(projection.Markdown.Contains("## User (edited)", StringComparison.Ordinal),
-      "Current Codex replacement is not labelled edited.");
+    Require(projection.Markdown.Contains("## User (edited 1)", StringComparison.Ordinal),
+      "Current Codex replacement is not labelled edited with revision depth.");
     Require(projection.Markdown.Contains("# Context from my IDE setup:", StringComparison.Ordinal),
       "Recorded Codex IDE context was stripped.");
     Require(projection.Markdown.Contains("Edited prompt", StringComparison.Ordinal),
@@ -167,13 +167,13 @@ internal static class CoreRegressionTestRunner
       new AIConversationCoreProjectOptions(IncludeRolledBackTurns: true));
 
     Require(projection.Markdown.Contains(
-        "## User (original, aborted)",
+        "## User (original 0, aborted)",
         StringComparison.Ordinal),
       "Opt-in Codex history omitted the original/aborted label.");
     Require(projection.Markdown.Contains("Original prompt", StringComparison.Ordinal),
       "Opt-in Codex history omitted the original prompt.");
-    Require(projection.Markdown.Contains("## User (edited)", StringComparison.Ordinal),
-      "Opt-in Codex history omitted the edited label.");
+    Require(projection.Markdown.Contains("## User (edited 1)", StringComparison.Ordinal),
+      "Opt-in Codex history omitted the edited label/depth.");
   }
 
   /// <summary>

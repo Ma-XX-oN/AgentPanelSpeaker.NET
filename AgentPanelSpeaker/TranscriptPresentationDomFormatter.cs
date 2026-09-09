@@ -44,7 +44,10 @@ internal static class TranscriptPresentationDomFormatter
         string.Empty);
     }
 
-    AIConversationProjection projection = CoreClient.Project(source, jsonLines);
+    AIConversationProjection projection = CoreClient.Project(
+      source,
+      jsonLines,
+      new AIConversationCoreProjectOptions(IncludeRolledBackTurns: true));
     cancellationToken.ThrowIfCancellationRequested();
     JsonElement tree = projection.Presentation?.Tree ?? default;
     if (tree.ValueKind != JsonValueKind.Object ||
@@ -110,6 +113,8 @@ internal static class TranscriptPresentationDomFormatter
   {
     string turnId = GetString(turn, "id");
     string label = "Agent";
+    string revisionStatus = string.Empty;
+    int revisionDepth = -1;
     if (turn.TryGetProperty("actor", out JsonElement actor) &&
         actor.ValueKind == JsonValueKind.Object)
     {
@@ -118,6 +123,21 @@ internal static class TranscriptPresentationDomFormatter
       {
         label = GetString(actor, "role") == "user" ? "User" : "Agent";
       }
+      revisionStatus = GetString(actor, "revision_status");
+      revisionDepth = GetInt32(actor, "revision_depth");
+    }
+
+    bool projectionVisible = true;
+    bool revisionHistoryControlled = false;
+    bool historicalRevision = false;
+    if (turn.TryGetProperty("projection", out JsonElement projection) &&
+        projection.ValueKind == JsonValueKind.Object)
+    {
+      projectionVisible = GetBoolean(projection, "visible", defaultValue: true);
+      revisionHistoryControlled = GetBoolean(
+        projection,
+        "revision_history_controlled");
+      historicalRevision = GetBoolean(projection, "historical_revision");
     }
 
     var bodyChildren = new List<TranscriptDomNode>();
@@ -139,13 +159,37 @@ internal static class TranscriptPresentationDomFormatter
       }
     }
 
+    string revisionClass = string.IsNullOrWhiteSpace(revisionStatus)
+      ? string.Empty
+      : $" revision-{revisionStatus}";
+    var attributes = new Dictionary<string, string>
+    {
+      ["class"] = "transcript-turn" + revisionClass,
+      ["data-presentation-id"] = turnId,
+      ["data-projection-visible"] = projectionVisible ? "true" : "false",
+      ["data-revision-history-controlled"] =
+        revisionHistoryControlled ? "true" : "false",
+      ["data-revision-historical"] = historicalRevision ? "true" : "false"
+    };
+    if (!string.IsNullOrWhiteSpace(revisionStatus))
+    {
+      attributes["data-revision-status"] = revisionStatus;
+    }
+    if (revisionDepth >= 0)
+    {
+      attributes["data-revision-depth"] = revisionDepth.ToString(
+        CultureInfo.InvariantCulture);
+    }
+    if (historicalRevision)
+    {
+      // Historical turns start hidden so there is no flash before WebView2
+      // receives the current UI visibility setting.
+      attributes["hidden"] = "hidden";
+    }
+
     return Element(
       "section",
-      new Dictionary<string, string>
-      {
-        ["class"] = "transcript-turn",
-        ["data-presentation-id"] = turnId
-      },
+      attributes,
       Element("h2", null, Text(label)),
       Element(
         "blockquote",
@@ -624,6 +668,24 @@ internal static class TranscriptPresentationDomFormatter
       value.ValueKind == JsonValueKind.String
         ? value.GetString() ?? string.Empty
         : string.Empty;
+  }
+
+  private static bool GetBoolean(
+    JsonElement element,
+    string propertyName,
+    bool defaultValue = false)
+  {
+    if (element.ValueKind != JsonValueKind.Object ||
+        !element.TryGetProperty(propertyName, out JsonElement value))
+    {
+      return defaultValue;
+    }
+    return value.ValueKind switch
+    {
+      JsonValueKind.True => true,
+      JsonValueKind.False => false,
+      _ => defaultValue
+    };
   }
 
   private static int GetInt32(JsonElement element, string propertyName)

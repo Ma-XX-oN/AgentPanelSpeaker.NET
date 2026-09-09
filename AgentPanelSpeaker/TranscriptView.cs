@@ -49,6 +49,8 @@ internal sealed class TranscriptView : UserControl
   private int _windowStartIndex = -1;
   private int _windowEndIndex = -1;
   private bool _domPresentationMode;
+  private int _layoutGeneration = 1;
+  private Size _lastLayoutSize;
   private CancellationTokenSource? _findCancellation;
   private PendingFindRequest? _pendingFindRequest;
   private long _latestFindWindowNavigationGeneration;
@@ -255,6 +257,8 @@ internal sealed class TranscriptView : UserControl
   {
     LogViewState("apply-settings", "begin", requestedDark: dark);
     _settings = settings.Normalize();
+    _virtualDocument?.SetShowRolledBackHistory(
+      _settings.ShowRolledBackHistory);
     _dark = dark;
     Color page = dark
       ? Color.FromArgb(30, 32, 35)
@@ -359,6 +363,8 @@ internal sealed class TranscriptView : UserControl
       highlight = ToCss(colour),
       duration = settings.FadeMilliseconds,
       follow = settings.FollowSpeech,
+      showRolledBackHistory = settings.ShowRolledBackHistory,
+      layoutGeneration = _layoutGeneration,
       dark
     });
   }
@@ -595,7 +601,7 @@ internal sealed class TranscriptView : UserControl
     try
     {
       AgentSource source = _source;
-      bool includeRolledBackTurns = _settings.ShowRolledBackHistory;
+      const bool includeRolledBackTurns = true;
       CancellationToken token = cancellation.Token;
       TranscriptRenderPayload payload = await Task.Run(() =>
       {
@@ -630,6 +636,9 @@ internal sealed class TranscriptView : UserControl
           identities,
           token);
         TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
+        document.SetShowRolledBackHistory(
+          _settings.ShowRolledBackHistory);
+        document.SetLayoutGeneration(_layoutGeneration);
         return new TranscriptRenderPayload(
           document,
           identities,
@@ -987,7 +996,10 @@ internal sealed class TranscriptView : UserControl
               values[index] = height;
             }
           }
-          virtualDocument.UpdateMeasuredHeights(values);
+          int layoutGeneration = ReadOptionalInt32(
+            root,
+            "layoutGeneration") ?? _layoutGeneration;
+          virtualDocument.UpdateMeasuredHeights(values, layoutGeneration);
         }
         return;
       }
@@ -1222,6 +1234,13 @@ internal sealed class TranscriptView : UserControl
       IReadOnlyList<TranscriptSearchMatch> matches = await index.SearchAsync(
         request,
         cancellation.Token);
+      TranscriptVirtualDocument? visibleDocument = _virtualDocument;
+      if (visibleDocument is not null)
+      {
+        matches = matches.Where(match => visibleDocument.IsVisible(
+          match.RecordNumber,
+          match.SourceId)).ToArray();
+      }
       matches = RotateMatchesAfterOrigin(
         matches,
         originRecordNumber,
@@ -1498,6 +1517,17 @@ internal sealed class TranscriptView : UserControl
   protected override void OnSizeChanged(EventArgs eventArgs)
   {
     base.OnSizeChanged(eventArgs);
+    Size currentSize = ClientSize;
+    if (currentSize != _lastLayoutSize)
+    {
+      _lastLayoutSize = currentSize;
+      ++_layoutGeneration;
+      _virtualDocument?.SetLayoutGeneration(_layoutGeneration);
+      if (_initialized)
+      {
+        QueueSettingsApply(immediate: false);
+      }
+    }
     LogViewState("size-changed", "after-base");
   }
 
@@ -2199,6 +2229,8 @@ let currentBoundaryWordIndex = -1;
 let currentSpeechListItem = null;
 let fadeMs = 250;
 let followSpeech = true;
+let showRolledBackHistory = false;
+let layoutGeneration = 1;
 let programmaticScrollUntil = 0;
 let windowStartIndex = -1;
 let windowEndIndex = -1;
@@ -2531,6 +2563,7 @@ function replaceTranscriptDom(
     fragment.append(buildTranscriptDomNode(spec));
   }
   transcript.replaceChildren(fragment);
+  applyRevisionVisibility(showRolledBackHistory);
 
   let currentStructureMap = postStructureStage(
     structureProbeId,
@@ -2631,6 +2664,7 @@ function replaceTranscriptWindow(
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   transcript.innerHTML = exactAssignedHtml;
+  applyRevisionVisibility(showRolledBackHistory);
   const exactParsedHtml = transcript.innerHTML;
   previousStructureMap = postStructureStage(
     structureProbeId,
@@ -2694,7 +2728,11 @@ function replaceTranscriptWindow(
     }))
     .filter(item => item.index >= 0 && item.height > 0);
   if (measurements.length) {
-    chrome.webview.postMessage({type:'window-measured', measurements});
+    chrome.webview.postMessage({
+      type:'window-measured',
+      layoutGeneration,
+      measurements
+    });
   }
   virtualShiftPending = false;
   if (anchorRecordNumber !== null && anchorOffset !== null) {
@@ -2771,11 +2809,27 @@ function setFollowSpeech(enabled, notify) {
   }
 }
 
-function applySettings(highlight, duration, follow, dark) {
+function applyRevisionVisibility(show) {
+  showRolledBackHistory = !!show;
+  for (const turn of transcript.querySelectorAll(
+      'section.transcript-turn[data-revision-historical="true"]')) {
+    turn.hidden = !showRolledBackHistory;
+  }
+}
+
+function applySettings(
+  highlight,
+  duration,
+  follow,
+  showHistory,
+  generation,
+  dark) {
   document.documentElement.classList.toggle('dark', dark);
   document.documentElement.style.setProperty('--highlight', highlight);
   document.documentElement.style.setProperty('--fade-ms', duration + 'ms');
   fadeMs = duration;
+  layoutGeneration = Number(generation || layoutGeneration);
+  applyRevisionVisibility(showHistory);
   setFollowSpeech(follow, false);
 }
 
@@ -3975,6 +4029,8 @@ chrome.webview.addEventListener('message', event => {
       data.highlight,
       data.duration,
       data.follow,
+      data.showRolledBackHistory,
+      data.layoutGeneration,
       data.dark);
     return;
   }

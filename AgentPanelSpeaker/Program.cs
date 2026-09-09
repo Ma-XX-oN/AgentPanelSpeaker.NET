@@ -181,8 +181,7 @@ internal static class Program
         "app.unobserved_task_exception",
         eventArgs.Exception,
         source: "TaskScheduler",
-        isTerminating: false,
-        rawException: eventArgs.Exception);
+        isTerminating: false);
       eventArgs.SetObserved();
     };
 

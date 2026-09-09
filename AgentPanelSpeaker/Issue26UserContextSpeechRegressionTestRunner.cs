@@ -156,23 +156,20 @@ internal static class Issue26UserContextSpeechRegressionTestRunner
     IReadOnlyList<(string Category, string Text)> disabledNodes = ReadNodes(disabled);
     IReadOnlyList<(string Category, string Text)> enabledNodes = ReadNodes(enabled);
 
-    Require(disabledNodes.Count == 1,
-      $"Disabled context speech emitted {disabledNodes.Count} nodes instead of one prompt.");
-    Require(disabledNodes[0].Category == nameof(ContentCategory.User),
-      "Disabled context speech changed the prompt voice category.");
-    Require(disabledNodes[0].Text == prompt,
-      "Disabled context speech did not leave the actual User prompt intact.");
-
+    Require(disabledNodes.Count == 2,
+      $"Disabled context policy retained {disabledNodes.Count} nodes instead of context + prompt.");
     Require(enabledNodes.Count == 2,
-      $"Enabled context speech emitted {enabledNodes.Count} nodes instead of context + prompt.");
-    Require(enabledNodes[0].Category == nameof(ContentCategory.UserContext),
-      "Included IDE context did not use the alternate User-context voice category.");
-    Require(enabledNodes[0].Text.Contains("## Active file:", StringComparison.Ordinal),
-      "Included IDE context lost canonical context content.");
-    Require(enabledNodes[1].Category == nameof(ContentCategory.User),
+      $"Enabled context policy retained {enabledNodes.Count} nodes instead of context + prompt.");
+    Require(disabledNodes.SequenceEqual(enabledNodes),
+      "SpeakUserContext changed indexed canonical speech history instead of final playback eligibility.");
+    Require(disabledNodes[0].Category == nameof(ContentCategory.UserContext),
+      "Retained IDE context did not use the alternate User-context voice category.");
+    Require(disabledNodes[0].Text.Contains("## Active file:", StringComparison.Ordinal),
+      "Retained IDE context lost canonical context content.");
+    Require(disabledNodes[1].Category == nameof(ContentCategory.User),
       "Actual prompt did not retain the normal User voice category.");
-    Require(enabledNodes[1].Text == prompt,
-      "Actual prompt changed when IDE context speech was enabled.");
+    Require(disabledNodes[1].Text == prompt,
+      "Actual User prompt changed while User Context remained indexed.");
   }
 
   /// <summary>

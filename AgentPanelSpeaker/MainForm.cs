@@ -1169,6 +1169,8 @@ internal sealed class MainForm : Form, IMessageFilter
         settings.Transcript,
         transcriptDark);
       _speakUserContext = settings.Transcript.SpeakUserContext;
+      _speech.SetShowRolledBackHistory(
+        settings.Transcript.ShowRolledBackHistory);
       _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
       _speech.SetWordBoundaryPollMilliseconds(
         settings.Transcript.HighlightUpdateMilliseconds);
@@ -1577,8 +1579,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _speakExistingCheckBox.Checked,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
         preindexedHistory,
-        IncludeRolledBackTurns:
-          _transcriptSettingsPopup.Settings.ShowRolledBackHistory,
+        IncludeRolledBackTurns: true,
         IncludeUserContext: true));
       if (reusePausedHistory)
       {
@@ -2211,10 +2212,8 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
-    bool historyProjectionChanged =
-      _settingsStore.Current.Transcript.ShowRolledBackHistory !=
-        settings.ShowRolledBackHistory;
     _speakUserContext = settings.SpeakUserContext;
+    _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);
     _transcriptView.ApplySettings(settings, dark);
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
@@ -2227,25 +2226,6 @@ internal sealed class MainForm : Form, IMessageFilter
     }
     _transcriptSettingsSaveTimer.Stop();
     _transcriptSettingsSaveTimer.Start();
-    if (historyProjectionChanged && !_monitor.IsRunning &&
-        !string.IsNullOrWhiteSpace(_sessionPathTextBox.Text))
-    {
-      try
-      {
-        LocatedSession session = SessionLocator.FromPath(
-          _sessionPathTextBox.Text,
-          GetSelectedSource());
-        _selectedSessionHistory = null;
-        _selectedSessionHistoryPath = null;
-        _ = LoadPausedHistoryPreviewAsync(session);
-      }
-      catch (Exception exception) when (
-        exception is IOException or UnauthorizedAccessException or
-        InvalidDataException or InvalidOperationException or ArgumentException)
-      {
-        AppendLog($"Unable to rebuild transcript history: {exception.Message}");
-      }
-    }
   }
 
   /// <summary>
@@ -4060,7 +4040,7 @@ internal sealed class MainForm : Form, IMessageFilter
         _monitor.LoadHistoryPreview(
           session,
           startAtLatestTurn,
-          _transcriptSettingsPopup.Settings.ShowRolledBackHistory,
+          includeRolledBackTurns: true,
           includeUserContext: true));
       if (_closing || IsDisposed || generation != Volatile.Read(
             ref _historyPreviewGeneration) || _monitor.IsRunning ||

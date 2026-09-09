@@ -574,7 +574,12 @@ internal sealed class JsonlSessionMonitor : IDisposable
             part.FenceLineCount,
             PauseAfter: sentence.PauseAfter,
             NodeTimestampUtc: nodeTimestampUtc,
-            StartsUserTurn: startsUserTurn && sentenceIndex == 0));
+            StartsUserTurn: startsUserTurn && sentenceIndex == 0,
+            RevisionStatus: node.RevisionStatus,
+            RevisionDepth: node.RevisionDepth,
+            ProjectionVisible: node.ProjectionVisible,
+            RevisionHistoryControlled: node.RevisionHistoryControlled,
+            HistoricalRevision: node.HistoricalRevision));
         }
       }
       else
@@ -590,7 +595,12 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceLineCount,
           PauseAfter: part.PauseAfter,
           NodeTimestampUtc: nodeTimestampUtc,
-          StartsUserTurn: startsUserTurn));
+          StartsUserTurn: startsUserTurn,
+          RevisionStatus: node.RevisionStatus,
+          RevisionDepth: node.RevisionDepth,
+          ProjectionVisible: node.ProjectionVisible,
+          RevisionHistoryControlled: node.RevisionHistoryControlled,
+          HistoricalRevision: node.HistoricalRevision));
       }
     }
     DiagnosticLog.Write("jsonl.node_accepted", new
