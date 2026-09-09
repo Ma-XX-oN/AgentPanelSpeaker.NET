@@ -4059,6 +4059,11 @@ window.addEventListener('scroll', () => {
   if (virtualShiftTimer) clearTimeout(virtualShiftTimer);
   virtualShiftTimer = setTimeout(() => {
     virtualShiftTimer = 0;
+    // Window replacement, playback reveal, and anchor restoration all scroll
+    // programmatically.  Those scroll events must not be reinterpreted as
+    // manual edge navigation or they can bounce the virtual window away from
+    // the playback target and back indefinitely.
+    if (performance.now() <= programmaticScrollUntil) return;
     const visibleRecord = firstVisibleVirtualRecord();
     const visibleIndex = Number(visibleRecord?.dataset.virtualIndex || -1);
     if (visibleIndex >= 0 && visibleIndex <= windowStartIndex + 20 &&
