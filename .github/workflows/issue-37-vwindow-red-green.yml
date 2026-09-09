@@ -31,7 +31,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Wire issue 37 virtual-window suite before production change
+      - name: Ensure issue 37 virtual-window suite is wired before production change
         shell: pwsh
         run: |
           @'
@@ -80,8 +80,10 @@ jobs:
           git config user.name 'Ma-XX-oN'
           git config user.email 'Ma-XX-oN@users.noreply.github.com'
           git add AgentPanelSpeaker/Program.cs AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          git commit -m 'test: wire issue 37 initial vwindow acceptance (#37)'
-          git push origin HEAD:issue-37-shared-display-projection
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'test: wire issue 37 initial vwindow acceptance (#37)'
+            git push origin HEAD:issue-37-shared-display-projection
+          }
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -231,14 +233,11 @@ jobs:
           git fetch origin feature/aiconversationcore-integration --depth=1
           git diff --check FETCH_HEAD HEAD
 
-      - name: Remove temporary issue 37 workflows after validation
+      - name: Remove temporary issue 37 workflow after validation
         if: success()
         shell: pwsh
         run: |
           Remove-Item .github/workflows/issue-37-vwindow-red-green.yml
-          if (Test-Path .github/workflows/issue-37-red-single-projection.yml) {
-            Remove-Item .github/workflows/issue-37-red-single-projection.yml
-          }
           git add -A
-          git commit -m 'chore: remove issue 37 temporary validation workflows'
+          git commit -m 'chore: remove issue 37 temporary validation workflow'
           git push origin HEAD:issue-37-shared-display-projection
