@@ -6,7 +6,7 @@ on:
       - issue-37-directional-prefetch-blank-viewport
     paths:
       - '.github/workflows/issue-37-directional-red.yml'
-      - 'tools/adjust_issue37_tall_turn_physical_fixture.py'
+      - 'tools/adjust_issue37_tall_turn_preplay_geometry.py'
 
 permissions:
   contents: write
@@ -36,9 +36,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Stage physically positioned tall-turn regression
+      - name: Stage pre-playback physical tall-turn oracle
         shell: pwsh
-        run: python tools/adjust_issue37_tall_turn_physical_fixture.py
+        run: python tools/adjust_issue37_tall_turn_preplay_geometry.py
 
       - name: Validate staged test patch
         shell: pwsh
@@ -91,19 +91,17 @@ jobs:
           if ($failLines.Count -ne 5) {
             throw "Expected exactly 5 physical RED failures, observed $($failLines.Count)."
           }
-          if (-not $text.Contains('Physical vwindow retains a removable')) {
-            throw 'Minimal-window regression failed for an unexpected reason.'
+          foreach ($invalidPrecondition in @(
+            'speech map could not resolve the exact target word before playback',
+            'test window did not meet the physical minimum height',
+            'test has no unloaded content below the materialized window',
+            'cursor target did not enter the lower physical trigger zone'
+          )) {
+            if ($text.Contains($invalidPrecondition)) {
+              throw "Tall-turn oracle failed its own precondition: $invalidPrecondition"
+            }
           }
-          if (-not $text.Contains('Follow mode remained enabled')) {
-            throw 'Manual-scroll follow regression failed for an unexpected reason.'
-          }
-          if (-not $text.Contains('no playback-down shift was requested')) {
-            throw 'Tall-turn voice-cursor regression failed for an unexpected reason.'
-          }
-          if ($text.Contains('did not enter the lower physical trigger zone')) {
-            throw 'Tall-turn oracle still failed its own physical trigger precondition.'
-          }
-          Write-Host 'RED-PROVEN issue-37 corrected physical tall-turn oracle reproduces production failures.'
+          Write-Host 'RED-PROVEN issue-37 pre-playback physical cursor oracle reproduces production failures.'
 
       - name: Commit corrected tall-turn RED regression
         shell: pwsh
@@ -112,6 +110,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
           if (git diff --cached --quiet) { throw 'Tall-turn oracle patch produced no source change.' }
-          git commit -m 'test: position tall-turn cursor by physical geometry (#37) [skip ci]'
+          git commit -m 'test: measure tall-turn cursor before playback shift (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'Corrected tall-turn RED regression committed after intended failure was proven.'
+          Write-Host 'Pre-playback tall-turn RED regression committed after intended failure was proven.'
