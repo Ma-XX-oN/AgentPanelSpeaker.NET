@@ -73,7 +73,8 @@ marker = '''  private static void WriteFixture(string path)
 '''
 fixture = '''  private static void WriteDirectionalFixture(string path)
   {
-    const int directionalPairCount = 260;
+    const int directionalPairCount = 120;
+    string largePayload = new('x', 32_000);
     var records = new List<string>(directionalPairCount * 2);
     for (int index = 1; index <= directionalPairCount; ++index)
     {
@@ -84,7 +85,7 @@ fixture = '''  private static void WriteDirectionalFixture(string path)
         payload = new
         {
           type = "user_message",
-          message = $"Directional issue 37 request {index:D3}."
+          message = $"Directional issue 37 request {index:D3}. {largePayload}"
         }
       }));
       records.Add(JsonSerializer.Serialize(new
@@ -95,7 +96,7 @@ fixture = '''  private static void WriteDirectionalFixture(string path)
         {
           type = "agent_message",
           phase = "final",
-          message = $"Directional issue 37 response {index:D3}."
+          message = $"Directional issue 37 response {index:D3}. {largePayload}"
         }
       }));
     }
