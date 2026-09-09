@@ -1,5 +1,6 @@
 name: Issue 37 physical vwindow RED
 
+# Stable-head RED gate: do not advance this branch until the regression commit lands.
 on:
   push:
     branches:
