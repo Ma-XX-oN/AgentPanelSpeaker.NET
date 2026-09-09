@@ -77,14 +77,14 @@ jobs:
         run: |
           git diff --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git diff -- AgentPanelSpeaker/TranscriptSearchIndex.cs AgentPanelSpeaker/TranscriptView.cs
+          git diff -- AgentPanelSpeaker/TranscriptSearchIndex.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs
 
       - name: Commit verified ordinal mapping fix
         shell: pwsh
         run: |
           git config user.name 'Ma-XX-oN'
           git config user.email 'Ma-XX-oN@users.noreply.github.com'
-          git add AgentPanelSpeaker/TranscriptSearchIndex.cs AgentPanelSpeaker/TranscriptView.cs
+          git add AgentPanelSpeaker/TranscriptSearchIndex.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m 'fix: map Core list ordinals into speech highlighting (#37)'
