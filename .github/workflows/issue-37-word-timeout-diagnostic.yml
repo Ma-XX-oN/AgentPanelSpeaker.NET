@@ -1,0 +1,174 @@
+name: Issue 37 word-materialization timeout diagnostic
+
+on:
+  push:
+    branches:
+      - issue-37-vwindow-convergence-containment
+    paths:
+      - '.github/workflows/issue-37-word-timeout-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-37-vwindow-convergence-containment
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Apply pending Core-unit integration
+        shell: pwsh
+        run: |
+          python scripts/issue-37-core-unit-integration.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-core-unit-constructor-compat.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-core-runtime-pin.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-core-parity-html-entity-test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C dependencies/AIConversationCore fetch origin 6c92799c1b14693001e8b913465f4a12b0b1e1ab
+          git -C dependencies/AIConversationCore checkout --detach 6c92799c1b14693001e8b913465f4a12b0b1e1ab
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Instrument word-materialization acceptance stages
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/Issue37WordMaterializationRegressionTestRunner.cs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new, label):
+            global text
+            count = text.count(old)
+            if count != 1:
+              raise SystemExit(f'{label} anchor count={count}')
+            text = text.replace(old, new, 1)
+
+          replace_once(
+            '      try\n      {\n        body();',
+            '      try\n      {\n        Console.WriteLine($"TRACE start {name}");\n        Console.Out.Flush();\n        body();',
+            'test-start')
+          replace_once(
+            '    using BrowserFixture fixture = CreateBrowserFixture();\n    JsonElement actual = ExecuteJsonProbe(',
+            '    Console.WriteLine("TRACE eager before fixture"); Console.Out.Flush();\n    using BrowserFixture fixture = CreateBrowserFixture();\n    Console.WriteLine("TRACE eager after fixture"); Console.Out.Flush();\n    JsonElement actual = ExecuteJsonProbe(',
+            'eager-fixture')
+          replace_once(
+            '    Require(actual.GetProperty("fillerPresent").GetBoolean(),',
+            '    Console.WriteLine("TRACE eager after probe"); Console.Out.Flush();\n    Require(actual.GetProperty("fillerPresent").GetBoolean(),',
+            'eager-probe')
+          replace_once(
+            '    using BrowserFixture fixture = CreateBrowserFixture();\n    IReadOnlyList<TranscriptSearchMatch> matches = fixture.SearchIndex.SearchAsync(',
+            '    Console.WriteLine("TRACE lazy before fixture"); Console.Out.Flush();\n    using BrowserFixture fixture = CreateBrowserFixture();\n    Console.WriteLine("TRACE lazy after fixture"); Console.Out.Flush();\n    IReadOnlyList<TranscriptSearchMatch> matches = fixture.SearchIndex.SearchAsync(',
+            'lazy-fixture')
+          replace_once(
+            '    string matchesJson = JsonSerializer.Serialize(matches);\n    JsonElement actual = ExecuteJsonProbe(',
+            '    string matchesJson = JsonSerializer.Serialize(matches);\n    Console.WriteLine("TRACE lazy before probe"); Console.Out.Flush();\n    JsonElement actual = ExecuteJsonProbe(',
+            'lazy-probe-before')
+          replace_once(
+            '    Require(actual.GetProperty("bulkWordCount").GetInt32() > 0,',
+            '    Console.WriteLine("TRACE lazy after probe"); Console.Out.Flush();\n    Require(actual.GetProperty("bulkWordCount").GetInt32() > 0,',
+            'lazy-probe-after')
+          replace_once(
+            '    TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(',
+            '    Console.WriteLine("TRACE fixture before search-index"); Console.Out.Flush();\n    TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(',
+            'fixture-search-before')
+          replace_once(
+            '    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);',
+            '    Console.WriteLine("TRACE fixture after search-index"); Console.Out.Flush();\n    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);\n    Console.WriteLine("TRACE fixture after virtual-document"); Console.Out.Flush();',
+            'fixture-document')
+          replace_once(
+            '    string replaceScript = BuildProductionReplaceWindowScript(',
+            '    Console.WriteLine("TRACE fixture before payload-builder"); Console.Out.Flush();\n    string replaceScript = BuildProductionReplaceWindowScript(',
+            'fixture-payload-before')
+          replace_once(
+            '    return BrowserFixture.Create(replaceScript, searchIndex);',
+            '    Console.WriteLine("TRACE fixture after payload-builder"); Console.Out.Flush();\n    BrowserFixture result = BrowserFixture.Create(replaceScript, searchIndex);\n    Console.WriteLine("TRACE fixture after browser-create"); Console.Out.Flush();\n    return result;',
+            'fixture-browser-create')
+          replace_once(
+            '    PumpUntilCompleted(\n      productionWebView.EnsureCoreWebView2Async(),',
+            '    Console.WriteLine("TRACE payload before ensure-webview"); Console.Out.Flush();\n    PumpUntilCompleted(\n      productionWebView.EnsureCoreWebView2Async(),',
+            'payload-ensure-before')
+          replace_once(
+            '    FieldInfo identitiesField = typeof(TranscriptView).GetField(',
+            '    Console.WriteLine("TRACE payload after ensure-webview"); Console.Out.Flush();\n    FieldInfo identitiesField = typeof(TranscriptView).GetField(',
+            'payload-ensure-after')
+          replace_once(
+            '    return build.Invoke(productionView, new object?[]',
+            '    Console.WriteLine("TRACE payload before build-invoke"); Console.Out.Flush();\n    string result = build.Invoke(productionView, new object?[]',
+            'payload-invoke-before')
+          replace_once(
+            '    }) as string ?? throw new InvalidOperationException(\n      "Production window payload builder returned no script.");',
+            '    }) as string ?? throw new InvalidOperationException(\n      "Production window payload builder returned no script.");\n    Console.WriteLine("TRACE payload after build-invoke"); Console.Out.Flush();\n    return result;',
+            'payload-invoke-after')
+          replace_once(
+            '      Task ensure = webView.EnsureCoreWebView2Async();',
+            '      Console.WriteLine("TRACE browser before ensure"); Console.Out.Flush();\n      Task ensure = webView.EnsureCoreWebView2Async();',
+            'browser-ensure-before')
+          replace_once(
+            '      MethodInfo shellMethod = typeof(TranscriptView).GetMethod(',
+            '      Console.WriteLine("TRACE browser after ensure"); Console.Out.Flush();\n      MethodInfo shellMethod = typeof(TranscriptView).GetMethod(',
+            'browser-ensure-after')
+          replace_once(
+            '      webView.CoreWebView2.NavigateToString(shell);',
+            '      Console.WriteLine("TRACE browser before navigate"); Console.Out.Flush();\n      webView.CoreWebView2.NavigateToString(shell);',
+            'browser-nav-before')
+          replace_once(
+            '      Task<string> replace = webView.CoreWebView2.ExecuteScriptAsync(replaceScript);',
+            '      Console.WriteLine("TRACE browser after navigate"); Console.Out.Flush();\n      Task<string> replace = webView.CoreWebView2.ExecuteScriptAsync(replaceScript);',
+            'browser-nav-after')
+          replace_once(
+            '      return new BrowserFixture(host, webView, searchIndex);',
+            '      Console.WriteLine("TRACE browser after replace"); Console.Out.Flush();\n      return new BrowserFixture(host, webView, searchIndex);',
+            'browser-replace-after')
+
+          path.write_text(text, encoding='utf-8')
+          '@ | python -
+
+      - name: Build diagnostic binary
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run bounded word-materialization diagnostic
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'word-trace-out.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'word-trace-err.txt'
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','word-materialization' -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          if (-not $p.WaitForExit(150000)) {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            Write-Host '===== stdout at timeout ====='
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host '===== stderr at timeout ====='
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw 'word-materialization diagnostic timed out after 150 seconds.'
+          }
+          Write-Host '===== stdout ====='
+          if (Test-Path $stdout) { Get-Content $stdout }
+          Write-Host '===== stderr ====='
+          if (Test-Path $stderr) { Get-Content $stderr }
+          if ($p.ExitCode -ne 0) { throw "word-materialization exited $($p.ExitCode)." }
