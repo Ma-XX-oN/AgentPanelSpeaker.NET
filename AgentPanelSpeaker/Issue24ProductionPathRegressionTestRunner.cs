@@ -59,7 +59,7 @@ internal static class Issue24ProductionPathRegressionTestRunner
   /// <summary>
   /// Starts with a real Codex JSONL fixture, runs Core presentation, virtual
   /// document construction, search/stable-word mapping, the exact production
-  /// replaceTranscriptDom payload builder, the actual WebView2 DOM consumer,
+  /// virtual-window payload builder, the actual WebView2 DOM consumer,
   /// and finally the real playback JavaScript. No intermediate browser scope
   /// assignment is performed by the test.
   /// </summary>
@@ -105,7 +105,7 @@ Like this:
         identities,
         CancellationToken.None);
       TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
-        presentation.Html);
+        presentation.Units);
       TranscriptWindow window = document.CreateFullWindow();
 
       TranscriptNodeIdentity responseIdentity = identities.First(item =>
@@ -121,7 +121,6 @@ Like this:
 
       string replaceScript = BuildProductionReplaceScript(
         window,
-        presentation.Nodes,
         identities,
         searchIndex);
       RunPlaybackProbe(
@@ -241,13 +240,8 @@ Like this:
     Require(document.Records[0].Identities.Count == 2,
       "Acceptance fixture did not retain both canonical identities.");
 
-    TranscriptDomNode[] domNodes =
-    {
-      new("html", null, null, null, html, null)
-    };
     string replaceScript = BuildProductionReplaceScript(
       document.CreateFullWindow(),
-      domNodes,
       identities,
       searchIndex);
 
@@ -270,7 +264,6 @@ Like this:
   /// </summary>
   private static string BuildProductionReplaceScript(
     TranscriptWindow window,
-    IReadOnlyList<TranscriptDomNode> domNodes,
     IReadOnlyList<TranscriptNodeIdentity> identities,
     TranscriptSearchIndex searchIndex)
   {
@@ -296,13 +289,13 @@ Like this:
     FieldInfo? searchIndexField = typeof(TranscriptView).GetField(
       "_searchIndex",
       BindingFlags.NonPublic | BindingFlags.Instance);
-    MethodInfo? buildReplaceDom = typeof(TranscriptView).GetMethod(
-      "BuildReplaceDomScript",
+    MethodInfo? buildReplaceWindow = typeof(TranscriptView).GetMethod(
+      "BuildReplaceWindowScript",
       BindingFlags.NonPublic | BindingFlags.Instance);
     Require(webViewField is not null &&
         identitiesField is not null &&
         searchIndexField is not null &&
-        buildReplaceDom is not null,
+        buildReplaceWindow is not null,
       "Production transcript payload members could not be located.");
 
     var internalWebView = (WebView2?)webViewField!.GetValue(productionView);
@@ -313,21 +306,25 @@ Like this:
 
     identitiesField!.SetValue(productionView, identities);
     searchIndexField!.SetValue(productionView, searchIndex);
-    string script = buildReplaceDom!.Invoke(productionView, new object?[]
+    string script = buildReplaceWindow!.Invoke(productionView, new object?[]
     {
       window,
-      domNodes,
       false,
+      null,
+      null,
+      null,
+      null,
+      null,
       null,
       null
     }) as string ?? string.Empty;
     Require(script.Length != 0,
-      "Production BuildReplaceDomScript returned no browser payload.");
+      "Production BuildReplaceWindowScript returned no browser payload.");
     return script;
   }
 
   /// <summary>
-  /// Executes the exact production replaceTranscriptDom output in the actual
+  /// Executes the exact production replaceTranscriptWindow output in the actual
   /// transcript shell and then drives playback. Browser mapping is therefore
   /// entirely the output of the production payload; the test supplies none.
   /// </summary>

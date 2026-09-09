@@ -21,6 +21,9 @@ internal sealed class TranscriptSearchIndex
   private static readonly Regex RecordRegex = new(
     "class=\\\"record-anchor\\\"[^>]*data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*data-source-id=\\\"(?<source>[^\\\"]*)\\\"",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
+  private static readonly Regex ListItemTagRegex = new(
+    "<li\\b[^>]*\\bdata-list-ordinal\\s*=\\s*\"(?<ordinal>-?\\d+)\"[^>]*>",
+    RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
   private static readonly HashSet<string> BlockTags = new(
     new[] { "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "summary" },
     StringComparer.OrdinalIgnoreCase);
@@ -64,7 +67,8 @@ internal sealed class TranscriptSearchIndex
     int recordNumber = 0;
     string sourceId = string.Empty;
 
-    foreach (Match part in HtmlPartRegex.Matches(html))
+    string mappingHtml = AddCoreOrdinalMappingTokens(html);
+    foreach (Match part in HtmlPartRegex.Matches(mappingHtml))
     {
       cancellationToken.ThrowIfCancellationRequested();
       string value = part.Value;
@@ -158,6 +162,52 @@ internal sealed class TranscriptSearchIndex
     SearchRecord[] voicedRecords = BuildCorpus(tokens, voicedOnly: true);
     Dictionary<string, TranscriptRecordWordMap> wordMaps = BuildWordMaps(tokens);
     return new TranscriptSearchIndex(allRecords, voicedRecords, wordMaps);
+  }
+
+  /// <summary>
+  /// Adds non-visual mapping tokens for Core-owned ordered-list ordinals.
+  /// </summary>
+  /// <remarks>
+  /// Core already resolved the semantic ordinal and exposed it through
+  /// <c>data-list-ordinal</c>.  This method does not infer list semantics; it
+  /// only makes that Core metadata addressable by the existing speech-token
+  /// mapper.  Existing mapping spans are preserved without duplication.
+  /// </remarks>
+  private static string AddCoreOrdinalMappingTokens(string html)
+  {
+    MatchCollection matches = ListItemTagRegex.Matches(html);
+    if (matches.Count == 0)
+    {
+      return html;
+    }
+
+    var result = new StringBuilder(html.Length + matches.Count * 80);
+    int cursor = 0;
+    foreach (Match match in matches)
+    {
+      result.Append(html, cursor, match.Index - cursor);
+      result.Append(match.Value);
+      cursor = match.Index + match.Length;
+
+      int probe = cursor;
+      while (probe < html.Length && char.IsWhiteSpace(html[probe]))
+      {
+        ++probe;
+      }
+      if (html.AsSpan(probe).StartsWith(
+          "<span class=\"speech-ordinal-map\"",
+          StringComparison.OrdinalIgnoreCase))
+      {
+        continue;
+      }
+
+      string ordinal = match.Groups["ordinal"].Value;
+      result.Append(
+        "<span class=\"speech-ordinal-map\" aria-hidden=\"true\" " +
+        "style=\"display:none\">" + ordinal + ". </span>");
+    }
+    result.Append(html, cursor, html.Length - cursor);
+    return result.ToString();
   }
 
   /// <summary>
@@ -256,10 +306,10 @@ internal sealed class TranscriptSearchIndex
           request.Query,
           request.CaseSensitive,
           request.WholeWord,
-          cancellationToken)
+          cancellationToken).ConfigureAwait(false)
       : await Task.Run(
           () => FindLiteral(records, request, cancellationToken),
-          cancellationToken);
+          cancellationToken).ConfigureAwait(false);
     return MapMatches(raw, records);
   }
 

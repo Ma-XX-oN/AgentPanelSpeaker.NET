@@ -77,6 +77,71 @@ internal sealed class TranscriptVirtualDocument
       _records);
   }
 
+
+/// <summary>
+/// Builds virtualization records directly from Core-owned complete HTML units.
+/// Unit boundaries and source identities come from Core metadata; this path
+/// does not discover semantic boundaries from completed HTML.
+/// </summary>
+public static TranscriptVirtualDocument Build(
+  IReadOnlyList<CanonicalHtmlUnitProjection> units)
+{
+  ArgumentNullException.ThrowIfNull(units);
+  var records = new List<TranscriptVirtualRecord>(units.Count);
+  foreach (CanonicalHtmlUnitProjection unit in units)
+  {
+    if (!unit.Atomic ||
+        !string.Equals(unit.Kind, "turn", StringComparison.Ordinal))
+    {
+      throw new InvalidOperationException(
+        "Unsupported AIConversationCore HTML virtualization unit.");
+    }
+
+    var identities = new List<TranscriptVirtualIdentity>();
+    var seen = new HashSet<string>(StringComparer.Ordinal);
+    foreach (CanonicalHtmlSourceProjection source in unit.Source ??
+        Array.Empty<CanonicalHtmlSourceProjection>())
+    {
+      if (source.RecordIndex is not int sourceIndex || sourceIndex < 0)
+      {
+        continue;
+      }
+      int recordNumber = sourceIndex + 1;
+      string sourceId = string.IsNullOrWhiteSpace(source.RecordId)
+        ? recordNumber.ToString(CultureInfo.InvariantCulture)
+        : source.RecordId;
+      if (seen.Add(MakeKey(recordNumber, sourceId)))
+      {
+        identities.Add(new TranscriptVirtualIdentity(
+          recordNumber,
+          sourceId));
+      }
+    }
+
+    TranscriptVirtualIdentity primary = identities.Count == 0
+      ? new TranscriptVirtualIdentity(0, string.Empty)
+      : identities[0];
+    string html = unit.Html ?? string.Empty;
+    records.Add(new TranscriptVirtualRecord(
+      primary.RecordNumber,
+      primary.SourceId,
+      html,
+      EstimateHeight(html),
+      identities,
+      html.Contains(
+        "data-revision-historical=\"true\"",
+        StringComparison.OrdinalIgnoreCase)));
+  }
+
+  DiagnosticLog.Write("transcript.virtual-core-units", new
+  {
+    unitCount = units.Count,
+    sourceIdentityCount = records.Sum(
+      record => record.Identities.Count)
+  });
+  return new TranscriptVirtualDocument(records.ToArray());
+}
+
   public static TranscriptVirtualDocument Build(string html)
   {
     MatchCollection anchors = AnchorRegex.Matches(html);

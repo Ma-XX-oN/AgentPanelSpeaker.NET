@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = '7eb7f4fca630aa0a132e93799e878120aaf353b9';
+const CORE_COMMIT = '6c92799c1b14693001e8b913465f4a12b0b1e1ab';
 const sessions = new Map();
 
 /**
@@ -131,6 +131,24 @@ function requireSession(sessionId) {
   return entry;
 }
 
+
+/**
+ * Adds Core-rendered HTML virtualization units to one structured projection.
+ *
+ * The worker forwards completed Core HTML and metadata; it never interprets or
+ * recreates presentation semantics.
+ *
+ * @param {Object<string, *>} projection - Structured Core projection.
+ * @param {Object<string, boolean>} options - Effective projection options.
+ * @returns {Object<string, *>} Projection including ordered Core HTML units.
+ */
+function withHtmlUnits(projection, options) {
+  return {
+    ...projection,
+    html_units: core.renderCanonicalHtmlUnits(projection?.events ?? [], options)
+  };
+}
+
 /**
  * Executes one bridge request.
  *
@@ -165,7 +183,7 @@ function execute(request) {
     return {
       ok: true,
       core_commit: CORE_COMMIT,
-      projection: session.project(options),
+      projection: withHtmlUnits(session.project(options), options),
       diagnostics: session.diagnostics
     };
   }
@@ -175,7 +193,7 @@ function execute(request) {
     return {
       ok: true,
       core_commit: CORE_COMMIT,
-      projection: entry.session.project(options),
+      projection: withHtmlUnits(entry.session.project(options), options),
       diagnostics: entry.session.diagnostics
     };
   }
@@ -189,7 +207,7 @@ function execute(request) {
     return {
       ok: true,
       core_commit: CORE_COMMIT,
-      projection: entry.session.project(options),
+      projection: withHtmlUnits(entry.session.project(options), options),
       diagnostics: entry.session.diagnostics
     };
   }
@@ -225,7 +243,7 @@ function execute(request) {
   return {
     ok: true,
     core_commit: CORE_COMMIT,
-    projection
+    projection: withHtmlUnits(projection, options)
   };
 }
 

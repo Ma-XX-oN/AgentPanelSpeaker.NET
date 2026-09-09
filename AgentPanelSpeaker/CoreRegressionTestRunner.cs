@@ -226,7 +226,9 @@ internal static class CoreRegressionTestRunner
       int htmlEnd = html.IndexOf("</details>", Math.Max(0, htmlStart), StringComparison.Ordinal);
       int nestedQuote = html.IndexOf("<blockquote class=\"user-context\">", StringComparison.Ordinal);
       int quoteEnd = html.IndexOf("</blockquote>", Math.Max(0, htmlEnd), StringComparison.Ordinal);
-      int htmlPrompt = html.IndexOf(prompt, StringComparison.Ordinal);
+      int htmlPrompt = html.IndexOf(
+        "What time is it in Paris?",
+        StringComparison.Ordinal);
       Require(nestedQuote >= 0 && htmlStart > nestedQuote, "HTML omitted context blockquote/details.");
       Require(html.Contains("<summary># Context from my IDE setup:</summary>", StringComparison.Ordinal), "HTML changed context summary.");
       Require(htmlEnd > htmlStart && quoteEnd > htmlEnd && htmlPrompt > quoteEnd, "HTML prompt is not after/outside context disclosure.");
@@ -246,7 +248,9 @@ internal static class CoreRegressionTestRunner
         "</details>",
         Math.Max(0, productionStart),
         StringComparison.Ordinal);
-      int productionPrompt = productionHtml.IndexOf(prompt, StringComparison.Ordinal);
+      int productionPrompt = productionHtml.IndexOf(
+        "What time is it in Paris?",
+        StringComparison.Ordinal);
       Require(productionStart >= 0,
         "Production DOM formatter omitted Codex IDE context.");
       Require(productionHtml.Contains(
