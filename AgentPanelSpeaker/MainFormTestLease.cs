@@ -23,6 +23,7 @@ internal sealed class MainFormTestLease : IDisposable
       StartPosition = FormStartPosition.Manual,
       Location = new Point(-32000, -32000)
     };
+    SuppressPersistedSessionRestore(Form);
     Form.Show();
     _ = Form.Handle;
   }
@@ -31,6 +32,34 @@ internal sealed class MainFormTestLease : IDisposable
   /// Gets the production form owned by this lease.
   /// </summary>
   public MainForm Form { get; }
+
+  /// <summary>
+  /// Prevents the test host from asynchronously restoring a developer/user
+  /// session when MainForm raises Shown. Acceptance fixtures install their own
+  /// deterministic session after the form is visible; allowing persisted state
+  /// here can race those fixtures and falsely look like a history rebuild.
+  /// </summary>
+  private static void SuppressPersistedSessionRestore(MainForm form)
+  {
+    FieldInfo manualPathField = typeof(MainForm).GetField(
+      "_pathIsManual",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "MainForm manual-path field was not found.");
+    FieldInfo sessionPathField = typeof(MainForm).GetField(
+      "_sessionPathTextBox",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "MainForm session-path control was not found.");
+
+    manualPathField.SetValue(form, false);
+    if (sessionPathField.GetValue(form) is not TextBox sessionPath)
+    {
+      throw new InvalidOperationException(
+        "MainForm session-path control had an unexpected type.");
+    }
+    sessionPath.Clear();
+  }
 
   /// <summary>
   /// Runs the production immediate-termination cleanup and releases the form.
