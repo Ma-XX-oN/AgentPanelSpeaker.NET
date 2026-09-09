@@ -910,6 +910,11 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
+      if (type == "lazy-word-materialized")
+      {
+        DiagnosticLog.Write("transcript.lazy_word_materialized", root.Clone());
+        return;
+      }
       if (type == "stable-word-map-failure")
       {
         DiagnosticLog.Write("transcript.stable_word_map_failure", new
@@ -2251,6 +2256,7 @@ let knownNodeIds = new Set();
 let displayWordsByRecord = new Map();
 let displayWordsById = new Map();
 let lexicalWordsByRecord = new Map();
+let availableWordMapsByRecord = new Map();
 let segmentRangesByNode = new Map();
 let mappingGeneration = 0;
 const reportedMappingFailures = new Set();
@@ -2282,26 +2288,69 @@ function isLexical(text) {
   return /^[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*$/u.test(text);
 }
 
-function wrapWords() {
-  words = [];
-  lexicalWords = [];
-  const walker = document.createTreeWalker(transcript, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent || /^(SCRIPT|STYLE)$/.test(parent.tagName)) return NodeFilter.FILTER_REJECT;
-      return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-    }
-  });
+function nodeRecordKeys(nodeMap) {
+  const result = new Set();
+  for (const item of nodeMap || []) {
+    const recordNumber = String(
+      item.RecordNumber ?? item.recordNumber ?? '');
+    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
+    result.add(makeRecordKey(recordNumber, sourceId));
+  }
+  return result;
+}
+
+function setAvailableWordMaps(wordMap) {
+  availableWordMapsByRecord = new Map();
+  for (const record of wordMap || []) {
+    const recordNumber = String(
+      record.RecordNumber ?? record.recordNumber ?? '');
+    const sourceId = String(record.SourceId ?? record.sourceId ?? '');
+    availableWordMapsByRecord.set(
+      makeRecordKey(recordNumber, sourceId), record);
+  }
+}
+
+function wrapWordsForRecordKeys(recordKeys, reset) {
+  if (reset) {
+    words = [];
+    lexicalWords = [];
+  }
+  let currentKey = '';
+  const walker = document.createTreeWalker(
+    transcript,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
   const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node;
+      if (element.classList.contains('record-anchor')) {
+        currentKey = makeRecordKey(
+          String(element.dataset.jsonlRecord || ''),
+          element.dataset.sourceId || '');
+      }
+      continue;
+    }
+    const parent = node.parentElement;
+    if (!parent ||
+        /^(SCRIPT|STYLE)$/.test(parent.tagName) ||
+        parent.closest('.word') ||
+        (recordKeys !== null && !recordKeys.has(currentKey)) ||
+        !node.nodeValue.trim()) {
+      continue;
+    }
+    nodes.push(node);
+  }
+
   const rx = /(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)|\.+|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*|[^\s]/gu;
   for (const node of nodes) {
-    const text = node.nodeValue;
+    const value = node.nodeValue;
     let match;
     let last = 0;
+    rx.lastIndex = 0;
     const fragment = document.createDocumentFragment();
-    while ((match = rx.exec(text)) !== null) {
-      fragment.append(text.slice(last, match.index));
+    while ((match = rx.exec(value)) !== null) {
+      fragment.append(value.slice(last, match.index));
       const span = document.createElement('span');
       span.className = 'word';
       span.textContent = match[0];
@@ -2313,9 +2362,17 @@ function wrapWords() {
       fragment.append(span);
       last = match.index + match[0].length;
     }
-    fragment.append(text.slice(last));
+    fragment.append(value.slice(last));
     node.replaceWith(fragment);
   }
+}
+
+function wrapWords(nodeMap = null) {
+  words = [];
+  lexicalWords = [];
+  wrapWordsForRecordKeys(
+    nodeMap === null ? null : nodeRecordKeys(nodeMap),
+    false);
 }
 
 function structureDetailsKey(details) {
@@ -2591,7 +2648,8 @@ function replaceTranscriptDom(
     currentStructureMap,
     'after-dom-construction');
 
-  wrapWords();
+  setAvailableWordMaps(wordMap || []);
+  wrapWords(nodeMap || []);
   currentStructureMap = postStructureStage(
     structureProbeId,
     'after-wrap-words',
@@ -2697,7 +2755,8 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-details-restore';
-  wrapWords();
+  setAvailableWordMaps(wordMap || []);
+  wrapWords(nodeMap || []);
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-wrap-words',
@@ -2928,6 +2987,33 @@ function assignStableWordScopes(wordMap) {
   }
 }
 
+function materializeRecordWords(recordNumber, sourceId) {
+  const key = makeRecordKey(String(recordNumber), String(sourceId || ''));
+  if (displayWordsByRecord.has(key)) return true;
+  if (!availableWordMapsByRecord.has(key)) return false;
+  const selector = '.record-anchor[data-jsonl-record="' +
+    CSS.escape(String(recordNumber)) + '"][data-source-id="' +
+    CSS.escape(String(sourceId || '')) + '"]';
+  if (!transcript.querySelector(selector)) return false;
+
+  const beforeWordCount = words.length;
+  const started = performance.now();
+  wrapWordsForRecordKeys(new Set([key]), false);
+  assignRecordScopes();
+  assignStableWordScopes([...availableWordMapsByRecord.values()]);
+  const materialized = displayWordsByRecord.has(key);
+  chrome.webview.postMessage({
+    type:'lazy-word-materialized',
+    recordNumber:Number(recordNumber),
+    sourceId:String(sourceId || ''),
+    addedWordCount:words.length - beforeWordCount,
+    totalWordCount:words.length,
+    elapsedMilliseconds:Math.round(performance.now() - started),
+    materialized
+  });
+  return materialized;
+}
+
 function findSequence(
   collection,
   target,
@@ -2998,6 +3084,16 @@ function diagnosticRanges(ranges) {
 }
 
 function postMappingInstallSummary(nodeMap) {
+  const scopedCounts = new Map();
+  const stableCounts = new Map();
+  for (const word of words) {
+    const nodeId = String(word.dataset.nodeId || '');
+    if (!nodeId) continue;
+    scopedCounts.set(nodeId, (scopedCounts.get(nodeId) || 0) + 1);
+    if (word.dataset.wordId) {
+      stableCounts.set(nodeId, (stableCounts.get(nodeId) || 0) + 1);
+    }
+  }
   const nodes = [];
   for (const item of nodeMap || []) {
     const nodeId = String(item.NodeId ?? item.nodeId ?? '');
@@ -3006,15 +3102,14 @@ function postMappingInstallSummary(nodeMap) {
     const sourceId = String(item.SourceId ?? item.sourceId ?? '');
     const segments = item.Segments ?? item.segments ?? [];
     const ranges = segmentRangesByNode.get(nodeId) || [];
-    const scopedWords = words.filter(word => word.dataset.nodeId === nodeId);
     nodes.push({
       nodeId: Number(nodeId),
       recordNumber,
       sourceId,
       segmentCount: segments.length,
       rangeCount: ranges.length,
-      scopedWordCount: scopedWords.length,
-      stableWordCount: scopedWords.filter(word => !!word.dataset.wordId).length
+      scopedWordCount: scopedCounts.get(nodeId) || 0,
+      stableWordCount: stableCounts.get(nodeId) || 0
     });
   }
   chrome.webview.postMessage({
@@ -3601,7 +3696,11 @@ async function showFindMatch(
   const match = findMatches[currentFindMatch];
   if (followSpeech) setFollowSpeech(false, true);
   const key = makeRecordKey(String(match.recordNumber), match.sourceId);
-  const recordWords = displayWordsByRecord.get(key);
+  let recordWords = displayWordsByRecord.get(key);
+  if (!recordWords &&
+      materializeRecordWords(match.recordNumber, match.sourceId)) {
+    recordWords = displayWordsByRecord.get(key);
+  }
   if (!recordWords) {
     findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
     chrome.webview.postMessage({
