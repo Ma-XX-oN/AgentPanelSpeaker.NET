@@ -42,10 +42,15 @@ jobs:
           if in_triple:
             raise SystemExit('unterminated triple-quoted literal in staged patch script')
           text = '\n'.join(source) + '\n'
-          text = text.replace(
-            "    if count != 1:\n      raise SystemExit(f'{path}: expected one match, found {count}: {old[:120]!r}')\n",
-            "    if count < 1:\n      raise SystemExit(f'{path}: expected a match, found {count}: {old[:120]!r}')\n",
-            1)
+          old_helper = (
+            "  if count != 1:\n"
+            "    raise SystemExit(f'{path}: expected one match, found {count}: {old[:120]!r}')\n")
+          new_helper = (
+            "  if count < 1:\n"
+            "    raise SystemExit(f'{path}: expected a match, found {count}: {old[:120]!r}')\n")
+          if old_helper not in text:
+            raise SystemExit('staged replace_once helper not found')
+          text = text.replace(old_helper, new_helper, 1)
           out = Path('/tmp/issue35-implementation.py')
           out.write_text(text, encoding='utf-8')
           PY
