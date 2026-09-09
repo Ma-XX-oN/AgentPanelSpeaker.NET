@@ -157,6 +157,16 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "virtual-window", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "virtual-window",
+          () => RunWithWinFormsMessageLoop(
+            Issue37VirtualWindowRegressionTestRunner.Run));
+        return;
+      }
+
       if (args.Length == 2)
       {
         string suite = args[1];
@@ -185,6 +195,7 @@ internal static class Program
       int rolledBackSpeech = RunIsolatedTestSuite("rolled-back-speech");
       int independentOutputOracle = RunIsolatedTestSuite("output-oracle");
       int independentOracles = RunIsolatedTestSuite("independent-oracles");
+      int virtualWindow = RunIsolatedTestSuite("virtual-window");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -198,7 +209,8 @@ internal static class Program
                              rolledBackVisibility == 0 &&
                              rolledBackSpeech == 0 &&
                              independentOutputOracle == 0 &&
-                             independentOracles == 0
+                             independentOracles == 0 &&
+                             virtualWindow == 0
         ? 0
         : 1;
       Console.WriteLine(
