@@ -1928,10 +1928,9 @@ internal sealed class TranscriptView : UserControl
     }
     _windowStartIndex = window.StartIndex;
     _windowEndIndex = window.EndIndex;
-    if (_pendingPosition is TranscriptPlaybackPosition pending)
-    {
-      PostPlaybackPosition(pending);
-    }
+    // Keyboard Home/End is explicit manual navigation.  The WebView has already
+    // disabled follow mode, so replaying the pending speech marker here would
+    // countermand the user's chosen window and can restart window ping-pong.
     DiagnosticLog.Write("transcript.window_rendered", new
     {
       reason = "keyboard-" + edge,
@@ -1977,7 +1976,11 @@ internal sealed class TranscriptView : UserControl
     }
     _windowStartIndex = window.StartIndex;
     _windowEndIndex = window.EndIndex;
-    if (_pendingPosition is TranscriptPlaybackPosition pending)
+    bool manualScroll =
+      string.Equals(reason, "scroll-up", StringComparison.OrdinalIgnoreCase) ||
+      string.Equals(reason, "scroll-down", StringComparison.OrdinalIgnoreCase);
+    if (!manualScroll &&
+        _pendingPosition is TranscriptPlaybackPosition pending)
     {
       PostPlaybackPosition(pending);
     }
@@ -3178,7 +3181,6 @@ function assignNodeScopes(nodeMap) {
     const recordLexicalWords = lexicalWordsByRecord.get(key) || [];
     let displayCursor = displayCursors.get(key) || 0;
     let lexicalCursor = lexicalCursors.get(key) || 0;
-    let mappedAny = false;
     for (const segment of segments) {
       const displayTarget = tokenizeDisplay(segment);
       const lexicalTarget = tokenize(segment);
@@ -3219,7 +3221,6 @@ function assignNodeScopes(nodeMap) {
           ++lexicalCursor;
         }
         lexicalCursors.set(key, lexicalCursor);
-        mappedAny = true;
         continue;
       }
 
@@ -3257,7 +3258,6 @@ function assignNodeScopes(nodeMap) {
         displayCursor = Number(
           recordLexicalWords[lexicalEnd].dataset.recordIndex) + 1;
         displayCursors.set(key, displayCursor);
-        mappedAny = true;
         continue;
       }
 
@@ -3285,26 +3285,6 @@ function assignNodeScopes(nodeMap) {
         });
       }
     }
-    const ranges = segmentRangesByNode.get(nodeId) || [];
-    chrome.webview.postMessage({
-      type: 'mapping-node-summary',
-      mappingGeneration,
-      nodeId: Number(nodeId),
-      recordNumber: Number(recordNumber),
-      sourceId,
-      segmentCount: segments.length,
-      segments: Array.from(segments).slice(0, 64).map(segment => ({
-        text: String(segment).slice(0, 500),
-        displayKey: tokenizeDisplay(segment).join('\u0000').slice(0, 1000),
-        lexicalKey: tokenize(segment).join('\u0000').slice(0, 1000)
-      })),
-      recordWordCount: recordWords.length,
-      recordLexicalWordCount: recordLexicalWords.length,
-      mappedAny,
-      rangeCount: ranges.length,
-      ranges: diagnosticRanges(ranges)
-    });
-    if (!mappedAny) continue;
   }
 }
 
