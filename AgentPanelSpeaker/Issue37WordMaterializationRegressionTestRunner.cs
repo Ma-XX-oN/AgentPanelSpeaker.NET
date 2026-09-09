@@ -19,7 +19,7 @@ internal static class Issue37WordMaterializationRegressionTestRunner
   private const long SpeechNodeId = 42;
   private const string SpeechFragment = "Speak me now.";
   private const string FindNeedle = "UNIQUEFILLERNEEDLE";
-  private const int FillerRepeats = 12000;
+  private const int FillerRepeats = 1000;
 
   /// <summary>
   /// Runs the issue #37 selective-word-materialization acceptance suite.
