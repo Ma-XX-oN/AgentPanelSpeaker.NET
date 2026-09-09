@@ -8,7 +8,7 @@ on:
       - '.github/workflows/issue-37-convergence-red.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   red:
@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: issue-37-vwindow-convergence-containment
+          fetch-depth: 0
           submodules: recursive
 
       - name: Set up Node.js
@@ -30,6 +31,33 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Correct test-only token helper call
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs')
+          text = path.read_text(encoding='utf-8')
+          if 'using System.Diagnostics;' not in text:
+            text = text.replace(
+              'using System.Reflection;\n',
+              'using System.Diagnostics;\nusing System.Reflection;\n',
+              1)
+          old = '''      string playbackWord = SpeechTokenization.TokenizeDisplay(playbackFragment)
+                .First();'''
+          new = '''      string playbackWord = SpeechTokenization.First(playbackFragment);'''
+          if text.count(old) != 1:
+            raise SystemExit(f'playback token anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name 'Ma-XX-oN'
+          git config user.email 'Ma-XX-oN@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
+          git commit -m 'test: correct issue 37 playback token fixture'
+          git push origin HEAD:issue-37-vwindow-convergence-containment
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -49,6 +77,6 @@ jobs:
           $text = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
           Write-Host $text
           if ($p.ExitCode -eq 0) { throw 'Expected issue #37 virtual-window regressions to be RED before production fix.' }
-          if ($text -notmatch 'single-anchor-details-is-atomic') { throw 'Containment regression did not run.' }
-          if ($text -notmatch 'browser-is-bounded-convergent-and-diagnostics-are-bounded') { throw 'Convergence/diagnostic regression did not run.' }
+          if ($text -notmatch 'FAIL  virtual-window/single-anchor-details-is-atomic') { throw 'Containment regression did not reproduce.' }
+          if ($text -notmatch 'FAIL  virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded') { throw 'Convergence/diagnostic regression did not reproduce.' }
           if ($text -notmatch 'TEST-SUITE-COMPLETE virtual-window exit=1') { throw 'RED suite did not reach completion sentinel.' }
