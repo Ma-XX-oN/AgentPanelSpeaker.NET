@@ -1,0 +1,80 @@
+name: Issue 46 independent regression-oracle validation
+
+on:
+  push:
+    branches:
+      - issue-46-independent-regression-oracles
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Run pinned Core suite
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify completion guard
+        shell: pwsh
+        run: '& tools/Invoke-TestSuite.ps1 -SelfTest'
+
+      - name: Run focused independent oracles
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite independent-oracles
+
+      - name: Run full built suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and run full deployed suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable (Join-Path $publish 'AgentPanelSpeaker.exe') -Suite all
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate whitespace
+        shell: pwsh
+        run: git diff --check f4d4a637f7ac26056f080d14d62bc2c69786e466 HEAD
