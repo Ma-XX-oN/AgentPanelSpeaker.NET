@@ -670,10 +670,22 @@ internal sealed class TranscriptView : UserControl
       TranscriptStructureProbe.Compare(
         payload.RendererStructure,
         virtualStructure);
-      string script = BuildReplaceDomScript(
+      DiagnosticLog.Write("transcript.initial_window_selected", new
+      {
+        focalIndex,
+        window.StartIndex,
+        window.EndIndex,
+        recordCount = window.Records.Count,
+        totalRecordCount = payload.Document.Count,
+        htmlCharacters = window.Html.Length,
+        window.TopSpacerHeight,
+        window.BottomSpacerHeight,
+        preparationMilliseconds
+      });
+      string script = BuildReplaceWindowScript(
         window,
-        payload.DomNodes,
         preserve: !force,
+        focusVirtualIndex: force ? focalIndex : null,
         structureProbeId: structureProbeId,
         expectedStructure: virtualStructure);
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -684,7 +696,7 @@ internal sealed class TranscriptView : UserControl
       }
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
-      _domPresentationMode = true;
+      _domPresentationMode = false;
       TranscriptStructureSnapshot? webViewStructure =
         await CaptureWebViewStructureAsync(structureProbeId);
       if (webViewStructure is not null)
@@ -1719,7 +1731,7 @@ internal sealed class TranscriptView : UserControl
     TranscriptVirtualDocument document,
     int focalIndex)
   {
-    return document.CreateFullWindow();
+    return document.CreateWindow(focalIndex);
   }
 
   private static bool TryResolvePositionIndex(

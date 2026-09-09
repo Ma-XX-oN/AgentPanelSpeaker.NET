@@ -143,6 +143,8 @@ internal static class Program
       int liveEnd = RunIsolatedTestSuite("live-end");
       int rolledBackVisibility = RunIsolatedTestSuite("rolled-back-visibility");
       int rolledBackSpeech = RunIsolatedTestSuite("rolled-back-speech");
+      int largeTranscriptWindowing = RunIsolatedTestSuite(
+        "large-transcript-windowing");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -154,7 +156,8 @@ internal static class Program
                              speechOrdinalProduction == 0 &&
                              liveEnd == 0 &&
                              rolledBackVisibility == 0 &&
-                             rolledBackSpeech == 0
+                             rolledBackSpeech == 0 &&
+                             largeTranscriptWindowing == 0
         ? 0
         : 1;
       return;
