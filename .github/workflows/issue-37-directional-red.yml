@@ -34,7 +34,9 @@ jobs:
 
       - name: Stage exact production regressions
         shell: pwsh
-        run: python tools/apply_issue37_directional_regressions.py
+        run: |
+          python tools/apply_issue37_directional_regressions.py
+          python tools/adjust_issue37_directional_regression_fixture.py
 
       - name: Validate staged test patch
         shell: pwsh
