@@ -1,0 +1,80 @@
+name: Issue 46 published toggle repro
+
+on:
+  push:
+    branches:
+      - issue-46-published-toggle-isolation
+    paths:
+      - '.github/workflows/issue-46-published-toggle-repro.yml'
+      - 'tools/issue46_repro_launch.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build and publish
+        shell: pwsh
+        run: |
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $publish = Join-Path $env:RUNNER_TEMP 'publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Repeat built independent oracle
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          for ($i = 1; $i -le 8; $i++) {
+            $stdout = Join-Path $env:RUNNER_TEMP "built-$i.out"
+            $stderr = Join-Path $env:RUNNER_TEMP "built-$i.err"
+            $p = Start-Process -FilePath $exe -ArgumentList '--test','independent-oracle' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host "=== built iteration $i exit=$($p.ExitCode) ==="
+            Write-Host $text
+            if ($p.ExitCode -ne 0 -or -not $text.Contains('TEST-SUITE-COMPLETE independent-oracle exit=0')) {
+              throw "Built independent oracle failed on iteration $i."
+            }
+          }
+
+      - name: Repeat published independent oracle
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'publish\AgentPanelSpeaker.exe'
+          for ($i = 1; $i -le 8; $i++) {
+            $stdout = Join-Path $env:RUNNER_TEMP "published-$i.out"
+            $stderr = Join-Path $env:RUNNER_TEMP "published-$i.err"
+            $p = Start-Process -FilePath $exe -ArgumentList '--test','independent-oracle' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host "=== published iteration $i exit=$($p.ExitCode) ==="
+            Write-Host $text
+            if ($p.ExitCode -ne 0 -or -not $text.Contains('TEST-SUITE-COMPLETE independent-oracle exit=0')) {
+              throw "Published independent oracle failed on iteration $i."
+            }
+          }
+
+      - name: Diff hygiene
+        shell: pwsh
+        run: git diff --check
