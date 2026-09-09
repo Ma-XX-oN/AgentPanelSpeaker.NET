@@ -1,5 +1,6 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 
@@ -229,8 +230,7 @@ internal static class Issue37VirtualWindowRegressionTestRunner
           identity.Segments.Count > 0 &&
           identity.RecordNumber >= maxRecord - 2);
       string playbackFragment = playbackIdentity.Segments[0];
-      string playbackWord = SpeechTokenization.TokenizeDisplay(playbackFragment)
-        .First();
+      string playbackWord = SpeechTokenization.First(playbackFragment);
       view.ShowPlaybackPosition(new TranscriptPlaybackPosition(
         TranscriptPlaybackState.Speaking,
         playbackFragment,
