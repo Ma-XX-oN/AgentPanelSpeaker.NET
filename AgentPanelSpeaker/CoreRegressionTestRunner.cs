@@ -20,7 +20,7 @@ internal static class CoreRegressionTestRunner
       ("core/claude-leading-injected-context", TestClaudeLeadingInjectedContext),
       ("core/codex-revision-default-hidden", TestCodexRevisionDefaultHidden),
       ("core/codex-revision-opt-in", TestCodexRevisionOptIn),
-      ("core/codex-user-context-production-display", TestCodexUserContextMarkdownHtmlParity),
+      ("core/codex-user-context-formatter-parity", TestCodexUserContextMarkdownHtmlParity),
       ("core/codex-commentary-inside-reasoning-group",
         TestCodexCommentaryInsideReasoningGroup),
       ("core/codex-session-index-title", TestCodexSessionIndexTitle),
@@ -178,8 +178,9 @@ internal static class CoreRegressionTestRunner
 
   /// <summary>
   /// Verifies one Codex IDE-context record through canonical Markdown, the
-  /// legacy direct-HTML formatter, and the real production DOM/virtual-document
-  /// path used by TranscriptView.
+  /// legacy direct-HTML formatter, and the canonical presentation DOM formatter.
+  /// Final browser output is covered separately by the independent output-oracle
+  /// acceptance suite.
   /// </summary>
   private static void TestCodexUserContextMarkdownHtmlParity()
   {
@@ -256,16 +257,6 @@ internal static class CoreRegressionTestRunner
         "Production DOM formatter did not keep prompt after/outside context details.");
       Require(!productionHtml.Contains("## My request for Codex:", StringComparison.Ordinal),
         "Production DOM formatter leaked the removed request marker.");
-
-      TranscriptVirtualDocument virtualDocument =
-        TranscriptVirtualDocument.Build(productionHtml);
-      string displayedHtml = virtualDocument.CreateFullWindow().Html;
-      Require(displayedHtml.Contains(
-          "<details class=\"user-context-details\"",
-          StringComparison.Ordinal),
-        "Production virtual document dropped Codex IDE context.");
-      Require(displayedHtml.Contains(prompt, StringComparison.Ordinal),
-        "Production virtual document dropped the actual User prompt.");
 
       string plainRecord = JsonSerializer.Serialize(new
       {
