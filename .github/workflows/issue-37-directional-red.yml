@@ -32,11 +32,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Stage physical-window regressions
+      - name: Stage minimal physical-window regression
         shell: pwsh
-        run: |
-          python tools/apply_issue37_physical_window_regressions.py
-          python tools/fix_issue37_physical_regression_escape.py
+        run: python tools/apply_issue37_minimal_physical_window_regression.py
 
       - name: Validate staged test patch
         shell: pwsh
@@ -77,34 +75,29 @@ jobs:
           foreach ($requiredRed in @(
             'FAIL  virtual-window/spacer-shift-restores-materialized-content',
             'FAIL  virtual-window/directional-prefetch-follows-scroll-direction',
+            'FAIL  virtual-window/physical-window-keeps-five-viewports-materialized',
             'FAIL  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
           )) {
             if (-not $text.Contains($requiredRed)) {
               throw "Required physical RED regression did not fail: $requiredRed"
             }
           }
-          $allowedFailNames = @(
-            'virtual-window/spacer-shift-restores-materialized-content',
-            'virtual-window/directional-prefetch-follows-scroll-direction',
-            'virtual-window/physical-window-keeps-five-viewports-materialized',
-            'virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
-          )
-          $unexpected = @($output | Where-Object { $_ -match '^FAIL  ' } | ForEach-Object {
-            $name = $_.Substring(6)
-            if ($allowedFailNames -notcontains $name) { $_ }
-          })
-          if ($unexpected.Count -ne 0) {
-            throw "Unexpected RED failures: $($unexpected -join '; ')"
+          $failLines = @($output | Where-Object { $_ -match '^FAIL  ' })
+          if ($failLines.Count -ne 4) {
+            throw "Expected exactly 4 physical RED failures, observed $($failLines.Count)."
           }
-          Write-Host 'RED-PROVEN issue-37 physical spacer/direction/voice-cursor requirements reproduced.'
+          if (-not $text.Contains('Physical vwindow retains a removable')) {
+            throw 'Minimal-window regression failed for an unexpected reason.'
+          }
+          Write-Host 'RED-PROVEN issue-37 physical minimum/minimality, direction, spacer, and voice-cursor requirements reproduced.'
 
-      - name: Commit corrected RED regressions
+      - name: Commit minimal physical RED regression
         shell: pwsh
         run: |
           git config user.name 'chatgpt-codex-connector'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
-          if (git diff --cached --quiet) { throw 'Physical regression patch produced no source change.' }
-          git commit -m 'test: specify physical virtual-window behaviour (#37) [skip ci]'
+          if (git diff --cached --quiet) { throw 'Minimal physical regression patch produced no source change.' }
+          git commit -m 'test: require minimal five-viewport window (#37) [skip ci]'
           git push origin HEAD:issue-37-directional-prefetch-blank-viewport
-          Write-Host 'Physical RED regressions committed after intended failures were proven.'
+          Write-Host 'Minimal physical RED regression committed after intended failure was proven.'
