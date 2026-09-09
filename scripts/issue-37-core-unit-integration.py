@@ -78,25 +78,22 @@ text = text.replace(
   entry_site,
   "projection: withHtmlUnits(entry.session.project(options), options),")
 
-final_block = dedent(r'''
-  return {
-    ok: true,
-    core_commit: CORE_COMMIT,
-    projection
-  };
-''')
+final_block = (
+  "  return {\n"
+  "    ok: true,\n"
+  "    core_commit: CORE_COMMIT,\n"
+  "    projection\n"
+  "  };\n")
 if text.count(final_block) != 1:
   raise SystemExit(
     "worker compatibility projection return did not match exactly")
 text = text.replace(
   final_block,
-  dedent(r'''
-  return {
-    ok: true,
-    core_commit: CORE_COMMIT,
-    projection: withHtmlUnits(projection, options)
-  };
-'''),
+  "  return {\n"
+  "    ok: true,\n"
+  "    core_commit: CORE_COMMIT,\n"
+  "    projection: withHtmlUnits(projection, options)\n"
+  "  };\n",
   1)
 worker.write_text(text, encoding="utf-8")
 
