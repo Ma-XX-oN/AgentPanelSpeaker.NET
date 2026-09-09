@@ -1,1 +1,1 @@
-Launch the physical-vwindow GREEN gate after the corrected eight-test RED suite was committed at 177757e44887c30dc88702fc5599404fde7457ed.
+Launch the physical-vwindow GREEN gate after the strengthened manual-scroll RED suite was committed at 69bed726b8e4833e7ac7500ac3654a77339ef447.
