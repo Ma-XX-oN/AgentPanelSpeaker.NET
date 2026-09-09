@@ -9,6 +9,7 @@ on:
       - 'scripts/issue-37-core-unit-integration.py'
       - 'scripts/issue-37-core-unit-constructor-compat.py'
       - 'scripts/issue-37-core-runtime-pin.py'
+      - 'scripts/issue-37-core-parity-html-entity-test.py'
 
 permissions:
   contents: write
@@ -48,6 +49,8 @@ jobs:
           python scripts/issue-37-core-unit-constructor-compat.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/issue-37-core-runtime-pin.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/issue-37-core-parity-html-entity-test.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Pin verified AIConversationCore
@@ -134,6 +137,7 @@ jobs:
           git add `
             dependencies/AIConversationCore `
             AgentPanelSpeaker/AIConversationCoreClient.cs `
+            AgentPanelSpeaker/CoreRegressionTestRunner.cs `
             AgentPanelSpeaker/TranscriptPresentationDomFormatter.cs `
             AgentPanelSpeaker/TranscriptPresentationHtmlFormatter.cs `
             AgentPanelSpeaker/TranscriptVirtualDocument.cs `
