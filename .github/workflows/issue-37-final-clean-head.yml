@@ -1,5 +1,6 @@
 name: Issue 37 final clean-head validation
 
+# Re-run this gate after the verified Core-ordinal repair for issue #37.
 on:
   push:
     branches:
