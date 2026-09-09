@@ -52,6 +52,51 @@ if text.count(old) != 1:
   raise SystemExit(f"expected one directional precondition assertion, found {text.count(old)}")
 text = text.replace(old, new, 1)
 
+old = '''      int shiftsBeforeDown = windowShiftReasons.Count;
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollBy(0, 80);");
+      PumpUntil(
+        () => windowShiftReasons.Count > shiftsBeforeDown,
+        "downward scroll to request predictive virtual-window movement",
+        timeoutMilliseconds: 5000);
+      string downwardReason = windowShiftReasons[shiftsBeforeDown];
+      Require(
+        string.Equals(downwardReason, "scroll-down", StringComparison.Ordinal),
+        "Downward scrolling requested the wrong virtual-window direction: " +
+        downwardReason + ".");
+'''
+new = '''      int shiftsBeforeReverse = windowShiftReasons.Count;
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollBy(0, -80);");
+      PumpMessages(300);
+      string[] reverseReasons = windowShiftReasons
+        .Skip(shiftsBeforeReverse)
+        .ToArray();
+      Require(
+        !reverseReasons.Any(reason => reason == "scroll-down"),
+        "Upward scrolling near the lower prefetch boundary requested a " +
+        "competing scroll-down virtual-window shift.");
+
+      int shiftsBeforeDown = windowShiftReasons.Count;
+      ExecuteVoidScript(
+        webView,
+        "programmaticScrollUntil = 0; window.scrollBy(0, 160);");
+      PumpUntil(
+        () => windowShiftReasons.Count > shiftsBeforeDown,
+        "downward scroll to request predictive virtual-window movement",
+        timeoutMilliseconds: 5000);
+      string downwardReason = windowShiftReasons[shiftsBeforeDown];
+      Require(
+        string.Equals(downwardReason, "scroll-down", StringComparison.Ordinal),
+        "Downward scrolling did not request a downward prefetch: " +
+        downwardReason + ".");
+'''
+if text.count(old) != 1:
+  raise SystemExit(f"expected one downward-direction assertion, found {text.count(old)}")
+text = text.replace(old, new, 1)
+
 old = '''      Task resetMiddleWindow = InvokeTask(
         view,
         "RenderWindowForIndexAsync",
