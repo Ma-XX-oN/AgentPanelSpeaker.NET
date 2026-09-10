@@ -93,10 +93,13 @@ internal static class Issue55StartupProgressRegressionTestRunner
     {
       string? stageText = observed.FirstOrDefault(text =>
         text.StartsWith(prefix, StringComparison.Ordinal));
-      Require(stageText is not null,
-        $"Startup never displayed required stage '{prefix}'.");
+      if (stageText is null)
+      {
+        throw new InvalidOperationException(
+          $"Startup never displayed required stage '{prefix}'.");
+      }
       Require(
-        !stageText.Contains('%', StringComparison.Ordinal),
+        !stageText.Contains('%'),
         $"Startup stage '{prefix}' displayed a percentage without a real denominator: " +
         Compact(stageText));
     }
