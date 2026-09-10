@@ -2077,6 +2077,33 @@ internal sealed class TranscriptView : UserControl
     int? focusVirtualIndex = null,
     string? focusEdge = null,
     string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null)
+  {
+    return BuildReplaceWindowScriptInstrumented(
+      window,
+      preserve,
+      anchorRecordNumber,
+      anchorSourceId,
+      anchorOffset,
+      focusVirtualIndex,
+      focusEdge,
+      structureProbeId,
+      expectedStructure,
+      metrics: null,
+      transactionId: null,
+      renderReason: null,
+      requestSequence: null);
+  }
+
+  private string BuildReplaceWindowScriptInstrumented(
+    TranscriptWindow window,
+    bool preserve,
+    int? anchorRecordNumber = null,
+    string? anchorSourceId = null,
+    double? anchorOffset = null,
+    int? focusVirtualIndex = null,
+    string? focusEdge = null,
+    string? structureProbeId = null,
     TranscriptStructureSnapshot? expectedStructure = null,
     WindowScriptBuildMetrics? metrics = null,
     long? transactionId = null,
@@ -2365,7 +2392,7 @@ internal sealed class TranscriptView : UserControl
         ref _windowRenderTransactionSequence);
       var scriptMetrics = new WindowScriptBuildMetrics();
       var scriptBuildTimer = Stopwatch.StartNew();
-      string replacementScript = BuildReplaceWindowScript(
+      string replacementScript = BuildReplaceWindowScriptInstrumented(
         window,
         preserve: false,
         anchorRecordNumber: anchorRecordNumber,
