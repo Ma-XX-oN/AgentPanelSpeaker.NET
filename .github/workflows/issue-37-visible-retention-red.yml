@@ -7,7 +7,6 @@ on:
     paths:
       - '.github/workflows/issue-37-visible-retention-red.yml'
       - 'tools/apply_issue37_visible_retention_regression.py'
-      - 'tools/tune_issue37_visible_retention_fixture.py'
   workflow_dispatch:
 
 permissions:
@@ -33,8 +32,6 @@ jobs:
         shell: pwsh
         run: |
           python tools/apply_issue37_visible_retention_regression.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/tune_issue37_visible_retention_fixture.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
 
