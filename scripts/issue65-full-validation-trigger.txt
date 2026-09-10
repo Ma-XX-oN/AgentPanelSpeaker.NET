@@ -1,1 +1,0 @@
-Temporary trigger for full issue #65 validation after DisplayParity migration.
