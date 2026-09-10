@@ -18,14 +18,12 @@ jobs:
           submodules: recursive
 
       - name: Apply permanent follow-up regressions
-        if: github.event.head_commit.message == 'ci: launch follow-up RED (#56 #60)'
         shell: pwsh
         run: |
           python scripts/apply-followup-regressions.py
           git diff --check
 
       - name: Commit permanent follow-up regressions
-        if: github.event.head_commit.message == 'ci: launch follow-up RED (#56 #60)'
         shell: pwsh
         run: |
           if (-not (git status --porcelain -- AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs AgentPanelSpeaker/Issue55StartupProgressRegressionTestRunner.cs AgentPanelSpeaker/Issue60StartupPerformanceRegressionTestRunner.cs AgentPanelSpeaker/Program.cs)) {
@@ -34,7 +32,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs AgentPanelSpeaker/Issue55StartupProgressRegressionTestRunner.cs AgentPanelSpeaker/Issue60StartupPerformanceRegressionTestRunner.cs AgentPanelSpeaker/Program.cs
-          git commit -m 'test: cover scroll headroom stale shifts and deferred search (#56 #60)'
+          git commit -m 'test: cover scroll headroom stale shifts and deferred search (#56 #60) [skip ci]'
           git push origin HEAD:issue-56-scroll-replacement-user-intent
 
       - name: Set up Node.js
