@@ -9,37 +9,31 @@ permissions:
   contents: write
 
 jobs:
-  apply:
-    if: github.event.head_commit.message == 'chore: launch combined validation (#55 #58)'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Apply guarded startup-percentage patch
-        shell: pwsh
-        run: python scripts/apply-issue-55-progress.py
-      - name: Commit production patch
-        shell: pwsh
-        run: |
-          git diff --check
-          if (-not (git status --porcelain)) {
-            throw 'Issue #55 patch produced no production change.'
-          }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/TranscriptView.cs
-          git commit -m 'fix: report determinate startup percentage (#55)'
-          git push origin HEAD:issue-56-scroll-replacement-user-intent
-
   validate:
-    if: github.event.head_commit.message != 'chore: launch combined validation (#55 #58)'
     runs-on: windows-latest
     steps:
       - name: Check out AgentPanelSpeaker and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Apply guarded startup-percentage patch
+        shell: pwsh
+        run: |
+          python scripts/apply-issue-55-progress.py
+          git diff --check
+
+      - name: Commit production patch
+        shell: pwsh
+        run: |
+          if (-not (git status --porcelain -- AgentPanelSpeaker/TranscriptView.cs)) {
+            throw 'Issue #55 patch produced no production change.'
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'fix: report determinate startup percentage (#55) [skip ci]'
+          git push origin HEAD:issue-56-scroll-replacement-user-intent
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
