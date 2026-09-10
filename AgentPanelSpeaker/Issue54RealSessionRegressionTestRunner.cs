@@ -22,7 +22,9 @@ internal static class Issue54RealSessionRegressionTestRunner
     var tests = new (string Name, Action Body)[]
     {
       ("real-session/scroll-replacement-does-not-reverse-user-intent",
-        TestReplacementScrollDoesNotReverseUserIntent)
+        TestReplacementScrollDoesNotReverseUserIntent),
+      ("real-session/live-end-window-retains-preceding-unit",
+        TestLiveEndWindowRetainsPrecedingUnit)
     };
 
     int failures = 0;
@@ -177,6 +179,61 @@ internal static class Issue54RealSessionRegressionTestRunner
     {
       try { Directory.Delete(root, recursive: true); } catch { }
     }
+  }
+
+  /// <summary>
+  /// Reproduces issue #58 without splitting Core atomic units. A final turn can
+  /// itself exceed the five-viewport materialization target; live-end startup
+  /// must still retain at least one earlier visible unit so the user can see
+  /// preceding context without first scrolling into an unloaded spacer.
+  /// </summary>
+  private static void TestLiveEndWindowRetainsPrecedingUnit()
+  {
+    string tallText = string.Join(
+      " ",
+      Enumerable.Repeat("issue58-tall-final-turn", 18000));
+    var units = new[]
+    {
+      CreateUnit(0, "preceding", "<p>Issue 58 preceding turn.</p>"),
+      CreateUnit(1, "final", $"<p>{tallText}</p>")
+    };
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(units);
+    TranscriptWindow window = document.CreateWindow(
+      focalIndex: document.Count - 1,
+      viewportHeight: TranscriptVirtualDocument.DefaultViewportHeight);
+
+    Require(
+      window.EndIndex == document.Count - 1,
+      "Live-end window did not retain the final Core unit.");
+    Require(
+      window.StartIndex < window.EndIndex,
+      "A tall final Core unit satisfied the height floor by itself and caused " +
+      "the immediately preceding visible unit to remain unloaded.");
+    Require(
+      window.Records.Any(record =>
+        record.Html.Contains("Issue 58 preceding turn.", StringComparison.Ordinal)),
+      "Live-end window omitted the preceding visible Core unit.");
+  }
+
+  private static CanonicalHtmlUnitProjection CreateUnit(
+    int recordIndex,
+    string id,
+    string html)
+  {
+    return new CanonicalHtmlUnitProjection(
+      Id: $"issue58-{id}",
+      Kind: "turn",
+      Atomic: true,
+      Source: new[]
+      {
+        new CanonicalHtmlSourceProjection(
+          EventId: $"issue58-event-{recordIndex}",
+          Provider: "codex",
+          RecordId: $"issue58-record-{recordIndex}",
+          RecordIndex: recordIndex,
+          BlockIndexes: new[] { 0 })
+      },
+      Html: html);
   }
 
   private static Form CreateOffscreenHost()
