@@ -1,5 +1,6 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 
@@ -22,7 +23,9 @@ internal static class Issue54RealSessionRegressionTestRunner
     var tests = new (string Name, Action Body)[]
     {
       ("real-session/scroll-replacement-does-not-reverse-user-intent",
-        TestReplacementScrollDoesNotReverseUserIntent)
+        TestReplacementScrollDoesNotReverseUserIntent),
+      ("real-session/follow-enable-reattaches-retained-voice-cursor",
+        TestFollowEnableReattachesRetainedVoiceCursor)
     };
 
     int failures = 0;
@@ -172,6 +175,161 @@ internal static class Issue54RealSessionRegressionTestRunner
         competing.Length == 0,
         "A replacement-induced upward scroll reversed the active downward " +
         "physical user intent and requested scroll-up.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Reproduces issue #57. While Follow Speech is OFF, a paused voice cursor can
+  /// remain outside the materialized virtual window. An explicit OFF-to-ON
+  /// settings transition must immediately materialize and apply that retained
+  /// cursor without requiring another playback callback. Reapplying settings
+  /// while Follow is already ON must not replay or reposition the cursor.
+  /// </summary>
+  private static void TestFollowEnableReattachesRetainedVoiceCursor()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue57-follow-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue57-follow.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+
+      TranscriptSettings followOff =
+        TranscriptSettings.Default with { FollowSpeech = false };
+      TranscriptSettings followOn =
+        TranscriptSettings.Default with { FollowSpeech = true };
+      view.ApplySettings(followOff, dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Issue 57 follow fixture");
+      WaitForTranscriptRender(view);
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      IReadOnlyList<TranscriptNodeIdentity> identities =
+        ReadField<IReadOnlyList<TranscriptNodeIdentity>>(view, "_identities");
+      int initialStart = ReadField<int>(view, "_windowStartIndex");
+      Require(initialStart > 0,
+        "Issue #57 fixture did not leave any earlier virtual units unloaded.");
+
+      TranscriptNodeIdentity? targetIdentity = null;
+      int targetIndex = -1;
+      foreach (TranscriptNodeIdentity identity in identities)
+      {
+        if (identity.Segments.Count == 0 ||
+            !document.TryGetIndex(
+              identity.RecordNumber,
+              identity.SourceId,
+              out int candidateIndex) ||
+            candidateIndex >= initialStart)
+        {
+          continue;
+        }
+        targetIdentity = identity;
+        targetIndex = candidateIndex;
+        break;
+      }
+      Require(targetIdentity is not null,
+        "Issue #57 fixture did not expose a speakable unloaded target.");
+
+      string fragment = targetIdentity!.Segments[0];
+      string word = SpeechTokenization.First(fragment);
+      Require(!string.IsNullOrWhiteSpace(word),
+        "Issue #57 target fragment contained no speakable word.");
+      var position = new TranscriptPlaybackPosition(
+        TranscriptPlaybackState.Paused,
+        fragment,
+        0,
+        word,
+        targetIdentity.NodeId,
+        0,
+        word.Length,
+        Stopwatch.GetTimestamp());
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      int matchingPlaybackApplied = 0;
+      webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+      {
+        try
+        {
+          using JsonDocument message = JsonDocument.Parse(
+            eventArgs.WebMessageAsJson);
+          JsonElement rootElement = message.RootElement;
+          if (!rootElement.TryGetProperty("type", out JsonElement typeElement) ||
+              typeElement.ValueKind != JsonValueKind.String ||
+              typeElement.GetString() != "playback-applied" ||
+              !rootElement.TryGetProperty("nodeId", out JsonElement nodeElement) ||
+              nodeElement.ValueKind != JsonValueKind.Number ||
+              nodeElement.GetInt64() != targetIdentity.NodeId ||
+              !rootElement.TryGetProperty("wordIndex", out JsonElement wordElement) ||
+              wordElement.ValueKind != JsonValueKind.Number ||
+              wordElement.GetInt32() != 0)
+          {
+            return;
+          }
+          ++matchingPlaybackApplied;
+        }
+        catch (JsonException)
+        {
+          // Production owns malformed-message handling. This observer records
+          // only the exact retained playback position required by issue #57.
+        }
+      };
+
+      view.ShowPlaybackPosition(position);
+      PumpMessages(300);
+      Require(
+        targetIndex < ReadField<int>(view, "_windowStartIndex") ||
+        targetIndex > ReadField<int>(view, "_windowEndIndex"),
+        "Follow OFF unexpectedly materialized the retained issue #57 cursor.");
+      TranscriptPlaybackPosition retainedBefore =
+        ReadField<TranscriptPlaybackPosition>(
+          view,
+          "_lastLocatedContentPosition");
+      Require(retainedBefore == position,
+        "TranscriptView did not retain the paused voice cursor while Follow was OFF.");
+      int appliedBeforeEnable = matchingPlaybackApplied;
+
+      view.ApplySettings(followOn, dark: false);
+      PumpUntil(
+        () =>
+          targetIndex >= ReadField<int>(view, "_windowStartIndex") &&
+          targetIndex <= ReadField<int>(view, "_windowEndIndex") &&
+          matchingPlaybackApplied > appliedBeforeEnable,
+        "Follow ON to materialize and apply the retained voice cursor",
+        timeoutMilliseconds: 5000);
+
+      TranscriptPlaybackPosition retainedAfter =
+        ReadField<TranscriptPlaybackPosition>(
+          view,
+          "_lastLocatedContentPosition");
+      Require(retainedAfter == position,
+        "Enabling Follow changed the retained speech cursor instead of reattaching to it.");
+
+      int appliedAfterEnable = matchingPlaybackApplied;
+      int startAfterEnable = ReadField<int>(view, "_windowStartIndex");
+      int endAfterEnable = ReadField<int>(view, "_windowEndIndex");
+      view.ApplySettings(followOn, dark: true);
+      PumpMessages(500);
+      Require(
+        matchingPlaybackApplied == appliedAfterEnable,
+        "Applying settings while Follow was already ON replayed the voice cursor.");
+      Require(
+        ReadField<int>(view, "_windowStartIndex") == startAfterEnable &&
+        ReadField<int>(view, "_windowEndIndex") == endAfterEnable,
+        "Applying settings while Follow was already ON repositioned the virtual window.");
     }
     finally
     {
