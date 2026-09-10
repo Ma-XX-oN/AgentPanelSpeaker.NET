@@ -12,10 +12,11 @@ text = text.replace(list_anchor, list_replacement, 1)
 method_anchor = '''  private static bool ReadBrowserBoolean(WebView2 webView, string expression)\n'''
 method = r'''  /// <summary>
   /// A virtual-window shift must not evict any Core atomic unit that still
-  /// intersects the physical browser viewport.  This fixture mixes one taller
-  /// turn with compact neighbours so the five-viewport height floor alone is
-  /// insufficient to protect the still-visible leading turn during a downward
-  /// shift.
+  /// intersects the physical browser viewport.  The leading turn is a little
+  /// over three viewport heights tall: when the lower edge enters its two-
+  /// viewport trigger zone, that same leading turn can still be physically
+  /// visible.  The five-viewport total-height floor therefore cannot by itself
+  /// decide that the leading turn is safe to trim.
   /// </summary>
   private static void TestVisibleTurnSurvivesShiftUntilOutsideViewport()
   {
@@ -113,10 +114,11 @@ method = r'''  /// <summary>
         "Could not position the taller visible turn.");
       double tallHeight = positioned.GetProperty("tallHeight").GetDouble();
       double viewportHeight = positioned.GetProperty("innerHeight").GetDouble();
-      Require(tallHeight > viewportHeight * 0.75 &&
-              tallHeight < viewportHeight * 2.0,
-        "Visible-retention fixture taller turn did not have the intended " +
-        $"physical size: height={tallHeight:F1}, viewport={viewportHeight:F1}.");
+      Require(tallHeight > viewportHeight * 2.5 &&
+              tallHeight < viewportHeight * 4.5,
+        "Visible-retention fixture taller turn did not overlap the intended " +
+        $"physical trigger geometry: height={tallHeight:F1}, " +
+        $"viewport={viewportHeight:F1}.");
       PumpMessages(650);
 
       JsonElement before = ExecuteJsonProbe(
@@ -128,10 +130,11 @@ method = r'''  /// <summary>
     const rect = record.getBoundingClientRect();
     return rect.bottom > 0 && rect.top < window.innerHeight;
   });
+  const last = records[records.length - 1];
   return JSON.stringify({
     visible:visible.map(record => Number(record.dataset.virtualIndex)),
-    firstVisibleTop:visible.length ? visible[0].getBoundingClientRect().top : null,
     firstVisibleBottom:visible.length ? visible[0].getBoundingClientRect().bottom : null,
+    distanceToLowerEdge:last.getBoundingClientRect().bottom - window.innerHeight,
     innerHeight:window.innerHeight
   });
 })()
@@ -145,6 +148,11 @@ method = r'''  /// <summary>
         "physically visible together with following content.");
       Require(before.GetProperty("firstVisibleBottom").GetDouble() > 0,
         "Taller leading turn had already left the physical viewport.");
+      Require(
+        before.GetProperty("distanceToLowerEdge").GetDouble() <=
+          viewportHeight * EdgeTriggerViewportHeights,
+        "Visible-retention fixture was not inside the lower two-viewport " +
+        "shift trigger while the leading turn remained visible.");
 
       int beforeStart = ReadField<int>(view, "_windowStartIndex");
       int beforeEnd = ReadField<int>(view, "_windowEndIndex");
