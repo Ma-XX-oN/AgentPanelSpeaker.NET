@@ -206,15 +206,11 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
             identity!.NodeId,
             0,
             out int recordNumber,
-            out string sourceId,
             out int recordWordIndex),
           $"Rendered transcript could not map speech segment '{expectedSegment}'.");
         Require(recordNumber == identity.RecordNumber,
           $"Speech segment '{expectedSegment}' mapped to record {recordNumber}, " +
           $"expected {identity.RecordNumber}.");
-        Require(string.Equals(sourceId, identity.SourceId, StringComparison.Ordinal),
-          $"Speech segment '{expectedSegment}' mapped to source '{sourceId}', " +
-          $"expected '{identity.SourceId}'.");
         Require(recordWordIndex >= 0,
           $"Speech segment '{expectedSegment}' mapped to an invalid word index.");
       }
@@ -288,7 +284,6 @@ internal static class Issue24SpeechOrdinalRegressionTestRunner
   assignNodeScopes([{
     NodeId: 1,
     RecordNumber: 1,
-    SourceId: 'ordinal-test',
     Segments: ['1. Parent item']
   }]);
 
@@ -531,8 +526,8 @@ Like this:
 
     TranscriptNodeIdentity[] identities =
     {
-      new(201, 1, "one", new[] { "Primary thought." }),
-      new(202, 2, "two", new[]
+      new(201, 1, new[] { "Primary thought." }),
+      new(202, 2, new[]
       {
         "1. *Nested numbered item with a table inside it*",
         "| Column | Value | Style |"
@@ -543,12 +538,14 @@ Like this:
       identities,
       CancellationToken.None);
 
-    IReadOnlyList<TranscriptRecordWordMap> maps =
-      searchIndex.GetWordMaps(document.Records);
-    Require(maps.Any(map => map.RecordNumber == 1 && map.SourceId == "one"),
-      "Primary structural-unit record lost its stable word map.");
-    Require(maps.Any(map => map.RecordNumber == 2 && map.SourceId == "two"),
-      "Secondary structural-unit record was omitted from stable word maps.");
+    Require(searchIndex.TryResolveVoiceOrigin(
+        202,
+        0,
+        out int secondaryRecordNumber,
+        out int secondaryRecordWordIndex) &&
+        secondaryRecordNumber == 2 &&
+        secondaryRecordWordIndex >= 0,
+      "Secondary structural-unit record lost its direct speech mapping.");
 
     using var view = new TranscriptView();
     FieldInfo? identitiesField = typeof(TranscriptView).GetField(
@@ -578,9 +575,8 @@ Like this:
       "Production BuildReplaceDomScript returned no script.");
     Require(script!.Contains("\"NodeId\":202", StringComparison.Ordinal),
       "Secondary structural-unit node identity was omitted from the production DOM payload.");
-    Require(script.Contains("\"RecordNumber\":2", StringComparison.Ordinal) &&
-        script.Contains("\"SourceId\":\"two\"", StringComparison.Ordinal),
-      "Secondary structural-unit stable word map was omitted from the production DOM payload.");
+    Require(script.Contains("\"RecordNumber\":2", StringComparison.Ordinal),
+      "Secondary structural-unit record identity was omitted from the production DOM payload.");
   }
 
   /// <summary>

@@ -169,9 +169,9 @@ internal static class ExtendedRegressionTestRunner
     }
     TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html.ToString());
     Require(document.Count == 100, $"Expected 100 virtual records, got {document.Count}.");
-    Require(document.TryGetIndex(1, "id-1", out int first) && first == 0,
+    Require(document.TryGetIndex(1, out int first) && first == 0,
       "First virtual identity resolved incorrectly.");
-    Require(document.TryGetIndex(100, "id-100", out int last) && last == 99,
+    Require(document.TryGetIndex(100, out int last) && last == 99,
       "Last virtual identity resolved incorrectly.");
     TranscriptWindow firstWindow = document.CreateWindow(first);
     TranscriptWindow lastWindow = document.CreateWindow(last);

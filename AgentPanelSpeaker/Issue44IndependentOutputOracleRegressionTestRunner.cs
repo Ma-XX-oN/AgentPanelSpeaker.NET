@@ -154,7 +154,7 @@ internal static class Issue44IndependentOutputOracleRegressionTestRunner
 """;
 
     TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(sourceHtml);
-    Require(document.TryGetIndex(11, "context", out int contextIndex),
+    Require(document.TryGetIndex(11, out int contextIndex),
       "Fixed bounded-window reproducer did not expose its context identity.");
     JsonElement actual = ExecuteWindowAndProbe(
       document.CreateWindow(contextIndex),

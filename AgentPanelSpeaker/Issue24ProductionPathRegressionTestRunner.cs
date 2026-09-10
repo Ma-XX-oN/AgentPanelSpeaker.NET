@@ -223,8 +223,8 @@ Like this:
 
     TranscriptNodeIdentity[] identities =
     {
-      new(201, 1, "one", new[] { "Primary thought." }),
-      new(202, 2, "two", new[]
+      new(201, 1, new[] { "Primary thought." }),
+      new(202, 2, new[]
       {
         "1. *Nested numbered item with a table inside it*",
         "| Column | Value | Style |"
@@ -310,7 +310,6 @@ Like this:
     {
       window,
       false,
-      null,
       null,
       null,
       null,

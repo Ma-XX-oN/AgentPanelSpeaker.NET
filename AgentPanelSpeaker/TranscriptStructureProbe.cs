@@ -12,9 +12,8 @@ namespace AgentPanelSpeaker;
 internal static class TranscriptStructureProbe
 {
   private static readonly Regex RecordAnchorRegex = new(
-    "<span\\s+class=\\\"record-anchor\\\"[^>]*" +
-    "data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*" +
-    "data-source-id=\\\"(?<source>[^\\\"]*)\\\"[^>]*></span>",
+    @"<span\s+class=""record-anchor""[^>]*" +
+    @"data-jsonl-record=""(?<record>[^""]*)""[^>]*></span>",
     RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
   private static readonly Regex DetailsTagRegex = new(
@@ -72,7 +71,6 @@ internal static class TranscriptStructureProbe
         NumberStyles.Integer,
         CultureInfo.InvariantCulture,
         out int recordNumber);
-      string sourceId = WebUtility.HtmlDecode(anchor.Groups["source"].Value);
       string[] detailsChain = details
         .Where(range => range.Contains(anchor.Index))
         .OrderBy(range => range.Start)
@@ -85,7 +83,6 @@ internal static class TranscriptStructureProbe
         .FirstOrDefault() ?? string.Empty;
       entries.Add(new TranscriptStructureEntry(
         recordNumber,
-        sourceId,
         turnId,
         detailsChain));
     }
@@ -129,7 +126,6 @@ internal static class TranscriptStructureProbe
       "presentation-tree",
       entries.Values
         .OrderBy(entry => entry.RecordNumber)
-        .ThenBy(entry => entry.SourceId, StringComparer.Ordinal)
         .ToArray());
     LogSnapshot(snapshot, detailsCount: null, turnCount: null);
     return snapshot;
@@ -197,7 +193,6 @@ internal static class TranscriptStructureProbe
       differences.Add(new
       {
         left.RecordNumber,
-        left.SourceId,
         beforeTurn = left.TurnId,
         afterTurn = right.TurnId,
         beforeDetails = left.DetailsChain,
@@ -253,7 +248,6 @@ internal static class TranscriptStructureProbe
           const turn = anchor.closest('section.transcript-turn');
           return {
             recordNumber: Number(anchor.getAttribute('data-jsonl-record') || 0),
-            sourceId: anchor.getAttribute('data-source-id') || '',
             turnId: turn ? ('presentation:' + (turn.getAttribute('data-presentation-id') || '')) : '',
             detailsChain: chain,
             connected: anchor.isConnected
@@ -293,7 +287,6 @@ internal static class TranscriptStructureProbe
         }
         entries.Add(new TranscriptStructureEntry(
           ReadInt32(item, "recordNumber"),
-          ReadString(item, "sourceId"),
           ReadString(item, "turnId"),
           chain.ToArray()));
       }
@@ -335,14 +328,8 @@ internal static class TranscriptStructureProbe
           continue;
         }
         int recordNumber = recordIndex + 1;
-        string sourceId = ReadString(source, "record_id");
-        if (sourceId.Length == 0)
-        {
-          sourceId = recordNumber.ToString(CultureInfo.InvariantCulture);
-        }
         var entry = new TranscriptStructureEntry(
           recordNumber,
-          sourceId,
           turnId.Length == 0 ? string.Empty : "presentation:" + turnId,
           nextChain);
         string key = EntryKey(entry);
@@ -476,7 +463,6 @@ internal static class TranscriptStructureProbe
       entries = snapshot.Entries.Select(entry => new
       {
         entry.RecordNumber,
-        entry.SourceId,
         entry.TurnId,
         entry.DetailsChain
       }).ToArray()
@@ -485,8 +471,7 @@ internal static class TranscriptStructureProbe
 
   private static string EntryKey(TranscriptStructureEntry entry)
   {
-    return entry.SourceId + "\0" +
-      entry.RecordNumber.ToString(CultureInfo.InvariantCulture);
+    return entry.RecordNumber.ToString(CultureInfo.InvariantCulture);
   }
 
   private static string ReadString(JsonElement element, string propertyName)
@@ -525,6 +510,5 @@ internal sealed record TranscriptStructureSnapshot(
 
 internal sealed record TranscriptStructureEntry(
   int RecordNumber,
-  string SourceId,
   string TurnId,
   string[] DetailsChain);

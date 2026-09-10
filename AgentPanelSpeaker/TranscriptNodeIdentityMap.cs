@@ -63,8 +63,6 @@ internal static class TranscriptNodeIdentityMap
       client.Project(source, jsonLines, projectOptions));
     cancellationToken.ThrowIfCancellationRequested();
 
-    IReadOnlyDictionary<int, string> sourceIds = BuildCanonicalSourceIds(
-      projection.Events);
     var result = new List<TranscriptNodeIdentity>();
     var recentQueue = new Queue<string>();
     var recentSet = new HashSet<string>(StringComparer.Ordinal);
@@ -88,9 +86,6 @@ internal static class TranscriptNodeIdentityMap
         extraction.InputResponse,
         pendingInputRequests);
       int recordNumber = sourceIndex + 1;
-      string sourceId = sourceIds.TryGetValue(sourceIndex, out string? canonicalId)
-        ? canonicalId
-        : recordNumber.ToString(CultureInfo.InvariantCulture);
 
       foreach (ExtractedNode node in extraction.Nodes.Concat(responseNodes))
       {
@@ -116,7 +111,6 @@ internal static class TranscriptNodeIdentityMap
         result.Add(new TranscriptNodeIdentity(
           nextNodeId++,
           recordNumber,
-          sourceId,
           IsRenderedKind(source, node.Kind)
             ? BuildSegments(parts)
             : Array.Empty<string>()));
@@ -127,31 +121,6 @@ internal static class TranscriptNodeIdentityMap
         jsonLines.Count));
     }
 
-    return result;
-  }
-
-  /// <summary>
-  /// Builds record-index to persistent source-ID mappings from canonical
-  /// provenance.  Missing source IDs intentionally use the same one-based
-  /// fallback used by transcript record anchors.
-  /// </summary>
-  private static IReadOnlyDictionary<int, string> BuildCanonicalSourceIds(
-    IReadOnlyList<JsonElement> events)
-  {
-    var result = new Dictionary<int, string>();
-    foreach (JsonElement eventElement in events)
-    {
-      int? sourceIndex = ReadInt32(eventElement, "source_index");
-      if (sourceIndex is not int index || index < 0 || result.ContainsKey(index))
-      {
-        continue;
-      }
-
-      string sourceId = ReadString(eventElement, "source_record_id").Trim();
-      result[index] = sourceId.Length == 0
-        ? (index + 1).ToString(CultureInfo.InvariantCulture)
-        : sourceId;
-    }
     return result;
   }
 
@@ -360,11 +329,10 @@ internal readonly record struct TranscriptBuildProgress(
   int Total);
 
 /// <summary>
-/// Associates one monitor node identifier with its canonical source provenance
+/// Associates one monitor node identifier with its source-file record number
 /// and ordered speakable segments.
 /// </summary>
 internal sealed record TranscriptNodeIdentity(
   long NodeId,
   int RecordNumber,
-  string SourceId,
   IReadOnlyList<string> Segments);

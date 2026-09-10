@@ -207,6 +207,15 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "redundancy",
+          Issue65RedundancyRegressionTestRunner.Run);
+        return;
+      }
+
       if (args.Length == 2)
       {
         string suite = args[1];
@@ -240,6 +249,7 @@ internal static class Program
       int startupProgress = RunIsolatedTestSuite("startup-progress");
       int realSessionFixes = RunIsolatedTestSuite("real-session-fixes");
       int startupPerformance = RunIsolatedTestSuite("startup-performance");
+      int redundancy = RunIsolatedTestSuite("redundancy");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -258,7 +268,8 @@ internal static class Program
                              wordMaterialization == 0 &&
                              startupProgress == 0 &&
                              realSessionFixes == 0 &&
-                             startupPerformance == 0
+                             startupPerformance == 0 &&
+                             redundancy == 0
         ? 0
         : 1;
       Console.WriteLine(

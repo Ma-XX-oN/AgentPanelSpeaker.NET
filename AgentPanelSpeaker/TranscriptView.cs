@@ -66,10 +66,7 @@ internal sealed class TranscriptView : UserControl
   private sealed class WindowScriptBuildMetrics
   {
     public int NodeCount { get; set; }
-    public int WordMapCount { get; set; }
-    public int WordCount { get; set; }
     public long IdentityMilliseconds { get; set; }
-    public long WordMapMilliseconds { get; set; }
     public long SerializationMilliseconds { get; set; }
   }
 
@@ -82,7 +79,6 @@ internal sealed class TranscriptView : UserControl
     bool VoicedEnabled,
     bool HasSelectionOrigin,
     int OriginRecordNumber,
-    string OriginSourceId,
     int OriginWordIndex);
 
   /// <summary>
@@ -321,15 +317,11 @@ internal sealed class TranscriptView : UserControl
       item => item.NodeId == position.NodeId);
     if (_settings.FollowSpeech && identity is not null &&
         _virtualDocument is TranscriptVirtualDocument document &&
-        document.TryGetIndex(
-          identity.RecordNumber,
-          identity.SourceId,
-          out int index) &&
+        document.TryGetIndex(identity.RecordNumber, out int index) &&
         (index < _windowStartIndex || index > _windowEndIndex))
     {
       _ = RenderWindowForRecordAsync(
         identity.RecordNumber,
-        identity.SourceId,
         "playback-position",
         matchIndex: null);
       return;
@@ -907,8 +899,7 @@ internal sealed class TranscriptView : UserControl
   }
 
   /// <summary>
-  /// Builds the immutable full-session search corpus away from the UI thread,
-  /// then attaches stable word IDs to whichever virtual window is current.
+  /// Builds the immutable full-session search corpus away from the UI thread.
   /// </summary>
   private async Task BuildDeferredSearchIndexAsync(
     string path,
@@ -935,11 +926,6 @@ internal sealed class TranscriptView : UserControl
       }
 
       _searchIndex = index;
-      await InstallCurrentWindowSearchMapsAsync(
-        index,
-        generation,
-        path,
-        cancellation.Token);
       cancellation.Token.ThrowIfCancellationRequested();
       if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
           generation != _renderGeneration ||
@@ -994,44 +980,6 @@ internal sealed class TranscriptView : UserControl
         _searchIndexCancellation = null;
       }
       cancellation.Dispose();
-    }
-  }
-
-  /// <summary>
-  /// Installs search-owned stable word IDs into the current browser window
-  /// without replacing its canonical Core HTML or moving the viewport.
-  /// </summary>
-  private async Task InstallCurrentWindowSearchMapsAsync(
-    TranscriptSearchIndex index,
-    int generation,
-    string path,
-    CancellationToken cancellationToken)
-  {
-    await _windowRenderGate.WaitAsync(cancellationToken);
-    try
-    {
-      if (generation != _renderGeneration ||
-          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase) ||
-          _virtualDocument is not TranscriptVirtualDocument document ||
-          _windowStartIndex < 0 ||
-          _windowEndIndex < _windowStartIndex)
-      {
-        return;
-      }
-
-      int start = Math.Clamp(_windowStartIndex, 0, document.Count - 1);
-      int end = Math.Clamp(_windowEndIndex, start, document.Count - 1);
-      TranscriptVirtualRecord[] records = document.Records
-        .Skip(start)
-        .Take(end - start + 1)
-        .ToArray();
-      IReadOnlyList<TranscriptRecordWordMap> wordMaps = index.GetWordMaps(records);
-      await ExecuteAsync(
-        "installSearchWordMaps(" + JsonSerializer.Serialize(wordMaps) + ");");
-    }
-    finally
-    {
-      _windowRenderGate.Release();
     }
   }
 
@@ -1186,16 +1134,6 @@ internal sealed class TranscriptView : UserControl
         DiagnosticLog.Write("transcript.lazy_word_materialized", root.Clone());
         return;
       }
-      if (type == "stable-word-map-failure")
-      {
-        DiagnosticLog.Write("transcript.stable_word_map_failure", new
-        {
-          key = ReadOptionalString(root, "key"),
-          renderedWordCount = ReadOptionalInt32(root, "renderedWordCount"),
-          mappedWordCount = ReadOptionalInt32(root, "mappedWordCount")
-        });
-        return;
-      }
       if (type == "mapping-failure" || type == "playback-unmatched")
       {
         DiagnosticLog.Write($"transcript.{type}", root.Clone());
@@ -1255,10 +1193,6 @@ internal sealed class TranscriptView : UserControl
           detailsAncestors = ReadOptionalString(root, "detailsAncestors"),
           corpusLength = ReadOptionalInt32(root, "corpusLength"),
           corpusWords = ReadOptionalInt32(root, "corpusWords"),
-          firstWordId = ReadOptionalString(root, "firstWordId"),
-          seekWordId = ReadOptionalString(root, "seekWordId"),
-          expectedWordCount = ReadOptionalInt32(root, "expectedWordCount"),
-          resolvedWordCount = ReadOptionalInt32(root, "resolvedWordCount"),
           navigationGeneration = ReadOptionalInt64(root, "navigationGeneration")
         });
         return;
@@ -1299,7 +1233,6 @@ internal sealed class TranscriptView : UserControl
             validFocalIndex,
             ReadOptionalString(root, "reason"),
             ReadOptionalInt32(root, "anchorRecordNumber"),
-            ReadOptionalString(root, "anchorSourceId"),
             ReadOptionalDouble(root, "anchorOffset"),
             ReadOptionalInt32(root, "visibleStartIndex"),
             ReadOptionalInt32(root, "visibleEndIndex"),
@@ -1321,7 +1254,6 @@ internal sealed class TranscriptView : UserControl
       if (type == "window-request")
       {
         int? recordNumber = ReadOptionalInt32(root, "recordNumber");
-        string sourceId = ReadOptionalString(root, "sourceId");
         if (recordNumber is int validRecordNumber)
         {
           long? navigationGeneration = ReadOptionalInt64(
@@ -1335,7 +1267,6 @@ internal sealed class TranscriptView : UserControl
           }
           _ = RenderWindowForRecordAsync(
             validRecordNumber,
-            sourceId,
             ReadOptionalString(root, "reason"),
             ReadOptionalInt32(root, "matchIndex"),
             navigationGeneration);
@@ -1372,22 +1303,6 @@ internal sealed class TranscriptView : UserControl
           return;
         }
 
-        long? wordId = ReadOptionalInt64(root, "wordId");
-        TranscriptSearchIndex? searchIndex = _searchIndex;
-        if (wordId is long validWordId &&
-            validWordId > 0 &&
-            searchIndex is not null &&
-            searchIndex.TryResolveSpeechWord(
-              validWordId,
-              out long resolvedNodeId,
-              out int resolvedNodeWordIndex))
-        {
-          FindSeekRequested?.Invoke(
-            this,
-            new FindSeekRequestedEventArgs(
-              resolvedNodeId,
-              resolvedNodeWordIndex));
-        }
         return;
       }
       if (type == "find-seek-end")
@@ -1447,7 +1362,6 @@ internal sealed class TranscriptView : UserControl
         "selection",
         StringComparison.Ordinal),
       ReadOptionalInt32(root, "originRecordNumber") ?? 0,
-      ReadOptionalString(root, "originSourceId"),
       ReadOptionalInt32(root, "originWordIndex") ?? -1);
 
     CancelFindSearch();
@@ -1492,7 +1406,6 @@ internal sealed class TranscriptView : UserControl
     _findCancellation = cancellation;
 
     int originRecordNumber = pending.OriginRecordNumber;
-    string originSourceId = pending.OriginSourceId;
     int originWordIndex = pending.OriginWordIndex;
     if (!pending.HasSelectionOrigin &&
         _pendingPosition is TranscriptPlaybackPosition voicePosition &&
@@ -1500,11 +1413,9 @@ internal sealed class TranscriptView : UserControl
           voicePosition.NodeId,
           voicePosition.WordIndex,
           out int voiceRecordNumber,
-          out string voiceSourceId,
           out int voiceRecordWordIndex))
     {
       originRecordNumber = voiceRecordNumber;
-      originSourceId = voiceSourceId;
       originWordIndex = voiceRecordWordIndex;
     }
 
@@ -1529,14 +1440,12 @@ internal sealed class TranscriptView : UserControl
       TranscriptVirtualDocument? visibleDocument = _virtualDocument;
       if (visibleDocument is not null)
       {
-        matches = matches.Where(match => visibleDocument.IsVisible(
-          match.RecordNumber,
-          match.SourceId)).ToArray();
+        matches = matches.Where(match =>
+          visibleDocument.IsRecordVisible(match.RecordNumber)).ToArray();
       }
       matches = RotateMatchesAfterOrigin(
         matches,
         originRecordNumber,
-        originSourceId,
         originWordIndex);
       if (cancellation.IsCancellationRequested ||
           !ReferenceEquals(_findCancellation, cancellation))
@@ -1558,7 +1467,6 @@ internal sealed class TranscriptView : UserControl
         request.VoicedOnly,
         originKind = pending.HasSelectionOrigin ? "selection" : "voice",
         originRecordNumber,
-        originSourceId,
         originWordIndex,
         matchCount = matches.Count,
         elapsedMilliseconds = timer.ElapsedMilliseconds
@@ -1612,7 +1520,6 @@ internal sealed class TranscriptView : UserControl
   private static IReadOnlyList<TranscriptSearchMatch> RotateMatchesAfterOrigin(
     IReadOnlyList<TranscriptSearchMatch> matches,
     int recordNumber,
-    string sourceId,
     int wordIndex)
   {
     if (matches.Count < 2 || wordIndex < 0)
@@ -1623,12 +1530,8 @@ internal sealed class TranscriptView : UserControl
     for (int index = 0; index < matches.Count; ++index)
     {
       TranscriptSearchMatch match = matches[index];
-      bool sameSource = string.Equals(
-        match.SourceId,
-        sourceId,
-        StringComparison.Ordinal);
       if (match.RecordNumber > recordNumber ||
-          (match.RecordNumber == recordNumber && sameSource &&
+          (match.RecordNumber == recordNumber &&
            match.StartWordIndex > wordIndex))
       {
         first = index;
@@ -2033,7 +1936,7 @@ internal sealed class TranscriptView : UserControl
     TranscriptNodeIdentity? identity = identities.FirstOrDefault(
       item => item.NodeId == position.NodeId);
     return identity is not null &&
-      document.TryGetIndex(identity.RecordNumber, identity.SourceId, out index);
+      document.TryGetIndex(identity.RecordNumber, out index);
   }
 
   private string BuildReplaceDomScript(
@@ -2043,26 +1946,19 @@ internal sealed class TranscriptView : UserControl
     string? structureProbeId = null,
     TranscriptStructureSnapshot? expectedStructure = null)
   {
-    var keys = window.Records
+    HashSet<int> keys = window.Records
       .SelectMany(record => record.Identities.Count != 0
         ? record.Identities
-        : new[]
-        {
-          new TranscriptVirtualIdentity(record.RecordNumber, record.SourceId)
-        })
-      .Select(identity => identity.SourceId + "\0" + identity.RecordNumber)
-      .ToHashSet(StringComparer.Ordinal);
+        : new[] { new TranscriptVirtualIdentity(record.RecordNumber) })
+      .Select(identity => identity.RecordNumber)
+      .ToHashSet();
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
-      .Where(identity => keys.Contains(
-        identity.SourceId + "\0" + identity.RecordNumber))
+      .Where(identity => keys.Contains(identity.RecordNumber))
       .ToArray();
-    IReadOnlyList<TranscriptRecordWordMap> wordMaps = _searchIndex?.GetWordMaps(
-      window.Records) ?? Array.Empty<TranscriptRecordWordMap>();
     return "replaceTranscriptDom(" +
       JsonSerializer.Serialize(domNodes) + "," +
       JsonSerializer.Serialize(preserve) + "," +
       JsonSerializer.Serialize(identities) + "," +
-      JsonSerializer.Serialize(wordMaps) + "," +
       JsonSerializer.Serialize(expectedStructure?.Entries ??
         Array.Empty<TranscriptStructureEntry>()) + "," +
       JsonSerializer.Serialize(structureProbeId ?? string.Empty) + ");";
@@ -2072,7 +1968,6 @@ internal sealed class TranscriptView : UserControl
     TranscriptWindow window,
     bool preserve,
     int? anchorRecordNumber = null,
-    string? anchorSourceId = null,
     double? anchorOffset = null,
     int? focusVirtualIndex = null,
     string? focusEdge = null,
@@ -2083,7 +1978,6 @@ internal sealed class TranscriptView : UserControl
       window,
       preserve,
       anchorRecordNumber,
-      anchorSourceId,
       anchorOffset,
       focusVirtualIndex,
       focusEdge,
@@ -2099,7 +1993,6 @@ internal sealed class TranscriptView : UserControl
     TranscriptWindow window,
     bool preserve,
     int? anchorRecordNumber = null,
-    string? anchorSourceId = null,
     double? anchorOffset = null,
     int? focusVirtualIndex = null,
     string? focusEdge = null,
@@ -2111,17 +2004,14 @@ internal sealed class TranscriptView : UserControl
     long? requestSequence = null)
   {
     var identityTimer = Stopwatch.StartNew();
-    var keys = window.Records
+    HashSet<int> keys = window.Records
       .SelectMany(record => record.Identities.Count != 0
         ? record.Identities
-        : new[]
-        {
-          new TranscriptVirtualIdentity(record.RecordNumber, record.SourceId)
-        })
-      .Select(identity => identity.SourceId + "\0" + identity.RecordNumber)
-      .ToHashSet(StringComparer.Ordinal);
+        : new[] { new TranscriptVirtualIdentity(record.RecordNumber) })
+      .Select(identity => identity.RecordNumber)
+      .ToHashSet();
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
-      .Where(identity => keys.Contains(identity.SourceId + "\0" + identity.RecordNumber))
+      .Where(identity => keys.Contains(identity.RecordNumber))
       .ToArray();
     if (metrics is not null)
     {
@@ -2129,15 +2019,6 @@ internal sealed class TranscriptView : UserControl
       metrics.IdentityMilliseconds = identityTimer.ElapsedMilliseconds;
     }
 
-    var wordMapTimer = Stopwatch.StartNew();
-    IReadOnlyList<TranscriptRecordWordMap> wordMaps = _searchIndex?.GetWordMaps(
-      window.Records) ?? Array.Empty<TranscriptRecordWordMap>();
-    if (metrics is not null)
-    {
-      metrics.WordMapCount = wordMaps.Count;
-      metrics.WordCount = wordMaps.Sum(record => record.Words.Count);
-      metrics.WordMapMilliseconds = wordMapTimer.ElapsedMilliseconds;
-    }
 
     long effectiveTransactionId = transactionId ??
       Interlocked.Increment(ref _windowRenderTransactionSequence);
@@ -2147,13 +2028,11 @@ internal sealed class TranscriptView : UserControl
       JsonSerializer.Serialize(window.Html) + "," +
       JsonSerializer.Serialize(preserve) + "," +
       JsonSerializer.Serialize(identities) + "," +
-      JsonSerializer.Serialize(wordMaps) + "," +
       window.StartIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.EndIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.TopSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.BottomSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       JsonSerializer.Serialize(anchorRecordNumber) + "," +
-      JsonSerializer.Serialize(anchorSourceId) + "," +
       JsonSerializer.Serialize(anchorOffset) + "," +
       JsonSerializer.Serialize(focusVirtualIndex) + "," +
       JsonSerializer.Serialize(focusEdge) + "," +
@@ -2173,14 +2052,13 @@ internal sealed class TranscriptView : UserControl
 
   private async Task RenderWindowForRecordAsync(
     int recordNumber,
-    string sourceId,
     string reason,
     int? matchIndex,
     long? navigationGeneration = null)
   {
     TranscriptVirtualDocument? document = _virtualDocument;
     if (document is null ||
-        !document.TryGetIndex(recordNumber, sourceId, out int focalIndex))
+        !document.TryGetIndex(recordNumber, out int focalIndex))
     {
       return;
     }
@@ -2245,7 +2123,6 @@ internal sealed class TranscriptView : UserControl
       {
         reason,
         recordNumber,
-        sourceId,
         navigationGeneration,
         window.StartIndex,
         window.EndIndex,
@@ -2306,14 +2183,12 @@ internal sealed class TranscriptView : UserControl
     int focalIndex,
     string reason,
     int? anchorRecordNumber,
-    string anchorSourceId,
     double? anchorOffset)
   {
     return RenderWindowForIndexCoreAsync(
       focalIndex,
       reason,
       anchorRecordNumber,
-      anchorSourceId,
       anchorOffset,
       protectedStartIndex: null,
       protectedEndIndex: null,
@@ -2325,7 +2200,6 @@ internal sealed class TranscriptView : UserControl
     int focalIndex,
     string reason,
     int? anchorRecordNumber,
-    string anchorSourceId,
     double? anchorOffset,
     int? protectedStartIndex,
     int? protectedEndIndex,
@@ -2396,7 +2270,6 @@ internal sealed class TranscriptView : UserControl
         window,
         preserve: false,
         anchorRecordNumber: anchorRecordNumber,
-        anchorSourceId: anchorSourceId,
         anchorOffset: anchorOffset,
         focusVirtualIndex: focalIndex,
         metrics: scriptMetrics,
@@ -2430,14 +2303,11 @@ internal sealed class TranscriptView : UserControl
         window.EndIndex,
         recordCount = window.Records.Count,
         nodeCount = scriptMetrics.NodeCount,
-        wordMapCount = scriptMetrics.WordMapCount,
-        wordCount = scriptMetrics.WordCount,
         searchIndexAvailable = _searchIndex is not null,
         htmlCharacters = window.Html.Length,
         gateWaitMilliseconds,
         windowBuildMilliseconds,
         identityMilliseconds = scriptMetrics.IdentityMilliseconds,
-        wordMapMilliseconds = scriptMetrics.WordMapMilliseconds,
         serializationMilliseconds = scriptMetrics.SerializationMilliseconds,
         scriptBuildMilliseconds,
         executeMilliseconds,
@@ -2458,7 +2328,6 @@ internal sealed class TranscriptView : UserControl
       ? Task.CompletedTask
       : RenderWindowForRecordAsync(
           identity.RecordNumber,
-          identity.SourceId,
           reason,
           matchIndex: null);
   }
@@ -2712,9 +2581,7 @@ let latestSettingsSequence = 0;
 const fadingAnimations = new WeakMap();
 let knownNodeIds = new Set();
 let displayWordsByRecord = new Map();
-let displayWordsById = new Map();
 let lexicalWordsByRecord = new Map();
-let availableWordMapsByRecord = new Map();
 let segmentRangesByNode = new Map();
 let mappingGeneration = 0;
 const reportedMappingFailures = new Set();
@@ -2751,21 +2618,9 @@ function nodeRecordKeys(nodeMap) {
   for (const item of nodeMap || []) {
     const recordNumber = String(
       item.RecordNumber ?? item.recordNumber ?? '');
-    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
-    result.add(makeRecordKey(recordNumber, sourceId));
+    result.add(makeRecordKey(recordNumber));
   }
   return result;
-}
-
-function setAvailableWordMaps(wordMap) {
-  availableWordMapsByRecord = new Map();
-  for (const record of wordMap || []) {
-    const recordNumber = String(
-      record.RecordNumber ?? record.recordNumber ?? '');
-    const sourceId = String(record.SourceId ?? record.sourceId ?? '');
-    availableWordMapsByRecord.set(
-      makeRecordKey(recordNumber, sourceId), record);
-  }
 }
 
 function ensureCoreOrdinalSpeechMaps() {
@@ -2798,8 +2653,7 @@ function wrapWordsForRecordKeys(recordKeys, reset) {
       const element = node;
       if (element.classList.contains('record-anchor')) {
         currentKey = makeRecordKey(
-          String(element.dataset.jsonlRecord || ''),
-          element.dataset.sourceId || '');
+          String(element.dataset.jsonlRecord || ''));
       }
       continue;
     }
@@ -2865,14 +2719,12 @@ function normalizeStructureEntries(entries) {
   const result = new Map();
   for (const entry of entries || []) {
     const recordNumber = Number(entry.RecordNumber ?? entry.recordNumber ?? 0);
-    const sourceId = String(entry.SourceId ?? entry.sourceId ?? '');
     const turnId = String(entry.TurnId ?? entry.turnId ?? '');
     const detailsChain = Array.from(
       entry.DetailsChain ?? entry.detailsChain ?? [],
       value => String(value));
-    result.set(sourceId + '\u0000' + recordNumber, {
+    result.set(String(recordNumber), {
       recordNumber,
-      sourceId,
       turnId,
       detailsChain
     });
@@ -2897,7 +2749,6 @@ function captureStructureDom() {
     const turn = anchor.closest('section.transcript-turn');
     entries.push({
       recordNumber: Number(anchor.getAttribute('data-jsonl-record') || 0),
-      sourceId: anchor.getAttribute('data-source-id') || '',
       turnId: turn
         ? 'presentation:' + (turn.getAttribute('data-presentation-id') || '')
         : '',
@@ -2918,7 +2769,6 @@ function compareStructureMaps(before, after) {
     if (!right) {
       differences.push({
         recordNumber: left.recordNumber,
-        sourceId: left.sourceId,
         kind: 'missing-record',
         beforeTurn: left.turnId,
         afterTurn: '',
@@ -2934,7 +2784,6 @@ function compareStructureMaps(before, after) {
     if (detailsChanged || turnChanged) {
       differences.push({
         recordNumber: left.recordNumber,
-        sourceId: left.sourceId,
         kind: 'containment-changed',
         beforeTurn: left.turnId,
         afterTurn: right.turnId,
@@ -2947,7 +2796,6 @@ function compareStructureMaps(before, after) {
     if (!before.has(key)) {
       differences.push({
         recordNumber: right.recordNumber,
-        sourceId: right.sourceId,
         kind: 'unexpected-record',
         beforeTurn: '',
         afterTurn: right.turnId,
@@ -2959,26 +2807,23 @@ function compareStructureMaps(before, after) {
   return differences;
 }
 
-function structureAnchorSelector(recordNumber, sourceId) {
+function structureAnchorSelector(recordNumber) {
   return '.record-anchor[data-jsonl-record="' +
-    CSS.escape(String(recordNumber)) + '"][data-source-id="' +
-    CSS.escape(String(sourceId || '')) + '"]';
+    CSS.escape(String(recordNumber)) + '"]';
 }
 
-function inputContextForRecord(html, recordNumber, sourceId) {
+function inputContextForRecord(html, recordNumber) {
   const recordNeedle = 'data-jsonl-record="' + String(recordNumber) + '"';
-  const sourceNeedle = 'data-source-id="' + String(sourceId || '') + '"';
-  let index = html.indexOf(sourceNeedle);
-  if (index < 0) index = html.indexOf(recordNeedle);
+  let index = html.indexOf(recordNeedle);
   if (index < 0) return '';
   const start = Math.max(0, index - 1800);
   const end = Math.min(html.length, index + 2200);
   return html.slice(start, end);
 }
 
-function domContextForRecord(recordNumber, sourceId) {
+function domContextForRecord(recordNumber) {
   const anchor = transcript.querySelector(
-    structureAnchorSelector(recordNumber, sourceId));
+    structureAnchorSelector(recordNumber));
   if (!anchor) return '';
   let element = anchor.parentElement;
   let selected = anchor;
@@ -2994,14 +2839,12 @@ function domContextForRecord(recordNumber, sourceId) {
 function buildStructureDivergenceContexts(html, differences) {
   return (differences || []).slice(0, 20).map(diff => ({
     recordNumber: diff.recordNumber,
-    sourceId: diff.sourceId,
     beforeDetails: diff.beforeDetails,
     afterDetails: diff.afterDetails,
     inputContext: inputContextForRecord(
       html,
-      diff.recordNumber,
-      diff.sourceId),
-    domContext: domContextForRecord(diff.recordNumber, diff.sourceId)
+      diff.recordNumber),
+    domContext: domContextForRecord(diff.recordNumber)
   }));
 }
 
@@ -3081,7 +2924,6 @@ function replaceTranscriptDom(
   domNodes,
   preserve,
   nodeMap,
-  wordMap,
   expectedStructure = [],
   structureProbeId = '') {
   const expectedStructureMap = normalizeStructureEntries(expectedStructure);
@@ -3121,7 +2963,6 @@ function replaceTranscriptDom(
     currentStructureMap,
     'after-dom-construction');
 
-  setAvailableWordMaps(wordMap || []);
   wrapWords(nodeMap || []);
   currentStructureMap = postStructureStage(
     structureProbeId,
@@ -3143,7 +2984,6 @@ function replaceTranscriptDom(
     expectedStructureMap,
     currentStructureMap,
     'after-record-scopes');
-  assignStableWordScopes(wordMap || []);
   postMappingInstallSummary(nodeMap || []);
   postStructureStage(
     structureProbeId,
@@ -3175,13 +3015,11 @@ function replaceTranscriptWindow(
   html,
   preserve,
   nodeMap,
-  wordMap,
   startIndex = -1,
   endIndex = -1,
   topSpacerHeight = 0,
   bottomSpacerHeight = 0,
   anchorRecordNumber = null,
-  anchorSourceId = null,
   anchorOffset = null,
   focusVirtualIndex = null,
   focusEdge = null,
@@ -3266,7 +3104,6 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-details-restore';
-  setAvailableWordMaps(wordMap || []);
   phaseStarted = performance.now();
   wrapWords(nodeMap || []);
   const wrapWordsMilliseconds = performance.now() - phaseStarted;
@@ -3297,9 +3134,6 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-node-scopes';
-  phaseStarted = performance.now();
-  assignStableWordScopes(wordMap || []);
-  const stableWordScopesMilliseconds = performance.now() - phaseStarted;
   phaseStarted = performance.now();
   postMappingInstallSummary(nodeMap || []);
   const mappingSummaryMilliseconds = performance.now() - phaseStarted;
@@ -3354,8 +3188,7 @@ function replaceTranscriptWindow(
   let restoredAnchor = false;
   if (anchorRecordNumber !== null && anchorOffset !== null) {
     const selector = '.record-anchor[data-jsonl-record="' +
-      CSS.escape(String(anchorRecordNumber)) + '"][data-source-id="' +
-      CSS.escape(String(anchorSourceId || '')) + '"]';
+      CSS.escape(String(anchorRecordNumber)) + '"]';
     const anchor = transcript.querySelector(selector);
     if (anchor) {
       const delta = anchor.getBoundingClientRect().top - Number(anchorOffset);
@@ -3401,7 +3234,6 @@ function replaceTranscriptWindow(
     endIndex:Number(endIndex),
     recordCount:document.querySelectorAll('.virtual-record').length,
     nodeCount:Array.isArray(nodeMap) ? nodeMap.length : 0,
-    wordMapCount:Array.isArray(wordMap) ? wordMap.length : 0,
     wordCount:words.length,
     beforeScrollY:beforeGeometry.scrollY,
     beforeViewportHeight:beforeGeometry.viewportHeight,
@@ -3421,7 +3253,6 @@ function replaceTranscriptWindow(
     wrapWordsMilliseconds:Math.round(wrapWordsMilliseconds),
     recordScopesMilliseconds:Math.round(recordScopesMilliseconds),
     nodeScopesMilliseconds:Math.round(nodeScopesMilliseconds),
-    stableWordScopesMilliseconds:Math.round(stableWordScopesMilliseconds),
     mappingSummaryMilliseconds:Math.round(mappingSummaryMilliseconds),
     measurementMilliseconds:Math.round(measurementMilliseconds),
     anchorRestoreMilliseconds:Math.round(anchorRestoreMilliseconds),
@@ -3438,9 +3269,8 @@ function replaceTranscriptWindow(
   };
 }
 
-function replaceTranscript(html, preserve, nodeMap, wordMap = []) {
-  replaceTranscriptWindow(
-    html, preserve, nodeMap, wordMap, -1, -1, 0, 0);
+function replaceTranscript(html, preserve, nodeMap) {
+  replaceTranscriptWindow(html, preserve, nodeMap, -1, -1, 0, 0);
 }
 
 function updateFollowToggle() {
@@ -3489,8 +3319,8 @@ function applySettings(
   setFollowSpeech(follow, false);
 }
 
-function makeRecordKey(recordNumber, sourceId) {
-  return sourceId + '\u0000' + recordNumber;
+function makeRecordKey(recordNumber) {
+  return String(recordNumber);
 }
 
 function appendRecordWord(map, key, word) {
@@ -3507,7 +3337,6 @@ function assignRecordScopes() {
   displayWordsByRecord = new Map();
   lexicalWordsByRecord = new Map();
   let recordNumber = '';
-  let sourceId = '';
   const walker = document.createTreeWalker(
     transcript,
     NodeFilter.SHOW_ELEMENT);
@@ -3515,16 +3344,14 @@ function assignRecordScopes() {
     const element = walker.currentNode;
     if (element.classList.contains('record-anchor')) {
       recordNumber = element.dataset.jsonlRecord || '';
-      sourceId = element.dataset.sourceId || '';
       continue;
     }
     if (!element.classList.contains('word')) continue;
 
     element.dataset.recordNumber = recordNumber;
-    element.dataset.sourceId = sourceId;
-    if (!recordNumber && !sourceId) continue;
+    if (!recordNumber) continue;
 
-    const key = makeRecordKey(recordNumber, sourceId);
+    const key = makeRecordKey(recordNumber);
     element.dataset.recordIndex = String(
       appendRecordWord(displayWordsByRecord, key, element));
     if (element.dataset.lexical === '1') {
@@ -3534,71 +3361,21 @@ function assignRecordScopes() {
   }
 }
 
-function assignStableWordScopes(wordMap) {
-  displayWordsById = new Map();
-  const mapsByRecord = new Map();
-  for (const record of wordMap || []) {
-    const recordNumber = String(record.RecordNumber ?? record.recordNumber ?? '');
-    const sourceId = String(record.SourceId ?? record.sourceId ?? '');
-    mapsByRecord.set(
-      makeRecordKey(recordNumber, sourceId),
-      record.Words ?? record.words ?? []);
-  }
-
-  for (const [key, recordWords] of displayWordsByRecord) {
-    const mappedWords = mapsByRecord.get(key) || [];
-    if (mappedWords.length !== recordWords.length) {
-      chrome.webview.postMessage({
-        type:'stable-word-map-failure',
-        key,
-        renderedWordCount:recordWords.length,
-        mappedWordCount:mappedWords.length
-      });
-    }
-    const count = Math.min(recordWords.length, mappedWords.length);
-    for (let index = 0; index < count; ++index) {
-      const word = recordWords[index];
-      const mapped = mappedWords[index];
-      const wordId = String(mapped.WordId ?? mapped.wordId ?? '');
-      if (!wordId) continue;
-      word.dataset.wordId = wordId;
-      word.id = 'word-' + wordId;
-      displayWordsById.set(wordId, word);
-      const nodeId = Number(mapped.NodeId ?? mapped.nodeId ?? 0);
-      const nodeWordIndex = Number(
-        mapped.NodeWordIndex ?? mapped.nodeWordIndex ?? -1);
-      if (nodeId > 0 && nodeWordIndex >= 0) {
-        word.dataset.nodeId = String(nodeId);
-        word.dataset.nodeWordIndex = String(nodeWordIndex);
-      }
-    }
-  }
-}
-
-function installSearchWordMaps(wordMap) {
-  setAvailableWordMaps(wordMap || []);
-  assignStableWordScopes(wordMap || []);
-}
-
-function materializeRecordWords(recordNumber, sourceId) {
-  const key = makeRecordKey(String(recordNumber), String(sourceId || ''));
+function materializeRecordWords(recordNumber) {
+  const key = makeRecordKey(recordNumber);
   if (displayWordsByRecord.has(key)) return true;
-  if (!availableWordMapsByRecord.has(key)) return false;
-  const selector = '.record-anchor[data-jsonl-record="' +
-    CSS.escape(String(recordNumber)) + '"][data-source-id="' +
-    CSS.escape(String(sourceId || '')) + '"]';
+  const selector = '.record-anchor[data-jsonl-record=\"' +
+    CSS.escape(String(recordNumber)) + '\"]';
   if (!transcript.querySelector(selector)) return false;
 
   const beforeWordCount = words.length;
   const started = performance.now();
   wrapWordsForRecordKeys(new Set([key]), false);
   assignRecordScopes();
-  assignStableWordScopes([...availableWordMapsByRecord.values()]);
   const materialized = displayWordsByRecord.has(key);
   chrome.webview.postMessage({
     type:'lazy-word-materialized',
     recordNumber:Number(recordNumber),
-    sourceId:String(sourceId || ''),
     addedWordCount:words.length - beforeWordCount,
     totalWordCount:words.length,
     elapsedMilliseconds:Math.round(performance.now() - started),
@@ -3612,8 +3389,7 @@ function findSequence(
   target,
   startAt,
   requiredNodeId,
-  requiredRecordNumber,
-  requiredSourceId) {
+  requiredRecordNumber) {
   if (!target.length || !collection.length) return -1;
   const lastStart = collection.length - target.length;
   for (let i = Math.max(0, startAt); i <= lastStart; ++i) {
@@ -3624,9 +3400,7 @@ function findSequence(
           (requiredNodeId !== null &&
            candidate.dataset.nodeId !== requiredNodeId) ||
           (requiredRecordNumber !== null &&
-           candidate.dataset.recordNumber !== requiredRecordNumber) ||
-          (requiredSourceId !== null &&
-           candidate.dataset.sourceId !== requiredSourceId)) {
+           candidate.dataset.recordNumber !== requiredRecordNumber)) {
         equal = false;
         break;
       }
@@ -3678,31 +3452,24 @@ function diagnosticRanges(ranges) {
 
 function postMappingInstallSummary(nodeMap) {
   const scopedCounts = new Map();
-  const stableCounts = new Map();
   for (const word of words) {
     const nodeId = String(word.dataset.nodeId || '');
     if (!nodeId) continue;
     scopedCounts.set(nodeId, (scopedCounts.get(nodeId) || 0) + 1);
-    if (word.dataset.wordId) {
-      stableCounts.set(nodeId, (stableCounts.get(nodeId) || 0) + 1);
-    }
   }
   const nodes = [];
   for (const item of nodeMap || []) {
     const nodeId = String(item.NodeId ?? item.nodeId ?? '');
     const recordNumber = Number(
       item.RecordNumber ?? item.recordNumber ?? 0);
-    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
     const segments = item.Segments ?? item.segments ?? [];
     const ranges = segmentRangesByNode.get(nodeId) || [];
     nodes.push({
       nodeId: Number(nodeId),
       recordNumber,
-      sourceId,
       segmentCount: segments.length,
       rangeCount: ranges.length,
       scopedWordCount: scopedCounts.get(nodeId) || 0,
-      stableWordCount: stableCounts.get(nodeId) || 0
     });
   }
   chrome.webview.postMessage({
@@ -3745,9 +3512,7 @@ function postFragmentRangeMiss(
       index: Number(word.dataset.index ?? -1),
       normalized: word.dataset.normalized || '',
       recordNumber: word.dataset.recordNumber || '',
-      sourceId: word.dataset.sourceId || '',
       recordIndex: word.dataset.recordIndex || '',
-      wordId: word.dataset.wordId || ''
     }))
   });
 }
@@ -3763,9 +3528,8 @@ function assignNodeScopes(nodeMap) {
     knownNodeIds.add(nodeId);
     const recordNumber = String(
       item.RecordNumber ?? item.recordNumber ?? '');
-    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
     const segments = item.Segments ?? item.segments ?? [];
-    const key = makeRecordKey(recordNumber, sourceId);
+    const key = makeRecordKey(recordNumber);
     const recordWords = displayWordsByRecord.get(key) || [];
     const recordLexicalWords = lexicalWordsByRecord.get(key) || [];
     let displayCursor = displayCursors.get(key) || 0;
@@ -3780,14 +3544,12 @@ function assignNodeScopes(nodeMap) {
         displayTarget,
         displayCursor,
         null,
-        null,
         null);
       if (start < 0 && displayCursor > 0) {
         start = findSequence(
           recordWords,
           displayTarget,
           0,
-          null,
           null,
           null);
       }
@@ -3818,14 +3580,12 @@ function assignNodeScopes(nodeMap) {
         lexicalTarget,
         lexicalCursor,
         null,
-        null,
         null);
       if (lexicalStart < 0 && lexicalCursor > 0) {
         lexicalStart = findSequence(
           recordLexicalWords,
           lexicalTarget,
           0,
-          null,
           null,
           null);
       }
@@ -3850,8 +3610,7 @@ function assignNodeScopes(nodeMap) {
         continue;
       }
 
-      const failureKey = nodeId + ':' + recordNumber + ':' +
-        sourceId + ':' + segment;
+      const failureKey = nodeId + ':' + recordNumber + ':' + segment;
       if (!reportedMappingFailures.has(failureKey)) {
         reportedMappingFailures.add(failureKey);
         chrome.webview.postMessage({
@@ -3859,8 +3618,7 @@ function assignNodeScopes(nodeMap) {
           mappingGeneration,
           nodeId: Number(nodeId),
           recordNumber: Number(recordNumber),
-          sourceId,
-          text: segment.slice(0, 500),
+              text: segment.slice(0, 500),
           displayKey: displayTarget.join('\u0000').slice(0, 1000),
           lexicalKey: lexicalTarget.join('\u0000').slice(0, 1000),
           displayCursor,
@@ -4306,11 +4064,8 @@ function normalizeFindMatch(match) {
   return {
     fileOrdinal: Number(match.FileOrdinal ?? match.fileOrdinal ?? 0),
     recordNumber: Number(match.RecordNumber ?? match.recordNumber ?? 0),
-    sourceId: String(match.SourceId ?? match.sourceId ?? ''),
     startWordIndex: Number(match.StartWordIndex ?? match.startWordIndex ?? -1),
     endWordIndex: Number(match.EndWordIndex ?? match.endWordIndex ?? -1),
-    wordIds: (match.WordIds ?? match.wordIds ?? []).map(value => String(value)),
-    seekWordId: String(match.SeekWordId ?? match.seekWordId ?? ''),
     nodeId: Number(match.NodeId ?? match.nodeId ?? 0),
     nodeWordIndex: Number(match.NodeWordIndex ?? match.nodeWordIndex ?? -1)
   };
@@ -4338,10 +4093,10 @@ async function showFindMatch(
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
   if (followSpeech) setFollowSpeech(false, true);
-  const key = makeRecordKey(String(match.recordNumber), match.sourceId);
+  const key = makeRecordKey(match.recordNumber);
   let recordWords = displayWordsByRecord.get(key);
   if (!recordWords &&
-      materializeRecordWords(match.recordNumber, match.sourceId)) {
+      materializeRecordWords(match.recordNumber)) {
     recordWords = displayWordsByRecord.get(key);
   }
   if (!recordWords) {
@@ -4349,7 +4104,6 @@ async function showFindMatch(
     chrome.webview.postMessage({
       type:'window-request',
       recordNumber:match.recordNumber,
-      sourceId:match.sourceId,
       reason:'search',
       matchIndex:currentFindMatch,
       navigationGeneration
@@ -4357,15 +4111,14 @@ async function showFindMatch(
     reportFind('window-requested', {trigger, targetIndex:currentFindMatch});
     return;
   }
-  const matchedWords = match.wordIds
-    .map(wordId => displayWordsById.get(String(wordId)))
-    .filter(word => !!word);
-  if (!match.wordIds.length || matchedWords.length !== match.wordIds.length) {
-    reportFind('navigation-word-id-missing', {
+  const matchedWords = recordWords.slice(
+    match.startWordIndex, match.endWordIndex + 1);
+  const expectedWordCount = match.endWordIndex - match.startWordIndex + 1;
+  if (expectedWordCount <= 0 || matchedWords.length !== expectedWordCount) {
+    reportFind('navigation-record-index-missing', {
       trigger,
-      expectedWordCount:match.wordIds.length,
-      resolvedWordCount:matchedWords.length,
-      firstWordId:match.wordIds.length ? match.wordIds[0] : ''
+      expectedWordCount,
+      resolvedWordCount:matchedWords.length
     });
     return;
   }
@@ -4437,12 +4190,11 @@ function getFindOrigin() {
       return {
         kind:'selection',
         recordNumber:Number(word.dataset.recordNumber || 0),
-        sourceId:word.dataset.sourceId || '',
         wordIndex:Number(word.dataset.recordIndex || -1)
       };
     }
   }
-  return {kind:'voice', recordNumber:0, sourceId:'', wordIndex:-1};
+  return {kind:'voice', recordNumber:0, wordIndex:-1};
 }
 
 function runFind() {
@@ -4473,7 +4225,6 @@ function runFind() {
     voicedEnabled:findVoicedEnabled,
     originKind:origin.kind,
     originRecordNumber:origin.recordNumber,
-    originSourceId:origin.sourceId,
     originWordIndex:origin.wordIndex
   });
 }
@@ -4532,7 +4283,8 @@ findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => find
 findVoiced.addEventListener('click', () => toggleFindOption(findVoiced, () => findVoicedEnabled = !findVoicedEnabled));
 
 function isVoicedFindMatch(match) {
-  return !!match && Number(match.seekWordId || 0) > 0;
+  return !!match && Number(match.nodeId || 0) > 0 &&
+    Number(match.nodeWordIndex ?? -1) >= 0;
 }
 
 function postFindSeek(match, trigger) {
@@ -4540,13 +4292,13 @@ function postFindSeek(match, trigger) {
     trigger,
     targetMatch: currentFindMatch,
     fileOrdinal: match.fileOrdinal,
-    seekWordId:match.seekWordId
+    nodeId:match.nodeId,
+    nodeWordIndex:match.nodeWordIndex
   });
   chrome.webview.postMessage({
     type:'find-seek',
     nodeId:Number(match.nodeId),
-    nodeWordIndex:Number(match.nodeWordIndex),
-    wordId:Number(match.seekWordId)
+    nodeWordIndex:Number(match.nodeWordIndex)
   });
 }
 
@@ -4801,7 +4553,6 @@ function requestVirtualShift(direction, reason = null, referenceRecord = null) {
     ...visibleRange,
     viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
-    anchorSourceId:anchor.dataset.sourceId || '',
     anchorOffset:anchor.getBoundingClientRect().top
   });
   setTimeout(
