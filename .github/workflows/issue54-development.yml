@@ -36,7 +36,7 @@ jobs:
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
       - name: Wire issue 54 regression suite
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
 
