@@ -167,7 +167,6 @@ internal static class Program
         return;
       }
 
-
       if (args.Length == 2 &&
           string.Equals(args[1], "word-materialization", StringComparison.OrdinalIgnoreCase))
       {
@@ -175,6 +174,16 @@ internal static class Program
           "word-materialization",
           () => RunWithWinFormsMessageLoop(
             Issue37WordMaterializationRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "startup-progress", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "startup-progress",
+          () => RunWithWinFormsMessageLoop(
+            Issue55StartupProgressRegressionTestRunner.Run));
         return;
       }
 
@@ -208,6 +217,7 @@ internal static class Program
       int independentOracles = RunIsolatedTestSuite("independent-oracles");
       int virtualWindow = RunIsolatedTestSuite("virtual-window");
       int wordMaterialization = RunIsolatedTestSuite("word-materialization");
+      int startupProgress = RunIsolatedTestSuite("startup-progress");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -223,7 +233,8 @@ internal static class Program
                              independentOutputOracle == 0 &&
                              independentOracles == 0 &&
                              virtualWindow == 0 &&
-                             wordMaterialization == 0
+                             wordMaterialization == 0 &&
+                             startupProgress == 0
         ? 0
         : 1;
       Console.WriteLine(
