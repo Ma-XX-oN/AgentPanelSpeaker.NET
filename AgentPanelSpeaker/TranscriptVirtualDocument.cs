@@ -12,6 +12,7 @@ internal sealed class TranscriptVirtualDocument
 {
   internal const double MinimumWindowViewportHeights = 5.0;
   internal const double EdgeTriggerViewportHeights = 2.0;
+  internal const double ShiftPrefetchViewportHeights = 4.0;
   internal const double DefaultViewportHeight = 700.0;
   private const double MinimumEstimatedHeight = 72.0;
   private static readonly Regex AnchorRegex = new(
@@ -341,10 +342,22 @@ public static TranscriptVirtualDocument Build(
       }
     }
 
+    int protectedStartIndex = focalIndex;
+    if (IsLastVisibleIndex(focalIndex))
+    {
+      int previousVisibleIndex = FindPreviousVisibleIndex(focalIndex);
+      if (previousVisibleIndex >= 0 && left > previousVisibleIndex)
+      {
+        left = previousVisibleIndex;
+        totalHeight = SumHeights(left, right + 1);
+        protectedStartIndex = previousVisibleIndex;
+      }
+    }
+
     TrimToMinimumHeight(
       ref left,
       ref right,
-      focalIndex,
+      protectedStartIndex,
       focalIndex,
       targetHeight,
       ref totalHeight,
@@ -441,7 +454,7 @@ public static TranscriptVirtualDocument Build(
     double targetHeight = normalizedViewportHeight *
       MinimumWindowViewportHeights;
     double extensionHeight = normalizedViewportHeight *
-      EdgeTriggerViewportHeights;
+      ShiftPrefetchViewportHeights;
     double totalHeight = SumHeights(left, right + 1);
     double addedHeight = 0.0;
 
@@ -690,6 +703,37 @@ public static TranscriptVirtualDocument Build(
   private double EffectiveHeight(int index)
   {
     return IsVisible(index) ? _heights[index] : 0.0;
+  }
+
+  /// <summary>
+  /// Returns whether the supplied unit is the final currently visible Core
+  /// unit, ignoring hidden historical revisions after it.
+  /// </summary>
+  private bool IsLastVisibleIndex(int index)
+  {
+    for (int candidate = index + 1; candidate < _records.Length; ++candidate)
+    {
+      if (IsVisible(candidate))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// <summary>
+  /// Finds the immediately preceding currently visible Core unit.
+  /// </summary>
+  private int FindPreviousVisibleIndex(int index)
+  {
+    for (int candidate = index - 1; candidate >= 0; --candidate)
+    {
+      if (IsVisible(candidate))
+      {
+        return candidate;
+      }
+    }
+    return -1;
   }
 
   private int ResolveVisibleFocalIndex(int focalIndex)

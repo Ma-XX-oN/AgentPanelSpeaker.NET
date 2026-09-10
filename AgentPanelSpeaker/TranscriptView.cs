@@ -15,7 +15,8 @@ internal sealed class TranscriptView : UserControl
 {
   private const int GwlStyle = -16;
   private const int WsVisible = 0x10000000;
-  private const int StartupStageCount = 3;
+  private const int StartupCanonicalEndPercent = 98;
+  private const int StartupRenderPercent = 99;
   private readonly WebView2 _webView = new();
   private readonly Label _loadingLabel = new();
   private readonly Label _failureLabel = new();
@@ -36,7 +37,10 @@ internal sealed class TranscriptView : UserControl
   private bool _refreshPendingForce;
   private int _renderGeneration;
   private int _activeRenderGeneration = -1;
+  private int _startupProgressPhase;
+  private int _startupProgressPercent;
   private CancellationTokenSource? _renderCancellation;
+  private CancellationTokenSource? _searchIndexCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
   private TranscriptPlaybackPosition? _lastLocatedContentPosition;
@@ -56,7 +60,18 @@ internal sealed class TranscriptView : UserControl
   private CancellationTokenSource? _findCancellation;
   private PendingFindRequest? _pendingFindRequest;
   private long _latestFindWindowNavigationGeneration;
-  private readonly SemaphoreSlim _findWindowRenderGate = new(1, 1);
+  private long _windowRenderTransactionSequence;
+  private readonly SemaphoreSlim _windowRenderGate = new(1, 1);
+
+  private sealed class WindowScriptBuildMetrics
+  {
+    public int NodeCount { get; set; }
+    public int WordMapCount { get; set; }
+    public int WordCount { get; set; }
+    public long IdentityMilliseconds { get; set; }
+    public long WordMapMilliseconds { get; set; }
+    public long SerializationMilliseconds { get; set; }
+  }
 
   private sealed record PendingFindRequest(
     long RequestId,
@@ -209,6 +224,7 @@ internal sealed class TranscriptView : UserControl
 
     _pendingPosition = null;
     _lastLocatedContentPosition = null;
+    CancelSearchIndexBuild();
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
@@ -230,6 +246,7 @@ internal sealed class TranscriptView : UserControl
   public void ClearSession()
   {
     _pendingPosition = null;
+    CancelSearchIndexBuild();
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
@@ -460,6 +477,7 @@ internal sealed class TranscriptView : UserControl
     {
       _renderGeneration++;
       CancelActiveRender();
+      CancelSearchIndexBuild();
       _refreshTimer.Stop();
       _refreshTimer.Dispose();
       _settingsApplyTimer.Stop();
@@ -587,12 +605,16 @@ internal sealed class TranscriptView : UserControl
     _renderCancellation = cancellation;
     _activeRenderGeneration = generation;
     _refreshInProgress = true;
+    CancelSearchIndexBuild();
+    _searchIndex = null;
     if (force)
     {
-      ShowStartupStage(1, "Preparing canonical transcript…");
+      _startupProgressPhase = 0;
+      _startupProgressPercent = 0;
+      ShowStartupProgress(1, "Preparing canonical transcript…", 0);
     }
-    IProgress<int>? startupProgress = force
-      ? new Progress<int>(stage =>
+    IProgress<TranscriptBuildProgress>? startupRecordProgress = force
+      ? new Progress<TranscriptBuildProgress>(progress =>
       {
         if (generation != _renderGeneration ||
             !string.Equals(
@@ -602,10 +624,14 @@ internal sealed class TranscriptView : UserControl
         {
           return;
         }
-        if (stage == 2)
-        {
-          ShowStartupStage(2, "Building transcript search index…");
-        }
+        ShowStartupProgress(
+          1,
+          "Preparing canonical transcript…",
+          ScaleStartupProgress(
+            progress.Completed,
+            progress.Total,
+            0,
+            StartupCanonicalEndPercent));
       })
       : null;
     DiagnosticLog.Write("transcript.render_started", new
@@ -637,24 +663,20 @@ internal sealed class TranscriptView : UserControl
             path,
             source,
             token,
-            includeRolledBackTurns),
+            includeRolledBackTurns,
+            startupRecordProgress),
           () => presentation = TranscriptPresentationDomFormatter.Format(
             path,
             source,
             _pipeline,
             token));
         token.ThrowIfCancellationRequested();
-        startupProgress?.Report(2);
         string html = presentation.Html;
         TranscriptStructureSnapshot rendererStructure =
           TranscriptStructureProbe.CaptureHtml(
             structureProbeId,
             "dom-model-html",
             html);
-        TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
-          html,
-          identities,
-          token);
         TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
           presentation.Units);
         document.SetShowRolledBackHistory(
@@ -663,7 +685,7 @@ internal sealed class TranscriptView : UserControl
         return new TranscriptRenderPayload(
           document,
           identities,
-          searchIndex,
+          html,
           rendererStructure,
           presentation.Nodes);
       }, token);
@@ -678,7 +700,6 @@ internal sealed class TranscriptView : UserControl
 
       _virtualDocument = payload.Document;
       _identities = payload.Identities;
-      _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
       TranscriptWindow window = payload.Document.CreateWindow(focalIndex, GetVirtualViewportHeight());
       TranscriptStructureSnapshot virtualStructure =
@@ -706,7 +727,10 @@ internal sealed class TranscriptView : UserControl
         expectedStructure: virtualStructure);
       if (force)
       {
-        ShowStartupStage(3, "Rendering visible transcript…");
+        ShowStartupProgress(
+          3,
+          "Rendering visible transcript…",
+          StartupRenderPercent);
       }
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
@@ -781,10 +805,21 @@ internal sealed class TranscriptView : UserControl
 
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
-      StartPendingFindRequest();
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
+      if (force)
+      {
+        ShowStartupProgress(
+          3,
+          "Rendering visible transcript…",
+          100);
+      }
       HideLoading();
+      BeginDeferredSearchIndexBuild(
+        path,
+        generation,
+        payload.SearchHtml,
+        payload.Identities);
       _restoredFromSettings = false;
       QueueSettingsApply(immediate: true);
       if (_lastLocatedContentPosition is TranscriptPlaybackPosition locatedPosition &&
@@ -851,6 +886,162 @@ internal sealed class TranscriptView : UserControl
     }
   }
 
+  /// <summary>
+  /// Starts full-file search indexing only after the initial visible window is
+  /// installed. Search readiness is deliberately independent of first paint.
+  /// </summary>
+  private void BeginDeferredSearchIndexBuild(
+    string path,
+    int generation,
+    string html,
+    IReadOnlyList<TranscriptNodeIdentity> identities)
+  {
+    var cancellation = new CancellationTokenSource();
+    _searchIndexCancellation = cancellation;
+    _ = BuildDeferredSearchIndexAsync(
+      path,
+      generation,
+      html,
+      identities,
+      cancellation);
+  }
+
+  /// <summary>
+  /// Builds the immutable full-session search corpus away from the UI thread,
+  /// then attaches stable word IDs to whichever virtual window is current.
+  /// </summary>
+  private async Task BuildDeferredSearchIndexAsync(
+    string path,
+    int generation,
+    string html,
+    IReadOnlyList<TranscriptNodeIdentity> identities,
+    CancellationTokenSource cancellation)
+  {
+    var timer = Stopwatch.StartNew();
+    try
+    {
+      TranscriptSearchIndex index = await Task.Run(
+        () => TranscriptSearchIndex.Build(
+          html,
+          identities,
+          cancellation.Token),
+        cancellation.Token);
+      cancellation.Token.ThrowIfCancellationRequested();
+      if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
+          generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      _searchIndex = index;
+      await InstallCurrentWindowSearchMapsAsync(
+        index,
+        generation,
+        path,
+        cancellation.Token);
+      cancellation.Token.ThrowIfCancellationRequested();
+      if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
+          generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      StartPendingFindRequest();
+      DiagnosticLog.Write("transcript.search_index_completed", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = timer.ElapsedMilliseconds,
+        firstRenderAlreadyVisible = !_loadingLabel.Visible
+      });
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+      DiagnosticLog.Write("transcript.search_index_cancelled", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+    }
+    catch (Exception exception)
+    {
+      DiagnosticLog.Write("transcript.search_index_failed", new
+      {
+        path,
+        generation,
+        exception = exception.ToString()
+      });
+      PendingFindRequest? request = _pendingFindRequest;
+      if (request is not null)
+      {
+        _pendingFindRequest = null;
+        PostMessage(new
+        {
+          type = "find-error",
+          requestId = request.RequestId,
+          errorKind = "search",
+          error = exception.Message
+        });
+      }
+    }
+    finally
+    {
+      if (ReferenceEquals(_searchIndexCancellation, cancellation))
+      {
+        _searchIndexCancellation = null;
+      }
+      cancellation.Dispose();
+    }
+  }
+
+  /// <summary>
+  /// Installs search-owned stable word IDs into the current browser window
+  /// without replacing its canonical Core HTML or moving the viewport.
+  /// </summary>
+  private async Task InstallCurrentWindowSearchMapsAsync(
+    TranscriptSearchIndex index,
+    int generation,
+    string path,
+    CancellationToken cancellationToken)
+  {
+    await _windowRenderGate.WaitAsync(cancellationToken);
+    try
+    {
+      if (generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase) ||
+          _virtualDocument is not TranscriptVirtualDocument document ||
+          _windowStartIndex < 0 ||
+          _windowEndIndex < _windowStartIndex)
+      {
+        return;
+      }
+
+      int start = Math.Clamp(_windowStartIndex, 0, document.Count - 1);
+      int end = Math.Clamp(_windowEndIndex, start, document.Count - 1);
+      TranscriptVirtualRecord[] records = document.Records
+        .Skip(start)
+        .Take(end - start + 1)
+        .ToArray();
+      IReadOnlyList<TranscriptRecordWordMap> wordMaps = index.GetWordMaps(records);
+      await ExecuteAsync(
+        "installSearchWordMaps(" + JsonSerializer.Serialize(wordMaps) + ");");
+    }
+    finally
+    {
+      _windowRenderGate.Release();
+    }
+  }
+
+  private void CancelSearchIndexBuild()
+  {
+    CancellationTokenSource? cancellation = _searchIndexCancellation;
+    _searchIndexCancellation = null;
+    cancellation?.Cancel();
+  }
+
   private void CancelActiveRender()
   {
     CancellationTokenSource? cancellation = _renderCancellation;
@@ -875,20 +1066,47 @@ internal sealed class TranscriptView : UserControl
       : prefix + ":" + Environment.NewLine + name + "…";
   }
 
-  private void ShowStartupStage(int stage, string description)
+  private void ShowStartupProgress(
+    int phase,
+    string description,
+    int percentage)
   {
-    Debug.Assert(stage >= 1 && stage <= StartupStageCount);
+    Debug.Assert(phase >= 1 && phase <= 3);
     Debug.Assert(!string.IsNullOrWhiteSpace(description));
+    if (phase < _startupProgressPhase)
+    {
+      return;
+    }
+
+    _startupProgressPhase = phase;
+    _startupProgressPercent = Math.Max(
+      _startupProgressPercent,
+      Math.Clamp(percentage, 0, 100));
     string name = string.IsNullOrWhiteSpace(_sessionDisplayName)
       ? Path.GetFileName(_sessionPath) ?? string.Empty
       : _sessionDisplayName;
     string text = description + Environment.NewLine +
-      $"Stage {stage} of {StartupStageCount}";
+      $"{_startupProgressPercent}%";
     if (!string.IsNullOrWhiteSpace(name))
     {
       text += Environment.NewLine + name;
     }
     ShowLoading(text);
+  }
+
+  private static int ScaleStartupProgress(
+    int completed,
+    int total,
+    int startPercentage,
+    int endPercentage)
+  {
+    if (total <= 0)
+    {
+      return startPercentage;
+    }
+    int boundedCompleted = Math.Clamp(completed, 0, total);
+    int span = Math.Max(0, endPercentage - startPercentage);
+    return startPercentage + (int)((long)span * boundedCompleted / total);
   }
 
   private void ShowLoading(string text)
@@ -951,6 +1169,16 @@ internal sealed class TranscriptView : UserControl
           javascriptTimestamp = ReadOptionalString(root, "javascriptTimestamp"),
           receivedTimestamp = Stopwatch.GetTimestamp()
         });
+        return;
+      }
+      if (type == "window-transaction-diagnostic")
+      {
+        DiagnosticLog.Write("transcript.window_browser_timing", root.Clone());
+        return;
+      }
+      if (type == "window-shift-followup")
+      {
+        DiagnosticLog.Write("transcript.window_shift_followup", root.Clone());
         return;
       }
       if (type == "lazy-word-materialized")
@@ -1074,7 +1302,10 @@ internal sealed class TranscriptView : UserControl
             ReadOptionalString(root, "anchorSourceId"),
             ReadOptionalDouble(root, "anchorOffset"),
             ReadOptionalInt32(root, "visibleStartIndex"),
-            ReadOptionalInt32(root, "visibleEndIndex"));
+            ReadOptionalInt32(root, "visibleEndIndex"),
+            ReadOptionalInt32(root, "sourceStartIndex"),
+            ReadOptionalInt32(root, "sourceEndIndex"),
+            ReadOptionalInt64(root, "requestSequence"));
         }
         return;
       }
@@ -1755,7 +1986,7 @@ internal sealed class TranscriptView : UserControl
   private sealed record TranscriptRenderPayload(
     TranscriptVirtualDocument Document,
     IReadOnlyList<TranscriptNodeIdentity> Identities,
-    TranscriptSearchIndex SearchIndex,
+    string SearchHtml,
     TranscriptStructureSnapshot RendererStructure,
     IReadOnlyList<TranscriptDomNode> DomNodes);
 
@@ -1848,6 +2079,38 @@ internal sealed class TranscriptView : UserControl
     string? structureProbeId = null,
     TranscriptStructureSnapshot? expectedStructure = null)
   {
+    return BuildReplaceWindowScriptInstrumented(
+      window,
+      preserve,
+      anchorRecordNumber,
+      anchorSourceId,
+      anchorOffset,
+      focusVirtualIndex,
+      focusEdge,
+      structureProbeId,
+      expectedStructure,
+      metrics: null,
+      transactionId: null,
+      renderReason: null,
+      requestSequence: null);
+  }
+
+  private string BuildReplaceWindowScriptInstrumented(
+    TranscriptWindow window,
+    bool preserve,
+    int? anchorRecordNumber = null,
+    string? anchorSourceId = null,
+    double? anchorOffset = null,
+    int? focusVirtualIndex = null,
+    string? focusEdge = null,
+    string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null,
+    WindowScriptBuildMetrics? metrics = null,
+    long? transactionId = null,
+    string? renderReason = null,
+    long? requestSequence = null)
+  {
+    var identityTimer = Stopwatch.StartNew();
     var keys = window.Records
       .SelectMany(record => record.Identities.Count != 0
         ? record.Identities
@@ -1860,9 +2123,27 @@ internal sealed class TranscriptView : UserControl
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
       .Where(identity => keys.Contains(identity.SourceId + "\0" + identity.RecordNumber))
       .ToArray();
+    if (metrics is not null)
+    {
+      metrics.NodeCount = identities.Count;
+      metrics.IdentityMilliseconds = identityTimer.ElapsedMilliseconds;
+    }
+
+    var wordMapTimer = Stopwatch.StartNew();
     IReadOnlyList<TranscriptRecordWordMap> wordMaps = _searchIndex?.GetWordMaps(
       window.Records) ?? Array.Empty<TranscriptRecordWordMap>();
-    return "replaceTranscriptWindow(" +
+    if (metrics is not null)
+    {
+      metrics.WordMapCount = wordMaps.Count;
+      metrics.WordCount = wordMaps.Sum(record => record.Words.Count);
+      metrics.WordMapMilliseconds = wordMapTimer.ElapsedMilliseconds;
+    }
+
+    long effectiveTransactionId = transactionId ??
+      Interlocked.Increment(ref _windowRenderTransactionSequence);
+    bool searchIndexAvailable = _searchIndex is not null;
+    var serializationTimer = Stopwatch.StartNew();
+    string script = "replaceTranscriptWindow(" +
       JsonSerializer.Serialize(window.Html) + "," +
       JsonSerializer.Serialize(preserve) + "," +
       JsonSerializer.Serialize(identities) + "," +
@@ -1878,7 +2159,16 @@ internal sealed class TranscriptView : UserControl
       JsonSerializer.Serialize(focusEdge) + "," +
       JsonSerializer.Serialize(expectedStructure?.Entries ??
         Array.Empty<TranscriptStructureEntry>()) + "," +
-      JsonSerializer.Serialize(structureProbeId ?? string.Empty) + ");";
+      JsonSerializer.Serialize(structureProbeId ?? string.Empty) + "," +
+      effectiveTransactionId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      JsonSerializer.Serialize(renderReason ?? string.Empty) + "," +
+      (requestSequence ?? 0L).ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      JsonSerializer.Serialize(searchIndexAvailable) + ");";
+    if (metrics is not null)
+    {
+      metrics.SerializationMilliseconds = serializationTimer.ElapsedMilliseconds;
+    }
+    return script;
   }
 
   private async Task RenderWindowForRecordAsync(
@@ -1900,7 +2190,7 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
-    await _findWindowRenderGate.WaitAsync();
+    await _windowRenderGate.WaitAsync();
     try
     {
       if (navigationGeneration is long currentGeneration &&
@@ -1966,7 +2256,7 @@ internal sealed class TranscriptView : UserControl
     }
     finally
     {
-      _findWindowRenderGate.Release();
+      _windowRenderGate.Release();
     }
   }
 
@@ -2026,7 +2316,9 @@ internal sealed class TranscriptView : UserControl
       anchorSourceId,
       anchorOffset,
       protectedStartIndex: null,
-      protectedEndIndex: null);
+      protectedEndIndex: null,
+      sourceStartIndex: null,
+      sourceEndIndex: null);
   }
 
   private async Task RenderWindowForIndexCoreAsync(
@@ -2036,67 +2328,126 @@ internal sealed class TranscriptView : UserControl
     string anchorSourceId,
     double? anchorOffset,
     int? protectedStartIndex,
-    int? protectedEndIndex)
+    int? protectedEndIndex,
+    int? sourceStartIndex,
+    int? sourceEndIndex,
+    long? requestSequence = null)
   {
-    if (_domPresentationMode)
+    var gateTimer = Stopwatch.StartNew();
+    await _windowRenderGate.WaitAsync();
+    long gateWaitMilliseconds = gateTimer.ElapsedMilliseconds;
+    try
     {
-      return;
-    }
-    TranscriptVirtualDocument? document = _virtualDocument;
-    if (document is null)
-    {
-      return;
-    }
-    int direction = reason.EndsWith("-up", StringComparison.OrdinalIgnoreCase)
-      ? -1
-      : reason.EndsWith("-down", StringComparison.OrdinalIgnoreCase)
-        ? 1
-        : 0;
-    TranscriptWindow window = direction == 0
-      ? document.CreateWindow(focalIndex, GetVirtualViewportHeight())
-      : document.CreateShiftedWindow(
+      if (_domPresentationMode)
+      {
+        return;
+      }
+      TranscriptVirtualDocument? document = _virtualDocument;
+      if (document is null)
+      {
+        return;
+      }
+      if (sourceStartIndex is int requestedStart &&
+          sourceEndIndex is int requestedEnd &&
+          (requestedStart != _windowStartIndex ||
+           requestedEnd != _windowEndIndex))
+      {
+        DiagnosticLog.Write("transcript.window_shift_stale", new
+        {
+          reason,
           focalIndex,
-          _windowStartIndex,
-          _windowEndIndex,
-          direction,
-          GetVirtualViewportHeight(),
-          protectedStartIndex,
-          protectedEndIndex);
-    if (window.StartIndex == _windowStartIndex && window.EndIndex == _windowEndIndex)
-    {
-      return;
+          requestedStart,
+          requestedEnd,
+          currentStart = _windowStartIndex,
+          currentEnd = _windowEndIndex
+        });
+        return;
+      }
+
+      int direction = reason.EndsWith("-up", StringComparison.OrdinalIgnoreCase)
+        ? -1
+        : reason.EndsWith("-down", StringComparison.OrdinalIgnoreCase)
+          ? 1
+          : 0;
+      var windowBuildTimer = Stopwatch.StartNew();
+      TranscriptWindow window = direction == 0
+        ? document.CreateWindow(focalIndex, GetVirtualViewportHeight())
+        : document.CreateShiftedWindow(
+            focalIndex,
+            _windowStartIndex,
+            _windowEndIndex,
+            direction,
+            GetVirtualViewportHeight(),
+            protectedStartIndex,
+            protectedEndIndex);
+      long windowBuildMilliseconds = windowBuildTimer.ElapsedMilliseconds;
+      if (window.StartIndex == _windowStartIndex &&
+          window.EndIndex == _windowEndIndex)
+      {
+        return;
+      }
+
+      var timer = Stopwatch.StartNew();
+      long transactionId = Interlocked.Increment(
+        ref _windowRenderTransactionSequence);
+      var scriptMetrics = new WindowScriptBuildMetrics();
+      var scriptBuildTimer = Stopwatch.StartNew();
+      string replacementScript = BuildReplaceWindowScriptInstrumented(
+        window,
+        preserve: false,
+        anchorRecordNumber: anchorRecordNumber,
+        anchorSourceId: anchorSourceId,
+        anchorOffset: anchorOffset,
+        focusVirtualIndex: focalIndex,
+        metrics: scriptMetrics,
+        transactionId: transactionId,
+        renderReason: reason,
+        requestSequence: requestSequence);
+      long scriptBuildMilliseconds = scriptBuildTimer.ElapsedMilliseconds;
+      var executeTimer = Stopwatch.StartNew();
+      if (!await ExecuteAsync(replacementScript))
+      {
+        return;
+      }
+      long executeMilliseconds = executeTimer.ElapsedMilliseconds;
+      _windowStartIndex = window.StartIndex;
+      _windowEndIndex = window.EndIndex;
+      bool manualScroll =
+        string.Equals(reason, "scroll-up", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(reason, "scroll-down", StringComparison.OrdinalIgnoreCase);
+      if (!manualScroll &&
+          _pendingPosition is TranscriptPlaybackPosition pending)
+      {
+        PostPlaybackPosition(pending);
+      }
+      DiagnosticLog.Write("transcript.window_rendered", new
+      {
+        transactionId,
+        requestSequence = requestSequence ?? 0L,
+        reason,
+        focalIndex,
+        window.StartIndex,
+        window.EndIndex,
+        recordCount = window.Records.Count,
+        nodeCount = scriptMetrics.NodeCount,
+        wordMapCount = scriptMetrics.WordMapCount,
+        wordCount = scriptMetrics.WordCount,
+        searchIndexAvailable = _searchIndex is not null,
+        htmlCharacters = window.Html.Length,
+        gateWaitMilliseconds,
+        windowBuildMilliseconds,
+        identityMilliseconds = scriptMetrics.IdentityMilliseconds,
+        wordMapMilliseconds = scriptMetrics.WordMapMilliseconds,
+        serializationMilliseconds = scriptMetrics.SerializationMilliseconds,
+        scriptBuildMilliseconds,
+        executeMilliseconds,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
     }
-    var timer = Stopwatch.StartNew();
-    if (!await ExecuteAsync(BuildReplaceWindowScript(
-          window,
-          preserve: false,
-          anchorRecordNumber: anchorRecordNumber,
-          anchorSourceId: anchorSourceId,
-          anchorOffset: anchorOffset,
-          focusVirtualIndex: focalIndex)))
+    finally
     {
-      return;
+      _windowRenderGate.Release();
     }
-    _windowStartIndex = window.StartIndex;
-    _windowEndIndex = window.EndIndex;
-    bool manualScroll =
-      string.Equals(reason, "scroll-up", StringComparison.OrdinalIgnoreCase) ||
-      string.Equals(reason, "scroll-down", StringComparison.OrdinalIgnoreCase);
-    if (!manualScroll &&
-        _pendingPosition is TranscriptPlaybackPosition pending)
-    {
-      PostPlaybackPosition(pending);
-    }
-    DiagnosticLog.Write("transcript.window_rendered", new
-    {
-      reason,
-      focalIndex,
-      window.StartIndex,
-      window.EndIndex,
-      recordCount = window.Records.Count,
-      htmlCharacters = window.Html.Length,
-      elapsedMilliseconds = timer.ElapsedMilliseconds
-    });
   }
 
   private Task RenderWindowForNodeAsync(long nodeId, string reason)
@@ -2835,7 +3186,37 @@ function replaceTranscriptWindow(
   focusVirtualIndex = null,
   focusEdge = null,
   expectedStructure = [],
-  structureProbeId = '') {
+  structureProbeId = '',
+  transactionId = 0,
+  renderReason = '',
+  requestSequence = 0,
+  searchIndexAvailable = false) {
+  const diagnosticStarted = performance.now();
+  const captureGeometry = () => {
+    const topSpacer = transcript.querySelector(
+      '.virtual-spacer[data-virtual-spacer="top"]');
+    const bottomSpacer = transcript.querySelector(
+      '.virtual-spacer[data-virtual-spacer="bottom"]');
+    const visible = [...transcript.querySelectorAll('.virtual-record')]
+      .filter(record => {
+        const rect = record.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+    return {
+      scrollY:Number(window.scrollY),
+      viewportHeight:Number(window.innerHeight),
+      documentHeight:Number(document.documentElement.scrollHeight),
+      topSpacerHeight:Number(topSpacer?.getBoundingClientRect().height ?? 0),
+      bottomSpacerHeight:Number(bottomSpacer?.getBoundingClientRect().height ?? 0),
+      visibleStartIndex:visible.length
+        ? Number(visible[0].dataset.virtualIndex || -1)
+        : -1,
+      visibleEndIndex:visible.length
+        ? Number(visible[visible.length - 1].dataset.virtualIndex || -1)
+        : -1
+    };
+  };
+  const beforeGeometry = captureGeometry();
   const expectedStructureMap = normalizeStructureEntries(expectedStructure);
   let previousStructureMap = expectedStructureMap;
   let previousStructureStage = 'virtual-window-html';
@@ -2858,8 +3239,10 @@ function replaceTranscriptWindow(
     Math.max(0, Number(topSpacerHeight) || 0) + 'px"></div>' + html +
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
+  let phaseStarted = performance.now();
   transcript.innerHTML = exactAssignedHtml;
   applyRevisionVisibility(showRolledBackHistory);
+  const innerHtmlMilliseconds = performance.now() - phaseStarted;
   const exactParsedHtml = transcript.innerHTML;
   previousStructureMap = postStructureStage(
     structureProbeId,
@@ -2884,7 +3267,9 @@ function replaceTranscriptWindow(
     previousStructureStage);
   previousStructureStage = 'after-details-restore';
   setAvailableWordMaps(wordMap || []);
+  phaseStarted = performance.now();
   wrapWords(nodeMap || []);
+  const wrapWordsMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-wrap-words',
@@ -2892,7 +3277,9 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-wrap-words';
+  phaseStarted = performance.now();
   assignRecordScopes();
+  const recordScopesMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-record-scopes',
@@ -2900,7 +3287,9 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-record-scopes';
+  phaseStarted = performance.now();
   assignNodeScopes(nodeMap || []);
+  const nodeScopesMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-node-scopes',
@@ -2908,8 +3297,12 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-node-scopes';
+  phaseStarted = performance.now();
   assignStableWordScopes(wordMap || []);
+  const stableWordScopesMilliseconds = performance.now() - phaseStarted;
+  phaseStarted = performance.now();
   postMappingInstallSummary(nodeMap || []);
+  const mappingSummaryMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-stable-word-scopes',
@@ -2917,12 +3310,14 @@ function replaceTranscriptWindow(
     previousStructureMap,
     previousStructureStage);
   previousStructureStage = 'after-stable-word-scopes';
+  phaseStarted = performance.now();
   const measurements = [...transcript.querySelectorAll('.virtual-record')]
     .map(record => ({
       index:Number(record.dataset.virtualIndex || -1),
       height:record.getBoundingClientRect().height
     }))
     .filter(item => item.index >= 0 && item.height > 0);
+  const measurementMilliseconds = performance.now() - phaseStarted;
   if (measurements.length) {
     chrome.webview.postMessage({
       type:'window-measured',
@@ -2955,6 +3350,7 @@ function replaceTranscriptWindow(
     return true;
   }
 
+  phaseStarted = performance.now();
   let restoredAnchor = false;
   if (anchorRecordNumber !== null && anchorOffset !== null) {
     const selector = '.record-anchor[data-jsonl-record="' +
@@ -2986,12 +3382,60 @@ function replaceTranscriptWindow(
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
   }
+  const anchorRestoreMilliseconds = performance.now() - phaseStarted;
   postStructureStage(
     structureProbeId,
     'replace-window-exit',
     expectedStructureMap,
     previousStructureMap,
     previousStructureStage);
+  const afterGeometry = captureGeometry();
+  const totalMilliseconds = performance.now() - diagnosticStarted;
+  const diagnostic = {
+    type:'window-transaction-diagnostic',
+    transactionId:Number(transactionId || 0),
+    requestSequence:Number(requestSequence || 0),
+    reason:String(renderReason || ''),
+    searchIndexAvailable:!!searchIndexAvailable,
+    startIndex:Number(startIndex),
+    endIndex:Number(endIndex),
+    recordCount:document.querySelectorAll('.virtual-record').length,
+    nodeCount:Array.isArray(nodeMap) ? nodeMap.length : 0,
+    wordMapCount:Array.isArray(wordMap) ? wordMap.length : 0,
+    wordCount:words.length,
+    beforeScrollY:beforeGeometry.scrollY,
+    beforeViewportHeight:beforeGeometry.viewportHeight,
+    beforeDocumentHeight:beforeGeometry.documentHeight,
+    beforeTopSpacerHeight:beforeGeometry.topSpacerHeight,
+    beforeBottomSpacerHeight:beforeGeometry.bottomSpacerHeight,
+    beforeVisibleStartIndex:beforeGeometry.visibleStartIndex,
+    beforeVisibleEndIndex:beforeGeometry.visibleEndIndex,
+    afterScrollY:afterGeometry.scrollY,
+    afterViewportHeight:afterGeometry.viewportHeight,
+    afterDocumentHeight:afterGeometry.documentHeight,
+    afterTopSpacerHeight:afterGeometry.topSpacerHeight,
+    afterBottomSpacerHeight:afterGeometry.bottomSpacerHeight,
+    afterVisibleStartIndex:afterGeometry.visibleStartIndex,
+    afterVisibleEndIndex:afterGeometry.visibleEndIndex,
+    innerHtmlMilliseconds:Math.round(innerHtmlMilliseconds),
+    wrapWordsMilliseconds:Math.round(wrapWordsMilliseconds),
+    recordScopesMilliseconds:Math.round(recordScopesMilliseconds),
+    nodeScopesMilliseconds:Math.round(nodeScopesMilliseconds),
+    stableWordScopesMilliseconds:Math.round(stableWordScopesMilliseconds),
+    mappingSummaryMilliseconds:Math.round(mappingSummaryMilliseconds),
+    measurementMilliseconds:Math.round(measurementMilliseconds),
+    anchorRestoreMilliseconds:Math.round(anchorRestoreMilliseconds),
+    totalMilliseconds:Math.round(totalMilliseconds)
+  };
+  chrome.webview.postMessage(diagnostic);
+  lastWindowTransactionDiagnostic = {
+    transactionId:diagnostic.transactionId,
+    requestSequence:diagnostic.requestSequence,
+    reason:diagnostic.reason,
+    completedAt:performance.now(),
+    afterVisibleStartIndex:diagnostic.afterVisibleStartIndex,
+    afterVisibleEndIndex:diagnostic.afterVisibleEndIndex
+  };
 }
 
 function replaceTranscript(html, preserve, nodeMap, wordMap = []) {
@@ -3129,6 +3573,11 @@ function assignStableWordScopes(wordMap) {
       }
     }
   }
+}
+
+function installSearchWordMaps(wordMap) {
+  setAvailableWordMaps(wordMap || []);
+  assignStableWordScopes(wordMap || []);
 }
 
 function materializeRecordWords(recordNumber, sourceId) {
@@ -4214,9 +4663,14 @@ const VW_SCROLL_KEYS = new Set([
 let virtualShiftFrame = 0;
 let lastManualScrollY = window.scrollY;
 let userScrollIntentUntil = 0;
+let userScrollIntentDirection = 0;
+let lastTouchY = Number.NaN;
+let windowShiftRequestSequence = 0;
+let lastWindowTransactionDiagnostic = null;
 
-function markUserScrollIntent() {
+function markUserScrollIntent(direction = 0) {
   userScrollIntentUntil = performance.now() + VW_USER_SCROLL_INTENT_MS;
+  userScrollIntentDirection = Math.sign(Number(direction) || 0);
 }
 
 function isEditableScrollTarget(target) {
@@ -4224,15 +4678,32 @@ function isEditableScrollTarget(target) {
     (target.matches('input,textarea,select') || target.isContentEditable);
 }
 
-window.addEventListener('wheel', markUserScrollIntent, {
+window.addEventListener('wheel', event => {
+  markUserScrollIntent(event.deltaY);
+}, {
   passive:true,
   capture:true
 });
-window.addEventListener('touchstart', markUserScrollIntent, {
+window.addEventListener('touchstart', event => {
+  lastTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  markUserScrollIntent();
+}, {
   passive:true,
   capture:true
 });
-window.addEventListener('touchmove', markUserScrollIntent, {
+window.addEventListener('touchmove', event => {
+  const currentTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  const direction = Number.isFinite(lastTouchY) &&
+    Number.isFinite(currentTouchY)
+      ? lastTouchY - currentTouchY
+      : 0;
+  lastTouchY = currentTouchY;
+  markUserScrollIntent(direction);
+}, {
   passive:true,
   capture:true
 });
@@ -4241,7 +4712,17 @@ window.addEventListener('keydown', event => {
       !VW_SCROLL_KEYS.has(event.key) || isEditableScrollTarget(event.target)) {
     return;
   }
-  markUserScrollIntent();
+  let direction = 0;
+  if (event.key === 'ArrowUp' || event.key === 'PageUp' ||
+      event.key === 'Home') {
+    direction = -1;
+  } else if (event.key === 'ArrowDown' || event.key === 'PageDown' ||
+             event.key === 'End') {
+    direction = 1;
+  } else if (event.key === ' ') {
+    direction = event.shiftKey ? -1 : 1;
+  }
+  markUserScrollIntent(direction);
 }, {capture:true});
 window.addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
@@ -4288,10 +4769,35 @@ function requestVirtualShift(direction, reason = null, referenceRecord = null) {
       }
     : {};
   virtualShiftPending = true;
+  const requestSequence = ++windowShiftRequestSequence;
+  const requestReason = reason || (direction < 0 ? 'scroll-up' : 'scroll-down');
+  const requestedAt = performance.now();
+  if (lastWindowTransactionDiagnostic &&
+      requestedAt - lastWindowTransactionDiagnostic.completedAt <= 300) {
+    chrome.webview.postMessage({
+      type:'window-shift-followup',
+      requestSequence,
+      reason:requestReason,
+      previousTransactionId:lastWindowTransactionDiagnostic.transactionId,
+      previousRequestSequence:lastWindowTransactionDiagnostic.requestSequence,
+      previousReason:lastWindowTransactionDiagnostic.reason,
+      elapsedSinceReplacementMilliseconds:Math.round(
+        requestedAt - lastWindowTransactionDiagnostic.completedAt),
+      sourceStartIndex:windowStartIndex,
+      sourceEndIndex:windowEndIndex,
+      visibleStartIndex:visibleRange.visibleStartIndex ?? -1,
+      visibleEndIndex:visibleRange.visibleEndIndex ?? -1,
+      scrollY:Number(window.scrollY),
+      viewportHeight:Number(window.innerHeight)
+    });
+  }
   chrome.webview.postMessage({
     type:'window-shift',
-    reason:reason || (direction < 0 ? 'scroll-up' : 'scroll-down'),
+    requestSequence,
+    reason:requestReason,
     focalIndex:visibleIndex,
+    sourceStartIndex:windowStartIndex,
+    sourceEndIndex:windowEndIndex,
     ...visibleRange,
     viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
@@ -4330,18 +4836,23 @@ window.addEventListener('scroll', () => {
   lastManualScrollY = currentY;
   if (Math.abs(delta) <= VW_SCROLL_DIRECTION_EPSILON_PX) return;
 
+  const direction = delta > 0 ? 1 : -1;
   const explicitUserIntent = now <= userScrollIntentUntil;
-  if (explicitUserIntent) {
-    // User navigation always wins, even if it interrupts a smooth playback
-    // scroll or a vwindow replacement whose guard is still active.
+  if (now <= programmaticScrollUntil) {
+    // A physical input can override a programmatic scroll only when the
+    // resulting movement agrees with that input. Window replacement and
+    // anchor restoration can move scrollY in the opposite direction while the
+    // earlier user-intent timer is still alive; that movement is not a second
+    // user gesture and must not start a competing virtual-window shift.
+    if (!explicitUserIntent ||
+        (userScrollIntentDirection !== 0 &&
+         direction !== userScrollIntentDirection)) {
+      return;
+    }
     programmaticScrollUntil = 0;
-  } else if (now <= programmaticScrollUntil) {
-    return;
   }
 
   if (followSpeech) setFollowSpeech(false, true);
-
-  const direction = delta > 0 ? 1 : -1;
   if (virtualShiftFrame) cancelAnimationFrame(virtualShiftFrame);
   virtualShiftFrame = requestAnimationFrame(() => {
     virtualShiftFrame = 0;

@@ -22,7 +22,8 @@ internal static class TranscriptNodeIdentityMap
     string path,
     AgentSource source,
     CancellationToken cancellationToken = default,
-    bool includeRolledBackTurns = false)
+    bool includeRolledBackTurns = false,
+    IProgress<TranscriptBuildProgress>? progress = null)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
     var jsonLines = new List<string>();
@@ -44,9 +45,11 @@ internal static class TranscriptNodeIdentityMap
 
     if (jsonLines.Count == 0)
     {
+      progress?.Report(new TranscriptBuildProgress(0, 0));
       return Array.Empty<TranscriptNodeIdentity>();
     }
 
+    progress?.Report(new TranscriptBuildProgress(0, jsonLines.Count));
     using var client = new AIConversationCoreClient();
     var projectOptions = new AIConversationCoreProjectOptions(
       IncludeRolledBackTurns: includeRolledBackTurns,
@@ -118,6 +121,10 @@ internal static class TranscriptNodeIdentityMap
             ? BuildSegments(parts)
             : Array.Empty<string>()));
       }
+
+      progress?.Report(new TranscriptBuildProgress(
+        sourceIndex + 1,
+        jsonLines.Count));
     }
 
     return result;
@@ -344,6 +351,13 @@ internal static class TranscriptNodeIdentityMap
     }
   }
 }
+
+/// <summary>
+/// Reports determinate completion of record-oriented transcript preparation.
+/// </summary>
+internal readonly record struct TranscriptBuildProgress(
+  int Completed,
+  int Total);
 
 /// <summary>
 /// Associates one monitor node identifier with its canonical source provenance

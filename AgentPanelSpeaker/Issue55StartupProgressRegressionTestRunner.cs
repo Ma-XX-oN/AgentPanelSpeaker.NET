@@ -1,6 +1,7 @@
 using Microsoft.Web.WebView2.WinForms;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AgentPanelSpeaker;
 
@@ -9,12 +10,14 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal static class Issue55StartupProgressRegressionTestRunner
 {
-  private static readonly string[] ExpectedStagePrefixes =
+  private static readonly string[] ExpectedProgressDescriptions =
   {
     "Preparing canonical transcript…",
-    "Building transcript search index…",
     "Rendering visible transcript…"
   };
+  private static readonly Regex PercentageRegex = new(
+    @"(?<!\d)(?<value>\d{1,3})%",
+    RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
   /// <summary>
   /// Runs the issue #55 startup-progress regression suite.
@@ -24,10 +27,10 @@ internal static class Issue55StartupProgressRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("startup-progress/shows-ordered-preparation-stages",
-        TestShowsOrderedPreparationStages),
-      ("startup-progress/does-not-fabricate-percentages",
-        TestDoesNotFabricatePercentages)
+      ("startup-progress/shows-ordered-preparation-descriptions",
+        TestShowsOrderedPreparationDescriptions),
+      ("startup-progress/reports-fine-grained-monotonic-percentage",
+        TestReportsFineGrainedMonotonicPercentage)
     };
 
     int failures = 0;
@@ -57,52 +60,81 @@ internal static class Issue55StartupProgressRegressionTestRunner
   }
 
   /// <summary>
-  /// Initial transcript preparation must expose ordered, truthful stage changes
-  /// instead of leaving one static loading message visible for the whole wait.
+  /// Initial preparation must retain useful activity descriptions, but coarse
+  /// Stage-N-of-M ordinals are not acceptable as the progress indicator.
   /// </summary>
-  private static void TestShowsOrderedPreparationStages()
+  private static void TestShowsOrderedPreparationDescriptions()
   {
     IReadOnlyList<string> observed = CaptureStartupLoadingText();
     int previousIndex = -1;
-    for (int stage = 0; stage < ExpectedStagePrefixes.Length; ++stage)
+    foreach (string prefix in ExpectedProgressDescriptions)
     {
-      string prefix = ExpectedStagePrefixes[stage];
       int index = FindAfter(observed, prefix, previousIndex + 1);
       Require(
         index >= 0,
-        $"Startup never displayed required stage '{prefix}'. Observed: " +
+        $"Startup never displayed required activity '{prefix}'. Observed: " +
         string.Join(" | ", observed.Select(Compact)));
       Require(
-        observed[index].Contains(
-          $"Stage {stage + 1} of {ExpectedStagePrefixes.Length}",
-          StringComparison.Ordinal),
-        $"Stage '{prefix}' did not expose its truthful stage ordinal.");
+        !observed[index].Contains("Stage ", StringComparison.Ordinal),
+        $"Startup still exposes coarse stage ordinals for '{prefix}': " +
+        Compact(observed[index]));
       previousIndex = index;
     }
   }
 
   /// <summary>
-  /// No startup stage currently has a trustworthy work-unit denominator. The UI
-  /// must therefore use stage ordinals rather than inventing a percentage from
-  /// elapsed time or unequal phase count.
+  /// The user-facing indicator must be a real percentage that advances through
+  /// enough distinct values to describe work within the preparation phases. A
+  /// relabelled three-stage 33/67/100 display does not satisfy this contract.
   /// </summary>
-  private static void TestDoesNotFabricatePercentages()
+  private static void TestReportsFineGrainedMonotonicPercentage()
   {
     IReadOnlyList<string> observed = CaptureStartupLoadingText();
-    foreach (string prefix in ExpectedStagePrefixes)
+    int[] percentages = observed
+      .Select(TryReadPercentage)
+      .Where(value => value.HasValue)
+      .Select(value => value!.Value)
+      .ToArray();
+    Require(
+      percentages.Length != 0,
+      "Startup displayed no determinate percentage. Observed: " +
+      string.Join(" | ", observed.Select(Compact)));
+
+    for (int index = 0; index < percentages.Length; ++index)
     {
-      string? stageText = observed.FirstOrDefault(text =>
-        text.StartsWith(prefix, StringComparison.Ordinal));
-      if (stageText is null)
-      {
-        throw new InvalidOperationException(
-          $"Startup never displayed required stage '{prefix}'.");
-      }
+      int value = percentages[index];
       Require(
-        !stageText.Contains('%'),
-        $"Startup stage '{prefix}' displayed a percentage without a real denominator: " +
-        Compact(stageText));
+        value is >= 0 and <= 100,
+        $"Startup percentage was outside 0..100: {value}%.");
+      if (index != 0)
+      {
+        Require(
+          value >= percentages[index - 1],
+          $"Startup percentage moved backwards from " +
+          $"{percentages[index - 1]}% to {value}%.");
+      }
     }
+
+    int[] distinct = percentages.Distinct().ToArray();
+    Require(
+      distinct.Length >= 10,
+      "Startup percentage is still too coarse; expected at least ten distinct " +
+      $"measured values but observed: {string.Join(", ", distinct)}.");
+    Require(
+      distinct.Any(value => value is > 0 and < 100),
+      "Startup percentage never reported in-progress work.");
+    Require(
+      percentages[^1] == 100,
+      $"Startup did not finish at 100%; last value was {percentages[^1]}%.");
+  }
+
+  private static int? TryReadPercentage(string text)
+  {
+    Match match = PercentageRegex.Match(text);
+    return match.Success &&
+      int.TryParse(match.Groups["value"].Value, out int value)
+        ? value
+        : null;
   }
 
   private static IReadOnlyList<string> CaptureStartupLoadingText()

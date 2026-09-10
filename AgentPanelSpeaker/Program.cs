@@ -187,6 +187,26 @@ internal static class Program
         return;
       }
 
+      if (args.Length == 2 &&
+          string.Equals(args[1], "real-session-fixes", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "real-session-fixes",
+          () => RunWithWinFormsMessageLoop(
+            Issue54RealSessionRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "startup-performance", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "startup-performance",
+          () => RunWithWinFormsMessageLoop(
+            Issue60StartupPerformanceRegressionTestRunner.Run));
+        return;
+      }
+
       if (args.Length == 2)
       {
         string suite = args[1];
@@ -218,6 +238,8 @@ internal static class Program
       int virtualWindow = RunIsolatedTestSuite("virtual-window");
       int wordMaterialization = RunIsolatedTestSuite("word-materialization");
       int startupProgress = RunIsolatedTestSuite("startup-progress");
+      int realSessionFixes = RunIsolatedTestSuite("real-session-fixes");
+      int startupPerformance = RunIsolatedTestSuite("startup-performance");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -234,7 +256,9 @@ internal static class Program
                              independentOracles == 0 &&
                              virtualWindow == 0 &&
                              wordMaterialization == 0 &&
-                             startupProgress == 0
+                             startupProgress == 0 &&
+                             realSessionFixes == 0 &&
+                             startupPerformance == 0
         ? 0
         : 1;
       Console.WriteLine(
