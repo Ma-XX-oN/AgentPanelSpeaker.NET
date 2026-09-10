@@ -15,6 +15,7 @@ internal sealed class TranscriptView : UserControl
 {
   private const int GwlStyle = -16;
   private const int WsVisible = 0x10000000;
+  private const int StartupStageCount = 3;
   private readonly WebView2 _webView = new();
   private readonly Label _loadingLabel = new();
   private readonly Label _failureLabel = new();
@@ -588,8 +589,25 @@ internal sealed class TranscriptView : UserControl
     _refreshInProgress = true;
     if (force)
     {
-      ShowLoading(GetLoadingText());
+      ShowStartupStage(1, "Preparing canonical transcript…");
     }
+    IProgress<int>? startupProgress = force
+      ? new Progress<int>(stage =>
+      {
+        if (generation != _renderGeneration ||
+            !string.Equals(
+              path,
+              _sessionPath,
+              StringComparison.OrdinalIgnoreCase))
+        {
+          return;
+        }
+        if (stage == 2)
+        {
+          ShowStartupStage(2, "Building transcript search index…");
+        }
+      })
+      : null;
     DiagnosticLog.Write("transcript.render_started", new
     {
       path,
@@ -626,6 +644,7 @@ internal sealed class TranscriptView : UserControl
             _pipeline,
             token));
         token.ThrowIfCancellationRequested();
+        startupProgress?.Report(2);
         string html = presentation.Html;
         TranscriptStructureSnapshot rendererStructure =
           TranscriptStructureProbe.CaptureHtml(
@@ -685,6 +704,10 @@ internal sealed class TranscriptView : UserControl
         focusVirtualIndex: force ? focalIndex : null,
         structureProbeId: structureProbeId,
         expectedStructure: virtualStructure);
+      if (force)
+      {
+        ShowStartupStage(3, "Rendering visible transcript…");
+      }
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
       {
@@ -850,6 +873,22 @@ internal sealed class TranscriptView : UserControl
     return string.IsNullOrWhiteSpace(name)
       ? prefix + "…"
       : prefix + ":" + Environment.NewLine + name + "…";
+  }
+
+  private void ShowStartupStage(int stage, string description)
+  {
+    Debug.Assert(stage >= 1 && stage <= StartupStageCount);
+    Debug.Assert(!string.IsNullOrWhiteSpace(description));
+    string name = string.IsNullOrWhiteSpace(_sessionDisplayName)
+      ? Path.GetFileName(_sessionPath) ?? string.Empty
+      : _sessionDisplayName;
+    string text = description + Environment.NewLine +
+      $"Stage {stage} of {StartupStageCount}";
+    if (!string.IsNullOrWhiteSpace(name))
+    {
+      text += Environment.NewLine + name;
+    }
+    ShowLoading(text);
   }
 
   private void ShowLoading(string text)
