@@ -8,6 +8,7 @@ on:
       - '.github/workflows/issue-37-follow-visible-green.yml'
       - 'tools/apply_issue37_follow_visible_fix.py'
       - 'tools/refine_issue37_visible_range_fallback.py'
+      - 'tools/refine_issue37_visible_range_message.py'
   workflow_dispatch:
 
 permissions:
@@ -44,6 +45,8 @@ jobs:
           python tools/apply_issue37_follow_visible_fix.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/refine_issue37_visible_range_fallback.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/refine_issue37_visible_range_message.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
           $changed = @(git diff --name-only)
