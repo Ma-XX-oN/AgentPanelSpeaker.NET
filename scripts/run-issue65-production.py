@@ -55,3 +55,22 @@ probe, count = re.subn(
 if count != 1:
   raise RuntimeError(f"structure probe anchor-regex repair matched {count} declarations")
 probe_path.write_text(probe, encoding="utf-8", newline="\n")
+
+# TranscriptVirtualDocument already has a private IsVisible(int virtualIndex).
+# Keep the record-number lookup semantically explicit instead of overloading the
+# same int signature.
+virtual_path = path.parents[1] / "AgentPanelSpeaker" / "TranscriptVirtualDocument.cs"
+virtual = virtual_path.read_text(encoding="utf-8")
+old = "  public bool IsVisible(int recordNumber)\n  {\n    return TryGetIndex(recordNumber, out int index) && IsVisible(index);\n  }"
+new = "  public bool IsRecordVisible(int recordNumber)\n  {\n    return TryGetIndex(recordNumber, out int index) && IsVisible(index);\n  }"
+if virtual.count(old) != 1:
+  raise RuntimeError("record visibility method was not found exactly once")
+virtual = virtual.replace(old, new, 1)
+virtual_path.write_text(virtual, encoding="utf-8", newline="\n")
+
+view_path = path.parents[1] / "AgentPanelSpeaker" / "TranscriptView.cs"
+view = view_path.read_text(encoding="utf-8")
+view = view.replace(
+  "visibleDocument.IsVisible(match.RecordNumber)",
+  "visibleDocument.IsRecordVisible(match.RecordNumber)")
+view_path.write_text(view, encoding="utf-8", newline="\n")
