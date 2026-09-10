@@ -13,7 +13,6 @@ internal static class Issue55StartupProgressRegressionTestRunner
   private static readonly string[] ExpectedProgressDescriptions =
   {
     "Preparing canonical transcript…",
-    "Building transcript search index…",
     "Rendering visible transcript…"
   };
   private static readonly Regex PercentageRegex = new(

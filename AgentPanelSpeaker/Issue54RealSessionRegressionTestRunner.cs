@@ -23,6 +23,10 @@ internal static class Issue54RealSessionRegressionTestRunner
     {
       ("real-session/scroll-replacement-does-not-reverse-user-intent",
         TestReplacementScrollDoesNotReverseUserIntent),
+      ("real-session/stale-window-shift-is-coalesced",
+        TestStaleWindowShiftIsCoalesced),
+      ("real-session/directional-shift-keeps-prefetch-headroom",
+        TestDirectionalShiftKeepsPrefetchHeadroom),
       ("real-session/live-end-window-retains-preceding-unit",
         TestLiveEndWindowRetainsPrecedingUnit)
     };
@@ -179,6 +183,157 @@ internal static class Issue54RealSessionRegressionTestRunner
     {
       try { Directory.Delete(root, recursive: true); } catch { }
     }
+  }
+
+  /// <summary>
+  /// Reproduces the remaining issue #56 duplicate-window work. Two shift
+  /// requests produced from the same browser window are the same navigation
+  /// transaction. Once the first replacement advances the window, the stale
+  /// second request must not rebuild the same materialized range again.
+  /// </summary>
+  private static void TestStaleWindowShiftIsCoalesced()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue56-stale-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue56-stale.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      int mappingInstallSummaries = 0;
+      webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+      {
+        try
+        {
+          using JsonDocument message = JsonDocument.Parse(
+            eventArgs.WebMessageAsJson);
+          JsonElement rootElement = message.RootElement;
+          if (rootElement.TryGetProperty("type", out JsonElement typeElement) &&
+              typeElement.ValueKind == JsonValueKind.String &&
+              typeElement.GetString() == "mapping-install-summary")
+          {
+            ++mappingInstallSummaries;
+          }
+        }
+        catch (JsonException)
+        {
+        }
+      };
+
+      view.SelectSession(path, AgentSource.Codex, "Issue 56 stale shift fixture");
+      WaitForTranscriptRender(view);
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int middleIndex = document.Count / 2;
+      Task middleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        middleIndex,
+        "test-precondition",
+        null,
+        string.Empty,
+        null);
+      PumpUntilCompleted(middleWindow, "middle stale-shift virtual window");
+      PumpMessages(100);
+
+      int start = ReadField<int>(view, "_windowStartIndex");
+      int end = ReadField<int>(view, "_windowEndIndex");
+      Require(start > 0 && end > start,
+        "Issue #56 stale-shift fixture did not create a movable middle window.");
+      int summariesBefore = mappingInstallSummaries;
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  const records = [...document.querySelectorAll('.virtual-record')];
+  const reference = records[0];
+  const anchor = reference?.querySelector('.record-anchor');
+  if (!reference || !anchor) throw new Error('No virtual shift reference record.');
+  const message = {
+    type:'window-shift',
+    reason:'scroll-up',
+    focalIndex:Number(reference.dataset.virtualIndex || -1),
+    sourceStartIndex:windowStartIndex,
+    sourceEndIndex:windowEndIndex,
+    visibleStartIndex:Number(reference.dataset.virtualIndex || -1),
+    visibleEndIndex:Number(reference.dataset.virtualIndex || -1),
+    viewportHeight:window.innerHeight,
+    anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
+    anchorSourceId:anchor.dataset.sourceId || '',
+    anchorOffset:anchor.getBoundingClientRect().top
+  };
+  chrome.webview.postMessage(message);
+  chrome.webview.postMessage(message);
+})()
+""");
+      PumpMessages(2500);
+
+      int replacements = mappingInstallSummaries - summariesBefore;
+      Require(
+        replacements == 1,
+        $"Two stale requests from one source window caused {replacements} " +
+        "full browser mapping installs instead of one coalesced replacement.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Reproduces the remaining issue #56 scroll-ahead deficit. Once a downward
+  /// shift is requested, the resulting window must carry enough materialized
+  /// content beyond the currently visible range to absorb continued physical
+  /// scrolling while the next asynchronous replacement is prepared.
+  /// </summary>
+  private static void TestDirectionalShiftKeepsPrefetchHeadroom()
+  {
+    const int recordCount = 30;
+    const double viewportHeight = 700.0;
+    CanonicalHtmlUnitProjection[] units = Enumerable.Range(0, recordCount)
+      .Select(index => CreateUnit(
+        index,
+        $"prefetch-{index}",
+        $"<p>Issue 56 prefetch record {index}.</p>"))
+      .ToArray();
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(units);
+    const int layoutGeneration = 17;
+    document.UpdateMeasuredHeights(
+      Enumerable.Range(0, recordCount)
+        .ToDictionary(index => index, _ => viewportHeight),
+      layoutGeneration);
+
+    TranscriptWindow shifted = document.CreateShiftedWindow(
+      focalIndex: 12,
+      currentStartIndex: 8,
+      currentEndIndex: 12,
+      direction: 1,
+      viewportHeight: viewportHeight,
+      protectedStartIndex: 11,
+      protectedEndIndex: 12);
+
+    Require(
+      shifted.StartIndex <= 11,
+      "Directional shift discarded a protected physically visible Core unit.");
+    Require(
+      shifted.EndIndex - 12 >= 4,
+      "Directional shift left fewer than four viewport-heights of measured " +
+      "materialized headroom beyond the visible range.");
   }
 
   /// <summary>
