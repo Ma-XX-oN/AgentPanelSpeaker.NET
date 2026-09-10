@@ -1,0 +1,99 @@
+name: Issue 37 clean integration validation
+
+on:
+  push:
+    branches:
+      - issue-37-visible-range-red
+    paths:
+      - '.github/workflows/issue-37-clean-integration-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact clean integration commit
+        uses: actions/checkout@v4
+        with:
+          ref: bae7d4daf5b864f83e250f8f3d9edfa6e3cd5633
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Require exact commit
+        shell: pwsh
+        run: |
+          $expected = 'bae7d4daf5b864f83e250f8f3d9edfa6e3cd5633'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $expected) { throw "Wrong validation commit: $actual" }
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run exact virtual-window regressions
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Run Core regressions
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core
+
+      - name: Run rolled-back visibility regressions
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rolled-back-visibility
+
+      - name: Run independent output oracle
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite output-oracle
+
+      - name: Run word-materialization regressions
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
+
+      - name: Verify Core pin and clean tracked tree
+        shell: pwsh
+        run: |
+          $expectedCore = '6c92799c1b14693001e8b913465f4a12b0b1e1ab'
+          $submoduleCore = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          $runtimeCore = (Get-Content tools/AIConversationCore-runtime/CORE_COMMIT -Raw).Trim()
+          if ($submoduleCore -cne $expectedCore) {
+            throw "Core submodule pin mismatch: $submoduleCore"
+          }
+          if ($runtimeCore -cne $expectedCore) {
+            throw "Runtime Core pin mismatch: $runtimeCore"
+          }
+          git diff --check
+          git diff --exit-code
