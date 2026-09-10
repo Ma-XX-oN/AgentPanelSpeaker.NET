@@ -27,17 +27,45 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Run permanent issue 65 regression suite
-        shell: powershell
+      - name: Inventory redundant identity paths
+        shell: pwsh
         run: |
+          git grep -n -E 'SourceId|sourceId|WordId|wordId|GetWordMaps|displayWordsById|availableWordMapsByRecord|TryResolveSpeechWord' -- 'AgentPanelSpeaker/*.cs' | Write-Output
+
+      - name: Run permanent issue 65 regression suite
+        shell: pwsh
+        run: |
+          $hostRoot = Join-Path $env:RUNNER_TEMP 'issue65-host'
+          New-Item -ItemType Directory -Force -Path $hostRoot | Out-Null
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+            </PropertyGroup>
+          </Project>
+          '@ | Set-Content -Encoding utf8 (Join-Path $hostRoot 'Issue65Host.csproj')
+          @'
+          using System.Reflection;
+
+          string assemblyPath = Path.GetFullPath(args[0]);
+          Assembly assembly = Assembly.LoadFrom(assemblyPath);
+          Type type = assembly.GetType(
+            "AgentPanelSpeaker.Issue65RedundancyRegressionTestRunner",
+            throwOnError: true)!;
+          MethodInfo method = type.GetMethod(
+            "Run",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic) ??
+            throw new InvalidOperationException(
+              "Issue65RedundancyRegressionTestRunner.Run was not found.");
+          int exitCode = (int)(method.Invoke(null, null) ?? 1);
+          Environment.ExitCode = exitCode;
+          '@ | Set-Content -Encoding utf8 (Join-Path $hostRoot 'Program.cs')
           $assemblyPath = Resolve-Path 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.dll'
-          $assembly = [Reflection.Assembly]::LoadFrom($assemblyPath)
-          $type = $assembly.GetType('AgentPanelSpeaker.Issue65RedundancyRegressionTestRunner', $true)
-          $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::NonPublic
-          $method = $type.GetMethod('Run', $flags)
-          if ($null -eq $method) { throw 'Issue65RedundancyRegressionTestRunner.Run was not found.' }
-          $exitCode = [int]$method.Invoke($null, @())
-          if ($exitCode -ne 0) { exit $exitCode }
+          dotnet run --project (Join-Path $hostRoot 'Issue65Host.csproj') --configuration Release -- $assemblyPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate patch whitespace
         shell: pwsh
