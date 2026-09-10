@@ -345,6 +345,7 @@ public static TranscriptVirtualDocument Build(
       ref left,
       ref right,
       focalIndex,
+      focalIndex,
       targetHeight,
       ref totalHeight,
       trimBothEdges: true);
@@ -363,6 +364,51 @@ public static TranscriptVirtualDocument Build(
     int currentEndIndex,
     int direction,
     double viewportHeight)
+  {
+    return CreateShiftedWindowCore(
+      focalIndex,
+      currentStartIndex,
+      currentEndIndex,
+      direction,
+      viewportHeight,
+      protectedStartIndex: null,
+      protectedEndIndex: null,
+      inferProtectedRangeWhenMissing: true);
+  }
+
+  /// <summary>
+  /// Slides an existing physical window while protecting the exact atomic Core
+  /// units that the browser reports as intersecting the physical viewport.
+  /// </summary>
+  public TranscriptWindow CreateShiftedWindow(
+    int focalIndex,
+    int currentStartIndex,
+    int currentEndIndex,
+    int direction,
+    double viewportHeight,
+    int? protectedStartIndex,
+    int? protectedEndIndex)
+  {
+    return CreateShiftedWindowCore(
+      focalIndex,
+      currentStartIndex,
+      currentEndIndex,
+      direction,
+      viewportHeight,
+      protectedStartIndex,
+      protectedEndIndex,
+      inferProtectedRangeWhenMissing: false);
+  }
+
+  private TranscriptWindow CreateShiftedWindowCore(
+    int focalIndex,
+    int currentStartIndex,
+    int currentEndIndex,
+    int direction,
+    double viewportHeight,
+    int? protectedStartIndex,
+    int? protectedEndIndex,
+    bool inferProtectedRangeWhenMissing)
   {
     if (_records.Length == 0)
     {
@@ -383,6 +429,15 @@ public static TranscriptVirtualDocument Build(
     }
 
     double normalizedViewportHeight = NormalizeViewportHeight(viewportHeight);
+    (int protectedStart, int protectedEnd) = ResolveProtectedVisibleRange(
+      focalIndex,
+      left,
+      right,
+      direction,
+      normalizedViewportHeight,
+      protectedStartIndex,
+      protectedEndIndex,
+      inferProtectedRangeWhenMissing);
     double targetHeight = normalizedViewportHeight *
       MinimumWindowViewportHeights;
     double extensionHeight = normalizedViewportHeight *
@@ -408,7 +463,8 @@ public static TranscriptVirtualDocument Build(
       TrimToMinimumHeight(
         ref left,
         ref right,
-        focalIndex,
+        protectedStart,
+        protectedEnd,
         targetHeight,
         ref totalHeight,
         trimBothEdges: false,
@@ -432,7 +488,8 @@ public static TranscriptVirtualDocument Build(
       TrimToMinimumHeight(
         ref left,
         ref right,
-        focalIndex,
+        protectedStart,
+        protectedEnd,
         targetHeight,
         ref totalHeight,
         trimBothEdges: false,
@@ -505,7 +562,8 @@ public static TranscriptVirtualDocument Build(
   private void TrimToMinimumHeight(
     ref int left,
     ref int right,
-    int focalIndex,
+    int protectedStartIndex,
+    int protectedEndIndex,
     double targetHeight,
     ref double totalHeight,
     bool trimBothEdges,
@@ -515,7 +573,7 @@ public static TranscriptVirtualDocument Build(
     do
     {
       changed = false;
-      if ((trimBothEdges || trimLeadingEdge) && left < focalIndex)
+      if ((trimBothEdges || trimLeadingEdge) && left < protectedStartIndex)
       {
         double height = EffectiveHeight(left);
         if (totalHeight - height >= targetHeight)
@@ -525,7 +583,7 @@ public static TranscriptVirtualDocument Build(
           changed = true;
         }
       }
-      if ((trimBothEdges || !trimLeadingEdge) && right > focalIndex)
+      if ((trimBothEdges || !trimLeadingEdge) && right > protectedEndIndex)
       {
         double height = EffectiveHeight(right);
         if (totalHeight - height >= targetHeight)
@@ -537,6 +595,73 @@ public static TranscriptVirtualDocument Build(
       }
     }
     while (changed);
+  }
+
+  /// <summary>
+  /// Resolves the atomic Core-unit range that trimming is not allowed to cross.
+  /// Exact browser viewport indexes win when available.  Legacy/internal callers
+  /// that supply only the directional focal get a conservative one-viewport
+  /// opposite-side range so a potentially visible neighbouring unit is never
+  /// discarded merely because the total materialized height remains large.
+  /// </summary>
+  private (int Start, int End) ResolveProtectedVisibleRange(
+    int focalIndex,
+    int currentStartIndex,
+    int currentEndIndex,
+    int direction,
+    double viewportHeight,
+    int? protectedStartIndex,
+    int? protectedEndIndex,
+    bool inferProtectedRangeWhenMissing)
+  {
+    if (protectedStartIndex.HasValue || protectedEndIndex.HasValue)
+    {
+      int start = Math.Clamp(
+        protectedStartIndex ?? focalIndex,
+        currentStartIndex,
+        currentEndIndex);
+      int end = Math.Clamp(
+        protectedEndIndex ?? focalIndex,
+        currentStartIndex,
+        currentEndIndex);
+      if (start > end)
+      {
+        (start, end) = (end, start);
+      }
+      return (
+        Math.Min(start, focalIndex),
+        Math.Max(end, focalIndex));
+    }
+
+    if (!inferProtectedRangeWhenMissing)
+    {
+      return (focalIndex, focalIndex);
+    }
+
+    int conservativeStart = focalIndex;
+    int conservativeEnd = focalIndex;
+    double coveredHeight = 0.0;
+    if (direction > 0)
+    {
+      for (int index = focalIndex - 1;
+           index >= currentStartIndex && coveredHeight < viewportHeight;
+           --index)
+      {
+        conservativeStart = index;
+        coveredHeight += EffectiveHeight(index);
+      }
+    }
+    else if (direction < 0)
+    {
+      for (int index = focalIndex + 1;
+           index <= currentEndIndex && coveredHeight < viewportHeight;
+           ++index)
+      {
+        conservativeEnd = index;
+        coveredHeight += EffectiveHeight(index);
+      }
+    }
+    return (conservativeStart, conservativeEnd);
   }
 
   private static double NormalizeViewportHeight(double viewportHeight)
