@@ -46,7 +46,12 @@ replacement = (
   '    @"data-jsonl-record=""(?<record>[^""]*)""[^>]*></span>",\n'
   '    RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);'
 )
-probe, count = re.subn(pattern, replacement, probe, count=1, flags=re.S)
+probe, count = re.subn(
+  pattern,
+  lambda _match: replacement,
+  probe,
+  count=1,
+  flags=re.S)
 if count != 1:
   raise RuntimeError(f"structure probe anchor-regex repair matched {count} declarations")
 probe_path.write_text(probe, encoding="utf-8", newline="\n")
