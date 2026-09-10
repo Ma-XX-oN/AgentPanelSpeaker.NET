@@ -12,6 +12,7 @@ internal sealed class TranscriptVirtualDocument
 {
   internal const double MinimumWindowViewportHeights = 5.0;
   internal const double EdgeTriggerViewportHeights = 2.0;
+  internal const double ShiftPrefetchViewportHeights = 4.0;
   internal const double DefaultViewportHeight = 700.0;
   private const double MinimumEstimatedHeight = 72.0;
   private static readonly Regex AnchorRegex = new(
@@ -453,7 +454,7 @@ public static TranscriptVirtualDocument Build(
     double targetHeight = normalizedViewportHeight *
       MinimumWindowViewportHeights;
     double extensionHeight = normalizedViewportHeight *
-      EdgeTriggerViewportHeights;
+      ShiftPrefetchViewportHeights;
     double totalHeight = SumHeights(left, right + 1);
     double addedHeight = 0.0;
 
