@@ -538,14 +538,23 @@ Like this:
       identities,
       CancellationToken.None);
 
-    Require(searchIndex.TryResolveVoiceOrigin(
-        202,
-        0,
-        out int secondaryRecordNumber,
-        out int secondaryRecordWordIndex) &&
-        secondaryRecordNumber == 2 &&
-        secondaryRecordWordIndex >= 0,
-      "Secondary structural-unit record lost its direct speech mapping.");
+    IReadOnlyList<TranscriptSearchMatch> secondaryMatches = searchIndex
+      .SearchAsync(
+        new TranscriptSearchRequest(
+          1,
+          "Nested numbered item",
+          CaseSensitive: false,
+          WholeWord: false,
+          Regex: false,
+          VoicedOnly: false),
+        CancellationToken.None)
+      .GetAwaiter()
+      .GetResult();
+    Require(secondaryMatches.Any(match =>
+        match.RecordNumber == 2 &&
+        match.StartWordIndex >= 0 &&
+        match.EndWordIndex >= match.StartWordIndex),
+      "Secondary structural-unit record lost its direct record-local search mapping.");
 
     using var view = new TranscriptView();
     FieldInfo? identitiesField = typeof(TranscriptView).GetField(

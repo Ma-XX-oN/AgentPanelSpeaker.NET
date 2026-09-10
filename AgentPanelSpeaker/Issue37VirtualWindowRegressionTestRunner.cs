@@ -413,13 +413,12 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       PumpMessages(150);
 
       Task shiftTask = InvokeTask(
-      view,
-      "RenderWindowForIndexAsync",
-      0,
-      "scroll-up",
-      null,
-      string.Empty,
-      null);
+        view,
+        "RenderWindowForIndexAsync",
+        0,
+        "scroll-up",
+        null,
+        null);
     PumpUntilCompleted(
       shiftTask,
       "manual scroll window to replace the initial playback window");
@@ -1145,7 +1144,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         document.Count / 2,
         "test-measured-refinement",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(
         measuredMiddleWindow,
@@ -1342,7 +1340,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         {
           physicalWindow,
           false,
-          null,
           null,
           null,
           null,

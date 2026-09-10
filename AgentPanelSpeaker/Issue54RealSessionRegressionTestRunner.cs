@@ -128,7 +128,6 @@ internal static class Issue54RealSessionRegressionTestRunner
         middleIndex,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(middleWindow, "middle issue #56 virtual window");
       Require(
@@ -247,7 +246,6 @@ internal static class Issue54RealSessionRegressionTestRunner
         middleIndex,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(middleWindow, "middle stale-shift virtual window");
       PumpMessages(100);
@@ -276,7 +274,6 @@ internal static class Issue54RealSessionRegressionTestRunner
     visibleEndIndex:Number(reference.dataset.virtualIndex || -1),
     viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
-    anchorSourceId:anchor.dataset.sourceId || '',
     anchorOffset:anchor.getBoundingClientRect().top
   };
   chrome.webview.postMessage(message);
@@ -370,7 +367,6 @@ internal static class Issue54RealSessionRegressionTestRunner
         middleIndex,
         "instrumentation-contract",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(replacement, "instrumented issue #56 replacement");
       PumpUntil(
@@ -388,7 +384,6 @@ internal static class Issue54RealSessionRegressionTestRunner
         "endIndex",
         "recordCount",
         "nodeCount",
-        "wordMapCount",
         "wordCount",
         "beforeScrollY",
         "beforeViewportHeight",
@@ -408,7 +403,6 @@ internal static class Issue54RealSessionRegressionTestRunner
         "wrapWordsMilliseconds",
         "recordScopesMilliseconds",
         "nodeScopesMilliseconds",
-        "stableWordScopesMilliseconds",
         "mappingSummaryMilliseconds",
         "measurementMilliseconds",
         "anchorRestoreMilliseconds",

@@ -50,9 +50,9 @@ internal static class Issue60StartupPerformanceRegressionTestRunner
 
   /// <summary>
   /// The visible initial window must be allowed to appear before the full-file
-  /// search corpus is ready. Search-index construction can continue after that
-  /// point, and its stable word map must subsequently attach to the already
-  /// rendered browser window without replacing that window.
+  /// search corpus is ready. Search-index construction can continue afterward
+  /// without replacing the already-rendered window, and the completed C# index
+  /// must remain immediately usable without installing per-word browser maps.
   /// </summary>
   private static void TestVisibleRenderDoesNotWaitForSearchIndex()
   {
@@ -115,16 +115,44 @@ internal static class Issue60StartupPerformanceRegressionTestRunner
         "Initial transcript rendering remained blocked until the full search " +
         "index was already complete.");
 
+      int initialWindowStart = ReadField<int>(view, "_windowStartIndex");
+      int initialWindowEnd = ReadField<int>(view, "_windowEndIndex");
+      int initialWordCount = ReadScriptInt(
+        webView,
+        "document.querySelectorAll('.word').length");
+      Require(initialWordCount > 0,
+        "Initial visible transcript window contained no materialized words.");
+
       PumpUntil(
         () => ReadNullableField(view, "_searchIndex") is not null,
         "deferred search index to complete",
         timeoutMilliseconds: 60000);
-      PumpUntil(
-        () => ReadScriptInt(
+      Require(
+        ReadField<int>(view, "_windowStartIndex") == initialWindowStart &&
+        ReadField<int>(view, "_windowEndIndex") == initialWindowEnd,
+        "Deferred search-index completion replaced the already-visible window.");
+      Require(ReadScriptInt(
           webView,
-          "document.querySelectorAll('.word[data-word-id]').length") > 0,
-        "deferred stable word maps to attach to the visible window",
-        timeoutMilliseconds: 30000);
+          "document.querySelectorAll('.word').length") == initialWordCount,
+        "Deferred search-index completion rematerialized the visible word DOM.");
+
+      TranscriptSearchIndex searchIndex =
+        (TranscriptSearchIndex?)ReadNullableField(view, "_searchIndex") ??
+        throw new InvalidOperationException(
+          "Deferred search index disappeared after completion.");
+      IReadOnlyList<TranscriptSearchMatch> matches = searchIndex.SearchAsync(
+          new TranscriptSearchRequest(
+            1,
+            "issue60-search-token-100",
+            CaseSensitive: false,
+            WholeWord: false,
+            Regex: false,
+            VoicedOnly: false),
+          CancellationToken.None)
+        .GetAwaiter()
+        .GetResult();
+      Require(matches.Count > 0,
+        "Deferred C# search index was not usable after visible rendering.");
     }
     finally
     {
