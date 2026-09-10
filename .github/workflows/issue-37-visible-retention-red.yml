@@ -1,0 +1,79 @@
+name: Issue 37 visible-turn retention RED
+
+on:
+  push:
+    branches:
+      - issue-37-visible-turn-retention
+    paths:
+      - '.github/workflows/issue-37-visible-retention-red.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Stage regression
+        shell: pwsh
+        run: |
+          python tools/apply_issue37_visible_retention_regression.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove visible-turn retention RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'red.out'
+          $stderr = Join-Path $env:RUNNER_TEMP 'red.err'
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','virtual-window' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+          $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+          Write-Host $text
+          $name = 'FAIL  virtual-window/visible-turn-survives-shift-until-outside-viewport'
+          if ($p.ExitCode -eq 0) { throw 'Expected visible-turn retention regression to be RED.' }
+          if (-not $text.Contains($name)) { throw 'Visible-turn retention regression did not fail.' }
+          if (-not $text.Contains('evicted turn(s) that still intersected the physical viewport')) {
+            throw 'Visible-turn retention regression failed for the wrong reason.'
+          }
+          $expectedExisting = @(
+            'PASS  virtual-window/core-single-anchor-user-context-unit-is-preserved',
+            'PASS  virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded',
+            'PASS  virtual-window/programmatic-playback-scroll-does-not-request-shift',
+            'PASS  virtual-window/spacer-shift-restores-materialized-content',
+            'PASS  virtual-window/directional-prefetch-follows-scroll-direction',
+            'PASS  virtual-window/manual-scroll-disables-follow-before-vwindow-shift',
+            'PASS  virtual-window/physical-window-keeps-five-viewports-materialized',
+            'PASS  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
+          )
+          foreach ($pass in $expectedExisting) {
+            if (-not $text.Contains($pass)) { throw "Existing #37 baseline did not remain GREEN: $pass" }
+          }
+          Write-Host 'RED-PROVEN visible turn can be evicted while still physically visible.'
+
+      - name: Commit proven RED regression
+        shell: pwsh
+        run: |
+          git config user.name 'chatgpt-codex-connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
+          if (git diff --cached --quiet) { throw 'No RED regression change to commit.' }
+          git commit -m 'test: reproduce premature visible-turn eviction (#37) [skip ci]'
+          git push origin HEAD:issue-37-visible-turn-retention
