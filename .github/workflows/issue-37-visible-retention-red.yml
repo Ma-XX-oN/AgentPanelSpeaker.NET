@@ -6,6 +6,7 @@ on:
       - issue-37-visible-turn-retention
     paths:
       - '.github/workflows/issue-37-visible-retention-red.yml'
+      - 'tools/apply_issue37_visible_retention_regression.py'
   workflow_dispatch:
 
 permissions:
