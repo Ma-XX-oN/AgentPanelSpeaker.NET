@@ -141,12 +141,11 @@ internal static class Issue65RedundancyRegressionTestRunner
   /// </summary>
   private static void TestBrowserRecordAddressIsRecordNumberOnly()
   {
-    object view = RuntimeHelpers.GetUninitializedObject(typeof(TranscriptView));
     MethodInfo method = typeof(TranscriptView).GetMethod(
       "BuildShellHtml",
-      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      BindingFlags.Static | BindingFlags.NonPublic) ??
       throw new InvalidOperationException("TranscriptView.BuildShellHtml was not found.");
-    string shell = method.Invoke(view, null) as string ??
+    string shell = method.Invoke(null, null) as string ??
       throw new InvalidOperationException("BuildShellHtml did not return HTML.");
 
     Require(
