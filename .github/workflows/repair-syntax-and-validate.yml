@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   repair-and-validate:
-    if: github.event.head_commit.message == 'ci: repair generated syntax error and validate (#56 #60)'
     runs-on: windows-latest
     steps:
       - name: Check out branch and submodules
@@ -125,5 +124,4 @@ jobs:
 
       - name: Validate branch whitespace
         shell: pwsh
-        run: |
-          git diff --check HEAD~1 HEAD
+        run: git diff --check HEAD~1 HEAD
