@@ -9,9 +9,9 @@ for line in lines:
   if line.startswith("# remove stable word timing phase after node scopes"):
     out.append(line)
     out.append("text = text.replace(\n")
-    out.append("  \\"  phaseStarted = performance.now();\\\\n\\"\n")
-    out.append("  \\"  const stableWordScopesMilliseconds = performance.now() - phaseStarted;\\\\n\\",\n")
-    out.append("  \\"\\")\n")
+    out.append("  \"  phaseStarted = performance.now();\\n\"\n")
+    out.append("  \"  const stableWordScopesMilliseconds = performance.now() - phaseStarted;\\n\",\n")
+    out.append("  \"\")\n")
     skipping = True
     inserted = True
     continue
