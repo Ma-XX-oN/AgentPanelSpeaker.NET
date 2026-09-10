@@ -1,0 +1,80 @@
+name: Issue 37 real-machine regressions RED
+
+on:
+  push:
+    branches:
+      - issue-37-follow-off-startup-stable-map
+    paths:
+      - '.github/workflows/issue-37-real-machine-red.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Stage real-machine regressions
+        shell: pwsh
+        run: |
+          python tools/apply_issue37_real_machine_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact real-machine regressions RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'red.out'
+          $stderr = Join-Path $env:RUNNER_TEMP 'red.err'
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','virtual-window' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+          $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+          Write-Host $text
+          if ($p.ExitCode -eq 0) { throw 'Expected both new #37 regressions to be RED.' }
+          $followName = 'FAIL  virtual-window/follow-off-initial-render-ignores-pending-playback'
+          $mapName = 'FAIL  virtual-window/user-context-stable-word-map-is-exact'
+          if (-not $text.Contains($followName)) { throw 'Follow-OFF startup regression did not fail.' }
+          if (-not $text.Contains('Follow OFF let pending playback choose startup vwindow')) {
+            throw 'Follow-OFF regression failed for the wrong reason.'
+          }
+          if (-not $text.Contains($mapName)) { throw 'Stable-word-map regression did not fail.' }
+          if (-not $text.Contains('stable-word-map cardinality failure')) {
+            throw 'Stable-word-map regression failed for the wrong reason.'
+          }
+          Write-Host 'RED-PROVEN both real-machine #37 failures reproduced.'
+
+      - name: Commit proven RED regressions
+        shell: pwsh
+        run: |
+          git config user.name 'chatgpt-codex-connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
+          if (git diff --cached --quiet) { throw 'No RED regression changes to commit.' }
+          git commit -m 'test: reproduce follow-off startup and stable-map failures (#37) [skip ci]'
+          git push origin HEAD:issue-37-follow-off-startup-stable-map
