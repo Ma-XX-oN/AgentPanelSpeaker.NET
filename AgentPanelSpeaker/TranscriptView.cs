@@ -4214,9 +4214,12 @@ const VW_SCROLL_KEYS = new Set([
 let virtualShiftFrame = 0;
 let lastManualScrollY = window.scrollY;
 let userScrollIntentUntil = 0;
+let userScrollIntentDirection = 0;
+let lastTouchY = Number.NaN;
 
-function markUserScrollIntent() {
+function markUserScrollIntent(direction = 0) {
   userScrollIntentUntil = performance.now() + VW_USER_SCROLL_INTENT_MS;
+  userScrollIntentDirection = Math.sign(Number(direction) || 0);
 }
 
 function isEditableScrollTarget(target) {
@@ -4224,15 +4227,32 @@ function isEditableScrollTarget(target) {
     (target.matches('input,textarea,select') || target.isContentEditable);
 }
 
-window.addEventListener('wheel', markUserScrollIntent, {
+window.addEventListener('wheel', event => {
+  markUserScrollIntent(event.deltaY);
+}, {
   passive:true,
   capture:true
 });
-window.addEventListener('touchstart', markUserScrollIntent, {
+window.addEventListener('touchstart', event => {
+  lastTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  markUserScrollIntent();
+}, {
   passive:true,
   capture:true
 });
-window.addEventListener('touchmove', markUserScrollIntent, {
+window.addEventListener('touchmove', event => {
+  const currentTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  const direction = Number.isFinite(lastTouchY) &&
+    Number.isFinite(currentTouchY)
+      ? lastTouchY - currentTouchY
+      : 0;
+  lastTouchY = currentTouchY;
+  markUserScrollIntent(direction);
+}, {
   passive:true,
   capture:true
 });
@@ -4241,7 +4261,17 @@ window.addEventListener('keydown', event => {
       !VW_SCROLL_KEYS.has(event.key) || isEditableScrollTarget(event.target)) {
     return;
   }
-  markUserScrollIntent();
+  let direction = 0;
+  if (event.key === 'ArrowUp' || event.key === 'PageUp' ||
+      event.key === 'Home') {
+    direction = -1;
+  } else if (event.key === 'ArrowDown' || event.key === 'PageDown' ||
+             event.key === 'End') {
+    direction = 1;
+  } else if (event.key === ' ') {
+    direction = event.shiftKey ? -1 : 1;
+  }
+  markUserScrollIntent(direction);
 }, {capture:true});
 window.addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
@@ -4330,18 +4360,23 @@ window.addEventListener('scroll', () => {
   lastManualScrollY = currentY;
   if (Math.abs(delta) <= VW_SCROLL_DIRECTION_EPSILON_PX) return;
 
+  const direction = delta > 0 ? 1 : -1;
   const explicitUserIntent = now <= userScrollIntentUntil;
-  if (explicitUserIntent) {
-    // User navigation always wins, even if it interrupts a smooth playback
-    // scroll or a vwindow replacement whose guard is still active.
+  if (now <= programmaticScrollUntil) {
+    // A physical input can override a programmatic scroll only when the
+    // resulting movement agrees with that input. Window replacement and
+    // anchor restoration can move scrollY in the opposite direction while the
+    // earlier user-intent timer is still alive; that movement is not a second
+    // user gesture and must not start a competing virtual-window shift.
+    if (!explicitUserIntent ||
+        (userScrollIntentDirection !== 0 &&
+         direction !== userScrollIntentDirection)) {
+      return;
+    }
     programmaticScrollUntil = 0;
-  } else if (now <= programmaticScrollUntil) {
-    return;
   }
 
   if (followSpeech) setFollowSpeech(false, true);
-
-  const direction = delta > 0 ? 1 : -1;
   if (virtualShiftFrame) cancelAnimationFrame(virtualShiftFrame);
   virtualShiftFrame = requestAnimationFrame(() => {
     virtualShiftFrame = 0;
