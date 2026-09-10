@@ -703,7 +703,8 @@ internal sealed class TranscriptView : UserControl
 
       TranscriptPlaybackPosition? renderAnchor = null;
       int latestIndex = -1;
-      if (_pendingPosition is TranscriptPlaybackPosition latestPosition &&
+      if (_settings.FollowSpeech &&
+          _pendingPosition is TranscriptPlaybackPosition latestPosition &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
@@ -712,7 +713,8 @@ internal sealed class TranscriptView : UserControl
       {
         renderAnchor = latestPosition;
       }
-      else if (_lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+      else if (_settings.FollowSpeech &&
+          _lastLocatedContentPosition is TranscriptPlaybackPosition located &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
@@ -1026,12 +1028,14 @@ internal sealed class TranscriptView : UserControl
         int? focalIndex = ReadOptionalInt32(root, "focalIndex");
         if (focalIndex is int validFocalIndex)
         {
-          _ = RenderWindowForIndexAsync(
+          _ = RenderWindowForIndexCoreAsync(
             validFocalIndex,
             ReadOptionalString(root, "reason"),
             ReadOptionalInt32(root, "anchorRecordNumber"),
             ReadOptionalString(root, "anchorSourceId"),
-            ReadOptionalDouble(root, "anchorOffset"));
+            ReadOptionalDouble(root, "anchorOffset"),
+            ReadOptionalInt32(root, "visibleStartIndex"),
+            ReadOptionalInt32(root, "visibleEndIndex"));
         }
         return;
       }
@@ -1742,7 +1746,8 @@ internal sealed class TranscriptView : UserControl
     TranscriptVirtualDocument document,
     IReadOnlyList<TranscriptNodeIdentity> identities)
   {
-    return _pendingPosition is TranscriptPlaybackPosition position &&
+    return _settings.FollowSpeech &&
+      _pendingPosition is TranscriptPlaybackPosition position &&
       TryResolvePositionIndex(document, identities, position, out int index)
         ? index
         : Math.Max(0, document.Count - 1);
@@ -1968,12 +1973,31 @@ internal sealed class TranscriptView : UserControl
     });
   }
 
-  private async Task RenderWindowForIndexAsync(
+  private Task RenderWindowForIndexAsync(
     int focalIndex,
     string reason,
     int? anchorRecordNumber,
     string anchorSourceId,
     double? anchorOffset)
+  {
+    return RenderWindowForIndexCoreAsync(
+      focalIndex,
+      reason,
+      anchorRecordNumber,
+      anchorSourceId,
+      anchorOffset,
+      protectedStartIndex: null,
+      protectedEndIndex: null);
+  }
+
+  private async Task RenderWindowForIndexCoreAsync(
+    int focalIndex,
+    string reason,
+    int? anchorRecordNumber,
+    string anchorSourceId,
+    double? anchorOffset,
+    int? protectedStartIndex,
+    int? protectedEndIndex)
   {
     if (_domPresentationMode)
     {
@@ -1996,7 +2020,9 @@ internal sealed class TranscriptView : UserControl
           _windowStartIndex,
           _windowEndIndex,
           direction,
-          GetVirtualViewportHeight());
+          GetVirtualViewportHeight(),
+          protectedStartIndex,
+          protectedEndIndex);
     if (window.StartIndex == _windowStartIndex && window.EndIndex == _windowEndIndex)
     {
       return;
@@ -4205,16 +4231,29 @@ function firstVisibleVirtualRecord(direction = 0) {
 
 function requestVirtualShift(direction, reason = null, referenceRecord = null) {
   if (virtualShiftPending || windowStartIndex < 0 || windowEndIndex < 0) return;
+  const visibleRecords = materializedVirtualRecords().filter(record => {
+    const rect = record.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
   const visibleRecord = referenceRecord || firstVisibleVirtualRecord(direction);
   const anchor = visibleRecord?.querySelector('.record-anchor') || null;
   if (!visibleRecord || !anchor) return;
   const visibleIndex = Number(visibleRecord.dataset.virtualIndex || -1);
   if (visibleIndex < 0) return;
+  const visibleRange = visibleRecords.length
+    ? {
+        visibleStartIndex:Number(
+          visibleRecords[0].dataset.virtualIndex || -1),
+        visibleEndIndex:Number(
+          visibleRecords[visibleRecords.length - 1].dataset.virtualIndex || -1)
+      }
+    : {};
   virtualShiftPending = true;
   chrome.webview.postMessage({
     type:'window-shift',
     reason:reason || (direction < 0 ? 'scroll-up' : 'scroll-down'),
     focalIndex:visibleIndex,
+    ...visibleRange,
     viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
     anchorSourceId:anchor.dataset.sourceId || '',

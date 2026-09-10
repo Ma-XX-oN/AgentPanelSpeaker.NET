@@ -41,7 +41,11 @@ internal static class Issue37VirtualWindowRegressionTestRunner
       ("virtual-window/physical-window-keeps-five-viewports-materialized",
         TestPhysicalWindowKeepsFiveViewportsMaterialized),
       ("virtual-window/playback-voice-cursor-prefetches-inside-tall-turn",
-        TestPlaybackVoiceCursorPrefetchesInsideTallTurn)
+        TestPlaybackVoiceCursorPrefetchesInsideTallTurn),
+      ("virtual-window/shift-preserves-entire-physically-visible-range",
+        TestShiftPreservesEntirePhysicallyVisibleRange),
+      ("virtual-window/follow-off-initial-render-ignores-pending-playback",
+        TestFollowOffInitialRenderIgnoresPendingPlayback)
     };
 
     int failures = 0;
@@ -143,6 +147,133 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
     contextRecord.Html.Contains("Actual prompt.", StringComparison.Ordinal),
     "Core User Context turn lost its prompt while entering virtualization.");
 }
+
+  /// <summary>
+  /// Reproduces the real startup state where speech has a paused position while
+  /// Follow Speech is OFF. The pending playback position may still be drawn if
+  /// it happens to be materialized, but it must not choose the initial vwindow,
+  /// scroll to itself, or open a disclosure that was outside the user-controlled
+  /// startup window.
+  /// </summary>
+  private static void TestFollowOffInitialRenderIgnoresPendingPlayback()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-follow-off-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "fixture.jsonl");
+    WriteFollowOffFixture(path);
+
+    try
+    {
+      TranscriptNodeIdentity targetIdentity;
+      using (var discoveryHost = CreateOffscreenHost())
+      using (var discoveryView = new TranscriptView { Dock = DockStyle.Fill })
+      {
+        discoveryHost.Controls.Add(discoveryView);
+        discoveryHost.Show();
+        _ = discoveryHost.Handle;
+        _ = discoveryView.Handle;
+        WaitForViewInitialization(discoveryView);
+        discoveryView.ApplySettings(
+          TranscriptSettings.Default with { FollowSpeech = false },
+          dark: false);
+        discoveryView.SelectSession(path, AgentSource.Codex, "follow-off discovery");
+        WaitForTranscriptRender(discoveryView);
+        IReadOnlyList<TranscriptNodeIdentity> identities =
+          ReadField<IReadOnlyList<TranscriptNodeIdentity>>(
+            discoveryView,
+            "_identities");
+        targetIdentity = identities.FirstOrDefault(identity =>
+          identity.Segments.Any(segment =>
+            segment.Contains("Open tabs:", StringComparison.Ordinal))) ??
+          throw new InvalidOperationException(
+            "Follow-OFF fixture did not expose the expected User Context identity.");
+      }
+
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+
+      view.SelectSession(path, AgentSource.Codex, "follow-off production");
+      view.ShowPlaybackPosition(new TranscriptPlaybackPosition(
+        TranscriptPlaybackState.Paused,
+        "Open tabs:",
+        0,
+        "Open",
+        targetIdentity.NodeId,
+        0,
+        0,
+        Stopwatch.GetTimestamp()));
+      WaitForTranscriptRender(view);
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int start = ReadField<int>(view, "_windowStartIndex");
+      int end = ReadField<int>(view, "_windowEndIndex");
+      Require(document.Count > 10,
+        "Follow-OFF fixture did not create a meaningful virtual transcript.");
+      Require(end == document.Count - 1,
+        $"Follow OFF let pending playback choose startup vwindow [{start}..{end}] " +
+        $"instead of the user-controlled live-end window ending at {document.Count - 1}.");
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      JsonElement browser = ExecuteJsonProbe(
+        webView,
+        "JSON.stringify({follow:followSpeech,openDetails:" +
+        "document.querySelectorAll('details[open]').length," +
+        "windowStart:windowStartIndex,windowEnd:windowEndIndex})");
+      Require(!browser.GetProperty("follow").GetBoolean(),
+        "Browser Follow Speech state was not OFF in the production fixture.");
+      Require(browser.GetProperty("windowEnd").GetInt32() == document.Count - 1,
+        "Browser window did not remain at the live-end startup range with Follow OFF.");
+      Require(browser.GetProperty("openDetails").GetInt32() == 0,
+        "Follow-OFF pending playback opened a transcript disclosure during startup.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  private static Form CreateOffscreenHost()
+  {
+    return new Form
+    {
+      Width = 900,
+      Height = 700,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-30000, -30000)
+    };
+  }
+
+  private static void WaitForViewInitialization(TranscriptView view)
+  {
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    PumpUntil(
+      () => webView.CoreWebView2 is not null,
+      "WebView2 core initialization");
+  }
+
+  private static void WaitForTranscriptRender(TranscriptView view)
+  {
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    PumpUntil(
+      () =>
+        ReadField<int>(view, "_windowStartIndex") >= 0 &&
+        ReadField<int>(view, "_windowEndIndex") >=
+          ReadField<int>(view, "_windowStartIndex") &&
+        webView.Visible,
+      "production transcript window to finish rendering");
+  }
 
   /// <summary>
   /// Loads a transcript large enough to exceed one virtual window through the
@@ -1309,6 +1440,70 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
     }
   }
 
+  /// <summary>
+  /// Directional window trimming must preserve every Core atomic unit that is
+  /// still physically visible, not only the directional focal unit.  The
+  /// browser can report several intersecting units while the shifted window has
+  /// enough off-screen height to satisfy the five-viewport floor after dropping
+  /// one of them.
+  /// </summary>
+  private static void TestShiftPreservesEntirePhysicallyVisibleRange()
+  {
+    const double viewportHeight = 100.0;
+    const int layoutGeneration = 37;
+    const int currentStartIndex = 0;
+    const int currentEndIndex = 6;
+    const int visibleStartIndex = 2;
+    const int visibleEndIndex = 4;
+    const int focalIndex = visibleEndIndex;
+
+    CanonicalHtmlUnitProjection[] units = Enumerable.Range(0, 12)
+      .Select(index => new CanonicalHtmlUnitProjection(
+        $"turn:visible-range:{index}",
+        "turn",
+        true,
+        new[]
+        {
+          new CanonicalHtmlSourceProjection(
+            $"event:visible-range:{index}",
+            "codex",
+            $"visible-range-{index}",
+            index,
+            new[] { 0 })
+        },
+        $"<section class=\"transcript-turn\" data-presentation-id=\"turn:visible-range:{index}\">" +
+        $"<span class=\"record-anchor\" data-jsonl-record=\"{index + 1}\" " +
+        $"data-source-id=\"visible-range-{index}\"></span>" +
+        $"<p>Visible range unit {index}.</p></section>"))
+      .ToArray();
+
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(units);
+    document.SetLayoutGeneration(layoutGeneration);
+    double[] heights =
+    {
+      120.0, 120.0, 40.0, 40.0, 40.0, 100.0,
+      100.0, 120.0, 120.0, 100.0, 100.0, 100.0
+    };
+    document.UpdateMeasuredHeights(
+      heights.Select((height, index) => (index, height))
+        .ToDictionary(item => item.index, item => item.height),
+      layoutGeneration);
+
+    TranscriptWindow shifted = document.CreateShiftedWindow(
+      focalIndex,
+      currentStartIndex,
+      currentEndIndex,
+      direction: 1,
+      viewportHeight);
+
+    Require(
+      shifted.StartIndex <= visibleStartIndex &&
+      shifted.EndIndex >= visibleEndIndex,
+      "Directional shift evicted part of the physically visible Core-unit " +
+      $"range [{visibleStartIndex}..{visibleEndIndex}]; shifted window is " +
+      $"[{shifted.StartIndex}..{shifted.EndIndex}].");
+  }
+
   private static bool ReadBrowserBoolean(WebView2 webView, string expression)
   {
     Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(
@@ -1354,6 +1549,55 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
           message = index == tallPair
             ? tallResponse
             : $"Tall-turn issue 37 response {index:D3}."
+        }
+      }));
+    }
+    File.WriteAllLines(path, records);
+  }
+
+  private static void WriteFollowOffFixture(string path)
+  {
+    var records = new List<string>();
+    const string Context = """
+# Context from my IDE setup:
+
+## Active file: sessions/example.jsonl
+
+## Open tabs:
+- codex-transcript.md: C:\Users\adria\Downloads\codex-transcript.md
+- Download Conversation - 3. Phase 2 Classification Update (6).md: C:\Users\adria\Downloads\Download Conversation - 3. Phase 2 Classification Update (6).md
+- test.md: test.md
+
+## My request for Codex:
+What time is it in Paris?
+""";
+    records.Add(JsonSerializer.Serialize(new
+    {
+      type = "event_msg",
+      timestamp = "2026-09-07T00:00:00Z",
+      payload = new { type = "user_message", message = Context }
+    }));
+    for (int index = 1; index <= 40; ++index)
+    {
+      records.Add(JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = $"2026-09-07T00:{index % 60:00}:01Z",
+        payload = new
+        {
+          type = "agent_message",
+          phase = "final",
+          message = $"Later assistant turn {index}."
+        }
+      }));
+      records.Add(JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = $"2026-09-07T00:{index % 60:00}:02Z",
+        payload = new
+        {
+          type = "user_message",
+          message = $"Later user turn {index}."
         }
       }));
     }
