@@ -27,6 +27,9 @@ jobs:
       - name: Apply production simplification
         run: python scripts/run-issue65-production.py
 
+      - name: Migrate legacy regressions to simplified identity contract
+        run: python scripts/patch-issue65-regressions.py
+
       - name: Build application
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
