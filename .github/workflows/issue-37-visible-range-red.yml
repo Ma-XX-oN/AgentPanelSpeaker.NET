@@ -1,0 +1,80 @@
+name: Issue 37 protected visible range RED
+
+on:
+  push:
+    branches:
+      - issue-37-visible-range-red
+    paths:
+      - '.github/workflows/issue-37-visible-range-red.yml'
+      - 'tools/apply_issue37_visible_range_regression.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Stage protected visible-range regression
+        shell: pwsh
+        run: |
+          python tools/apply_issue37_visible_range_regression.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove protected visible-range RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'red.out'
+          $stderr = Join-Path $env:RUNNER_TEMP 'red.err'
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','virtual-window' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+          $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+          Write-Host $text
+          $name = 'FAIL  virtual-window/shift-preserves-entire-physically-visible-range'
+          if ($p.ExitCode -eq 0) { throw 'Expected protected visible-range regression to be RED.' }
+          if (-not $text.Contains($name)) { throw 'Protected visible-range regression did not fail.' }
+          if (-not $text.Contains('Directional shift evicted part of the physically visible Core-unit range')) {
+            throw 'Protected visible-range regression failed for the wrong reason.'
+          }
+          $baseline = @(
+            'PASS  virtual-window/core-single-anchor-user-context-unit-is-preserved',
+            'PASS  virtual-window/browser-is-bounded-convergent-and-diagnostics-are-bounded',
+            'PASS  virtual-window/programmatic-playback-scroll-does-not-request-shift',
+            'PASS  virtual-window/spacer-shift-restores-materialized-content',
+            'PASS  virtual-window/directional-prefetch-follows-scroll-direction',
+            'PASS  virtual-window/manual-scroll-disables-follow-before-vwindow-shift',
+            'PASS  virtual-window/physical-window-keeps-five-viewports-materialized',
+            'PASS  virtual-window/playback-voice-cursor-prefetches-inside-tall-turn'
+          )
+          foreach ($pass in $baseline) {
+            if (-not $text.Contains($pass)) { throw "Existing #37 baseline did not remain GREEN: $pass" }
+          }
+          Write-Host 'RED-PROVEN shifted-window trimming can evict a still-visible atomic Core unit.'
+
+      - name: Commit proven RED regression
+        shell: pwsh
+        run: |
+          git config user.name 'chatgpt-codex-connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
+          if (git diff --cached --quiet) { throw 'No RED regression change to commit.' }
+          git commit -m 'test: reproduce visible Core-unit eviction (#37) [skip ci]'
+          git push origin HEAD:issue-37-visible-range-red
