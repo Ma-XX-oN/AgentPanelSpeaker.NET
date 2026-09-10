@@ -41,6 +41,8 @@ jobs:
         run: |
           python tools/apply_issue37_real_machine_regressions.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fix_issue37_real_machine_regression_harness.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
 
       - name: Build Release
