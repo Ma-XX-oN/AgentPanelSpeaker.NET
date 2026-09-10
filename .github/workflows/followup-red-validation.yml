@@ -1,0 +1,76 @@
+name: Follow-up RED validation
+
+on:
+  push:
+    branches:
+      - issue-56-scroll-replacement-user-intent
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Apply permanent follow-up regressions
+        if: github.event.head_commit.message == 'ci: launch follow-up RED (#56 #60)'
+        shell: pwsh
+        run: |
+          python scripts/apply-followup-regressions.py
+          git diff --check
+
+      - name: Commit permanent follow-up regressions
+        if: github.event.head_commit.message == 'ci: launch follow-up RED (#56 #60)'
+        shell: pwsh
+        run: |
+          if (-not (git status --porcelain -- AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs AgentPanelSpeaker/Issue55StartupProgressRegressionTestRunner.cs AgentPanelSpeaker/Issue60StartupPerformanceRegressionTestRunner.cs AgentPanelSpeaker/Program.cs)) {
+            throw 'Follow-up regression patch produced no permanent test changes.'
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs AgentPanelSpeaker/Issue55StartupProgressRegressionTestRunner.cs AgentPanelSpeaker/Issue60StartupPerformanceRegressionTestRunner.cs AgentPanelSpeaker/Program.cs
+          git commit -m 'test: cover scroll headroom stale shifts and deferred search (#56 #60)'
+          git push origin HEAD:issue-56-scroll-replacement-user-intent
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned AIConversationCore dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run startup progress regressions
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite startup-progress
+
+      - name: Run real-session regressions
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite real-session-fixes
+
+      - name: Run startup performance regressions
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite startup-performance
