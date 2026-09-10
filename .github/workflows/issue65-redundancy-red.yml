@@ -1,0 +1,44 @@
+name: Issue 65 redundancy regression
+
+on:
+  push:
+    branches:
+      - issue-65-remove-redundant-transcript-identities
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build application
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run permanent issue 65 regression suite
+        shell: powershell
+        run: |
+          $assemblyPath = Resolve-Path 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.dll'
+          $assembly = [Reflection.Assembly]::LoadFrom($assemblyPath)
+          $type = $assembly.GetType('AgentPanelSpeaker.Issue65RedundancyRegressionTestRunner', $true)
+          $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::NonPublic
+          $method = $type.GetMethod('Run', $flags)
+          if ($null -eq $method) { throw 'Issue65RedundancyRegressionTestRunner.Run was not found.' }
+          $exitCode = [int]$method.Invoke($null, @())
+          if ($exitCode -ne 0) { exit $exitCode }
+
+      - name: Validate patch whitespace
+        shell: pwsh
+        run: git diff --check "${{ github.event.before }}" HEAD
