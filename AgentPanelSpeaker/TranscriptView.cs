@@ -623,7 +623,7 @@ internal sealed class TranscriptView : UserControl
             StartupCanonicalEndPercent));
       })
       : null;
-    DiagnosticLog.Write("transcript.render_started", new    DiagnosticLog.Write("transcript.render_started", new
+    DiagnosticLog.Write("transcript.render_started", new
     {
       path,
       force,
