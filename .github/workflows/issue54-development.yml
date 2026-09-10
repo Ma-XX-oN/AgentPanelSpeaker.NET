@@ -1,0 +1,124 @@
+name: Issue 54 development gate
+
+on:
+  push:
+    branches:
+      - issue-54-real-session-fixes
+    paths:
+      - .github/workflows/issue54-development.yml
+
+permissions:
+  contents: write
+
+jobs:
+  develop:
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-54-real-session-fixes
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Wire issue 54 regression suite
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/Program.cs')
+          text = path.read_text(encoding='utf-8-sig')
+          dispatch_anchor = '''      if (args.Length == 2 &&
+          string.Equals(args[1], "startup-progress", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "startup-progress",
+          () => RunWithWinFormsMessageLoop(
+            Issue55StartupProgressRegressionTestRunner.Run));
+        return;
+      }
+'''
+          dispatch = dispatch_anchor + '''
+      if (args.Length == 2 &&
+          string.Equals(args[1], "real-session-fixes", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "real-session-fixes",
+          () => RunWithWinFormsMessageLoop(
+            Issue54RealSessionRegressionTestRunner.Run));
+        return;
+      }
+'''
+          if '"real-session-fixes"' not in text:
+            if dispatch_anchor not in text:
+              raise SystemExit('Program dispatch anchor not found')
+            text = text.replace(dispatch_anchor, dispatch, 1)
+
+          declaration_anchor = '''      int startupProgress = RunIsolatedTestSuite("startup-progress");
+'''
+          declaration = declaration_anchor + '''      int realSessionFixes = RunIsolatedTestSuite("real-session-fixes");
+'''
+          if 'int realSessionFixes = ' not in text:
+            if declaration_anchor not in text:
+              raise SystemExit('Program all-suite declaration anchor not found')
+            text = text.replace(declaration_anchor, declaration, 1)
+
+          condition_anchor = '''                             wordMaterialization == 0 &&
+                             startupProgress == 0
+'''
+          condition = '''                             wordMaterialization == 0 &&
+                             startupProgress == 0 &&
+                             realSessionFixes == 0
+'''
+          if 'realSessionFixes == 0' not in text:
+            if condition_anchor not in text:
+              raise SystemExit('Program all-suite condition anchor not found')
+            text = text.replace(condition_anchor, condition, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Build test-first branch
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove issue 56 regression is RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = & $exe --test real-session-fixes 2>&1 | Out-String
+          $exit = $LASTEXITCODE
+          Write-Host $output
+          if ($exit -eq 0) {
+            throw 'Issue #56 regression unexpectedly passed before the production fix.'
+          }
+          if ($output -notmatch 'FAIL  real-session/scroll-replacement-does-not-reverse-user-intent') {
+            throw 'Issue #56 did not fail at the intended permanent regression.'
+          }
+          if ($output -notmatch 'replacement-induced upward scroll') {
+            throw 'Issue #56 RED did not reproduce the intended direction-reversal defect.'
+          }
+
+      - name: Commit proven RED wiring
+        shell: pwsh
+        run: |
+          git config user.name 'ChatGPT Codex Connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Program.cs
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'test: wire proven RED issue 56 regression (#56)'
+            git push origin HEAD:issue-54-real-session-fixes
+          }
