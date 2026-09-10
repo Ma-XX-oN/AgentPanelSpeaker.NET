@@ -1,0 +1,48 @@
+name: Issue 56 instrumentation RED confirmation
+
+on:
+  push:
+    branches:
+      - issue-56-scroll-replacement-user-intent
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build regression-only head
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove permanent regression is RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe"
+          $start = New-Object System.Diagnostics.ProcessStartInfo
+          $start.FileName = $exe
+          $start.UseShellExecute = $false
+          $start.RedirectStandardOutput = $true
+          $start.RedirectStandardError = $true
+          [void]$start.ArgumentList.Add('--test')
+          [void]$start.ArgumentList.Add('real-session-fixes')
+          $process = New-Object System.Diagnostics.Process
+          $process.StartInfo = $start
+          [void]$process.Start()
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $stderr = $process.StandardError.ReadToEnd()
+          $process.WaitForExit()
+          $output = $stdout + [Environment]::NewLine + $stderr
+          Write-Host $output
+          if ($process.ExitCode -eq 0) { throw "Regression unexpectedly passed before instrumentation." }
+          if ($output -notmatch "FAIL  real-session/window-replacement-emits-transaction-diagnostics") { throw "Expected instrumentation regression did not fail." }
+          if ($output -notmatch "Timed out waiting for window replacement transaction diagnostic") { throw "Failure was not the missing diagnostic contract." }
+          Write-Host "RED CONFIRMED: production emits no correlated window transaction diagnostic yet."
