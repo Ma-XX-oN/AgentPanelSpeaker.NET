@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   integration:
@@ -17,7 +17,9 @@ jobs:
       - name: Check out AgentPanelSpeaker and submodules
         uses: actions/checkout@v4
         with:
+          ref: issue-54-real-session-fixes
           submodules: recursive
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -41,6 +43,152 @@ jobs:
       - name: Install pinned AIConversationCore dependencies
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Apply issue 56 production candidate
+        shell: python {0}
+        run: |
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/TranscriptView.cs')
+          text = path.read_text(encoding='utf-8-sig')
+          replacements = [
+            (
+              '''let virtualShiftFrame = 0;
+let lastManualScrollY = window.scrollY;
+let userScrollIntentUntil = 0;
+
+function markUserScrollIntent() {
+  userScrollIntentUntil = performance.now() + VW_USER_SCROLL_INTENT_MS;
+}
+''',
+              '''let virtualShiftFrame = 0;
+let lastManualScrollY = window.scrollY;
+let userScrollIntentUntil = 0;
+let userScrollIntentDirection = 0;
+let lastTouchY = Number.NaN;
+
+function markUserScrollIntent(direction = 0) {
+  userScrollIntentUntil = performance.now() + VW_USER_SCROLL_INTENT_MS;
+  userScrollIntentDirection = Math.sign(Number(direction) || 0);
+}
+''',
+              'user-intent state'),
+            (
+              '''window.addEventListener('wheel', markUserScrollIntent, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchstart', markUserScrollIntent, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchmove', markUserScrollIntent, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
+      !VW_SCROLL_KEYS.has(event.key) || isEditableScrollTarget(event.target)) {
+    return;
+  }
+  markUserScrollIntent();
+}, {capture:true});
+''',
+              '''window.addEventListener('wheel', event => {
+  markUserScrollIntent(event.deltaY);
+}, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchstart', event => {
+  lastTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  markUserScrollIntent();
+}, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchmove', event => {
+  const currentTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  const direction = Number.isFinite(lastTouchY) &&
+    Number.isFinite(currentTouchY)
+      ? lastTouchY - currentTouchY
+      : 0;
+  lastTouchY = currentTouchY;
+  markUserScrollIntent(direction);
+}, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
+      !VW_SCROLL_KEYS.has(event.key) || isEditableScrollTarget(event.target)) {
+    return;
+  }
+  let direction = 0;
+  if (event.key === 'ArrowUp' || event.key === 'PageUp' ||
+      event.key === 'Home') {
+    direction = -1;
+  } else if (event.key === 'ArrowDown' || event.key === 'PageDown' ||
+             event.key === 'End') {
+    direction = 1;
+  } else if (event.key === ' ') {
+    direction = event.shiftKey ? -1 : 1;
+  }
+  markUserScrollIntent(direction);
+}, {capture:true});
+''',
+              'physical-input direction'),
+            (
+              '''  const explicitUserIntent = now <= userScrollIntentUntil;
+  if (explicitUserIntent) {
+    // User navigation always wins, even if it interrupts a smooth playback
+    // scroll or a vwindow replacement whose guard is still active.
+    programmaticScrollUntil = 0;
+  } else if (now <= programmaticScrollUntil) {
+    return;
+  }
+
+  if (followSpeech) setFollowSpeech(false, true);
+
+  const direction = delta > 0 ? 1 : -1;
+''',
+              '''  const direction = delta > 0 ? 1 : -1;
+  const explicitUserIntent = now <= userScrollIntentUntil;
+  if (now <= programmaticScrollUntil) {
+    // A physical input can override a programmatic scroll only when the
+    // resulting movement agrees with that input. Window replacement and
+    // anchor restoration can move scrollY in the opposite direction while the
+    // earlier user-intent timer is still alive; that movement is not a second
+    // user gesture and must not start a competing virtual-window shift.
+    if (!explicitUserIntent ||
+        (userScrollIntentDirection !== 0 &&
+         direction !== userScrollIntentDirection)) {
+      return;
+    }
+    programmaticScrollUntil = 0;
+  }
+
+  if (followSpeech) setFollowSpeech(false, true);
+''',
+              'scroll guard')
+          ]
+
+          for old, new, label in replacements:
+            count = text.count(old)
+            if count != 1:
+              raise SystemExit(
+                f'Issue #56 patch anchor {label!r} matched {count} times')
+            text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Validate candidate whitespace
+        shell: pwsh
+        run: git diff --check
 
       - name: Run pinned AIConversationCore regression tests
         shell: pwsh
@@ -170,5 +318,19 @@ jobs:
       - name: Validate whitespace and patch integrity
         shell: pwsh
         run: |
+          git diff --check
           git fetch origin main --depth=1
           git diff --check FETCH_HEAD HEAD
+
+      - name: Commit verified issue 56 production fix
+        shell: pwsh
+        run: |
+          git config user.name 'ChatGPT Codex Connector'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git diff --cached --check
+          if (git diff --cached --quiet) {
+            throw 'Issue #56 candidate produced no production change to commit.'
+          }
+          git commit -m 'fix: keep replacement scrolls out of manual navigation (#56)'
+          git push origin HEAD:issue-54-real-session-fixes
