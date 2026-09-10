@@ -15,7 +15,9 @@ internal sealed class TranscriptView : UserControl
 {
   private const int GwlStyle = -16;
   private const int WsVisible = 0x10000000;
-  private const int StartupStageCount = 3;
+  private const int StartupCanonicalEndPercent = 89;
+  private const int StartupSearchPercent = 94;
+  private const int StartupRenderPercent = 99;
   private readonly WebView2 _webView = new();
   private readonly Label _loadingLabel = new();
   private readonly Label _failureLabel = new();
@@ -36,6 +38,8 @@ internal sealed class TranscriptView : UserControl
   private bool _refreshPendingForce;
   private int _renderGeneration;
   private int _activeRenderGeneration = -1;
+  private int _startupProgressPhase;
+  private int _startupProgressPercent;
   private CancellationTokenSource? _renderCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
@@ -589,10 +593,12 @@ internal sealed class TranscriptView : UserControl
     _refreshInProgress = true;
     if (force)
     {
-      ShowStartupStage(1, "Preparing canonical transcript…");
+      _startupProgressPhase = 0;
+      _startupProgressPercent = 0;
+      ShowStartupProgress(1, "Preparing canonical transcript…", 0);
     }
-    IProgress<int>? startupProgress = force
-      ? new Progress<int>(stage =>
+    IProgress<TranscriptBuildProgress>? startupRecordProgress = force
+      ? new Progress<TranscriptBuildProgress>(progress =>
       {
         if (generation != _renderGeneration ||
             !string.Equals(
@@ -602,9 +608,33 @@ internal sealed class TranscriptView : UserControl
         {
           return;
         }
-        if (stage == 2)
+        ShowStartupProgress(
+          1,
+          "Preparing canonical transcript…",
+          ScaleStartupProgress(
+            progress.Completed,
+            progress.Total,
+            0,
+            StartupCanonicalEndPercent));
+      })
+      : null;
+    IProgress<int>? startupPhaseProgress = force
+      ? new Progress<int>(phase =>
+      {
+        if (generation != _renderGeneration ||
+            !string.Equals(
+              path,
+              _sessionPath,
+              StringComparison.OrdinalIgnoreCase))
         {
-          ShowStartupStage(2, "Building transcript search index…");
+          return;
+        }
+        if (phase == 2)
+        {
+          ShowStartupProgress(
+            2,
+            "Building transcript search index…",
+            StartupSearchPercent);
         }
       })
       : null;
@@ -637,14 +667,15 @@ internal sealed class TranscriptView : UserControl
             path,
             source,
             token,
-            includeRolledBackTurns),
+            includeRolledBackTurns,
+            startupRecordProgress),
           () => presentation = TranscriptPresentationDomFormatter.Format(
             path,
             source,
             _pipeline,
             token));
         token.ThrowIfCancellationRequested();
-        startupProgress?.Report(2);
+        startupPhaseProgress?.Report(2);
         string html = presentation.Html;
         TranscriptStructureSnapshot rendererStructure =
           TranscriptStructureProbe.CaptureHtml(
@@ -706,7 +737,10 @@ internal sealed class TranscriptView : UserControl
         expectedStructure: virtualStructure);
       if (force)
       {
-        ShowStartupStage(3, "Rendering visible transcript…");
+        ShowStartupProgress(
+          3,
+          "Rendering visible transcript…",
+          StartupRenderPercent);
       }
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
@@ -784,6 +818,13 @@ internal sealed class TranscriptView : UserControl
       StartPendingFindRequest();
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
+      if (force)
+      {
+        ShowStartupProgress(
+          3,
+          "Rendering visible transcript…",
+          100);
+      }
       HideLoading();
       _restoredFromSettings = false;
       QueueSettingsApply(immediate: true);
@@ -875,20 +916,47 @@ internal sealed class TranscriptView : UserControl
       : prefix + ":" + Environment.NewLine + name + "…";
   }
 
-  private void ShowStartupStage(int stage, string description)
+  private void ShowStartupProgress(
+    int phase,
+    string description,
+    int percentage)
   {
-    Debug.Assert(stage >= 1 && stage <= StartupStageCount);
+    Debug.Assert(phase >= 1 && phase <= 3);
     Debug.Assert(!string.IsNullOrWhiteSpace(description));
+    if (phase < _startupProgressPhase)
+    {
+      return;
+    }
+
+    _startupProgressPhase = phase;
+    _startupProgressPercent = Math.Max(
+      _startupProgressPercent,
+      Math.Clamp(percentage, 0, 100));
     string name = string.IsNullOrWhiteSpace(_sessionDisplayName)
       ? Path.GetFileName(_sessionPath) ?? string.Empty
       : _sessionDisplayName;
     string text = description + Environment.NewLine +
-      $"Stage {stage} of {StartupStageCount}";
+      $"{_startupProgressPercent}%";
     if (!string.IsNullOrWhiteSpace(name))
     {
       text += Environment.NewLine + name;
     }
     ShowLoading(text);
+  }
+
+  private static int ScaleStartupProgress(
+    int completed,
+    int total,
+    int startPercentage,
+    int endPercentage)
+  {
+    if (total <= 0)
+    {
+      return startPercentage;
+    }
+    int boundedCompleted = Math.Clamp(completed, 0, total);
+    int span = Math.Max(0, endPercentage - startPercentage);
+    return startPercentage + (int)((long)span * boundedCompleted / total);
   }
 
   private void ShowLoading(string text)
