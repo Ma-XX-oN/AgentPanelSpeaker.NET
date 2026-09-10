@@ -15,8 +15,7 @@ internal sealed class TranscriptView : UserControl
 {
   private const int GwlStyle = -16;
   private const int WsVisible = 0x10000000;
-  private const int StartupCanonicalEndPercent = 89;
-  private const int StartupSearchPercent = 94;
+  private const int StartupCanonicalEndPercent = 98;
   private const int StartupRenderPercent = 99;
   private readonly WebView2 _webView = new();
   private readonly Label _loadingLabel = new();
@@ -41,6 +40,7 @@ internal sealed class TranscriptView : UserControl
   private int _startupProgressPhase;
   private int _startupProgressPercent;
   private CancellationTokenSource? _renderCancellation;
+  private CancellationTokenSource? _searchIndexCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
   private TranscriptPlaybackPosition? _lastLocatedContentPosition;
@@ -60,7 +60,7 @@ internal sealed class TranscriptView : UserControl
   private CancellationTokenSource? _findCancellation;
   private PendingFindRequest? _pendingFindRequest;
   private long _latestFindWindowNavigationGeneration;
-  private readonly SemaphoreSlim _findWindowRenderGate = new(1, 1);
+  private readonly SemaphoreSlim _windowRenderGate = new(1, 1);
 
   private sealed record PendingFindRequest(
     long RequestId,
@@ -213,6 +213,7 @@ internal sealed class TranscriptView : UserControl
 
     _pendingPosition = null;
     _lastLocatedContentPosition = null;
+    CancelSearchIndexBuild();
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
@@ -234,6 +235,7 @@ internal sealed class TranscriptView : UserControl
   public void ClearSession()
   {
     _pendingPosition = null;
+    CancelSearchIndexBuild();
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
@@ -464,6 +466,7 @@ internal sealed class TranscriptView : UserControl
     {
       _renderGeneration++;
       CancelActiveRender();
+      CancelSearchIndexBuild();
       _refreshTimer.Stop();
       _refreshTimer.Dispose();
       _settingsApplyTimer.Stop();
@@ -591,6 +594,8 @@ internal sealed class TranscriptView : UserControl
     _renderCancellation = cancellation;
     _activeRenderGeneration = generation;
     _refreshInProgress = true;
+    CancelSearchIndexBuild();
+    _searchIndex = null;
     if (force)
     {
       _startupProgressPhase = 0;
@@ -618,27 +623,7 @@ internal sealed class TranscriptView : UserControl
             StartupCanonicalEndPercent));
       })
       : null;
-    IProgress<int>? startupPhaseProgress = force
-      ? new Progress<int>(phase =>
-      {
-        if (generation != _renderGeneration ||
-            !string.Equals(
-              path,
-              _sessionPath,
-              StringComparison.OrdinalIgnoreCase))
-        {
-          return;
-        }
-        if (phase == 2)
-        {
-          ShowStartupProgress(
-            2,
-            "Building transcript search index…",
-            StartupSearchPercent);
-        }
-      })
-      : null;
-    DiagnosticLog.Write("transcript.render_started", new
+    DiagnosticLog.Write("transcript.render_started", new    DiagnosticLog.Write("transcript.render_started", new
     {
       path,
       force,
@@ -675,17 +660,12 @@ internal sealed class TranscriptView : UserControl
             _pipeline,
             token));
         token.ThrowIfCancellationRequested();
-        startupPhaseProgress?.Report(2);
         string html = presentation.Html;
         TranscriptStructureSnapshot rendererStructure =
           TranscriptStructureProbe.CaptureHtml(
             structureProbeId,
             "dom-model-html",
             html);
-        TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
-          html,
-          identities,
-          token);
         TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
           presentation.Units);
         document.SetShowRolledBackHistory(
@@ -694,7 +674,7 @@ internal sealed class TranscriptView : UserControl
         return new TranscriptRenderPayload(
           document,
           identities,
-          searchIndex,
+          html,
           rendererStructure,
           presentation.Nodes);
       }, token);
@@ -709,7 +689,6 @@ internal sealed class TranscriptView : UserControl
 
       _virtualDocument = payload.Document;
       _identities = payload.Identities;
-      _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
       TranscriptWindow window = payload.Document.CreateWindow(focalIndex, GetVirtualViewportHeight());
       TranscriptStructureSnapshot virtualStructure =
@@ -815,7 +794,6 @@ internal sealed class TranscriptView : UserControl
 
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
-      StartPendingFindRequest();
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
       if (force)
@@ -826,6 +804,11 @@ internal sealed class TranscriptView : UserControl
           100);
       }
       HideLoading();
+      BeginDeferredSearchIndexBuild(
+        path,
+        generation,
+        payload.SearchHtml,
+        payload.Identities);
       _restoredFromSettings = false;
       QueueSettingsApply(immediate: true);
       if (_lastLocatedContentPosition is TranscriptPlaybackPosition locatedPosition &&
@@ -890,6 +873,162 @@ internal sealed class TranscriptView : UserControl
         }
       }
     }
+  }
+
+  /// <summary>
+  /// Starts full-file search indexing only after the initial visible window is
+  /// installed. Search readiness is deliberately independent of first paint.
+  /// </summary>
+  private void BeginDeferredSearchIndexBuild(
+    string path,
+    int generation,
+    string html,
+    IReadOnlyList<TranscriptNodeIdentity> identities)
+  {
+    var cancellation = new CancellationTokenSource();
+    _searchIndexCancellation = cancellation;
+    _ = BuildDeferredSearchIndexAsync(
+      path,
+      generation,
+      html,
+      identities,
+      cancellation);
+  }
+
+  /// <summary>
+  /// Builds the immutable full-session search corpus away from the UI thread,
+  /// then attaches stable word IDs to whichever virtual window is current.
+  /// </summary>
+  private async Task BuildDeferredSearchIndexAsync(
+    string path,
+    int generation,
+    string html,
+    IReadOnlyList<TranscriptNodeIdentity> identities,
+    CancellationTokenSource cancellation)
+  {
+    var timer = Stopwatch.StartNew();
+    try
+    {
+      TranscriptSearchIndex index = await Task.Run(
+        () => TranscriptSearchIndex.Build(
+          html,
+          identities,
+          cancellation.Token),
+        cancellation.Token);
+      cancellation.Token.ThrowIfCancellationRequested();
+      if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
+          generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      _searchIndex = index;
+      await InstallCurrentWindowSearchMapsAsync(
+        index,
+        generation,
+        path,
+        cancellation.Token);
+      cancellation.Token.ThrowIfCancellationRequested();
+      if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
+          generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      StartPendingFindRequest();
+      DiagnosticLog.Write("transcript.search_index_completed", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = timer.ElapsedMilliseconds,
+        firstRenderAlreadyVisible = !_loadingLabel.Visible
+      });
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+      DiagnosticLog.Write("transcript.search_index_cancelled", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+    }
+    catch (Exception exception)
+    {
+      DiagnosticLog.Write("transcript.search_index_failed", new
+      {
+        path,
+        generation,
+        exception = exception.ToString()
+      });
+      PendingFindRequest? request = _pendingFindRequest;
+      if (request is not null)
+      {
+        _pendingFindRequest = null;
+        PostMessage(new
+        {
+          type = "find-error",
+          requestId = request.RequestId,
+          errorKind = "search",
+          error = exception.Message
+        });
+      }
+    }
+    finally
+    {
+      if (ReferenceEquals(_searchIndexCancellation, cancellation))
+      {
+        _searchIndexCancellation = null;
+      }
+      cancellation.Dispose();
+    }
+  }
+
+  /// <summary>
+  /// Installs search-owned stable word IDs into the current browser window
+  /// without replacing its canonical Core HTML or moving the viewport.
+  /// </summary>
+  private async Task InstallCurrentWindowSearchMapsAsync(
+    TranscriptSearchIndex index,
+    int generation,
+    string path,
+    CancellationToken cancellationToken)
+  {
+    await _windowRenderGate.WaitAsync(cancellationToken);
+    try
+    {
+      if (generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase) ||
+          _virtualDocument is not TranscriptVirtualDocument document ||
+          _windowStartIndex < 0 ||
+          _windowEndIndex < _windowStartIndex)
+      {
+        return;
+      }
+
+      int start = Math.Clamp(_windowStartIndex, 0, document.Count - 1);
+      int end = Math.Clamp(_windowEndIndex, start, document.Count - 1);
+      TranscriptVirtualRecord[] records = document.Records
+        .Skip(start)
+        .Take(end - start + 1)
+        .ToArray();
+      IReadOnlyList<TranscriptRecordWordMap> wordMaps = index.GetWordMaps(records);
+      await ExecuteAsync(
+        "installSearchWordMaps(" + JsonSerializer.Serialize(wordMaps) + ");");
+    }
+    finally
+    {
+      _windowRenderGate.Release();
+    }
+  }
+
+  private void CancelSearchIndexBuild()
+  {
+    CancellationTokenSource? cancellation = _searchIndexCancellation;
+    _searchIndexCancellation = null;
+    cancellation?.Cancel();
   }
 
   private void CancelActiveRender()
@@ -1142,7 +1281,9 @@ internal sealed class TranscriptView : UserControl
             ReadOptionalString(root, "anchorSourceId"),
             ReadOptionalDouble(root, "anchorOffset"),
             ReadOptionalInt32(root, "visibleStartIndex"),
-            ReadOptionalInt32(root, "visibleEndIndex"));
+            ReadOptionalInt32(root, "visibleEndIndex"),
+            ReadOptionalInt32(root, "sourceStartIndex"),
+            ReadOptionalInt32(root, "sourceEndIndex"));
         }
         return;
       }
@@ -1823,7 +1964,7 @@ internal sealed class TranscriptView : UserControl
   private sealed record TranscriptRenderPayload(
     TranscriptVirtualDocument Document,
     IReadOnlyList<TranscriptNodeIdentity> Identities,
-    TranscriptSearchIndex SearchIndex,
+    string SearchHtml,
     TranscriptStructureSnapshot RendererStructure,
     IReadOnlyList<TranscriptDomNode> DomNodes);
 
@@ -1968,7 +2109,7 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
-    await _findWindowRenderGate.WaitAsync();
+    await _windowRenderGate.WaitAsync();
     try
     {
       if (navigationGeneration is long currentGeneration &&
@@ -2034,7 +2175,7 @@ internal sealed class TranscriptView : UserControl
     }
     finally
     {
-      _findWindowRenderGate.Release();
+      _windowRenderGate.Release();
     }
   }
 
@@ -2094,7 +2235,9 @@ internal sealed class TranscriptView : UserControl
       anchorSourceId,
       anchorOffset,
       protectedStartIndex: null,
-      protectedEndIndex: null);
+      protectedEndIndex: null,
+      sourceStartIndex: null,
+      sourceEndIndex: null);
   }
 
   private async Task RenderWindowForIndexCoreAsync(
@@ -2104,67 +2247,96 @@ internal sealed class TranscriptView : UserControl
     string anchorSourceId,
     double? anchorOffset,
     int? protectedStartIndex,
-    int? protectedEndIndex)
+    int? protectedEndIndex,
+    int? sourceStartIndex,
+    int? sourceEndIndex)
   {
-    if (_domPresentationMode)
+    await _windowRenderGate.WaitAsync();
+    try
     {
-      return;
-    }
-    TranscriptVirtualDocument? document = _virtualDocument;
-    if (document is null)
-    {
-      return;
-    }
-    int direction = reason.EndsWith("-up", StringComparison.OrdinalIgnoreCase)
-      ? -1
-      : reason.EndsWith("-down", StringComparison.OrdinalIgnoreCase)
-        ? 1
-        : 0;
-    TranscriptWindow window = direction == 0
-      ? document.CreateWindow(focalIndex, GetVirtualViewportHeight())
-      : document.CreateShiftedWindow(
+      if (_domPresentationMode)
+      {
+        return;
+      }
+      TranscriptVirtualDocument? document = _virtualDocument;
+      if (document is null)
+      {
+        return;
+      }
+      if (sourceStartIndex is int requestedStart &&
+          sourceEndIndex is int requestedEnd &&
+          (requestedStart != _windowStartIndex ||
+           requestedEnd != _windowEndIndex))
+      {
+        DiagnosticLog.Write("transcript.window_shift_stale", new
+        {
+          reason,
           focalIndex,
-          _windowStartIndex,
-          _windowEndIndex,
-          direction,
-          GetVirtualViewportHeight(),
-          protectedStartIndex,
-          protectedEndIndex);
-    if (window.StartIndex == _windowStartIndex && window.EndIndex == _windowEndIndex)
-    {
-      return;
+          requestedStart,
+          requestedEnd,
+          currentStart = _windowStartIndex,
+          currentEnd = _windowEndIndex
+        });
+        return;
+      }
+
+      int direction = reason.EndsWith("-up", StringComparison.OrdinalIgnoreCase)
+        ? -1
+        : reason.EndsWith("-down", StringComparison.OrdinalIgnoreCase)
+          ? 1
+          : 0;
+      TranscriptWindow window = direction == 0
+        ? document.CreateWindow(focalIndex, GetVirtualViewportHeight())
+        : document.CreateShiftedWindow(
+            focalIndex,
+            _windowStartIndex,
+            _windowEndIndex,
+            direction,
+            GetVirtualViewportHeight(),
+            protectedStartIndex,
+            protectedEndIndex);
+      if (window.StartIndex == _windowStartIndex &&
+          window.EndIndex == _windowEndIndex)
+      {
+        return;
+      }
+
+      var timer = Stopwatch.StartNew();
+      if (!await ExecuteAsync(BuildReplaceWindowScript(
+            window,
+            preserve: false,
+            anchorRecordNumber: anchorRecordNumber,
+            anchorSourceId: anchorSourceId,
+            anchorOffset: anchorOffset,
+            focusVirtualIndex: focalIndex)))
+      {
+        return;
+      }
+      _windowStartIndex = window.StartIndex;
+      _windowEndIndex = window.EndIndex;
+      bool manualScroll =
+        string.Equals(reason, "scroll-up", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(reason, "scroll-down", StringComparison.OrdinalIgnoreCase);
+      if (!manualScroll &&
+          _pendingPosition is TranscriptPlaybackPosition pending)
+      {
+        PostPlaybackPosition(pending);
+      }
+      DiagnosticLog.Write("transcript.window_rendered", new
+      {
+        reason,
+        focalIndex,
+        window.StartIndex,
+        window.EndIndex,
+        recordCount = window.Records.Count,
+        htmlCharacters = window.Html.Length,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
     }
-    var timer = Stopwatch.StartNew();
-    if (!await ExecuteAsync(BuildReplaceWindowScript(
-          window,
-          preserve: false,
-          anchorRecordNumber: anchorRecordNumber,
-          anchorSourceId: anchorSourceId,
-          anchorOffset: anchorOffset,
-          focusVirtualIndex: focalIndex)))
+    finally
     {
-      return;
+      _windowRenderGate.Release();
     }
-    _windowStartIndex = window.StartIndex;
-    _windowEndIndex = window.EndIndex;
-    bool manualScroll =
-      string.Equals(reason, "scroll-up", StringComparison.OrdinalIgnoreCase) ||
-      string.Equals(reason, "scroll-down", StringComparison.OrdinalIgnoreCase);
-    if (!manualScroll &&
-        _pendingPosition is TranscriptPlaybackPosition pending)
-    {
-      PostPlaybackPosition(pending);
-    }
-    DiagnosticLog.Write("transcript.window_rendered", new
-    {
-      reason,
-      focalIndex,
-      window.StartIndex,
-      window.EndIndex,
-      recordCount = window.Records.Count,
-      htmlCharacters = window.Html.Length,
-      elapsedMilliseconds = timer.ElapsedMilliseconds
-    });
   }
 
   private Task RenderWindowForNodeAsync(long nodeId, string reason)
@@ -3197,6 +3369,11 @@ function assignStableWordScopes(wordMap) {
       }
     }
   }
+}
+
+function installSearchWordMaps(wordMap) {
+  setAvailableWordMaps(wordMap || []);
+  assignStableWordScopes(wordMap || []);
 }
 
 function materializeRecordWords(recordNumber, sourceId) {
@@ -4390,6 +4567,8 @@ function requestVirtualShift(direction, reason = null, referenceRecord = null) {
     type:'window-shift',
     reason:reason || (direction < 0 ? 'scroll-up' : 'scroll-down'),
     focalIndex:visibleIndex,
+    sourceStartIndex:windowStartIndex,
+    sourceEndIndex:windowEndIndex,
     ...visibleRange,
     viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
