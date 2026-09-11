@@ -1,5 +1,6 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Collections;
 using System.Reflection;
 using System.Text.Json;
 
@@ -18,14 +19,10 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("ctrl-click-voice-pointer/ctrl-hold-outlines-only-addressable-words",
-        TestCtrlHoldOutlinesOnlyAddressableWords),
-      ("ctrl-click-voice-pointer/ctrl-release-and-blur-remove-outlines",
-        TestCtrlReleaseAndBlurRemoveOutlines),
-      ("ctrl-click-voice-pointer/ctrl-click-posts-exact-voice-position",
-        TestCtrlClickPostsExactVoicePosition),
-      ("ctrl-click-voice-pointer/replacement-retains-held-ctrl-affordance",
-        TestReplacementRetainsHeldCtrlAffordance)
+      ("ctrl-click-voice-pointer/current-speech-eligibility-is-authoritative",
+        TestCurrentSpeechEligibilityIsAuthoritative),
+      ("ctrl-click-voice-pointer/browser-affordance-and-click-contract",
+        TestBrowserAffordanceAndClickContract)
     };
 
     int failures = 0;
@@ -56,108 +53,97 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
   }
 
   /// <summary>
-  /// Holding Ctrl exposes exactly the rendered words with an exact speech
-  /// node/word coordinate. Unmapped display text must not look selectable.
+  /// Selectability is current playback eligibility, not merely DOM/node
+  /// mapping. Node-word coordinates remain stable when earlier fragments are
+  /// disabled, so enabling a category or fence never renumbers later words.
   /// </summary>
-  private static void TestCtrlHoldOutlinesOnlyAddressableWords()
+  private static void TestCurrentSpeechEligibilityIsAuthoritative()
   {
-    using BrowserFixture fixture = BrowserFixture.Create();
-    InstallTranscript(fixture.WebView, 42, 1, "alpha beta gamma", "alpha beta");
+    bool reasoningSpoken = false;
+    var spokenFenceTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+      "cpp"
+    };
+    using var speech = new SpeechService();
+    speech.SetPolicyProviders(
+      category => category == ContentCategory.Reasoning && !reasoningSpoken
+        ? new SpeechProfileSettings(SpeechProfileSettings.NotSpoken, 0, 0)
+        : new SpeechProfileSettings("Test voice", 0, 0),
+      fenceType => spokenFenceTypes.Contains(fenceType),
+      () => Array.Empty<string>(),
+      () => PronunciationRuleSet.Parse(string.Empty),
+      () => AudioWakeSettings.Default);
 
-    JsonElement result = ExecuteJsonProbe(
-      fixture.WebView,
-      """
-(() => {
-  window.dispatchEvent(new KeyboardEvent('keydown', {
-    key:'Control',
-    code:'ControlLeft',
-    ctrlKey:true,
-    bubbles:true
-  }));
-  const selectable = [...document.querySelectorAll('.word[data-node-word-index]')]
-    .map(word => ({
-      text:word.textContent,
-      nodeId:Number(word.dataset.nodeId || 0),
-      nodeWordIndex:Number(word.dataset.nodeWordIndex ?? -1)
-    }));
-  return JSON.stringify({
-    mode:document.body.classList.contains('voice-pointer-select-mode'),
-    selectable,
-    gammaSelectable:[...document.querySelectorAll('.word')]
-      .some(word => word.textContent === 'gamma' &&
-        word.hasAttribute('data-node-word-index'))
-  });
-})()
-""");
+    SpeechFragment[] fragments =
+    {
+      new(42, ContentCategory.Assistant, SpeechFragmentKind.Prose, "alpha beta"),
+      new(42, ContentCategory.Reasoning, SpeechFragmentKind.Prose, "hidden"),
+      new(
+        42,
+        ContentCategory.Assistant,
+        SpeechFragmentKind.FencedCodeLine,
+        "gamma",
+        FenceType: "python"),
+      new(
+        42,
+        ContentCategory.Assistant,
+        SpeechFragmentKind.FencedCodeLine,
+        "delta",
+        FenceType: "cpp")
+    };
+    speech.LoadHistory(
+      fragments,
+      Array.Empty<TurnCompletion>(),
+      Array.Empty<BackgroundWorkEvent>(),
+      PlaybackStartMode.Beginning);
 
-    Require(result.GetProperty("mode").GetBoolean(),
-      "Holding Ctrl did not enable the voice-pointer selection affordance.");
-    JsonElement selectable = result.GetProperty("selectable");
-    Require(selectable.GetArrayLength() == 2,
-      "Ctrl affordance did not expose exactly the two voiced words.");
-    Require(selectable[0].GetProperty("text").GetString() == "alpha" &&
-        selectable[0].GetProperty("nodeId").GetInt64() == 42 &&
-        selectable[0].GetProperty("nodeWordIndex").GetInt32() == 0,
-      "First selectable word has the wrong speech coordinate.");
-    Require(selectable[1].GetProperty("text").GetString() == "beta" &&
-        selectable[1].GetProperty("nodeId").GetInt64() == 42 &&
-        selectable[1].GetProperty("nodeWordIndex").GetInt32() == 1,
-      "Second selectable word has the wrong speech coordinate.");
-    Require(!result.GetProperty("gammaSelectable").GetBoolean(),
-      "Unmapped display text was incorrectly advertised as selectable.");
+    MethodInfo getRanges = typeof(SpeechService).GetMethod(
+      "GetSeekableTranscriptWordRanges",
+      BindingFlags.Instance | BindingFlags.Public) ??
+      throw new InvalidOperationException(
+        "SpeechService.GetSeekableTranscriptWordRanges() is missing.");
+
+    TranscriptRangeProbe[] initial = ReadRanges(getRanges.Invoke(speech, null));
+    RequireRanges(
+      initial,
+      new TranscriptRangeProbe(42, 0, 2),
+      new TranscriptRangeProbe(42, 4, 1));
+
+    Require(!speech.TrySeekToTranscriptWord(42, 2, out _),
+      "A currently Not Spoken reasoning word was seekable.");
+    Require(!speech.TrySeekToTranscriptWord(42, 3, out _),
+      "A currently disabled fenced-code word was seekable.");
+    Require(speech.TrySeekToTranscriptWord(42, 4, out string delta) &&
+        delta == "delta",
+      "Stable node-global word index 4 did not seek the eligible later word.");
+
+    reasoningSpoken = true;
+    TranscriptRangeProbe[] reasoningEnabled = ReadRanges(
+      getRanges.Invoke(speech, null));
+    RequireRanges(
+      reasoningEnabled,
+      new TranscriptRangeProbe(42, 0, 3),
+      new TranscriptRangeProbe(42, 4, 1));
+    Require(speech.TrySeekToTranscriptWord(42, 2, out string hidden) &&
+        hidden == "hidden",
+      "Enabling reasoning did not make its existing stable word coordinate seekable.");
+
+    spokenFenceTypes.Add("python");
+    TranscriptRangeProbe[] allEnabled = ReadRanges(getRanges.Invoke(speech, null));
+    RequireRanges(allEnabled, new TranscriptRangeProbe(42, 0, 5));
+    Require(speech.TrySeekToTranscriptWord(42, 3, out string gamma) &&
+        gamma == "gamma",
+      "Enabling the fence type did not make its stable word coordinate seekable.");
   }
 
   /// <summary>
-  /// Ctrl mode is momentary. Both key release and focus loss must clear it so
-  /// rectangles cannot remain stuck when modifier state is lost.
+  /// Ctrl is a momentary discoverability affordance: only currently eligible
+  /// mapped words are boxed and clickable, replacement inherits held state,
+  /// ordinary click is untouched, and key release or blur removes the boxes.
   /// </summary>
-  private static void TestCtrlReleaseAndBlurRemoveOutlines()
+  private static void TestBrowserAffordanceAndClickContract()
   {
     using BrowserFixture fixture = BrowserFixture.Create();
-    InstallTranscript(fixture.WebView, 42, 1, "alpha beta", "alpha beta");
-
-    JsonElement result = ExecuteJsonProbe(
-      fixture.WebView,
-      """
-(() => {
-  const ctrlDown = () => window.dispatchEvent(new KeyboardEvent('keydown', {
-    key:'Control',
-    code:'ControlLeft',
-    ctrlKey:true,
-    bubbles:true
-  }));
-  ctrlDown();
-  const afterDown = document.body.classList.contains('voice-pointer-select-mode');
-  window.dispatchEvent(new KeyboardEvent('keyup', {
-    key:'Control',
-    code:'ControlLeft',
-    ctrlKey:false,
-    bubbles:true
-  }));
-  const afterUp = document.body.classList.contains('voice-pointer-select-mode');
-  ctrlDown();
-  window.dispatchEvent(new Event('blur'));
-  const afterBlur = document.body.classList.contains('voice-pointer-select-mode');
-  return JSON.stringify({afterDown, afterUp, afterBlur});
-})()
-""");
-
-    Require(result.GetProperty("afterDown").GetBoolean(),
-      "Ctrl-down did not enable selection mode.");
-    Require(!result.GetProperty("afterUp").GetBoolean(),
-      "Ctrl-up did not remove selectable-word rectangles.");
-    Require(!result.GetProperty("afterBlur").GetBoolean(),
-      "Window blur did not clear Ctrl selection mode.");
-  }
-
-  /// <summary>
-  /// Only Ctrl+click on an addressable word may request a seek, and the posted
-  /// coordinate must identify the exact clicked speech token.
-  /// </summary>
-  private static void TestCtrlClickPostsExactVoicePosition()
-  {
-    using BrowserFixture fixture = BrowserFixture.Create();
-    InstallTranscript(fixture.WebView, 42, 1, "alpha beta gamma", "alpha beta");
     var seekMessage = new TaskCompletionSource<JsonElement>(
       TaskCreationOptions.RunContinuationsAsynchronously);
     int seekCount = 0;
@@ -181,6 +167,41 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     fixture.WebView.CoreWebView2.WebMessageReceived += MessageReceived;
     try
     {
+      JsonElement initial = ExecuteJsonProbe(
+        fixture.WebView,
+        """
+(() => {
+  replaceTranscript(
+    '<span class="record-anchor" data-jsonl-record="1"></span>' +
+      '<p>alpha beta gamma</p>',
+    false,
+    [{NodeId:42, RecordNumber:1, Segments:['alpha beta gamma']}]);
+  setSeekableVoiceRanges([{NodeId:42, StartNodeWordIndex:0, WordCount:2}]);
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key:'Control', code:'ControlLeft', ctrlKey:true, bubbles:true
+  }));
+  const words = [...document.querySelectorAll('.word')].map(word => ({
+    text:word.textContent,
+    nodeId:Number(word.dataset.nodeId || 0),
+    nodeWordIndex:Number(word.dataset.nodeWordIndex ?? -1),
+    selectable:word.dataset.voiceSelectable === '1'
+  }));
+  return JSON.stringify({
+    mode:document.body.classList.contains('voice-pointer-select-mode'),
+    words
+  });
+})()
+""");
+
+      Require(initial.GetProperty("mode").GetBoolean(),
+        "Holding Ctrl did not enable the voice-pointer selection affordance.");
+      JsonElement words = initial.GetProperty("words");
+      Require(words.GetArrayLength() == 3,
+        "Browser fixture did not materialize all three mapped words.");
+      RequireWord(words[0], "alpha", 42, 0, selectable: true);
+      RequireWord(words[1], "beta", 42, 1, selectable: true);
+      RequireWord(words[2], "gamma", 42, 2, selectable: false);
+
       ExecuteScript(
         fixture.WebView,
         """
@@ -191,22 +212,16 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     .find(word => word.textContent === 'gamma');
   if (!alpha || !gamma) throw new Error('Fixture words are missing.');
   alpha.dispatchEvent(new MouseEvent('click', {
-    button:0,
-    ctrlKey:false,
-    bubbles:true,
-    cancelable:true
+    button:0, ctrlKey:false, bubbles:true, cancelable:true
   }));
   gamma.dispatchEvent(new MouseEvent('click', {
-    button:0,
-    ctrlKey:true,
-    bubbles:true,
-    cancelable:true
+    button:0, ctrlKey:true, bubbles:true, cancelable:true
   }));
 })()
 """);
       PumpFor(150);
       Require(seekCount == 0,
-        "Ordinary click or Ctrl+click on an unmapped word requested a seek.");
+        "Ordinary click or Ctrl+click on a currently ineligible word requested a seek.");
 
       ExecuteScript(
         fixture.WebView,
@@ -216,22 +231,54 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     .find(word => word.textContent === 'beta');
   if (!beta) throw new Error('Selectable beta word is missing.');
   beta.dispatchEvent(new MouseEvent('click', {
-    button:0,
-    ctrlKey:true,
-    bubbles:true,
-    cancelable:true
+    button:0, ctrlKey:true, bubbles:true, cancelable:true
   }));
 })()
 """);
       PumpUntilCompleted(seekMessage.Task, "issue #73 Ctrl+click seek message");
-      JsonElement result = seekMessage.Task.Result;
-
+      JsonElement seek = seekMessage.Task.Result;
       Require(seekCount == 1,
         "Ctrl+click emitted more than one voice-pointer seek request.");
-      Require(result.GetProperty("nodeId").GetInt64() == 42,
-        "Ctrl+click posted the wrong speech node id.");
-      Require(result.GetProperty("nodeWordIndex").GetInt32() == 1,
-        "Ctrl+click posted the wrong speech word index.");
+      Require(seek.GetProperty("nodeId").GetInt64() == 42 &&
+          seek.GetProperty("nodeWordIndex").GetInt32() == 1,
+        "Ctrl+click did not post the exact clicked speech coordinate.");
+
+      JsonElement replacement = ExecuteJsonProbe(
+        fixture.WebView,
+        """
+(() => {
+  setSeekableVoiceRanges([{NodeId:99, StartNodeWordIndex:0, WordCount:2}]);
+  replaceTranscript(
+    '<span class="record-anchor" data-jsonl-record="2"></span>' +
+      '<p>delta epsilon tail</p>',
+    false,
+    [{NodeId:99, RecordNumber:2, Segments:['delta epsilon tail']}]);
+  const selectable = [...document.querySelectorAll('.word')]
+    .filter(word => word.dataset.voiceSelectable === '1')
+    .map(word => word.textContent);
+  window.dispatchEvent(new KeyboardEvent('keyup', {
+    key:'Control', code:'ControlLeft', ctrlKey:false, bubbles:true
+  }));
+  const afterUp = document.body.classList.contains('voice-pointer-select-mode');
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key:'Control', code:'ControlLeft', ctrlKey:true, bubbles:true
+  }));
+  window.dispatchEvent(new Event('blur'));
+  const afterBlur = document.body.classList.contains('voice-pointer-select-mode');
+  return JSON.stringify({
+    heldThroughReplacement:selectable.join(' ') === 'delta epsilon',
+    afterUp,
+    afterBlur
+  });
+})()
+""");
+
+      Require(replacement.GetProperty("heldThroughReplacement").GetBoolean(),
+        "Newly materialized eligible words did not inherit held-Ctrl affordances.");
+      Require(!replacement.GetProperty("afterUp").GetBoolean(),
+        "Ctrl-up did not remove selectable-word rectangles.");
+      Require(!replacement.GetProperty("afterBlur").GetBoolean(),
+        "Window blur did not clear Ctrl selection mode.");
     }
     finally
     {
@@ -239,81 +286,75 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     }
   }
 
-  /// <summary>
-  /// The Ctrl-held affordance is represented as page state rather than a
-  /// one-time mutation of existing words, so newly materialized words inherit
-  /// the rectangles without another key transition.
-  /// </summary>
-  private static void TestReplacementRetainsHeldCtrlAffordance()
+  private static TranscriptRangeProbe[] ReadRanges(object? value)
   {
-    using BrowserFixture fixture = BrowserFixture.Create();
-    InstallTranscript(fixture.WebView, 42, 1, "alpha beta", "alpha beta");
+    if (value is not IEnumerable ranges)
+    {
+      throw new InvalidOperationException(
+        "GetSeekableTranscriptWordRanges() returned no enumerable result.");
+    }
 
-    JsonElement result = ExecuteJsonProbe(
-      fixture.WebView,
-      """
-(() => {
-  window.dispatchEvent(new KeyboardEvent('keydown', {
-    key:'Control',
-    code:'ControlLeft',
-    ctrlKey:true,
-    bubbles:true
-  }));
-  replaceTranscript(
-    '<span class="record-anchor" data-jsonl-record="2"></span>' +
-      '<p>delta epsilon tail</p>',
-    false,
-    [{NodeId:99, RecordNumber:2, Segments:['delta epsilon']}]);
-  return JSON.stringify({
-    mode:document.body.classList.contains('voice-pointer-select-mode'),
-    selectable:[...document.querySelectorAll('.word[data-node-word-index]')]
-      .map(word => ({
-        text:word.textContent,
-        nodeId:Number(word.dataset.nodeId || 0),
-        nodeWordIndex:Number(word.dataset.nodeWordIndex ?? -1)
-      }))
-  });
-})()
-""");
-
-    Require(result.GetProperty("mode").GetBoolean(),
-      "Window replacement dropped held-Ctrl selection mode.");
-    JsonElement selectable = result.GetProperty("selectable");
-    Require(selectable.GetArrayLength() == 2,
-      "Newly materialized voiced words did not inherit Ctrl affordances.");
-    Require(selectable[0].GetProperty("text").GetString() == "delta" &&
-        selectable[0].GetProperty("nodeId").GetInt64() == 99 &&
-        selectable[0].GetProperty("nodeWordIndex").GetInt32() == 0,
-      "Replacement mapped the first selectable word incorrectly.");
-    Require(selectable[1].GetProperty("text").GetString() == "epsilon" &&
-        selectable[1].GetProperty("nodeWordIndex").GetInt32() == 1,
-      "Replacement mapped the second selectable word incorrectly.");
+    var result = new List<TranscriptRangeProbe>();
+    foreach (object? item in ranges)
+    {
+      if (item is null)
+      {
+        continue;
+      }
+      Type type = item.GetType();
+      result.Add(new TranscriptRangeProbe(
+        ReadInt64Property(type, item, "NodeId"),
+        ReadInt32Property(type, item, "StartNodeWordIndex"),
+        ReadInt32Property(type, item, "WordCount")));
+    }
+    return result.ToArray();
   }
 
-  private static void InstallTranscript(
-    WebView2 webView,
-    long nodeId,
-    int recordNumber,
-    string visibleText,
-    string segment)
+  private static long ReadInt64Property(Type type, object instance, string name)
   {
-    string script =
-      "replaceTranscript(" +
-      JsonSerializer.Serialize(
-        $"<span class=\"record-anchor\" data-jsonl-record=\"{recordNumber}\"></span>" +
-        $"<p>{visibleText}</p>") +
-      ",false," +
-      JsonSerializer.Serialize(new[]
-      {
-        new
-        {
-          NodeId = nodeId,
-          RecordNumber = recordNumber,
-          Segments = new[] { segment }
-        }
-      }) +
-      ");";
-    ExecuteScript(webView, script);
+    return type.GetProperty(name)?.GetValue(instance) is long value
+      ? value
+      : throw new InvalidOperationException($"Range property {name} is missing.");
+  }
+
+  private static int ReadInt32Property(Type type, object instance, string name)
+  {
+    return type.GetProperty(name)?.GetValue(instance) is int value
+      ? value
+      : throw new InvalidOperationException($"Range property {name} is missing.");
+  }
+
+  private static void RequireRanges(
+    IReadOnlyList<TranscriptRangeProbe> actual,
+    params TranscriptRangeProbe[] expected)
+  {
+    Require(actual.Count == expected.Length,
+      $"Expected {expected.Length} seekable range(s), found {actual.Count}.");
+    for (int index = 0; index < expected.Length; ++index)
+    {
+      Require(actual[index] == expected[index],
+        $"Seekable range {index} was {actual[index]}, expected {expected[index]}.");
+    }
+  }
+
+  private static void RequireWord(
+    JsonElement word,
+    string text,
+    long nodeId,
+    int nodeWordIndex,
+    bool selectable)
+  {
+    Require(string.Equals(
+        word.GetProperty("text").GetString(),
+        text,
+        StringComparison.Ordinal),
+      $"Expected rendered word {text}.");
+    Require(word.GetProperty("nodeId").GetInt64() == nodeId,
+      $"Rendered word {text} has the wrong node id.");
+    Require(word.GetProperty("nodeWordIndex").GetInt32() == nodeWordIndex,
+      $"Rendered word {text} has the wrong node-global word index.");
+    Require(word.GetProperty("selectable").GetBoolean() == selectable,
+      $"Rendered word {text} has the wrong current speech eligibility.");
   }
 
   private static JsonElement ExecuteJsonProbe(WebView2 webView, string script)
@@ -364,6 +405,11 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
       throw new InvalidOperationException(message);
     }
   }
+
+  private readonly record struct TranscriptRangeProbe(
+    long NodeId,
+    int StartNodeWordIndex,
+    int WordCount);
 
   private sealed class BrowserFixture : IDisposable
   {
