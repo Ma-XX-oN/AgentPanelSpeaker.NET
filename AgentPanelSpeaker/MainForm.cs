@@ -19,6 +19,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmGetLineCount = 0x00BA;
   private const int EmLineScroll = 0x00B6;
   private const int WmSetRedraw = 0x000B;
+  private const int WmActivateApp = 0x001C;
   private const int WmKeyDown = 0x0100;
   private const int WmKeyUp = 0x0101;
   private const int WmLButtonDown = 0x0201;
@@ -670,15 +671,29 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     Activated += (_, _) =>
+    {
+      bool foregroundIsCurrentProcess = IsWindowFromCurrentProcess(
+        GetForegroundWindowForTabDiagnostics());
       _transcriptView.SetVoicePointerSelectMode(
-        (Control.ModifierKeys & Keys.Control) != 0);
+        ResolveVoicePointerSelectModeForActivation(
+          (Control.ModifierKeys & Keys.Control) != 0,
+          foregroundIsCurrentProcess));
+    };
     Deactivate += (_, _) =>
     {
-      _transcriptView.SetVoicePointerSelectMode(false);
+      bool foregroundIsCurrentProcess = IsWindowFromCurrentProcess(
+        GetForegroundWindowForTabDiagnostics());
+      _transcriptView.SetVoicePointerSelectMode(
+        ResolveVoicePointerSelectModeForActivation(
+          (Control.ModifierKeys & Keys.Control) != 0,
+          foregroundIsCurrentProcess));
       PopupFormBase.WriteActivationDiagnostics(
         "mainform-deactivate-event",
         this);
-      HoverPopupController.HandleOwnerDeactivated(this);
+      if (!foregroundIsCurrentProcess)
+      {
+        HoverPopupController.HandleOwnerDeactivated(this);
+      }
     };
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
@@ -2742,10 +2757,49 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Resolves whether the Ctrl voice-pointer affordance remains active while
+  /// focus moves between top-level windows owned by this process.
+  /// </summary>
+  internal static bool ResolveVoicePointerSelectModeForActivation(
+    bool controlHeld,
+    bool foregroundIsCurrentProcess) =>
+    controlHeld && foregroundIsCurrentProcess;
+
+  /// <summary>
+  /// Returns whether one top-level message source belongs to the MainForm or
+  /// another top-level window owned by this process.
+  /// </summary>
+  internal static bool ShouldRouteVoicePointerMessageSource(
+    bool isMainFormRoot,
+    bool rootIsCurrentProcess) =>
+    isMainFormRoot || rootIsCurrentProcess;
+
+  private static bool IsWindowFromCurrentProcess(IntPtr window)
+  {
+    if (window == IntPtr.Zero)
+    {
+      return false;
+    }
+    _ = GetWindowThreadProcessIdForTabDiagnostics(window, out uint processId);
+    return processId == (uint)Environment.ProcessId;
+  }
+
+  /// <summary>
   /// Handles transport hotkeys before focused child windows consume them.
   /// </summary>
   public bool PreFilterMessage(ref Message message)
   {
+    if (message.Msg == WmActivateApp)
+    {
+      bool foregroundIsCurrentProcess = IsWindowFromCurrentProcess(
+        GetForegroundWindowForTabDiagnostics());
+      _transcriptView.SetVoicePointerSelectMode(
+        ResolveVoicePointerSelectModeForActivation(
+          (Control.ModifierKeys & Keys.Control) != 0,
+          foregroundIsCurrentProcess));
+      return false;
+    }
+
     if (message.Msg is WmLButtonDown or WmRButtonDown or
         WmMButtonDown or WmXButtonDown or
         WmNcLButtonDown or WmNcRButtonDown or
@@ -2756,7 +2810,12 @@ internal sealed class MainForm : Form, IMessageFilter
       return false;
     }
 
-    if (GetAncestor(message.HWnd, GaRoot) != Handle)
+    IntPtr messageRoot = GetAncestor(message.HWnd, GaRoot);
+    bool isMainFormRoot = messageRoot == Handle;
+    bool rootIsCurrentProcess = IsWindowFromCurrentProcess(messageRoot);
+    if (!ShouldRouteVoicePointerMessageSource(
+          isMainFormRoot,
+          rootIsCurrentProcess))
     {
       return false;
     }

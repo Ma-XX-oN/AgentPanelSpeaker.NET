@@ -220,6 +220,10 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
+    if (_initialized)
+    {
+      _ = ExecuteAsync("resetDisclosureOpenOverrides();");
+    }
     _pendingPosition = null;
     _lastLocatedContentPosition = null;
     CancelSearchIndexBuild();
@@ -263,7 +267,8 @@ internal sealed class TranscriptView : UserControl
     ShowLoading("Select a session to view its transcript.");
     if (_initialized)
     {
-      _ = ExecuteAsync("replaceTranscript('', false, []);");
+      _ = ExecuteAsync(
+        "resetDisclosureOpenOverrides(); replaceTranscript('', false, []);");
     }
   }
 
@@ -2716,6 +2721,9 @@ let findVoicedEnabled = true;
 let findCurrentWords = [];
 let findInputTimer = 0;
 let seekableVoiceRanges = [];
+const openDisclosureOverrides = new Set();
+const programmaticDisclosureStates = new WeakMap();
+let discardDisclosureStateOnNextReplacement = false;
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(
@@ -2830,8 +2838,41 @@ function structureDetailsKey(details) {
   const summaryText = summary
     ? summary.textContent.trim().replace(/\s+/g, ' ')
     : '';
-  return 'summary:' + summaryText;
+  const turn = details.closest('section.transcript-turn');
+  const turnId = turn?.getAttribute('data-presentation-id') || '';
+  const anchor = details.querySelector('.record-anchor') ||
+    turn?.querySelector('.record-anchor');
+  const recordNumber = anchor?.getAttribute('data-jsonl-record') || '';
+  const sourceId = anchor?.getAttribute('data-source-id') || '';
+  return 'fallback:' + turnId + ':' + recordNumber + ':' + sourceId + ':' +
+    summaryText;
 }
+
+function resetDisclosureOpenOverrides() {
+  openDisclosureOverrides.clear();
+  discardDisclosureStateOnNextReplacement = true;
+}
+
+function setDisclosureOpenProgrammatically(details, open) {
+  const requested = !!open;
+  if (!details || details.open === requested) return;
+  programmaticDisclosureStates.set(details, requested);
+  details.open = requested;
+}
+
+transcript.addEventListener('toggle', event => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const expected = programmaticDisclosureStates.get(details);
+  if (expected !== undefined && expected === details.open) {
+    programmaticDisclosureStates.delete(details);
+    return;
+  }
+  const key = structureDetailsKey(details);
+  if (!key) return;
+  if (details.open) openDisclosureOverrides.add(key);
+  else openDisclosureOverrides.delete(key);
+}, true);
 
 function normalizeStructureEntries(entries) {
   const result = new Map();
@@ -3072,8 +3113,13 @@ function replaceTranscriptDom(
     'dom-model-serialized-html');
   for (const details of transcript.querySelectorAll('details')) {
     const key = structureDetailsKey(details);
-    if (openDetails.has(key)) details.open = openDetails.get(key);
+    if (openDetails.has(key)) {
+      setDisclosureOpenProgrammatically(details, openDetails.get(key));
+    } else if (openDisclosureOverrides.has(key)) {
+      setDisclosureOpenProgrammatically(details, true);
+    }
   }
+  discardDisclosureStateOnNextReplacement = false;
   currentStructureMap = postStructureStage(
     structureProbeId,
     'after-details-restore',
@@ -3181,9 +3227,14 @@ function replaceTranscriptWindow(
   const nearBottom = document.documentElement.scrollHeight -
     (window.scrollY + window.innerHeight) < 80;
   const previousY = window.scrollY;
-  const openDetails = preserve
-    ? [...transcript.querySelectorAll('details')].map(x => x.open)
-    : [];
+  const localDetailsState = new Map();
+  if (!discardDisclosureStateOnNextReplacement) {
+    for (const details of transcript.querySelectorAll('details')) {
+      const key = structureDetailsKey(details);
+      localDetailsState.set(key, details.open);
+      if (!details.open) openDisclosureOverrides.delete(key);
+    }
+  }
   // Replacing spacer heights and materialized records can itself change
   // scrollY.  Mark that layout-induced movement as programmatic.  Genuine
   // wheel/touch/scroll-key/scrollbar input can explicitly override this guard.
@@ -3212,9 +3263,15 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-inner-html';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
-  [...transcript.querySelectorAll('details')].forEach((item, index) => {
-    if (index < openDetails.length) item.open = openDetails[index];
-  });
+  for (const details of transcript.querySelectorAll('details')) {
+    const key = structureDetailsKey(details);
+    if (localDetailsState.has(key)) {
+      setDisclosureOpenProgrammatically(details, localDetailsState.get(key));
+    } else if (openDisclosureOverrides.has(key)) {
+      setDisclosureOpenProgrammatically(details, true);
+    }
+  }
+  discardDisclosureStateOnNextReplacement = false;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-details-restore',
@@ -3705,6 +3762,77 @@ function setSeekableVoiceRanges(ranges) {
   applyVoiceEligibilityClasses();
 }
 
+function lexicalWordsCanJoin(left, right) {
+  if (!left || !right) return false;
+  try {
+    const range = document.createRange();
+    range.setStartAfter(left);
+    range.setEndBefore(right);
+    return !/\s/u.test(range.toString());
+  } catch {
+    return false;
+  }
+}
+
+function findSpeechLexicalAlignment(collection, target, startAt) {
+  if (!collection.length || !target.length) return null;
+  const first = Math.max(0, Number(startAt) || 0);
+  for (let candidate = first; candidate < collection.length; ++candidate) {
+    let cursor = candidate;
+    const groups = [];
+    let matched = true;
+    for (const targetToken of target) {
+      const groupStart = cursor;
+      let combined = '';
+      let complete = false;
+      while (cursor < collection.length) {
+        if (cursor > groupStart &&
+            !lexicalWordsCanJoin(collection[cursor - 1], collection[cursor])) {
+          break;
+        }
+        const piece = collection[cursor].dataset.normalized || '';
+        if (!piece) break;
+        combined += piece;
+        if (!targetToken.startsWith(combined)) break;
+        const groupEnd = cursor;
+        ++cursor;
+        if (combined === targetToken) {
+          groups.push({start:groupStart, end:groupEnd});
+          complete = true;
+          break;
+        }
+      }
+      if (!complete) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return groups;
+  }
+  return null;
+}
+
+function markAlignedVoiceSelectableWords(
+  collection,
+  groups,
+  nodeId,
+  startNodeWordIndex,
+  speechTokenOffsets) {
+  for (let targetIndex = 0; targetIndex < groups.length; ++targetIndex) {
+    const speechTokenOffset = speechTokenOffsets[targetIndex];
+    if (speechTokenOffset === undefined) continue;
+    const group = groups[targetIndex];
+    for (let index = group.start; index <= group.end; ++index) {
+      const word = collection[index];
+      if (!word) continue;
+      word.classList.add('voice-selectable');
+      word.dataset.nodeId = String(nodeId);
+      word.dataset.nodeWordIndex = String(
+        startNodeWordIndex + speechTokenOffset);
+    }
+  }
+}
+
 function assignNodeScopes(nodeMap) {
   ++mappingGeneration;
   knownNodeIds = new Set();
@@ -3823,6 +3951,43 @@ function assignNodeScopes(nodeMap) {
         continue;
       }
 
+      let lexicalAlignment = findSpeechLexicalAlignment(
+        recordLexicalWords,
+        lexicalTarget,
+        lexicalCursor);
+      if (!lexicalAlignment && lexicalCursor > 0) {
+        lexicalAlignment = findSpeechLexicalAlignment(
+          recordLexicalWords,
+          lexicalTarget,
+          0);
+      }
+      if (lexicalAlignment && lexicalAlignment.length) {
+        const firstGroup = lexicalAlignment[0];
+        const lastGroup = lexicalAlignment[lexicalAlignment.length - 1];
+        const firstWord = recordLexicalWords[firstGroup.start];
+        const lastWord = recordLexicalWords[lastGroup.end];
+        const tokenStart = Number(firstWord.dataset.index);
+        const tokenEnd = Number(lastWord.dataset.index);
+        markNodeRange(tokenStart, tokenEnd, nodeId);
+        markAlignedVoiceSelectableWords(
+          recordLexicalWords,
+          lexicalAlignment,
+          nodeId,
+          segmentNodeWordStart,
+          speechTokenOffsets);
+        rememberSegmentRange(
+          nodeId,
+          tokenStart,
+          tokenEnd,
+          displayTarget,
+          lexicalTarget);
+        lexicalCursor = lastGroup.end + 1;
+        displayCursor = Number(lastWord.dataset.recordIndex) + 1;
+        lexicalCursors.set(key, lexicalCursor);
+        displayCursors.set(key, displayCursor);
+        continue;
+      }
+
       const failureKey = nodeId + ':' + recordNumber + ':' + segment;
       if (!reportedMappingFailures.has(failureKey)) {
         reportedMappingFailures.add(failureKey);
@@ -3932,7 +4097,7 @@ function openAncestors(element) {
   let parent = element?.parentElement;
   while (parent) {
     if (parent.tagName === 'DETAILS' && !parent.open) {
-      parent.open = true;
+      setDisclosureOpenProgrammatically(parent, true);
       ++opened;
     }
     parent = parent.parentElement;
