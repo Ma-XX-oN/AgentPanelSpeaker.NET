@@ -26,7 +26,7 @@ jobs:
 
       - name: Apply issue 73 production implementation
         shell: pwsh
-        run: python scripts/apply-issue73-production.py
+        run: python scripts/apply-issue73-production-v2.py
 
       - name: Verify production patch scope
         shell: pwsh
