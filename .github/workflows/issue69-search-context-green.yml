@@ -1,0 +1,61 @@
+name: Issue 69 search predecessor GREEN
+
+on:
+  push:
+    branches:
+      - issue-69-search-preceding-context
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: ${{ !contains(github.event.head_commit.message, '[issue69-green-applied]') }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply production fix
+        run: python scripts/apply-issue69-search-predecessor-fix.py
+
+      - name: Build application
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run issue 54 real-session regressions
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite real-session-fixes
+
+      - name: Run virtual-window regressions
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Run complete built regression suite
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
+          ./tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Validate whitespace
+        run: git diff --check
+
+      - name: Commit verified production fix
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AgentPanelSpeaker/TranscriptVirtualDocument.cs AgentPanelSpeaker/TranscriptView.cs
+          git commit -m "fix: retain preceding context for Find materialization (#69) [issue69-red-applied] [issue69-green-applied]"
+          git push origin HEAD:issue-69-search-preceding-context
