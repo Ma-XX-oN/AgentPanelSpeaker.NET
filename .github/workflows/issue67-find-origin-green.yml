@@ -1,0 +1,58 @@
+name: Issue 67 Find-origin GREEN
+
+on:
+  push:
+    branches:
+      - issue-67-find-origin
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: ${{ !contains(github.event.head_commit.message, '[issue67-applied]') }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply production fix
+        run: python scripts/apply-issue67-find-origin-fix.py
+
+      - name: Build application
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run issue 67 regressions
+        run: AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe --test find-origin
+
+      - name: Run word materialization regressions
+        run: AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe --test word-materialization
+
+      - name: Run virtual-window regressions
+        run: AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe --test virtual-window
+
+      - name: Run issue 65 redundancy regressions
+        run: AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe --test redundancy
+
+      - name: Validate whitespace
+        run: git diff --check
+
+      - name: Commit verified production change
+        shell: pwsh
+        run: |
+          git config user.name "Ma-XX-oN"
+          git config user.email "Ma-XX-oN@users.noreply.github.com"
+          git add AgentPanelSpeaker/TranscriptView.cs
+          if (git diff --cached --quiet) {
+            throw "Issue #67 helper produced no production change."
+          }
+          git commit -m "fix: preserve previous Find origin (#67) [issue67-applied]"
+          git push origin HEAD:issue-67-find-origin
