@@ -1,0 +1,87 @@
+name: Issue 73 VS REDs
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: ${{ contains(github.event.head_commit.message, '[issue73-vs-reds]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Stage permanent regressions
+        shell: pwsh
+        run: python scripts/apply-issue73-vs-reds.py
+
+      - name: Verify RED diff scope
+        shell: pwsh
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'RED git diff --check failed.' }
+          $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3) } | Sort-Object)
+          $expected = @(
+            'AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs',
+            'AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs'
+          )
+          if (($changed -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected RED changes: $($changed -join ', ')"
+          }
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact REDs
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          function Capture-Suite([string]$suite) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-red-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-red-stderr.txt')
+            $process = Start-Process -FilePath $exe -ArgumentList @('--test', $suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            return @{ ExitCode = $process.ExitCode; Text = $text }
+          }
+
+          $ctrl = Capture-Suite 'ctrl-click-voice-pointer'
+          if ($ctrl.ExitCode -eq 0) { throw 'Owned-popup regression unexpectedly passed before production fix.' }
+          if ($ctrl.Text -notmatch 'PASS: 4/5 issue #73 Ctrl\+click tests passed\.') {
+            throw 'Issue #73 RED did not preserve all four existing GREEN regressions.'
+          }
+          if ($ctrl.Text -notmatch 'FAIL  ctrl-click-voice-pointer/owned-popup-focus-preserves-held-ctrl') {
+            throw 'Issue #73 owned-popup RED did not fail for the intended invariant.'
+          }
+
+          $virtual = Capture-Suite 'virtual-window'
+          if ($virtual.ExitCode -eq 0) { throw 'Disclosure-state regression unexpectedly passed before production fix.' }
+          if ($virtual.Text -notmatch 'PASS: 10/11 issue #37 virtual-window tests passed\.') {
+            throw 'Issue #37 RED did not preserve all ten existing GREEN regressions.'
+          }
+          if ($virtual.Text -notmatch 'FAIL  virtual-window/manual-scroll-preserves-disclosure-state') {
+            throw 'Issue #37 disclosure-state RED did not fail for the intended invariant.'
+          }
+
+      - name: Commit permanent REDs
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs
+          git commit -m 'test: reproduce popup Ctrl loss and disclosure collapse (#73) [issue73-vs-reds-recorded]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
