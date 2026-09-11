@@ -28,4 +28,9 @@ if count != 1:
   raise SystemExit(
     f"production helper: expected one ambiguous policy block, found {count}")
 source = source.replace(old, new, 1)
-exec(compile(source, str(source_path), "exec"), {"__name__": "__main__"})
+exec(
+  compile(source, str(source_path), "exec"),
+  {
+    "__name__": "__main__",
+    "__file__": str(source_path),
+  })
