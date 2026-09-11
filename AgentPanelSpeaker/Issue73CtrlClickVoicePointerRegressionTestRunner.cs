@@ -177,17 +177,23 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     false,
     [{NodeId:42, RecordNumber:1, Segments:['alpha beta gamma']}]);
   setSeekableVoiceRanges([{NodeId:42, StartNodeWordIndex:0, WordCount:2}]);
+  const renderedWords = [...document.querySelectorAll('.word')];
+  const classesBeforeCtrl = renderedWords.map(word => word.className);
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key:'Control', code:'ControlLeft', ctrlKey:true, bubbles:true
   }));
-  const words = [...document.querySelectorAll('.word')].map(word => ({
+  const classesAfterCtrl = renderedWords.map(word => word.className);
+  const words = renderedWords.map(word => ({
     text:word.textContent,
     nodeId:Number(word.dataset.nodeId || 0),
     nodeWordIndex:Number(word.dataset.nodeWordIndex ?? -1),
-    selectable:word.dataset.voiceSelectable === '1'
+    selectable:word.classList.contains('voice-selectable'),
+    excluded:word.classList.contains('voice-excluded')
   }));
   return JSON.stringify({
     mode:document.body.classList.contains('voice-pointer-select-mode'),
+    ctrlChangedWordClasses:JSON.stringify(classesBeforeCtrl) !==
+      JSON.stringify(classesAfterCtrl),
     words
   });
 })()
@@ -195,12 +201,14 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
 
       Require(initial.GetProperty("mode").GetBoolean(),
         "Holding Ctrl did not enable the voice-pointer selection affordance.");
+      Require(!initial.GetProperty("ctrlChangedWordClasses").GetBoolean(),
+        "Ctrl-down iterated/mutated individual word classes instead of only toggling page state.");
       JsonElement words = initial.GetProperty("words");
       Require(words.GetArrayLength() == 3,
         "Browser fixture did not materialize all three mapped words.");
-      RequireWord(words[0], "alpha", 42, 0, selectable: true);
-      RequireWord(words[1], "beta", 42, 1, selectable: true);
-      RequireWord(words[2], "gamma", 42, 2, selectable: false);
+      RequireWord(words[0], "alpha", 42, 0, selectable: true, excluded: false);
+      RequireWord(words[1], "beta", 42, 1, selectable: true, excluded: false);
+      RequireWord(words[2], "gamma", 42, 2, selectable: true, excluded: true);
 
       ExecuteScript(
         fixture.WebView,
@@ -254,7 +262,8 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     false,
     [{NodeId:99, RecordNumber:2, Segments:['delta epsilon tail']}]);
   const selectable = [...document.querySelectorAll('.word')]
-    .filter(word => word.dataset.voiceSelectable === '1')
+    .filter(word => word.classList.contains('voice-selectable') &&
+      !word.classList.contains('voice-excluded'))
     .map(word => word.textContent);
   window.dispatchEvent(new KeyboardEvent('keyup', {
     key:'Control', code:'ControlLeft', ctrlKey:false, bubbles:true
@@ -342,7 +351,8 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     string text,
     long nodeId,
     int nodeWordIndex,
-    bool selectable)
+    bool selectable,
+    bool excluded)
   {
     Require(string.Equals(
         word.GetProperty("text").GetString(),
@@ -354,7 +364,9 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     Require(word.GetProperty("nodeWordIndex").GetInt32() == nodeWordIndex,
       $"Rendered word {text} has the wrong node-global word index.");
     Require(word.GetProperty("selectable").GetBoolean() == selectable,
-      $"Rendered word {text} has the wrong current speech eligibility.");
+      $"Rendered word {text} has the wrong structural selectable class.");
+    Require(word.GetProperty("excluded").GetBoolean() == excluded,
+      $"Rendered word {text} has the wrong current exclusion class.");
   }
 
   private static JsonElement ExecuteJsonProbe(WebView2 webView, string script)
