@@ -1,0 +1,68 @@
+name: Issue 67 Find-origin RED
+
+on:
+  push:
+    branches:
+      - issue-67-find-origin
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: ${{ !contains(github.event.head_commit.message, '[issue67-red-wired]') }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Wire permanent issue 67 suite
+        run: python scripts/apply-issue67-red-wiring.py
+
+      - name: Commit permanent test wiring
+        shell: pwsh
+        run: |
+          git config user.name "Ma-XX-oN"
+          git config user.email "Ma-XX-oN@users.noreply.github.com"
+          git add AgentPanelSpeaker/Program.cs
+          if (git diff --cached --quiet) {
+            throw "Issue #67 Program.cs wiring produced no change."
+          }
+          git commit -m "test: wire issue 67 Find-origin regressions [issue67-red-wired]"
+          git push origin HEAD:issue-67-find-origin
+
+      - name: Build RED test state
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove expected RED
+        shell: pwsh
+        run: |
+          $exe = "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
+          $output = & $exe --test find-origin 2>&1
+          $exit = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exit -eq 0) {
+            throw "Issue #67 unexpectedly passed before production changes."
+          }
+          $text = $output -join "`n"
+          $expected = @(
+            "FAIL  find-origin/voice-cursor-selects-first-match-at-or-after-origin",
+            "FAIL  find-origin/previous-find-location-becomes-next-search-origin",
+            "FAIL  find-origin/browser-honors-resolved-initial-match-index"
+          )
+          foreach ($line in $expected) {
+            if (-not $text.Contains($line)) {
+              throw "Expected RED failure missing: $line"
+            }
+          }
+
+      - name: Validate whitespace
+        run: git diff --check
