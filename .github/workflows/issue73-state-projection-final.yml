@@ -25,9 +25,15 @@ jobs:
         shell: pwsh
         run: |
           $expectedProduction = 'ac8a5cc85e1c21179f1943e19ccda3711b27a3e9'
-          $parent = (git rev-parse HEAD^).Trim()
-          if ($parent -ne $expectedProduction) {
-            throw "Final-validation trigger is not directly on expected production candidate: $parent"
+          git merge-base --is-ancestor $expectedProduction HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "Expected production candidate is not an ancestor of final-validation trigger."
+          }
+          $afterProduction = @(git diff --name-only $expectedProduction HEAD)
+          $allowedAfterProduction = @('.github/workflows/issue73-state-projection-final.yml')
+          $unexpected = @($afterProduction | Where-Object { $_ -notin $allowedAfterProduction })
+          if ($unexpected.Count -ne 0) {
+            throw "Non-validation files changed after production candidate: $($unexpected -join ', ')"
           }
           $core = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
           if ($core -ne '6c92799c1b14693001e8b913465f4a12b0b1e1ab') {
@@ -209,6 +215,23 @@ jobs:
       - name: Validate cleaned tree and patch integrity
         shell: pwsh
         run: |
+          $expectedCore = '6c92799c1b14693001e8b913465f4a12b0b1e1ab'
+          $coreBeforeCleanup = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($coreBeforeCleanup -ne $expectedCore) {
+            throw "Validation changed Core revision before cleanup: $coreBeforeCleanup"
+          }
+          git -C dependencies/AIConversationCore reset --hard HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to restore Core submodule tracked files.' }
+          git -C dependencies/AIConversationCore clean -fdx
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to clean Core submodule validation artifacts.' }
+          $coreAfterCleanup = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($coreAfterCleanup -ne $expectedCore) {
+            throw "Core revision changed during cleanup: $coreAfterCleanup"
+          }
+          $coreStatus = git -C dependencies/AIConversationCore status --porcelain
+          if ($coreStatus) {
+            throw "Core submodule is still dirty after validation cleanup:`n$coreStatus"
+          }
           git fetch origin feature/aiconversationcore-integration --depth=1
           git diff --check FETCH_HEAD HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Patch integrity validation failed.' }
