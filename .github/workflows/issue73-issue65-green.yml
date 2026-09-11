@@ -1,0 +1,110 @@
+name: Issue 73 Issue 65 GREEN
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: ${{ contains(github.event.head_commit.message, '[issue73-issue65-green]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply issue 65 repair
+        shell: pwsh
+        run: python scripts/apply-issue73-issue65-fix.py
+
+      - name: Verify production diff scope
+        shell: pwsh
+        run: |
+          $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3) } | Sort-Object)
+          $expected = @('AgentPanelSpeaker/TranscriptView.cs')
+          if (($changed -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected production changes: $($changed -join ', ')"
+          }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run exact issue 65 regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue65-stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue65-stderr.txt'
+          $process = Start-Process -FilePath $exe -ArgumentList @('--test', 'redundancy') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+          Write-Host $text
+          if ($process.ExitCode -ne 0 -or $text -notmatch [regex]::Escape('TEST-SUITE-COMPLETE redundancy exit=0')) {
+            throw 'Issue #65 regression suite failed or lacked its completion marker.'
+          }
+          if ($text -notmatch [regex]::Escape('PASS: 5/5 issue #65 regressions passed.')) {
+            throw 'Issue #65 did not report 5/5 GREEN.'
+          }
+
+      - name: Run exact issue 73, issue 37, and User Context regressions
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          function Invoke-Suite([string]$suite, [string]$summary) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-stderr.txt')
+            $process = Start-Process -FilePath $exe -ArgumentList @('--test', $suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            if ($process.ExitCode -ne 0 -or $text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
+              throw "$suite failed or lacked its completion marker."
+            }
+            if ($text -notmatch [regex]::Escape($summary)) {
+              throw "$suite did not report expected GREEN summary: $summary"
+            }
+          }
+          Invoke-Suite 'ctrl-click-voice-pointer' 'PASS: 8/8 issue #73 Ctrl+click tests passed.'
+          Invoke-Suite 'virtual-window' 'PASS: 12/12 issue #37 virtual-window tests passed.'
+          Invoke-Suite 'user-context-speech' 'PASS: 4/4 user-context speech regressions passed.'
+
+      - name: Run focused mapping and navigation regressions
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $suites = @('word-materialization', 'find-origin', 'speech-ordinals-focused', 'rolled-back-speech', 'output-oracle', 'independent-oracles')
+          foreach ($suite in $suites) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-focused-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-focused-stderr.txt')
+            $process = Start-Process -FilePath $exe -ArgumentList @('--test', $suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            if ($process.ExitCode -ne 0 -or $text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
+              throw "$suite failed or lacked its completion marker."
+            }
+          }
+
+      - name: Commit production repair
+        shell: pwsh
+        run: |
+          $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3) } | Sort-Object)
+          if (($changed -join "`n") -ne 'AgentPanelSpeaker/TranscriptView.cs') {
+            throw "Unexpected changes before production commit: $($changed -join ', ')"
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'fix: keep disclosure identity source-id-free (#65) [issue73-issue65-green-recorded]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
