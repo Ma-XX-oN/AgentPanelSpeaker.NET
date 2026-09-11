@@ -30,7 +30,11 @@ internal static class Issue54RealSessionRegressionTestRunner
       ("real-session/directional-shift-keeps-prefetch-headroom",
         TestDirectionalShiftKeepsPrefetchHeadroom),
       ("real-session/live-end-window-retains-preceding-unit",
-        TestLiveEndWindowRetainsPrecedingUnit)
+        TestLiveEndWindowRetainsPrecedingUnit),
+      ("real-session/stale-find-materialization-is-cancelled-before-install",
+        TestStaleFindMaterializationIsCancelledBeforeInstall),
+      ("real-session/stale-find-invalidated-after-install-stays-visible",
+        TestStaleFindInvalidatedAfterInstallStaysVisible)
     };
 
     int failures = 0;
@@ -512,6 +516,231 @@ internal static class Issue54RealSessionRegressionTestRunner
       "Live-end window omitted the preceding visible Core unit.");
   }
 
+  /// <summary>
+  /// Reproduces issue #71. An off-window Find materialization can already be
+  /// queued behind the render gate when a newer query invalidates its browser
+  /// navigation generation. The invalidated request must not install its stale
+  /// virtual window or strand the viewport over a spacer.
+  /// </summary>
+  private static void TestStaleFindMaterializationIsCancelledBeforeInstall()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue71-stale-find-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue71-stale-find.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Issue 71 stale Find fixture");
+      WaitForTranscriptRender(view);
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int initialStart = ReadField<int>(view, "_windowStartIndex");
+      int initialEnd = ReadField<int>(view, "_windowEndIndex");
+      TranscriptWindow targetWindow = document.CreateWindow(
+        0,
+        TranscriptVirtualDocument.DefaultViewportHeight);
+      int targetRecordNumber = targetWindow.Records[0].RecordNumber;
+      Require(
+        !document.TryGetIndex(targetRecordNumber, out int targetIndex) ||
+        targetIndex < initialStart || targetIndex > initialEnd,
+        "Issue #71 fixture did not choose an off-window Find target.");
+
+      SemaphoreSlim gate = ReadField<SemaphoreSlim>(view, "_windowRenderGate");
+      gate.Wait();
+      try
+      {
+        ExecuteVoidScript(
+          webView,
+          $$"""
+(() => {
+  findNavigationGeneration = 105;
+  chrome.webview.postMessage({
+    type:'window-request',
+    recordNumber:{{targetRecordNumber}},
+    reason:'search',
+    matchIndex:0,
+    navigationGeneration:105
+  });
+})()
+""");
+        PumpUntil(
+          () => ReadField<long>(
+            view,
+            "_latestFindWindowNavigationGeneration") == 105,
+          "issue #71 stale Find request to reach C#");
+
+        // Supersede the queued request exactly as query-as-you-type does.
+        // Current production increments only the browser generation here;
+        // issue #71 requires that invalidation to reach C# before installation.
+        ExecuteVoidScript(
+          webView,
+          """
+(() => {
+  // The previous Find search has already completed. Only its off-window
+  // materialization is still queued when the user edits the query.
+  findSearchPending = false;
+  cancelFindSearch(false);
+})()
+""");
+        PumpMessages(250);
+      }
+      finally
+      {
+        gate.Release();
+      }
+
+      PumpMessages(1500);
+      int finalStart = ReadField<int>(view, "_windowStartIndex");
+      int finalEnd = ReadField<int>(view, "_windowEndIndex");
+      int visibleRecords = ExecuteIntScript(
+        webView,
+        """
+[...document.querySelectorAll('.virtual-record')].filter(record => {
+  const rect = record.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < window.innerHeight;
+}).length
+""");
+
+      Require(
+        finalStart == initialStart && finalEnd == initialEnd &&
+        visibleRecords > 0,
+        $"Superseded Find navigation changed window {initialStart}..{initialEnd} " +
+        $"to {finalStart}..{finalEnd}; visible materialized records={visibleRecords}.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Reproduces the remaining issue #71 race observed on the real machine.
+  /// The browser can invalidate Find after the replacement has started but
+  /// before C# posts window-ready. A stale ready must never leave the viewport
+  /// over an unloaded spacer with zero visible materialized records.
+  /// </summary>
+  private static void TestStaleFindInvalidatedAfterInstallStaysVisible()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue71-postinstall-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue71-postinstall.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Issue 71 post-install fixture");
+      WaitForTranscriptRender(view);
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int initialStart = ReadField<int>(view, "_windowStartIndex");
+      int initialEnd = ReadField<int>(view, "_windowEndIndex");
+      TranscriptWindow targetWindow = document.CreateWindow(
+        0,
+        TranscriptVirtualDocument.DefaultViewportHeight);
+      int targetRecordNumber = targetWindow.Records[0].RecordNumber;
+      Require(
+        !document.TryGetIndex(targetRecordNumber, out int targetIndex) ||
+        targetIndex < initialStart || targetIndex > initialEnd,
+        "Issue #71 post-install fixture did not choose an off-window target.");
+
+      ExecuteVoidScript(
+        webView,
+        $$"""
+(() => {
+  findInput.value = 'Issue';
+  findSearchPending = false;
+  findMatches = [{
+    fileOrdinal:1,
+    recordNumber:{{targetRecordNumber}},
+    startWordIndex:0,
+    endWordIndex:0,
+    nodeId:0,
+    nodeWordIndex:-1
+  }];
+  currentFindMatch = 0;
+  findNavigationGeneration = 205;
+  window.__issue71PostInstallInvalidated = false;
+
+  const observer = new MutationObserver(() => {
+    observer.disconnect();
+    findInput.value = 'Changed';
+    cancelFindSearch(false);
+    window.__issue71PostInstallInvalidated = true;
+  });
+  observer.observe(transcript, {childList:true});
+
+  chrome.webview.postMessage({
+    type:'window-request',
+    recordNumber:{{targetRecordNumber}},
+    reason:'search',
+    matchIndex:0,
+    navigationGeneration:205
+  });
+})()
+""");
+
+      PumpUntil(
+        () => ReadField<long>(
+          view,
+          "_latestFindWindowNavigationGeneration") > 205,
+        "issue #71 post-install invalidation to reach C#");
+      PumpMessages(500);
+
+      int invalidated = ExecuteIntScript(
+        webView,
+        "window.__issue71PostInstallInvalidated ? 1 : 0");
+      int visibleRecords = ExecuteIntScript(
+        webView,
+        """
+[...document.querySelectorAll('.virtual-record')].filter(record => {
+  const rect = record.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < window.innerHeight;
+}).length
+""");
+
+      Require(
+        invalidated == 1,
+        "Issue #71 post-install invalidation hook did not execute.");
+      Require(
+        visibleRecords > 0,
+        "Find invalidation after replacement began left zero visible " +
+        "materialized records.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
   private static CanonicalHtmlUnitProjection CreateUnit(
     int recordIndex,
     string id,
@@ -633,6 +862,13 @@ internal static class Issue54RealSessionRegressionTestRunner
       ? typed
       : throw new InvalidOperationException(
         $"Field '{fieldName}' had an unexpected value/type.");
+  }
+
+  private static int ExecuteIntScript(WebView2 webView, string script)
+  {
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(script);
+    PumpUntilCompleted(task, "browser issue #71 probe");
+    return JsonSerializer.Deserialize<int>(task.Result);
   }
 
   private static void ExecuteVoidScript(WebView2 webView, string script)
