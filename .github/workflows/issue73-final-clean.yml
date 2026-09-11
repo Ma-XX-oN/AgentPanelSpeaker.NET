@@ -1,0 +1,244 @@
+name: Issue 73 Final Clean Validation
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+
+permissions:
+  contents: write
+
+jobs:
+  final:
+    if: ${{ contains(github.event.head_commit.message, '[issue73-final-clean]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out candidate and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Verify production candidate and Core pin
+        shell: pwsh
+        run: |
+          $candidate = '1b9dab8f7d3f20dbd0ee562a36582bd5f337a9ce'
+          $integration = '2ad246ea0285d83fb98a44da5c2f269f1958279f'
+          git merge-base --is-ancestor $candidate HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Production candidate is not an ancestor of HEAD.' }
+          git merge-base --is-ancestor $integration HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Integration base is not an ancestor of HEAD.' }
+          $productChanges = @(git diff --name-only $candidate HEAD -- AgentPanelSpeaker dependencies)
+          if ($productChanges.Count -ne 0) {
+            throw "Product or Core changed after production candidate: $($productChanges -join ', ')"
+          }
+          $expectedCore = '6c92799c1b14693001e8b913465f4a12b0b1e1ab'
+          $actualCore = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($actualCore -ne $expectedCore) { throw "Unexpected AIConversationCore revision: $actualCore" }
+
+      - name: Remove all issue 73 investigation scaffolding and commit cleaned candidate
+        shell: pwsh
+        run: |
+          $paths = @(
+            '.github/workflows/issue73-issue65-green.yml',
+            '.github/workflows/issue73-popup-routing-red.yml',
+            '.github/workflows/issue73-sv-final.yml',
+            '.github/workflows/issue73-sv-green.yml',
+            '.github/workflows/issue73-sv-reds.yml',
+            '.github/workflows/issue73-sv3-red-correction.yml',
+            '.github/workflows/issue73-vs-reds.yml',
+            '.github/workflows/issue73-final-clean.yml',
+            'scripts/apply-issue73-issue65-fix.py',
+            'scripts/apply-issue73-popup-routing-red.py',
+            'scripts/apply-issue73-sv-fixes.py',
+            'scripts/apply-issue73-sv-reds.py',
+            'scripts/apply-issue73-vs-reds.py',
+            'scripts/fix-issue73-sv3-red.py'
+          )
+          foreach ($path in $paths) {
+            if (-not (Test-Path $path)) { throw "Expected temporary scaffold missing: $path" }
+            Remove-Item -Force $path
+          }
+          $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3) } | Sort-Object)
+          $expected = @($paths | Sort-Object)
+          if (($changed -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected cleanup changes: $($changed -join ', ')"
+          }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup git diff --check failed.' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: clean issue 73 validation scaffolding [issue73-finalized]'
+
+      - name: Verify exact cleaned production tree
+        shell: pwsh
+        run: |
+          $candidate = '1b9dab8f7d3f20dbd0ee562a36582bd5f337a9ce'
+          git merge-base --is-ancestor $candidate HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Production candidate is not an ancestor of cleaned HEAD.' }
+          $productChanges = @(git diff --name-only $candidate HEAD -- AgentPanelSpeaker dependencies)
+          if ($productChanges.Count -ne 0) {
+            throw "Cleaned HEAD changed production/Core files: $($productChanges -join ', ')"
+          }
+          $remainingWorkflows = @(Get-ChildItem '.github/workflows' -Filter 'issue73-*' -ErrorAction SilentlyContinue)
+          $remainingScripts = @(Get-ChildItem 'scripts' -Filter '*issue73*' -ErrorAction SilentlyContinue)
+          if ($remainingWorkflows.Count -ne 0 -or $remainingScripts.Count -ne 0) {
+            throw 'Issue 73 temporary scaffolding remains after cleanup.'
+          }
+          $status = @(git status --porcelain --untracked-files=all)
+          if ($status.Count -ne 0) { throw "Cleaned candidate is dirty: $($status -join '; ')" }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned AIConversationCore dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Run pinned AIConversationCore regression tests
+        shell: pwsh
+        run: npm test --prefix dependencies/AIConversationCore
+
+      - name: Validate Phase 2 fixture and baseline inventory
+        shell: pwsh
+        run: python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run exact issue 65, issue 73, issue 37, and User Context regressions
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          function Invoke-Suite([string]$suite, [string]$summary) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-final-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-final-stderr.txt')
+            $process = Start-Process -FilePath $exe -ArgumentList @('--test', $suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            if ($process.ExitCode -ne 0 -or $text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
+              throw "$suite failed or lacked its completion marker."
+            }
+            if ($text -notmatch [regex]::Escape($summary)) {
+              throw "$suite did not report expected GREEN summary: $summary"
+            }
+          }
+          Invoke-Suite 'redundancy' 'PASS: 5/5 issue #65 regressions passed.'
+          Invoke-Suite 'ctrl-click-voice-pointer' 'PASS: 8/8 issue #73 Ctrl+click tests passed.'
+          Invoke-Suite 'virtual-window' 'PASS: 12/12 issue #37 virtual-window tests passed.'
+          Invoke-Suite 'user-context-speech' 'PASS: 4/4 user-context speech regressions passed.'
+
+      - name: Verify test-runner completion guard
+        shell: pwsh
+        run: '& tools/Invoke-TestSuite.ps1 -SelfTest'
+
+      - name: Run complete built application suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and run complete deployed application suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Verify bundled runtime from built output
+        shell: pwsh
+        run: |
+          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
+          $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
+          $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
+          $marker = Join-Path $outputTools 'AIConversationCore-runtime\CORE_COMMIT'
+          if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
+          if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
+          $probe = 'Bundled runtime check — café 東京 😀'
+          $record = @{ type = 'user'; uuid = 'bundled-ci'; timestamp = '2026-09-11T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = $probe }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node $worker
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne '6c92799c1b14693001e8b913465f4a12b0b1e1ab') { throw "Unexpected bundled core commit: $($decoded.core_commit)" }
+          if ($decoded.projection.units[0].block.text -ne $probe) { throw 'Bundled projection corrupted Unicode text.' }
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Verify AIConversationCore worker pin
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $response = '{"operation":"ping"}' | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne '6c92799c1b14693001e8b913465f4a12b0b1e1ab') { throw "Unexpected core commit: $($decoded.core_commit)" }
+
+      - name: Verify structured Claude projection
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $record = @{ type = 'user'; uuid = 'ci-user'; timestamp = '2026-09-11T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = '<system-reminder>generated</system-reminder>CI projection check' }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
+          if ($decoded.projection.units[0].block.text -ne 'CI projection check') { throw 'Interactive Claude cleanup was not applied.' }
+
+      - name: Verify structured Codex lifecycle projection
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $userText = "context`n## My request for Codex:`nActual request"
+          $records = @(
+            @{ type = 'event_msg'; timestamp = '2026-09-11T00:00:00Z'; payload = @{ type = 'user_message'; message = $userText } },
+            @{ type = 'event_msg'; timestamp = '2026-09-11T00:00:01Z'; payload = @{ type = 'task_complete' } }
+          )
+          $request = @{ operation = 'project'; provider = 'codex'; records = $records } | ConvertTo-Json -Depth 10 -Compress
+          $response = $request | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Projection failed: $($decoded.error)" }
+          $user = $decoded.projection.events | Where-Object { $_.content_type -eq 'user_message' }
+          $completion = $decoded.projection.events | Where-Object { $_.content_type -eq 'task_complete' }
+          if ($user.blocks[0].text -ne $userText) { throw 'Recorded Codex IDE/request context was not preserved verbatim.' }
+          if ($completion.lifecycle.timestamp -ne '2026-09-11T00:00:01Z') { throw 'Task completion timestamp was not preserved.' }
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Verify clean fully validated candidate
+        shell: pwsh
+        run: |
+          $generated = 'dependencies/AIConversationCore/node_modules'
+          if (Test-Path $generated) { Remove-Item -Recurse -Force $generated }
+          $coreStatus = @(git -C dependencies/AIConversationCore status --porcelain --untracked-files=all)
+          if ($coreStatus.Count -ne 0) { throw "AIConversationCore submodule is dirty: $($coreStatus -join '; ')" }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
+          $status = @(git status --porcelain --untracked-files=all)
+          if ($status.Count -ne 0) { throw "Validation left an unexpected dirty worktree: $($status -join '; ')" }
+
+      - name: Push fully validated cleaned branch
+        shell: pwsh
+        run: git push origin HEAD:issue-73-ctrl-click-voice-pointer
