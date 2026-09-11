@@ -11,7 +11,6 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     "Lower values keep the cursor closer to the spoken audio by discarding " +
     "older pending positions. Higher values preserve more intermediate " +
     "movements but can make the visible cursor lag behind speech.";
-
   private readonly Label _description;
   private readonly TableLayoutPanel _layout;
   private readonly TrackBar _queueCapacitySlider = new();
@@ -142,12 +141,8 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
     _queueCapacitySlider.ValueChanged += (_, _) =>
     {
       UpdateValueText();
-      if (!_updating)
-      {
-        ValueChanged?.Invoke(this, EventArgs.Empty);
-      }
+      PublishValueChanged();
     };
-
     Paint += PaintBorder;
   }
 
@@ -225,6 +220,14 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       RecalculateLayout(force: true);
     }
     base.OnVisibleChanged(eventArgs);
+  }
+
+  private void PublishValueChanged()
+  {
+    if (!_updating)
+    {
+      ValueChanged?.Invoke(this, EventArgs.Empty);
+    }
   }
 
   private void RecalculateLayout(bool force)
@@ -309,6 +312,4 @@ internal sealed class TranscriptAdvancedSettingsPopup : PopupFormBase
       this,
       eventArgs.ClipRectangle);
   }
-
-
 }

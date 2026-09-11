@@ -24,12 +24,17 @@ internal static partial class SpeechSapiXmlBuilder
     int pitchSetting,
     IReadOnlyList<string> spelledWords,
     PronunciationRuleSet pronunciations,
-    bool pauseAfter = false)
+    bool pauseAfter = false,
+    bool pauseBefore = false)
   {
     ArgumentNullException.ThrowIfNull(text);
     ArgumentNullException.ThrowIfNull(spelledWords);
     ArgumentNullException.ThrowIfNull(pronunciations);
     string sapiContent = BuildContent(text, spelledWords, pronunciations);
+    if (pauseBefore)
+    {
+      sapiContent = SapiBlockPause + sapiContent;
+    }
     if (pauseAfter)
     {
       sapiContent += SapiBlockPause;

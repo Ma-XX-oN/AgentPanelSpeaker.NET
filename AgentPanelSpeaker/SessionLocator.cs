@@ -14,6 +14,9 @@ internal static partial class SessionLocator
 
   private static readonly ConcurrentDictionary<string, string>
     ClaudeTitleCache = new(StringComparer.OrdinalIgnoreCase);
+  private static readonly ConcurrentDictionary<string, CodexTitleCacheEntry>
+    CodexTitleCache = new(StringComparer.OrdinalIgnoreCase);
+  private static readonly object CodexTitleCacheSync = new();
 
   /// <summary>
   /// Finds the most recently written session for the requested source.
@@ -158,7 +161,7 @@ internal static partial class SessionLocator
       : Path.GetFileNameWithoutExtension(file.Path);
     string title = file.Source switch
     {
-      AgentSource.Codex => ReadCodexTitle(file.Path, sessionId),
+      AgentSource.Codex => ReadCodexTitle(file, sessionId),
       AgentSource.Claude => ReadClaudeTitle(file.Path),
       _ => string.Empty
     };
@@ -174,102 +177,132 @@ internal static partial class SessionLocator
 
   /// <summary>
   /// Reads a Codex thread name, falling back to its first user message.
+  /// Cached authoritative session-index titles remain valid while the rollout
+  /// grows; fallback titles also track rollout freshness.
   /// </summary>
-  private static string ReadCodexTitle(string sessionPath, string sessionId)
+  private static string ReadCodexTitle(SessionFile session, string sessionId)
   {
-    string indexTitle = ReadCodexIndexTitle(sessionId);
-    if (indexTitle.Length != 0)
+    string? indexPath = GetCodexSessionIndexPath();
+    FileStamp? indexStamp = GetFileStamp(indexPath);
+    if (TryGetCachedCodexTitle(session, indexPath, indexStamp, out string title))
     {
-      return indexTitle;
+      return title;
     }
 
-    try
+    lock (CodexTitleCacheSync)
     {
-      foreach (string line in ReadSharedLines(sessionPath))
+      indexPath = GetCodexSessionIndexPath();
+      indexStamp = GetFileStamp(indexPath);
+      if (TryGetCachedCodexTitle(session, indexPath, indexStamp, out title))
       {
-        using JsonDocument document = JsonDocument.Parse(line);
-        JsonElement root = document.RootElement;
-        if (!TryGetString(root, "type", out string recordType) ||
-            !recordType.Equals("event_msg", StringComparison.Ordinal))
-        {
-          continue;
-        }
+        return title;
+      }
 
-        if (!root.TryGetProperty("payload", out JsonElement payload) ||
-            !TryGetString(payload, "type", out string payloadType) ||
-            !payloadType.Equals("user_message", StringComparison.Ordinal) ||
-            !TryGetString(payload, "message", out string message))
+      try
+      {
+        using var client = new AIConversationCoreClient();
+        AIConversationProjection projection = client.Project(
+          AgentSource.Codex,
+          ReadSharedLines(session.Path).ToArray(),
+          new AIConversationCoreProjectOptions(
+            CodexSessionIndexPath: indexPath));
+        string? resolvedTitle = projection.SessionMetadata?.Title;
+        title = string.IsNullOrWhiteSpace(resolvedTitle)
+          ? sessionId
+          : LimitTitle(resolvedTitle.Trim());
+        CodexTitleCache[session.Path] = new CodexTitleCacheEntry(
+          session.LastWriteUtc,
+          session.Length,
+          indexPath,
+          indexStamp?.LastWriteUtc,
+          indexStamp?.Length,
+          title,
+          projection.SessionMetadata?.TitleSource);
+        return title;
+      }
+      catch (Exception exception) when (
+        exception is IOException or
+        UnauthorizedAccessException or
+        JsonException or
+        InvalidOperationException or
+        ArgumentException)
+      {
+        DiagnosticLog.Write("session.codex_title_failed", new
         {
-          continue;
-        }
-
-        string stripped = CodexRequestPreambleRegex().Replace(message, "$1");
-        string title = FirstMeaningfulLine(stripped);
-        if (title.Length != 0)
-        {
-          return LimitTitle(title);
-        }
+          sessionPath = session.Path,
+          sessionId,
+          exception = exception.Message
+        });
+        return sessionId;
       }
     }
-    catch (Exception exception) when (
-      exception is IOException or
-      UnauthorizedAccessException or
-      JsonException)
-    {
-    }
-
-    return sessionId;
   }
 
   /// <summary>
-  /// Reads the newest matching Codex session-index title.
+  /// Returns a cached Codex title when all metadata that can affect that title
+  /// is unchanged. An authoritative session-index title does not depend on
+  /// subsequent rollout growth.
   /// </summary>
-  private static string ReadCodexIndexTitle(string sessionId)
+  private static bool TryGetCachedCodexTitle(
+    SessionFile session,
+    string? indexPath,
+    FileStamp? indexStamp,
+    out string title)
   {
-    string indexPath = Path.Combine(GetCodexHome(), "session_index.jsonl");
-    if (!File.Exists(indexPath))
+    title = string.Empty;
+    if (!CodexTitleCache.TryGetValue(session.Path, out CodexTitleCacheEntry? cached))
     {
-      return string.Empty;
+      return false;
     }
 
-    string latestTimestamp = string.Empty;
-    string latestTitle = string.Empty;
-    try
+    bool sameIndex = string.Equals(
+        cached.IndexPath,
+        indexPath,
+        StringComparison.OrdinalIgnoreCase) &&
+      cached.IndexLastWriteUtc == indexStamp?.LastWriteUtc &&
+      cached.IndexLength == indexStamp?.Length;
+    if (!sameIndex)
     {
-      foreach (string line in ReadSharedLines(indexPath))
-      {
-        using JsonDocument document = JsonDocument.Parse(line);
-        JsonElement root = document.RootElement;
-        if (!TryGetString(root, "id", out string id) ||
-            !id.Equals(sessionId, StringComparison.OrdinalIgnoreCase))
-        {
-          continue;
-        }
-
-        TryGetString(root, "updated_at", out string updatedAt);
-        if (latestTitle.Length != 0 &&
-            string.CompareOrdinal(updatedAt, latestTimestamp) <= 0)
-        {
-          continue;
-        }
-
-        if (TryGetString(root, "thread_name", out string threadName) &&
-            !string.IsNullOrWhiteSpace(threadName))
-        {
-          latestTimestamp = updatedAt;
-          latestTitle = LimitTitle(threadName.Trim());
-        }
-      }
-    }
-    catch (Exception exception) when (
-      exception is IOException or
-      UnauthorizedAccessException or
-      JsonException)
-    {
-      return string.Empty;
+      return false;
     }
 
-    return latestTitle;
+    bool authoritativeIndexTitle = string.Equals(
+      cached.TitleSource,
+      "codex-session-index",
+      StringComparison.Ordinal);
+    bool sameSession = cached.SessionLastWriteUtc == session.LastWriteUtc &&
+      cached.SessionLength == session.Length;
+    if (!authoritativeIndexTitle && !sameSession)
+    {
+      return false;
+    }
+
+    title = cached.Title;
+    return true;
+  }
+
+  /// <summary>
+  /// Gets the optional caller-discovered Codex session-index path.
+  /// </summary>
+  internal static string? GetCodexSessionIndexPath()
+  {
+    string path = Path.Combine(GetCodexHome(), "session_index.jsonl");
+    return File.Exists(path) ? path : null;
+  }
+
+  /// <summary>
+  /// Reads file metadata used to invalidate supplementary-title caches.
+  /// </summary>
+  private static FileStamp? GetFileStamp(string? path)
+  {
+    if (string.IsNullOrWhiteSpace(path))
+    {
+      return null;
+    }
+    var info = new FileInfo(path);
+    return info.Exists
+      ? new FileStamp(info.LastWriteTimeUtc, info.Length)
+      : null;
   }
 
   /// <summary>
@@ -342,8 +375,8 @@ internal static partial class SessionLocator
           }
 
           string cleaned = SystemTagRegex().Replace(text, string.Empty).Trim();
-          string title = FirstMeaningfulLine(cleaned);
-          if (title.Length == 0)
+          string candidate = FirstMeaningfulLine(cleaned);
+          if (candidate.Length == 0)
           {
             continue;
           }
@@ -351,13 +384,13 @@ internal static partial class SessionLocator
           if (recordType.Equals("user", StringComparison.Ordinal) &&
               userFallback.Length == 0)
           {
-            userFallback = LimitTitle(title);
+            userFallback = LimitTitle(candidate);
           }
 
           if (recordType.Equals("assistant", StringComparison.Ordinal) &&
               assistantFallback.Length == 0)
           {
-            assistantFallback = LimitTitle(title);
+            assistantFallback = LimitTitle(candidate);
           }
         }
       }
@@ -595,11 +628,6 @@ internal static partial class SessionLocator
   }
 
   [GeneratedRegex(
-    @"## My request for Codex:\s*(.*)",
-    RegexOptions.Singleline)]
-  private static partial Regex CodexRequestPreambleRegex();
-
-  [GeneratedRegex(
     @"<(?:ide_opened_file|ide_selection|system[-_]reminder|system|env|" +
     @"claude_background_info|user[-_]prompt[-_]submit[-_]hook|" +
     @"command[-_]name|antml:[a-z_]+)[^>]*>.*?</[^>]+>",
@@ -614,4 +642,21 @@ internal static partial class SessionLocator
     string Path,
     DateTime LastWriteUtc,
     long Length);
+
+  /// <summary>
+  /// Stores freshness metadata for one optional supplementary file.
+  /// </summary>
+  private sealed record FileStamp(DateTime LastWriteUtc, long Length);
+
+  /// <summary>
+  /// Stores one resolved Codex title and the source freshness that produced it.
+  /// </summary>
+  private sealed record CodexTitleCacheEntry(
+    DateTime SessionLastWriteUtc,
+    long SessionLength,
+    string? IndexPath,
+    DateTime? IndexLastWriteUtc,
+    long? IndexLength,
+    string Title,
+    string? TitleSource);
 }

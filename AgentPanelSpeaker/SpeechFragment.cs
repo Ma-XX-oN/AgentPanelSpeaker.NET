@@ -20,6 +20,23 @@ namespace AgentPanelSpeaker;
 /// <param name="StartsUserTurn">
 /// Whether this fragment belongs to an actual User prompt that starts a turn.
 /// </param>
+/// <param name="RevisionStatus">
+/// Core-owned Codex revision status (`original`, `superseded`, `edited`), or
+/// null for ordinary/non-revision content.
+/// </param>
+/// <param name="RevisionDepth">
+/// Core-owned zero-based revision depth, or null for non-revision content.
+/// </param>
+/// <param name="ProjectionVisible">
+/// Core-owned effective visibility for the projection that produced this
+/// fragment.
+/// </param>
+/// <param name="RevisionHistoryControlled">
+/// Whether Core marks this fragment as belonging to revision-history policy.
+/// </param>
+/// <param name="HistoricalRevision">
+/// Whether Core classifies this fragment as historical revision content.
+/// </param>
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -31,7 +48,12 @@ internal sealed record SpeechFragment(
   int FenceLineCount = 0,
   bool PauseAfter = false,
   DateTimeOffset? NodeTimestampUtc = null,
-  bool StartsUserTurn = false);
+  bool StartsUserTurn = false,
+  string? RevisionStatus = null,
+  int? RevisionDepth = null,
+  bool ProjectionVisible = true,
+  bool RevisionHistoryControlled = false,
+  bool HistoricalRevision = false);
 
 /// <summary>
 /// Identifies how existing history should begin playback.

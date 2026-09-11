@@ -1,0 +1,13 @@
+{
+  "name": "aiconversationcore",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:browser": "node scripts/build-browser-bundle.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "marked": "18.0.11"
+  }
+}

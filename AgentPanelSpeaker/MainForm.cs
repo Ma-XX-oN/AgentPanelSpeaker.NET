@@ -193,6 +193,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _resumeAfterMonitorHistoryLoaded;
   private bool _reusePausedHistoryOnMonitorStart;
   private bool _suppressMonitorTextUntilHistoryLoaded;
+  private volatile bool _speakUserContext;
   private SpeechHistorySnapshot? _selectedSessionHistory;
   private string? _selectedSessionHistoryPath;
 
@@ -218,7 +219,7 @@ internal sealed class MainForm : Form, IMessageFilter
       _settingsStore = new UserSettingsStore(
         _installedVoices.Select(voice => voice.Name).ToArray());
       _speech.SetPolicyProviders(
-        _settingsStore.GetProfile,
+        GetPlaybackProfile,
         _settingsStore.IsFenceTypeSpoken,
         _settingsStore.GetSpelledWords,
         _settingsStore.GetPronunciations,
@@ -1167,6 +1168,9 @@ internal sealed class MainForm : Form, IMessageFilter
       _transcriptSettingsPopup.SetSettings(
         settings.Transcript,
         transcriptDark);
+      _speakUserContext = settings.Transcript.SpeakUserContext;
+      _speech.SetShowRolledBackHistory(
+        settings.Transcript.ShowRolledBackHistory);
       _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
       _speech.SetWordBoundaryPollMilliseconds(
         settings.Transcript.HighlightUpdateMilliseconds);
@@ -1574,7 +1578,9 @@ internal sealed class MainForm : Form, IMessageFilter
         _followLatestCheckBox.Checked,
         _speakExistingCheckBox.Checked,
         TimeSpan.FromMilliseconds((double)_pollNumeric.Value),
-        preindexedHistory));
+        preindexedHistory,
+        IncludeRolledBackTurns: true,
+        IncludeUserContext: true));
       if (reusePausedHistory)
       {
         PauseToggleResult result = _speech.TogglePause(allowIdlePause: true);
@@ -1759,6 +1765,19 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Chooses the first currently spoken profile for IPA previews.
   /// </summary>
+  /// <summary>
+  /// Resolves final playback eligibility without changing indexed
+  /// canonical history. User Context remains indexed so its speech
+  /// switch is an immediate policy change rather than a rebuild.
+  /// </summary>
+  private SpeechProfileSettings GetPlaybackProfile(ContentCategory category)
+  {
+    SpeechProfileSettings profile = _settingsStore.GetProfile(category);
+    return category == ContentCategory.UserContext && !_speakUserContext
+      ? profile with { VoiceName = SpeechProfileSettings.NotSpoken }
+      : profile;
+  }
+
   private SpeechProfileSettings GetIpaPreviewProfile()
   {
     foreach (ContentCategory category in new[]
@@ -2193,6 +2212,8 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     bool dark = ThemeManager.IsDark(GetSelectedTheme());
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
+    _speakUserContext = settings.SpeakUserContext;
+    _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);
     _transcriptView.ApplySettings(settings, dark);
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
@@ -4016,7 +4037,11 @@ internal sealed class MainForm : Form, IMessageFilter
     try
     {
       SpeechHistorySnapshot snapshot = await Task.Run(() =>
-        _monitor.LoadHistoryPreview(session, startAtLatestTurn));
+        _monitor.LoadHistoryPreview(
+          session,
+          startAtLatestTurn,
+          includeRolledBackTurns: true,
+          includeUserContext: true));
       if (_closing || IsDisposed || generation != Volatile.Read(
             ref _historyPreviewGeneration) || _monitor.IsRunning ||
           !string.Equals(

@@ -34,12 +34,28 @@ internal sealed record HotkeySettings
     string NormalizeOne(string value, string fallback)
     {
       Keys key = ParseKey(value);
-      if (key == Keys.None || !used.Add(key))
+      if (key != Keys.None && used.Add(key))
       {
-        key = ParseKey(fallback);
-        used.Add(key);
+        return FormatKey(key);
       }
-      return FormatKey(key);
+
+      key = ParseKey(fallback);
+      if (key != Keys.None && used.Add(key))
+      {
+        return FormatKey(key);
+      }
+
+      foreach ((_, string defaultValue) in Default.Entries())
+      {
+        key = ParseKey(defaultValue);
+        if (key != Keys.None && used.Add(key))
+        {
+          return FormatKey(key);
+        }
+      }
+
+      throw new InvalidOperationException(
+        "No unique default hotkey remains available during normalization.");
     }
 
     return this with

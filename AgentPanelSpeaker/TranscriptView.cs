@@ -15,6 +15,8 @@ internal sealed class TranscriptView : UserControl
 {
   private const int GwlStyle = -16;
   private const int WsVisible = 0x10000000;
+  private const int StartupCanonicalEndPercent = 98;
+  private const int StartupRenderPercent = 99;
   private readonly WebView2 _webView = new();
   private readonly Label _loadingLabel = new();
   private readonly Label _failureLabel = new();
@@ -35,7 +37,10 @@ internal sealed class TranscriptView : UserControl
   private bool _refreshPendingForce;
   private int _renderGeneration;
   private int _activeRenderGeneration = -1;
+  private int _startupProgressPhase;
+  private int _startupProgressPercent;
   private CancellationTokenSource? _renderCancellation;
+  private CancellationTokenSource? _searchIndexCancellation;
   private TranscriptSettings _settings = TranscriptSettings.Default;
   private TranscriptPlaybackPosition? _pendingPosition;
   private TranscriptPlaybackPosition? _lastLocatedContentPosition;
@@ -48,10 +53,22 @@ internal sealed class TranscriptView : UserControl
     Array.Empty<TranscriptNodeIdentity>();
   private int _windowStartIndex = -1;
   private int _windowEndIndex = -1;
+  private double _browserViewportHeight;
+  private bool _domPresentationMode;
+  private int _layoutGeneration = 1;
+  private Size _lastLayoutSize;
   private CancellationTokenSource? _findCancellation;
   private PendingFindRequest? _pendingFindRequest;
   private long _latestFindWindowNavigationGeneration;
-  private readonly SemaphoreSlim _findWindowRenderGate = new(1, 1);
+  private long _windowRenderTransactionSequence;
+  private readonly SemaphoreSlim _windowRenderGate = new(1, 1);
+
+  private sealed class WindowScriptBuildMetrics
+  {
+    public int NodeCount { get; set; }
+    public long IdentityMilliseconds { get; set; }
+    public long SerializationMilliseconds { get; set; }
+  }
 
   private sealed record PendingFindRequest(
     long RequestId,
@@ -60,9 +77,8 @@ internal sealed class TranscriptView : UserControl
     bool WordEnabled,
     bool RegexEnabled,
     bool VoicedEnabled,
-    bool HasSelectionOrigin,
+    string OriginKind,
     int OriginRecordNumber,
-    string OriginSourceId,
     int OriginWordIndex);
 
   /// <summary>
@@ -204,11 +220,13 @@ internal sealed class TranscriptView : UserControl
 
     _pendingPosition = null;
     _lastLocatedContentPosition = null;
+    CancelSearchIndexBuild();
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
     _windowStartIndex = -1;
     _windowEndIndex = -1;
+    _domPresentationMode = false;
     CancelFindSearch();
     _lastWriteUtc = DateTime.MinValue;
     _lastLength = -1;
@@ -224,11 +242,13 @@ internal sealed class TranscriptView : UserControl
   public void ClearSession()
   {
     _pendingPosition = null;
+    CancelSearchIndexBuild();
     _searchIndex = null;
     _virtualDocument = null;
     _identities = Array.Empty<TranscriptNodeIdentity>();
     _windowStartIndex = -1;
     _windowEndIndex = -1;
+    _domPresentationMode = false;
     CancelFindSearch();
     _sessionPath = null;
     _sessionDisplayName = string.Empty;
@@ -252,6 +272,8 @@ internal sealed class TranscriptView : UserControl
   {
     LogViewState("apply-settings", "begin", requestedDark: dark);
     _settings = settings.Normalize();
+    _virtualDocument?.SetShowRolledBackHistory(
+      _settings.ShowRolledBackHistory);
     _dark = dark;
     Color page = dark
       ? Color.FromArgb(30, 32, 35)
@@ -295,15 +317,11 @@ internal sealed class TranscriptView : UserControl
       item => item.NodeId == position.NodeId);
     if (_settings.FollowSpeech && identity is not null &&
         _virtualDocument is TranscriptVirtualDocument document &&
-        document.TryGetIndex(
-          identity.RecordNumber,
-          identity.SourceId,
-          out int index) &&
+        document.TryGetIndex(identity.RecordNumber, out int index) &&
         (index < _windowStartIndex || index > _windowEndIndex))
     {
       _ = RenderWindowForRecordAsync(
         identity.RecordNumber,
-        identity.SourceId,
         "playback-position",
         matchIndex: null);
       return;
@@ -356,6 +374,8 @@ internal sealed class TranscriptView : UserControl
       highlight = ToCss(colour),
       duration = settings.FadeMilliseconds,
       follow = settings.FollowSpeech,
+      showRolledBackHistory = settings.ShowRolledBackHistory,
+      layoutGeneration = _layoutGeneration,
       dark
     });
   }
@@ -449,6 +469,7 @@ internal sealed class TranscriptView : UserControl
     {
       _renderGeneration++;
       CancelActiveRender();
+      CancelSearchIndexBuild();
       _refreshTimer.Stop();
       _refreshTimer.Dispose();
       _settingsApplyTimer.Stop();
@@ -566,14 +587,45 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
+    // Record the exact file generation before preparation starts. If
+    // preparation fails, the timer must not retry identical bytes in a tight
+    // loop; a real file change or explicit forced refresh can retry.
+    _lastWriteUtc = info.LastWriteTimeUtc;
+    _lastLength = info.Length;
+
     var cancellation = new CancellationTokenSource();
     _renderCancellation = cancellation;
     _activeRenderGeneration = generation;
     _refreshInProgress = true;
+    CancelSearchIndexBuild();
+    _searchIndex = null;
     if (force)
     {
-      ShowLoading(GetLoadingText());
+      _startupProgressPhase = 0;
+      _startupProgressPercent = 0;
+      ShowStartupProgress(1, "Preparing canonical transcript…", 0);
     }
+    IProgress<TranscriptBuildProgress>? startupRecordProgress = force
+      ? new Progress<TranscriptBuildProgress>(progress =>
+      {
+        if (generation != _renderGeneration ||
+            !string.Equals(
+              path,
+              _sessionPath,
+              StringComparison.OrdinalIgnoreCase))
+        {
+          return;
+        }
+        ShowStartupProgress(
+          1,
+          "Preparing canonical transcript…",
+          ScaleStartupProgress(
+            progress.Completed,
+            progress.Total,
+            0,
+            StartupCanonicalEndPercent));
+      })
+      : null;
     DiagnosticLog.Write("transcript.render_started", new
     {
       path,
@@ -581,14 +633,16 @@ internal sealed class TranscriptView : UserControl
       info.Length
     });
     var renderTimer = Stopwatch.StartNew();
+    string structureProbeId = $"{generation}:{Guid.NewGuid():N}";
 
     try
     {
       AgentSource source = _source;
+      const bool includeRolledBackTurns = true;
       CancellationToken token = cancellation.Token;
       TranscriptRenderPayload payload = await Task.Run(() =>
       {
-        string markdown = string.Empty;
+        TranscriptPresentationDomResult presentation = null!;
         IReadOnlyList<TranscriptNodeIdentity> identities =
           Array.Empty<TranscriptNodeIdentity>();
         var options = new ParallelOptions
@@ -600,19 +654,32 @@ internal sealed class TranscriptView : UserControl
           () => identities = TranscriptNodeIdentityMap.Build(
             path,
             source,
-            token),
-          () => markdown = TranscriptMarkdownFormatter.Format(
+            token,
+            includeRolledBackTurns,
+            startupRecordProgress),
+          () => presentation = TranscriptPresentationDomFormatter.Format(
             path,
             source,
+            _pipeline,
             token));
         token.ThrowIfCancellationRequested();
-        string html = Markdown.ToHtml(markdown, _pipeline);
-        TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
-          html,
+        string html = presentation.Html;
+        TranscriptStructureSnapshot rendererStructure =
+          TranscriptStructureProbe.CaptureHtml(
+            structureProbeId,
+            "dom-model-html",
+            html);
+        TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
+          presentation.Units);
+        document.SetShowRolledBackHistory(
+          _settings.ShowRolledBackHistory);
+        document.SetLayoutGeneration(_layoutGeneration);
+        return new TranscriptRenderPayload(
+          document,
           identities,
-          token);
-        TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
-        return new TranscriptRenderPayload(document, identities, searchIndex);
+          html,
+          rendererStructure,
+          presentation.Nodes);
       }, token);
 
       long preparationMilliseconds = renderTimer.ElapsedMilliseconds;
@@ -625,13 +692,38 @@ internal sealed class TranscriptView : UserControl
 
       _virtualDocument = payload.Document;
       _identities = payload.Identities;
-      _searchIndex = payload.SearchIndex;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
-      TranscriptWindow window = payload.Document.CreateWindow(focalIndex);
+      TranscriptWindow window = payload.Document.CreateWindow(focalIndex, GetVirtualViewportHeight());
+      TranscriptStructureSnapshot virtualStructure =
+        TranscriptStructureProbe.CaptureHtml(
+          structureProbeId,
+          "initial-virtual-window-html",
+          window.Html);
+      DiagnosticLog.Write("transcript.initial_window_selected", new
+      {
+        focalIndex,
+        window.StartIndex,
+        window.EndIndex,
+        recordCount = window.Records.Count,
+        totalRecordCount = payload.Document.Count,
+        htmlCharacters = window.Html.Length,
+        window.TopSpacerHeight,
+        window.BottomSpacerHeight,
+        preparationMilliseconds
+      });
       string script = BuildReplaceWindowScript(
         window,
         preserve: !force,
-        focusVirtualIndex: focalIndex);
+        focusVirtualIndex: force ? focalIndex : null,
+        structureProbeId: structureProbeId,
+        expectedStructure: virtualStructure);
+      if (force)
+      {
+        ShowStartupProgress(
+          3,
+          "Rendering visible transcript…",
+          StartupRenderPercent);
+      }
       long domStartMilliseconds = renderTimer.ElapsedMilliseconds;
       if (!await ExecuteAsync(script))
       {
@@ -640,10 +732,18 @@ internal sealed class TranscriptView : UserControl
       }
       _windowStartIndex = window.StartIndex;
       _windowEndIndex = window.EndIndex;
+      _domPresentationMode = false;
+      TranscriptStructureSnapshot? webViewStructure =
+        await CaptureWebViewStructureAsync(structureProbeId);
+      if (webViewStructure is not null)
+      {
+        TranscriptStructureProbe.Compare(virtualStructure, webViewStructure);
+      }
 
       TranscriptPlaybackPosition? renderAnchor = null;
       int latestIndex = -1;
-      if (_pendingPosition is TranscriptPlaybackPosition latestPosition &&
+      if (_settings.FollowSpeech &&
+          _pendingPosition is TranscriptPlaybackPosition latestPosition &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
@@ -652,7 +752,8 @@ internal sealed class TranscriptView : UserControl
       {
         renderAnchor = latestPosition;
       }
-      else if (_lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+      else if (_settings.FollowSpeech &&
+          _lastLocatedContentPosition is TranscriptPlaybackPosition located &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
@@ -665,11 +766,20 @@ internal sealed class TranscriptView : UserControl
       if (renderAnchor is not null &&
           (latestIndex < _windowStartIndex || latestIndex > _windowEndIndex))
       {
-        window = payload.Document.CreateWindow(latestIndex);
+        window = payload.Document.CreateWindow(latestIndex, GetVirtualViewportHeight());
+        virtualStructure = TranscriptStructureProbe.CaptureHtml(
+          structureProbeId,
+          "virtual-window-html-positioned",
+          window.Html);
+        TranscriptStructureProbe.Compare(
+          payload.RendererStructure,
+          virtualStructure);
         if (!await ExecuteAsync(BuildReplaceWindowScript(
               window,
               preserve: false,
-              focusVirtualIndex: latestIndex)))
+              focusVirtualIndex: latestIndex,
+              structureProbeId: structureProbeId,
+              expectedStructure: virtualStructure)))
         {
           ShowLoading("Unable to position transcript at the voice marker. " +
             "See diagnostic log.");
@@ -677,15 +787,31 @@ internal sealed class TranscriptView : UserControl
         }
         _windowStartIndex = window.StartIndex;
         _windowEndIndex = window.EndIndex;
+        webViewStructure = await CaptureWebViewStructureAsync(structureProbeId);
+        if (webViewStructure is not null)
+        {
+          TranscriptStructureProbe.Compare(virtualStructure, webViewStructure);
+        }
         focalIndex = latestIndex;
       }
 
       long domMilliseconds =
         renderTimer.ElapsedMilliseconds - domStartMilliseconds;
-      StartPendingFindRequest();
       _lastWriteUtc = info.LastWriteTimeUtc;
       _lastLength = info.Length;
+      if (force)
+      {
+        ShowStartupProgress(
+          3,
+          "Rendering visible transcript…",
+          100);
+      }
       HideLoading();
+      BeginDeferredSearchIndexBuild(
+        path,
+        generation,
+        payload.SearchHtml,
+        payload.Identities);
       _restoredFromSettings = false;
       QueueSettingsApply(immediate: true);
       if (_lastLocatedContentPosition is TranscriptPlaybackPosition locatedPosition &&
@@ -752,6 +878,118 @@ internal sealed class TranscriptView : UserControl
     }
   }
 
+  /// <summary>
+  /// Starts full-file search indexing only after the initial visible window is
+  /// installed. Search readiness is deliberately independent of first paint.
+  /// </summary>
+  private void BeginDeferredSearchIndexBuild(
+    string path,
+    int generation,
+    string html,
+    IReadOnlyList<TranscriptNodeIdentity> identities)
+  {
+    var cancellation = new CancellationTokenSource();
+    _searchIndexCancellation = cancellation;
+    _ = BuildDeferredSearchIndexAsync(
+      path,
+      generation,
+      html,
+      identities,
+      cancellation);
+  }
+
+  /// <summary>
+  /// Builds the immutable full-session search corpus away from the UI thread.
+  /// </summary>
+  private async Task BuildDeferredSearchIndexAsync(
+    string path,
+    int generation,
+    string html,
+    IReadOnlyList<TranscriptNodeIdentity> identities,
+    CancellationTokenSource cancellation)
+  {
+    var timer = Stopwatch.StartNew();
+    try
+    {
+      TranscriptSearchIndex index = await Task.Run(
+        () => TranscriptSearchIndex.Build(
+          html,
+          identities,
+          cancellation.Token),
+        cancellation.Token);
+      cancellation.Token.ThrowIfCancellationRequested();
+      if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
+          generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      _searchIndex = index;
+      cancellation.Token.ThrowIfCancellationRequested();
+      if (!ReferenceEquals(_searchIndexCancellation, cancellation) ||
+          generation != _renderGeneration ||
+          !string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return;
+      }
+
+      StartPendingFindRequest();
+      DiagnosticLog.Write("transcript.search_index_completed", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = timer.ElapsedMilliseconds,
+        firstRenderAlreadyVisible = !_loadingLabel.Visible
+      });
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+      DiagnosticLog.Write("transcript.search_index_cancelled", new
+      {
+        path,
+        generation,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+    }
+    catch (Exception exception)
+    {
+      DiagnosticLog.Write("transcript.search_index_failed", new
+      {
+        path,
+        generation,
+        exception = exception.ToString()
+      });
+      PendingFindRequest? request = _pendingFindRequest;
+      if (request is not null)
+      {
+        _pendingFindRequest = null;
+        PostMessage(new
+        {
+          type = "find-error",
+          requestId = request.RequestId,
+          errorKind = "search",
+          error = exception.Message
+        });
+      }
+    }
+    finally
+    {
+      if (ReferenceEquals(_searchIndexCancellation, cancellation))
+      {
+        _searchIndexCancellation = null;
+      }
+      cancellation.Dispose();
+    }
+  }
+
+  private void CancelSearchIndexBuild()
+  {
+    CancellationTokenSource? cancellation = _searchIndexCancellation;
+    _searchIndexCancellation = null;
+    cancellation?.Cancel();
+  }
+
   private void CancelActiveRender()
   {
     CancellationTokenSource? cancellation = _renderCancellation;
@@ -774,6 +1012,49 @@ internal sealed class TranscriptView : UserControl
     return string.IsNullOrWhiteSpace(name)
       ? prefix + "…"
       : prefix + ":" + Environment.NewLine + name + "…";
+  }
+
+  private void ShowStartupProgress(
+    int phase,
+    string description,
+    int percentage)
+  {
+    Debug.Assert(phase >= 1 && phase <= 3);
+    Debug.Assert(!string.IsNullOrWhiteSpace(description));
+    if (phase < _startupProgressPhase)
+    {
+      return;
+    }
+
+    _startupProgressPhase = phase;
+    _startupProgressPercent = Math.Max(
+      _startupProgressPercent,
+      Math.Clamp(percentage, 0, 100));
+    string name = string.IsNullOrWhiteSpace(_sessionDisplayName)
+      ? Path.GetFileName(_sessionPath) ?? string.Empty
+      : _sessionDisplayName;
+    string text = description + Environment.NewLine +
+      $"{_startupProgressPercent}%";
+    if (!string.IsNullOrWhiteSpace(name))
+    {
+      text += Environment.NewLine + name;
+    }
+    ShowLoading(text);
+  }
+
+  private static int ScaleStartupProgress(
+    int completed,
+    int total,
+    int startPercentage,
+    int endPercentage)
+  {
+    if (total <= 0)
+    {
+      return startPercentage;
+    }
+    int boundedCompleted = Math.Clamp(completed, 0, total);
+    int span = Math.Max(0, endPercentage - startPercentage);
+    return startPercentage + (int)((long)span * boundedCompleted / total);
   }
 
   private void ShowLoading(string text)
@@ -838,30 +1119,60 @@ internal sealed class TranscriptView : UserControl
         });
         return;
       }
-      if (type == "stable-word-map-failure")
+      if (type == "window-transaction-diagnostic")
       {
-        DiagnosticLog.Write("transcript.stable_word_map_failure", new
-        {
-          key = ReadOptionalString(root, "key"),
-          renderedWordCount = ReadOptionalInt32(root, "renderedWordCount"),
-          mappedWordCount = ReadOptionalInt32(root, "mappedWordCount")
-        });
+        DiagnosticLog.Write("transcript.window_browser_timing", root.Clone());
+        return;
+      }
+      if (type == "window-shift-followup")
+      {
+        DiagnosticLog.Write("transcript.window_shift_followup", root.Clone());
+        return;
+      }
+      if (type == "lazy-word-materialized")
+      {
+        DiagnosticLog.Write("transcript.lazy_word_materialized", root.Clone());
         return;
       }
       if (type == "mapping-failure" || type == "playback-unmatched")
       {
-        DiagnosticLog.Write($"transcript.{type}", new
-        {
-          nodeId = ReadOptionalInt64(root, "nodeId"),
-          recordNumber = ReadOptionalInt32(root, "recordNumber"),
-          sourceId = ReadOptionalString(root, "sourceId"),
-          text = ReadOptionalString(root, "text")
-        });
+        DiagnosticLog.Write($"transcript.{type}", root.Clone());
+        return;
+      }
+      if (type is "mapping-node-summary" or
+          "mapping-install-summary" or
+          "fragment-range-miss")
+      {
+        DiagnosticLog.Write(
+          $"transcript.{type.Replace('-', '_')}",
+          root.Clone());
+        return;
+      }
+      if (type is "structure-js-equivalent" or "structure-js-divergence")
+      {
+        DiagnosticLog.Write(
+          type == "structure-js-equivalent"
+            ? "transcript.structure_js_equivalent"
+            : "transcript.structure_js_divergence",
+          root.Clone());
         return;
       }
       if (type == "find-query")
       {
         HandleFindQuery(root);
+        return;
+      }
+      if (type == "find-navigation-invalidated")
+      {
+        long? navigationGeneration = ReadOptionalInt64(
+          root,
+          "navigationGeneration");
+        if (navigationGeneration is long generation)
+        {
+          _latestFindWindowNavigationGeneration = Math.Max(
+            _latestFindWindowNavigationGeneration,
+            generation);
+        }
         return;
       }
       if (type == "find-cancel")
@@ -895,16 +1206,13 @@ internal sealed class TranscriptView : UserControl
           detailsAncestors = ReadOptionalString(root, "detailsAncestors"),
           corpusLength = ReadOptionalInt32(root, "corpusLength"),
           corpusWords = ReadOptionalInt32(root, "corpusWords"),
-          firstWordId = ReadOptionalString(root, "firstWordId"),
-          seekWordId = ReadOptionalString(root, "seekWordId"),
-          expectedWordCount = ReadOptionalInt32(root, "expectedWordCount"),
-          resolvedWordCount = ReadOptionalInt32(root, "resolvedWordCount"),
           navigationGeneration = ReadOptionalInt64(root, "navigationGeneration")
         });
         return;
       }
       if (type == "window-measured")
       {
+        UpdateBrowserViewportHeight(ReadOptionalDouble(root, "viewportHeight"));
         TranscriptVirtualDocument? virtualDocument = _virtualDocument;
         if (virtualDocument is not null &&
             root.TryGetProperty("measurements", out JsonElement measurements) &&
@@ -921,21 +1229,29 @@ internal sealed class TranscriptView : UserControl
               values[index] = height;
             }
           }
-          virtualDocument.UpdateMeasuredHeights(values);
+          int layoutGeneration = ReadOptionalInt32(
+            root,
+            "layoutGeneration") ?? _layoutGeneration;
+          virtualDocument.UpdateMeasuredHeights(values, layoutGeneration);
         }
         return;
       }
       if (type == "window-shift")
       {
+        UpdateBrowserViewportHeight(ReadOptionalDouble(root, "viewportHeight"));
         int? focalIndex = ReadOptionalInt32(root, "focalIndex");
         if (focalIndex is int validFocalIndex)
         {
-          _ = RenderWindowForIndexAsync(
+          _ = RenderWindowForIndexCoreAsync(
             validFocalIndex,
             ReadOptionalString(root, "reason"),
             ReadOptionalInt32(root, "anchorRecordNumber"),
-            ReadOptionalString(root, "anchorSourceId"),
-            ReadOptionalDouble(root, "anchorOffset"));
+            ReadOptionalDouble(root, "anchorOffset"),
+            ReadOptionalInt32(root, "visibleStartIndex"),
+            ReadOptionalInt32(root, "visibleEndIndex"),
+            ReadOptionalInt32(root, "sourceStartIndex"),
+            ReadOptionalInt32(root, "sourceEndIndex"),
+            ReadOptionalInt64(root, "requestSequence"));
         }
         return;
       }
@@ -951,7 +1267,6 @@ internal sealed class TranscriptView : UserControl
       if (type == "window-request")
       {
         int? recordNumber = ReadOptionalInt32(root, "recordNumber");
-        string sourceId = ReadOptionalString(root, "sourceId");
         if (recordNumber is int validRecordNumber)
         {
           long? navigationGeneration = ReadOptionalInt64(
@@ -965,7 +1280,6 @@ internal sealed class TranscriptView : UserControl
           }
           _ = RenderWindowForRecordAsync(
             validRecordNumber,
-            sourceId,
             ReadOptionalString(root, "reason"),
             ReadOptionalInt32(root, "matchIndex"),
             navigationGeneration);
@@ -1002,22 +1316,6 @@ internal sealed class TranscriptView : UserControl
           return;
         }
 
-        long? wordId = ReadOptionalInt64(root, "wordId");
-        TranscriptSearchIndex? searchIndex = _searchIndex;
-        if (wordId is long validWordId &&
-            validWordId > 0 &&
-            searchIndex is not null &&
-            searchIndex.TryResolveSpeechWord(
-              validWordId,
-              out long resolvedNodeId,
-              out int resolvedNodeWordIndex))
-        {
-          FindSeekRequested?.Invoke(
-            this,
-            new FindSeekRequestedEventArgs(
-              resolvedNodeId,
-              resolvedNodeWordIndex));
-        }
         return;
       }
       if (type == "find-seek-end")
@@ -1072,12 +1370,8 @@ internal sealed class TranscriptView : UserControl
       ReadOptionalBoolean(root, "wordEnabled") == true,
       ReadOptionalBoolean(root, "regexEnabled") == true,
       ReadOptionalBoolean(root, "voicedEnabled") != false,
-      string.Equals(
-        ReadOptionalString(root, "originKind"),
-        "selection",
-        StringComparison.Ordinal),
+      ReadOptionalString(root, "originKind"),
       ReadOptionalInt32(root, "originRecordNumber") ?? 0,
-      ReadOptionalString(root, "originSourceId"),
       ReadOptionalInt32(root, "originWordIndex") ?? -1);
 
     CancelFindSearch();
@@ -1122,19 +1416,17 @@ internal sealed class TranscriptView : UserControl
     _findCancellation = cancellation;
 
     int originRecordNumber = pending.OriginRecordNumber;
-    string originSourceId = pending.OriginSourceId;
     int originWordIndex = pending.OriginWordIndex;
-    if (!pending.HasSelectionOrigin &&
+    bool hasProvidedOrigin = IsProvidedFindOriginKind(pending.OriginKind);
+    if (!hasProvidedOrigin &&
         _pendingPosition is TranscriptPlaybackPosition voicePosition &&
         index.TryResolveVoiceOrigin(
           voicePosition.NodeId,
           voicePosition.WordIndex,
           out int voiceRecordNumber,
-          out string voiceSourceId,
           out int voiceRecordWordIndex))
     {
       originRecordNumber = voiceRecordNumber;
-      originSourceId = voiceSourceId;
       originWordIndex = voiceRecordWordIndex;
     }
 
@@ -1156,10 +1448,15 @@ internal sealed class TranscriptView : UserControl
       IReadOnlyList<TranscriptSearchMatch> matches = await index.SearchAsync(
         request,
         cancellation.Token);
+      TranscriptVirtualDocument? visibleDocument = _virtualDocument;
+      if (visibleDocument is not null)
+      {
+        matches = matches.Where(match =>
+          visibleDocument.IsRecordVisible(match.RecordNumber)).ToArray();
+      }
       matches = RotateMatchesAfterOrigin(
         matches,
         originRecordNumber,
-        originSourceId,
         originWordIndex);
       if (cancellation.IsCancellationRequested ||
           !ReferenceEquals(_findCancellation, cancellation))
@@ -1179,9 +1476,8 @@ internal sealed class TranscriptView : UserControl
         query = pending.Query,
         request.Regex,
         request.VoicedOnly,
-        originKind = pending.HasSelectionOrigin ? "selection" : "voice",
+        originKind = hasProvidedOrigin ? pending.OriginKind : "voice",
         originRecordNumber,
-        originSourceId,
         originWordIndex,
         matchCount = matches.Count,
         elapsedMilliseconds = timer.ElapsedMilliseconds
@@ -1232,10 +1528,15 @@ internal sealed class TranscriptView : UserControl
     }
   }
 
+  private static bool IsProvidedFindOriginKind(string originKind)
+  {
+    return string.Equals(originKind, "selection", StringComparison.Ordinal) ||
+      string.Equals(originKind, "find", StringComparison.Ordinal);
+  }
+
   private static IReadOnlyList<TranscriptSearchMatch> RotateMatchesAfterOrigin(
     IReadOnlyList<TranscriptSearchMatch> matches,
     int recordNumber,
-    string sourceId,
     int wordIndex)
   {
     if (matches.Count < 2 || wordIndex < 0)
@@ -1246,12 +1547,8 @@ internal sealed class TranscriptView : UserControl
     for (int index = 0; index < matches.Count; ++index)
     {
       TranscriptSearchMatch match = matches[index];
-      bool sameSource = string.Equals(
-        match.SourceId,
-        sourceId,
-        StringComparison.Ordinal);
       if (match.RecordNumber > recordNumber ||
-          (match.RecordNumber == recordNumber && sameSource &&
+          (match.RecordNumber == recordNumber &&
            match.StartWordIndex > wordIndex))
       {
         first = index;
@@ -1352,6 +1649,33 @@ internal sealed class TranscriptView : UserControl
     };
   }
 
+  private async Task<TranscriptStructureSnapshot?> CaptureWebViewStructureAsync(
+    string probeId)
+  {
+    try
+    {
+      CoreWebView2? core = _webView.CoreWebView2;
+      if (!_initialized || _webView.IsDisposed || core is null)
+      {
+        return null;
+      }
+      string result = await core.ExecuteScriptAsync(
+        TranscriptStructureProbe.BuildWebViewProbeScript());
+      return TranscriptStructureProbe.CaptureWebViewResult(probeId, result);
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or ObjectDisposedException or JsonException)
+    {
+      DiagnosticLog.Write("transcript.structure_probe_failed", new
+      {
+        probeId,
+        stage = "webview-dom",
+        exception = exception.ToString()
+      });
+      return null;
+    }
+  }
+
   private async Task<bool> ExecuteAsync(string script)
   {
     try
@@ -1405,6 +1729,18 @@ internal sealed class TranscriptView : UserControl
   protected override void OnSizeChanged(EventArgs eventArgs)
   {
     base.OnSizeChanged(eventArgs);
+    Size currentSize = ClientSize;
+    if (currentSize != _lastLayoutSize)
+    {
+      _lastLayoutSize = currentSize;
+      _browserViewportHeight = 0.0;
+      ++_layoutGeneration;
+      _virtualDocument?.SetLayoutGeneration(_layoutGeneration);
+      if (_initialized)
+      {
+        QueueSettingsApply(immediate: false);
+      }
+    }
     LogViewState("size-changed", "after-base");
   }
 
@@ -1570,14 +1906,38 @@ internal sealed class TranscriptView : UserControl
   private sealed record TranscriptRenderPayload(
     TranscriptVirtualDocument Document,
     IReadOnlyList<TranscriptNodeIdentity> Identities,
-    TranscriptSearchIndex SearchIndex);
+    string SearchHtml,
+    TranscriptStructureSnapshot RendererStructure,
+    IReadOnlyList<TranscriptDomNode> DomNodes);
 
+
+  private double GetVirtualViewportHeight()
+  {
+    if (double.IsFinite(_browserViewportHeight) && _browserViewportHeight > 0)
+    {
+      return _browserViewportHeight;
+    }
+    return _webView.ClientSize.Height > 0
+      ? _webView.ClientSize.Height
+      : TranscriptVirtualDocument.DefaultViewportHeight;
+  }
+
+  private void UpdateBrowserViewportHeight(double? viewportHeight)
+  {
+    if (viewportHeight is double value &&
+        double.IsFinite(value) &&
+        value > 0)
+    {
+      _browserViewportHeight = value;
+    }
+  }
 
   private int ResolveInitialWindowIndex(
     TranscriptVirtualDocument document,
     IReadOnlyList<TranscriptNodeIdentity> identities)
   {
-    return _pendingPosition is TranscriptPlaybackPosition position &&
+    return _settings.FollowSpeech &&
+      _pendingPosition is TranscriptPlaybackPosition position &&
       TryResolvePositionIndex(document, identities, position, out int index)
         ? index
         : Math.Max(0, document.Count - 1);
@@ -1593,52 +1953,168 @@ internal sealed class TranscriptView : UserControl
     TranscriptNodeIdentity? identity = identities.FirstOrDefault(
       item => item.NodeId == position.NodeId);
     return identity is not null &&
-      document.TryGetIndex(identity.RecordNumber, identity.SourceId, out index);
+      document.TryGetIndex(identity.RecordNumber, out index);
+  }
+
+  private string BuildReplaceDomScript(
+    TranscriptWindow window,
+    IReadOnlyList<TranscriptDomNode> domNodes,
+    bool preserve,
+    string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null)
+  {
+    HashSet<int> keys = window.Records
+      .SelectMany(record => record.Identities.Count != 0
+        ? record.Identities
+        : new[] { new TranscriptVirtualIdentity(record.RecordNumber) })
+      .Select(identity => identity.RecordNumber)
+      .ToHashSet();
+    IReadOnlyList<TranscriptNodeIdentity> identities = _identities
+      .Where(identity => keys.Contains(identity.RecordNumber))
+      .ToArray();
+    return "replaceTranscriptDom(" +
+      JsonSerializer.Serialize(domNodes) + "," +
+      JsonSerializer.Serialize(preserve) + "," +
+      JsonSerializer.Serialize(identities) + "," +
+      JsonSerializer.Serialize(expectedStructure?.Entries ??
+        Array.Empty<TranscriptStructureEntry>()) + "," +
+      JsonSerializer.Serialize(structureProbeId ?? string.Empty) + ");";
   }
 
   private string BuildReplaceWindowScript(
     TranscriptWindow window,
     bool preserve,
     int? anchorRecordNumber = null,
-    string? anchorSourceId = null,
     double? anchorOffset = null,
     int? focusVirtualIndex = null,
-    string? focusEdge = null)
+    string? focusEdge = null,
+    string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null)
   {
-    var keys = window.Records
-      .Select(record => record.SourceId + "\0" + record.RecordNumber)
-      .ToHashSet(StringComparer.Ordinal);
+    return BuildReplaceWindowScriptInstrumented(
+      window,
+      preserve,
+      anchorRecordNumber,
+      anchorOffset,
+      focusVirtualIndex,
+      focusEdge,
+      structureProbeId,
+      expectedStructure,
+      metrics: null,
+      transactionId: null,
+      renderReason: null,
+      requestSequence: null);
+  }
+
+  private string BuildReplaceWindowScriptInstrumented(
+    TranscriptWindow window,
+    bool preserve,
+    int? anchorRecordNumber = null,
+    double? anchorOffset = null,
+    int? focusVirtualIndex = null,
+    string? focusEdge = null,
+    string? structureProbeId = null,
+    TranscriptStructureSnapshot? expectedStructure = null,
+    WindowScriptBuildMetrics? metrics = null,
+    long? transactionId = null,
+    string? renderReason = null,
+    long? requestSequence = null)
+  {
+    var identityTimer = Stopwatch.StartNew();
+    HashSet<int> keys = window.Records
+      .SelectMany(record => record.Identities.Count != 0
+        ? record.Identities
+        : new[] { new TranscriptVirtualIdentity(record.RecordNumber) })
+      .Select(identity => identity.RecordNumber)
+      .ToHashSet();
     IReadOnlyList<TranscriptNodeIdentity> identities = _identities
-      .Where(identity => keys.Contains(identity.SourceId + "\0" + identity.RecordNumber))
+      .Where(identity => keys.Contains(identity.RecordNumber))
       .ToArray();
-    IReadOnlyList<TranscriptRecordWordMap> wordMaps = _searchIndex?.GetWordMaps(
-      window.Records) ?? Array.Empty<TranscriptRecordWordMap>();
-    return "replaceTranscriptWindow(" +
+    if (metrics is not null)
+    {
+      metrics.NodeCount = identities.Count;
+      metrics.IdentityMilliseconds = identityTimer.ElapsedMilliseconds;
+    }
+
+
+    long effectiveTransactionId = transactionId ??
+      Interlocked.Increment(ref _windowRenderTransactionSequence);
+    bool searchIndexAvailable = _searchIndex is not null;
+    var serializationTimer = Stopwatch.StartNew();
+    string script = "replaceTranscriptWindow(" +
       JsonSerializer.Serialize(window.Html) + "," +
       JsonSerializer.Serialize(preserve) + "," +
       JsonSerializer.Serialize(identities) + "," +
-      JsonSerializer.Serialize(wordMaps) + "," +
       window.StartIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.EndIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.TopSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       window.BottomSpacerHeight.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
       JsonSerializer.Serialize(anchorRecordNumber) + "," +
-      JsonSerializer.Serialize(anchorSourceId) + "," +
       JsonSerializer.Serialize(anchorOffset) + "," +
       JsonSerializer.Serialize(focusVirtualIndex) + "," +
-      JsonSerializer.Serialize(focusEdge) + ");";
+      JsonSerializer.Serialize(focusEdge) + "," +
+      JsonSerializer.Serialize(expectedStructure?.Entries ??
+        Array.Empty<TranscriptStructureEntry>()) + "," +
+      JsonSerializer.Serialize(structureProbeId ?? string.Empty) + "," +
+      effectiveTransactionId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      JsonSerializer.Serialize(renderReason ?? string.Empty) + "," +
+      (requestSequence ?? 0L).ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+      JsonSerializer.Serialize(searchIndexAvailable) + ");";
+    if (metrics is not null)
+    {
+      metrics.SerializationMilliseconds = serializationTimer.ElapsedMilliseconds;
+    }
+    return script;
+  }
+
+  private async Task<bool> ExecuteFindWindowReplacementAsync(
+    string replacementScript,
+    int matchIndex,
+    long navigationGeneration)
+  {
+    try
+    {
+      CoreWebView2? core = _webView.CoreWebView2;
+      if (!_initialized || _webView.IsDisposed || core is null)
+      {
+        return false;
+      }
+
+      string generation = navigationGeneration.ToString(
+        System.Globalization.CultureInfo.InvariantCulture);
+      string match = matchIndex.ToString(
+        System.Globalization.CultureInfo.InvariantCulture);
+      string script =
+        "(() => {" +
+        $"if (findNavigationGeneration !== {generation}) return false;" +
+        replacementScript +
+        $"void showFindMatch({match},'window-installed',{generation});" +
+        "return true;})()";
+      string result = await core.ExecuteScriptAsync(script);
+      return JsonSerializer.Deserialize<bool>(result);
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or
+        ObjectDisposedException or
+        JsonException)
+    {
+      DiagnosticLog.Write("transcript.script_failed", new
+      {
+        exception = exception.ToString()
+      });
+      return false;
+    }
   }
 
   private async Task RenderWindowForRecordAsync(
     int recordNumber,
-    string sourceId,
     string reason,
     int? matchIndex,
     long? navigationGeneration = null)
   {
     TranscriptVirtualDocument? document = _virtualDocument;
     if (document is null ||
-        !document.TryGetIndex(recordNumber, sourceId, out int focalIndex))
+        !document.TryGetIndex(recordNumber, out int focalIndex))
     {
       return;
     }
@@ -1648,7 +2124,7 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
-    await _findWindowRenderGate.WaitAsync();
+    await _windowRenderGate.WaitAsync();
     try
     {
       if (navigationGeneration is long currentGeneration &&
@@ -1669,17 +2145,31 @@ internal sealed class TranscriptView : UserControl
         }
         return;
       }
-      TranscriptWindow window = document.CreateWindow(focalIndex);
+      TranscriptWindow window = document.CreateWindow(focalIndex, GetVirtualViewportHeight());
       var timer = Stopwatch.StartNew();
-      if (!await ExecuteAsync(BuildReplaceWindowScript(
-            window,
-            preserve: false,
-            focusVirtualIndex: string.Equals(
-              reason,
-              "search",
-              StringComparison.OrdinalIgnoreCase)
-                ? null
-                : focalIndex)))
+      bool search = string.Equals(
+        reason,
+        "search",
+        StringComparison.OrdinalIgnoreCase);
+      string replacementScript = BuildReplaceWindowScript(
+        window,
+        preserve: false,
+        focusVirtualIndex: search ? null : focalIndex);
+      bool replacementApplied;
+      if (search &&
+          matchIndex is int searchMatchIndex &&
+          navigationGeneration is long searchNavigationGeneration)
+      {
+        replacementApplied = await ExecuteFindWindowReplacementAsync(
+          replacementScript,
+          searchMatchIndex,
+          searchNavigationGeneration);
+      }
+      else
+      {
+        replacementApplied = await ExecuteAsync(replacementScript);
+      }
+      if (!replacementApplied)
       {
         return;
       }
@@ -1703,7 +2193,6 @@ internal sealed class TranscriptView : UserControl
       {
         reason,
         recordNumber,
-        sourceId,
         navigationGeneration,
         window.StartIndex,
         window.EndIndex,
@@ -1714,19 +2203,26 @@ internal sealed class TranscriptView : UserControl
     }
     finally
     {
-      _findWindowRenderGate.Release();
+      _windowRenderGate.Release();
     }
   }
 
   private async Task RenderWindowForEdgeAsync(string edge)
   {
+    if (_domPresentationMode)
+    {
+      await ExecuteAsync(edge == "start"
+        ? "window.scrollTo(0, 0);"
+        : "window.scrollTo(0, document.documentElement.scrollHeight);");
+      return;
+    }
     TranscriptVirtualDocument? document = _virtualDocument;
     if (document is null || document.Count == 0)
     {
       return;
     }
     int focalIndex = edge == "start" ? 0 : document.Count - 1;
-    TranscriptWindow window = document.CreateWindow(focalIndex);
+    TranscriptWindow window = document.CreateWindow(focalIndex, GetVirtualViewportHeight());
     var timer = Stopwatch.StartNew();
     if (!await ExecuteAsync(BuildReplaceWindowScript(
           window,
@@ -1738,10 +2234,9 @@ internal sealed class TranscriptView : UserControl
     }
     _windowStartIndex = window.StartIndex;
     _windowEndIndex = window.EndIndex;
-    if (_pendingPosition is TranscriptPlaybackPosition pending)
-    {
-      PostPlaybackPosition(pending);
-    }
+    // Keyboard Home/End is explicit manual navigation.  The WebView has already
+    // disabled follow mode, so replaying the pending speech marker here would
+    // countermand the user's chosen window and can restart window ping-pong.
     DiagnosticLog.Write("transcript.window_rendered", new
     {
       reason = "keyboard-" + edge,
@@ -1754,49 +2249,145 @@ internal sealed class TranscriptView : UserControl
     });
   }
 
-  private async Task RenderWindowForIndexAsync(
+  private Task RenderWindowForIndexAsync(
     int focalIndex,
     string reason,
     int? anchorRecordNumber,
-    string anchorSourceId,
     double? anchorOffset)
   {
-    TranscriptVirtualDocument? document = _virtualDocument;
-    if (document is null)
-    {
-      return;
-    }
-    TranscriptWindow window = document.CreateWindow(focalIndex);
-    if (window.StartIndex == _windowStartIndex && window.EndIndex == _windowEndIndex)
-    {
-      return;
-    }
-    var timer = Stopwatch.StartNew();
-    if (!await ExecuteAsync(BuildReplaceWindowScript(
-          window,
-          preserve: false,
-          anchorRecordNumber: anchorRecordNumber,
-          anchorSourceId: anchorSourceId,
-          anchorOffset: anchorOffset)))
-    {
-      return;
-    }
-    _windowStartIndex = window.StartIndex;
-    _windowEndIndex = window.EndIndex;
-    if (_pendingPosition is TranscriptPlaybackPosition pending)
-    {
-      PostPlaybackPosition(pending);
-    }
-    DiagnosticLog.Write("transcript.window_rendered", new
-    {
-      reason,
+    return RenderWindowForIndexCoreAsync(
       focalIndex,
-      window.StartIndex,
-      window.EndIndex,
-      recordCount = window.Records.Count,
-      htmlCharacters = window.Html.Length,
-      elapsedMilliseconds = timer.ElapsedMilliseconds
-    });
+      reason,
+      anchorRecordNumber,
+      anchorOffset,
+      protectedStartIndex: null,
+      protectedEndIndex: null,
+      sourceStartIndex: null,
+      sourceEndIndex: null);
+  }
+
+  private async Task RenderWindowForIndexCoreAsync(
+    int focalIndex,
+    string reason,
+    int? anchorRecordNumber,
+    double? anchorOffset,
+    int? protectedStartIndex,
+    int? protectedEndIndex,
+    int? sourceStartIndex,
+    int? sourceEndIndex,
+    long? requestSequence = null)
+  {
+    var gateTimer = Stopwatch.StartNew();
+    await _windowRenderGate.WaitAsync();
+    long gateWaitMilliseconds = gateTimer.ElapsedMilliseconds;
+    try
+    {
+      if (_domPresentationMode)
+      {
+        return;
+      }
+      TranscriptVirtualDocument? document = _virtualDocument;
+      if (document is null)
+      {
+        return;
+      }
+      if (sourceStartIndex is int requestedStart &&
+          sourceEndIndex is int requestedEnd &&
+          (requestedStart != _windowStartIndex ||
+           requestedEnd != _windowEndIndex))
+      {
+        DiagnosticLog.Write("transcript.window_shift_stale", new
+        {
+          reason,
+          focalIndex,
+          requestedStart,
+          requestedEnd,
+          currentStart = _windowStartIndex,
+          currentEnd = _windowEndIndex
+        });
+        return;
+      }
+
+      int direction = reason.EndsWith("-up", StringComparison.OrdinalIgnoreCase)
+        ? -1
+        : reason.EndsWith("-down", StringComparison.OrdinalIgnoreCase)
+          ? 1
+          : 0;
+      var windowBuildTimer = Stopwatch.StartNew();
+      TranscriptWindow window = direction == 0
+        ? document.CreateWindow(focalIndex, GetVirtualViewportHeight())
+        : document.CreateShiftedWindow(
+            focalIndex,
+            _windowStartIndex,
+            _windowEndIndex,
+            direction,
+            GetVirtualViewportHeight(),
+            protectedStartIndex,
+            protectedEndIndex);
+      long windowBuildMilliseconds = windowBuildTimer.ElapsedMilliseconds;
+      if (window.StartIndex == _windowStartIndex &&
+          window.EndIndex == _windowEndIndex)
+      {
+        return;
+      }
+
+      var timer = Stopwatch.StartNew();
+      long transactionId = Interlocked.Increment(
+        ref _windowRenderTransactionSequence);
+      var scriptMetrics = new WindowScriptBuildMetrics();
+      var scriptBuildTimer = Stopwatch.StartNew();
+      string replacementScript = BuildReplaceWindowScriptInstrumented(
+        window,
+        preserve: false,
+        anchorRecordNumber: anchorRecordNumber,
+        anchorOffset: anchorOffset,
+        focusVirtualIndex: focalIndex,
+        metrics: scriptMetrics,
+        transactionId: transactionId,
+        renderReason: reason,
+        requestSequence: requestSequence);
+      long scriptBuildMilliseconds = scriptBuildTimer.ElapsedMilliseconds;
+      var executeTimer = Stopwatch.StartNew();
+      if (!await ExecuteAsync(replacementScript))
+      {
+        return;
+      }
+      long executeMilliseconds = executeTimer.ElapsedMilliseconds;
+      _windowStartIndex = window.StartIndex;
+      _windowEndIndex = window.EndIndex;
+      bool manualScroll =
+        string.Equals(reason, "scroll-up", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(reason, "scroll-down", StringComparison.OrdinalIgnoreCase);
+      if (!manualScroll &&
+          _pendingPosition is TranscriptPlaybackPosition pending)
+      {
+        PostPlaybackPosition(pending);
+      }
+      DiagnosticLog.Write("transcript.window_rendered", new
+      {
+        transactionId,
+        requestSequence = requestSequence ?? 0L,
+        reason,
+        focalIndex,
+        window.StartIndex,
+        window.EndIndex,
+        recordCount = window.Records.Count,
+        nodeCount = scriptMetrics.NodeCount,
+        searchIndexAvailable = _searchIndex is not null,
+        htmlCharacters = window.Html.Length,
+        gateWaitMilliseconds,
+        windowBuildMilliseconds,
+        identityMilliseconds = scriptMetrics.IdentityMilliseconds,
+        serializationMilliseconds = scriptMetrics.SerializationMilliseconds,
+        scriptBuildMilliseconds,
+        executeMilliseconds,
+        elapsedMilliseconds = timer.ElapsedMilliseconds
+      });
+    }
+    finally
+    {
+      _windowRenderGate.Release();
+    }
   }
 
   private Task RenderWindowForNodeAsync(long nodeId, string reason)
@@ -1807,7 +2398,6 @@ internal sealed class TranscriptView : UserControl
       ? Task.CompletedTask
       : RenderWindowForRecordAsync(
           identity.RecordNumber,
-          identity.SourceId,
           reason,
           matchIndex: null);
   }
@@ -1914,6 +2504,15 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 .word { border-radius: 2px; }
 .word.active { background: var(--highlight); }
 .word.paused {
+  outline: 2px solid var(--highlight);
+  outline-offset: 1px;
+  animation: marker-blink 1s steps(1, end) infinite;
+}
+li.speech-list-item-active {
+  background: var(--highlight);
+  border-radius: 3px;
+}
+li.speech-list-item-paused {
   outline: 2px solid var(--highlight);
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
@@ -2038,8 +2637,11 @@ let currentFragmentText = null;
 let currentFragmentStart = -1;
 let currentFragmentEnd = -1;
 let currentBoundaryWordIndex = -1;
+let currentSpeechListItem = null;
 let fadeMs = 250;
 let followSpeech = true;
+let showRolledBackHistory = false;
+let layoutGeneration = 1;
 let programmaticScrollUntil = 0;
 let windowStartIndex = -1;
 let windowEndIndex = -1;
@@ -2049,13 +2651,14 @@ let latestSettingsSequence = 0;
 const fadingAnimations = new WeakMap();
 let knownNodeIds = new Set();
 let displayWordsByRecord = new Map();
-let displayWordsById = new Map();
 let lexicalWordsByRecord = new Map();
 let segmentRangesByNode = new Map();
+let mappingGeneration = 0;
 const reportedMappingFailures = new Set();
 const reportedPlaybackFailures = new Set();
 let findMatches = [];
 let currentFindMatch = -1;
+let findEditOrigin = null;
 let findGeneration = 0;
 let findNavigationGeneration = 0;
 let findSearchPending = false;
@@ -2081,26 +2684,70 @@ function isLexical(text) {
   return /^[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*$/u.test(text);
 }
 
-function wrapWords() {
-  words = [];
-  lexicalWords = [];
-  const walker = document.createTreeWalker(transcript, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent || /^(SCRIPT|STYLE)$/.test(parent.tagName)) return NodeFilter.FILTER_REJECT;
-      return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-    }
-  });
+function nodeRecordKeys(nodeMap) {
+  const result = new Set();
+  for (const item of nodeMap || []) {
+    const recordNumber = String(
+      item.RecordNumber ?? item.recordNumber ?? '');
+    result.add(makeRecordKey(recordNumber));
+  }
+  return result;
+}
+
+function ensureCoreOrdinalSpeechMaps() {
+  for (const item of transcript.querySelectorAll('li[data-list-ordinal]')) {
+    if (item.querySelector(':scope > .speech-ordinal-map')) continue;
+    const ordinal = String(item.dataset.listOrdinal || '').trim();
+    if (!/^-?\d+$/.test(ordinal)) continue;
+    const marker = document.createElement('span');
+    marker.className = 'speech-ordinal-map';
+    marker.setAttribute('aria-hidden', 'true');
+    marker.style.display = 'none';
+    marker.textContent = ordinal + '. ';
+    item.insertBefore(marker, item.firstChild);
+  }
+}
+
+function wrapWordsForRecordKeys(recordKeys, reset) {
+  if (reset) {
+    words = [];
+    lexicalWords = [];
+  }
+  let currentKey = '';
+  const walker = document.createTreeWalker(
+    transcript,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
   const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node;
+      if (element.classList.contains('record-anchor')) {
+        currentKey = makeRecordKey(
+          String(element.dataset.jsonlRecord || ''));
+      }
+      continue;
+    }
+    const parent = node.parentElement;
+    if (!parent ||
+        /^(SCRIPT|STYLE)$/.test(parent.tagName) ||
+        parent.closest('.word') ||
+        (recordKeys !== null && !recordKeys.has(currentKey)) ||
+        !node.nodeValue.trim()) {
+      continue;
+    }
+    nodes.push(node);
+  }
+
   const rx = /(?<![\p{L}\p{M}\p{N}_.])\d*\.\d+(?!\.\d)(?=[fFlL]|\b)|\.+|[\p{L}\p{M}\p{N}_]+(?:['’\-][\p{L}\p{M}\p{N}_]+)*|[^\s]/gu;
   for (const node of nodes) {
-    const text = node.nodeValue;
+    const value = node.nodeValue;
     let match;
     let last = 0;
+    rx.lastIndex = 0;
     const fragment = document.createDocumentFragment();
-    while ((match = rx.exec(text)) !== null) {
-      fragment.append(text.slice(last, match.index));
+    while ((match = rx.exec(value)) !== null) {
+      fragment.append(value.slice(last, match.index));
       const span = document.createElement('span');
       span.className = 'word';
       span.textContent = match[0];
@@ -2112,8 +2759,326 @@ function wrapWords() {
       fragment.append(span);
       last = match.index + match[0].length;
     }
-    fragment.append(text.slice(last));
+    fragment.append(value.slice(last));
     node.replaceWith(fragment);
+  }
+}
+
+function wrapWords(nodeMap = null) {
+  words = [];
+  lexicalWords = [];
+  ensureCoreOrdinalSpeechMaps();
+  wrapWordsForRecordKeys(
+    nodeMap === null ? null : nodeRecordKeys(nodeMap),
+    false);
+}
+
+function structureDetailsKey(details) {
+  const presentation = details.getAttribute('data-presentation-id');
+  if (presentation) return 'presentation:' + presentation;
+  const marker = details.querySelector('[data-aicore-unit-id]');
+  if (marker) return 'core-unit:' + marker.getAttribute('data-aicore-unit-id');
+  const summary = Array.from(details.children).find(
+    child => child.tagName === 'SUMMARY');
+  const summaryText = summary
+    ? summary.textContent.trim().replace(/\s+/g, ' ')
+    : '';
+  return 'summary:' + summaryText;
+}
+
+function normalizeStructureEntries(entries) {
+  const result = new Map();
+  for (const entry of entries || []) {
+    const recordNumber = Number(entry.RecordNumber ?? entry.recordNumber ?? 0);
+    const turnId = String(entry.TurnId ?? entry.turnId ?? '');
+    const detailsChain = Array.from(
+      entry.DetailsChain ?? entry.detailsChain ?? [],
+      value => String(value));
+    result.set(String(recordNumber), {
+      recordNumber,
+      turnId,
+      detailsChain
+    });
+  }
+  return result;
+}
+
+function captureStructureDom() {
+  const detailsKeys = new Map(
+    Array.from(transcript.querySelectorAll('details'))
+      .map(details => [details, structureDetailsKey(details)]));
+  const entries = [];
+  for (const anchor of transcript.querySelectorAll('.record-anchor')) {
+    const chain = [];
+    let element = anchor.parentElement;
+    while (element) {
+      if (element.tagName === 'DETAILS') {
+        chain.unshift(detailsKeys.get(element) || 'details:?');
+      }
+      element = element.parentElement;
+    }
+    const turn = anchor.closest('section.transcript-turn');
+    entries.push({
+      recordNumber: Number(anchor.getAttribute('data-jsonl-record') || 0),
+      turnId: turn
+        ? 'presentation:' + (turn.getAttribute('data-presentation-id') || '')
+        : '',
+      detailsChain: chain
+    });
+  }
+  return {
+    entries,
+    detailsCount: transcript.querySelectorAll('details').length,
+    turnCount: transcript.querySelectorAll('section.transcript-turn').length
+  };
+}
+
+function compareStructureMaps(before, after) {
+  const differences = [];
+  for (const [key, left] of before) {
+    const right = after.get(key);
+    if (!right) {
+      differences.push({
+        recordNumber: left.recordNumber,
+        kind: 'missing-record',
+        beforeTurn: left.turnId,
+        afterTurn: '',
+        beforeDetails: left.detailsChain,
+        afterDetails: []
+      });
+      continue;
+    }
+    const detailsChanged =
+      left.detailsChain.length !== right.detailsChain.length ||
+      left.detailsChain.some((value, index) => value !== right.detailsChain[index]);
+    const turnChanged = left.turnId && right.turnId && left.turnId !== right.turnId;
+    if (detailsChanged || turnChanged) {
+      differences.push({
+        recordNumber: left.recordNumber,
+        kind: 'containment-changed',
+        beforeTurn: left.turnId,
+        afterTurn: right.turnId,
+        beforeDetails: left.detailsChain,
+        afterDetails: right.detailsChain
+      });
+    }
+  }
+  for (const [key, right] of after) {
+    if (!before.has(key)) {
+      differences.push({
+        recordNumber: right.recordNumber,
+        kind: 'unexpected-record',
+        beforeTurn: '',
+        afterTurn: right.turnId,
+        beforeDetails: [],
+        afterDetails: right.detailsChain
+      });
+    }
+  }
+  return differences;
+}
+
+function structureAnchorSelector(recordNumber) {
+  return '.record-anchor[data-jsonl-record="' +
+    CSS.escape(String(recordNumber)) + '"]';
+}
+
+function inputContextForRecord(html, recordNumber) {
+  const recordNeedle = 'data-jsonl-record="' + String(recordNumber) + '"';
+  let index = html.indexOf(recordNeedle);
+  if (index < 0) return '';
+  const start = Math.max(0, index - 1800);
+  const end = Math.min(html.length, index + 2200);
+  return html.slice(start, end);
+}
+
+function domContextForRecord(recordNumber) {
+  const anchor = transcript.querySelector(
+    structureAnchorSelector(recordNumber));
+  if (!anchor) return '';
+  let element = anchor.parentElement;
+  let selected = anchor;
+  for (let depth = 0; element && depth < 4; depth++) {
+    selected = element;
+    if (element.tagName === 'DETAILS') break;
+    element = element.parentElement;
+  }
+  const html = selected.outerHTML || '';
+  return html.length <= 5000 ? html : html.slice(0, 5000);
+}
+
+function buildStructureDivergenceContexts(html, differences) {
+  return (differences || []).slice(0, 20).map(diff => ({
+    recordNumber: diff.recordNumber,
+    beforeDetails: diff.beforeDetails,
+    afterDetails: diff.afterDetails,
+    inputContext: inputContextForRecord(
+      html,
+      diff.recordNumber),
+    domContext: domContextForRecord(diff.recordNumber)
+  }));
+}
+
+function postStructureStage(
+  probeId,
+  stage,
+  expectedMap,
+  previousMap,
+  previousStage,
+  rawInputHtml = '',
+  exactAssignedHtml = '',
+  exactParsedHtml = '') {
+  if (!probeId) return previousMap;
+  const snapshot = captureStructureDom();
+  const currentMap = normalizeStructureEntries(snapshot.entries);
+  const expectedDifferences = compareStructureMaps(expectedMap, currentMap);
+  const previousDifferences = compareStructureMaps(previousMap, currentMap);
+  chrome.webview.postMessage({
+    type: previousDifferences.length === 0
+      ? 'structure-js-equivalent'
+      : 'structure-js-divergence',
+    probeId,
+    stage,
+    previousStage,
+    anchorCount: snapshot.entries.length,
+    detailsCount: snapshot.detailsCount,
+    turnCount: snapshot.turnCount,
+    expectedDifferenceCount: expectedDifferences.length,
+    previousDifferenceCount: previousDifferences.length,
+    differencesFromExpected: expectedDifferences,
+    differencesFromPrevious: previousDifferences,
+    divergenceContexts:
+      previousDifferences.length === 0 || !rawInputHtml
+        ? []
+        : buildStructureDivergenceContexts(rawInputHtml, previousDifferences),
+    exactAssignedHtml:
+      previousDifferences.length === 0 ? '' : exactAssignedHtml,
+    exactParsedHtml:
+      previousDifferences.length === 0 ? '' : exactParsedHtml,
+    exactAssignedHtmlLength:
+      previousDifferences.length === 0 ? 0 : exactAssignedHtml.length,
+    exactParsedHtmlLength:
+      previousDifferences.length === 0 ? 0 : exactParsedHtml.length
+  });
+  return currentMap;
+}
+
+function buildTranscriptDomNode(spec) {
+  if (!spec) return document.createDocumentFragment();
+  const kind = String(spec.Kind ?? spec.kind ?? '');
+  if (kind === 'text') {
+    return document.createTextNode(String(spec.Text ?? spec.text ?? ''));
+  }
+  if (kind === 'html') {
+    // Markdown parsing ends at the leaf boundary. Structural transcript nodes
+    // never enter innerHTML/template parsing.
+    const template = document.createElement('template');
+    template.innerHTML = String(spec.Html ?? spec.html ?? '');
+    return template.content.cloneNode(true);
+  }
+  if (kind !== 'element') return document.createDocumentFragment();
+
+  const tag = String(spec.Tag ?? spec.tag ?? 'div');
+  const element = document.createElement(tag);
+  const attributes = spec.Attributes ?? spec.attributes ?? {};
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, String(value));
+  }
+  const children = spec.Children ?? spec.children ?? [];
+  for (const child of children) {
+    element.append(buildTranscriptDomNode(child));
+  }
+  return element;
+}
+
+function replaceTranscriptDom(
+  domNodes,
+  preserve,
+  nodeMap,
+  expectedStructure = [],
+  structureProbeId = '') {
+  const expectedStructureMap = normalizeStructureEntries(expectedStructure);
+  clearFindHighlights();
+  findCurrentWords = [];
+  const nearBottom = document.documentElement.scrollHeight -
+    (window.scrollY + window.innerHeight) < 80;
+  const previousY = window.scrollY;
+  const openDetails = new Map();
+  if (preserve) {
+    for (const details of transcript.querySelectorAll('details')) {
+      openDetails.set(structureDetailsKey(details), details.open);
+    }
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const spec of domNodes || []) {
+    fragment.append(buildTranscriptDomNode(spec));
+  }
+  transcript.replaceChildren(fragment);
+  applyRevisionVisibility(showRolledBackHistory);
+
+  let currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-dom-construction',
+    expectedStructureMap,
+    expectedStructureMap,
+    'dom-model-serialized-html');
+  for (const details of transcript.querySelectorAll('details')) {
+    const key = structureDetailsKey(details);
+    if (openDetails.has(key)) details.open = openDetails.get(key);
+  }
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-details-restore',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-dom-construction');
+
+  wrapWords(nodeMap || []);
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-wrap-words',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-details-restore');
+  assignRecordScopes();
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-record-scopes',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-wrap-words');
+  assignNodeScopes(nodeMap || []);
+  currentStructureMap = postStructureStage(
+    structureProbeId,
+    'after-node-scopes',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-record-scopes');
+  postMappingInstallSummary(nodeMap || []);
+  postStructureStage(
+    structureProbeId,
+    'replace-dom-exit',
+    expectedStructureMap,
+    currentStructureMap,
+    'after-node-scopes');
+
+  windowStartIndex = 0;
+  windowEndIndex = Number.MAX_SAFE_INTEGER;
+  virtualShiftPending = false;
+  currentIndex = -1;
+  currentEndIndex = -1;
+  voiceMarkerIndex = -1;
+  currentNode = -1;
+  currentFragmentText = null;
+  currentFragmentStart = -1;
+  currentFragmentEnd = -1;
+  currentBoundaryWordIndex = -1;
+  currentSpeechListItem = null;
+  liveEndMarker.style.display = 'none';
+  if (preserve) {
+    if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
+    else window.scrollTo(0, previousY);
   }
 }
 
@@ -2121,16 +3086,49 @@ function replaceTranscriptWindow(
   html,
   preserve,
   nodeMap,
-  wordMap,
   startIndex = -1,
   endIndex = -1,
   topSpacerHeight = 0,
   bottomSpacerHeight = 0,
   anchorRecordNumber = null,
-  anchorSourceId = null,
   anchorOffset = null,
   focusVirtualIndex = null,
-  focusEdge = null) {
+  focusEdge = null,
+  expectedStructure = [],
+  structureProbeId = '',
+  transactionId = 0,
+  renderReason = '',
+  requestSequence = 0,
+  searchIndexAvailable = false) {
+  const diagnosticStarted = performance.now();
+  const captureGeometry = () => {
+    const topSpacer = transcript.querySelector(
+      '.virtual-spacer[data-virtual-spacer="top"]');
+    const bottomSpacer = transcript.querySelector(
+      '.virtual-spacer[data-virtual-spacer="bottom"]');
+    const visible = [...transcript.querySelectorAll('.virtual-record')]
+      .filter(record => {
+        const rect = record.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+    return {
+      scrollY:Number(window.scrollY),
+      viewportHeight:Number(window.innerHeight),
+      documentHeight:Number(document.documentElement.scrollHeight),
+      topSpacerHeight:Number(topSpacer?.getBoundingClientRect().height ?? 0),
+      bottomSpacerHeight:Number(bottomSpacer?.getBoundingClientRect().height ?? 0),
+      visibleStartIndex:visible.length
+        ? Number(visible[0].dataset.virtualIndex || -1)
+        : -1,
+      visibleEndIndex:visible.length
+        ? Number(visible[visible.length - 1].dataset.virtualIndex || -1)
+        : -1
+    };
+  };
+  const beforeGeometry = captureGeometry();
+  const expectedStructureMap = normalizeStructureEntries(expectedStructure);
+  let previousStructureMap = expectedStructureMap;
+  let previousStructureStage = 'virtual-window-html';
   clearFindHighlights();
   findCurrentWords = [];
   const nearBottom = document.documentElement.scrollHeight -
@@ -2139,54 +3137,140 @@ function replaceTranscriptWindow(
   const openDetails = preserve
     ? [...transcript.querySelectorAll('details')].map(x => x.open)
     : [];
-  transcript.innerHTML =
+  // Replacing spacer heights and materialized records can itself change
+  // scrollY.  Mark that layout-induced movement as programmatic.  Genuine
+  // wheel/touch/scroll-key/scrollbar input can explicitly override this guard.
+  programmaticScrollUntil = Math.max(
+    programmaticScrollUntil,
+    performance.now() + VW_WINDOW_REPLACEMENT_SCROLL_GUARD_MS);
+  const exactAssignedHtml =
     '<div class="virtual-spacer" data-virtual-spacer="top" style="height:' +
     Math.max(0, Number(topSpacerHeight) || 0) + 'px"></div>' + html +
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
+  let phaseStarted = performance.now();
+  transcript.innerHTML = exactAssignedHtml;
+  applyRevisionVisibility(showRolledBackHistory);
+  const innerHtmlMilliseconds = performance.now() - phaseStarted;
+  const exactParsedHtml = transcript.innerHTML;
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-inner-html',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage,
+    html,
+    exactAssignedHtml,
+    exactParsedHtml);
+  previousStructureStage = 'after-inner-html';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
   [...transcript.querySelectorAll('details')].forEach((item, index) => {
     if (index < openDetails.length) item.open = openDetails[index];
   });
-  wrapWords();
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-details-restore',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-details-restore';
+  phaseStarted = performance.now();
+  wrapWords(nodeMap || []);
+  const wrapWordsMilliseconds = performance.now() - phaseStarted;
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-wrap-words',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-wrap-words';
+  phaseStarted = performance.now();
   assignRecordScopes();
+  const recordScopesMilliseconds = performance.now() - phaseStarted;
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-record-scopes',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-record-scopes';
+  phaseStarted = performance.now();
   assignNodeScopes(nodeMap || []);
-  assignStableWordScopes(wordMap || []);
+  const nodeScopesMilliseconds = performance.now() - phaseStarted;
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-node-scopes',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-node-scopes';
+  phaseStarted = performance.now();
+  postMappingInstallSummary(nodeMap || []);
+  const mappingSummaryMilliseconds = performance.now() - phaseStarted;
+  previousStructureMap = postStructureStage(
+    structureProbeId,
+    'after-stable-word-scopes',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  previousStructureStage = 'after-stable-word-scopes';
+  phaseStarted = performance.now();
   const measurements = [...transcript.querySelectorAll('.virtual-record')]
     .map(record => ({
       index:Number(record.dataset.virtualIndex || -1),
       height:record.getBoundingClientRect().height
     }))
     .filter(item => item.index >= 0 && item.height > 0);
+  const measurementMilliseconds = performance.now() - phaseStarted;
   if (measurements.length) {
-    chrome.webview.postMessage({type:'window-measured', measurements});
+    chrome.webview.postMessage({
+      type:'window-measured',
+      layoutGeneration,
+      viewportHeight:window.innerHeight,
+      measurements
+    });
   }
   virtualShiftPending = false;
+  function viewportIntersectsMaterializedContent() {
+    return [...transcript.querySelectorAll('.virtual-record')].some(record => {
+      const rect = record.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < window.innerHeight;
+    });
+  }
+  function focusRequestedVirtualRecord() {
+    if (focusVirtualIndex === null) return false;
+    const focusRecord = transcript.querySelector(
+      '.virtual-record[data-virtual-index="' +
+      CSS.escape(String(focusVirtualIndex)) + '"]');
+    if (!focusRecord) return false;
+    programmaticScrollUntil = performance.now() + 2000;
+    if (focusEdge === 'start') {
+      window.scrollTo(0, 0);
+    } else if (focusEdge === 'end') {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    } else {
+      focusRecord.scrollIntoView({block:'center', behavior:'auto'});
+    }
+    return true;
+  }
+
+  phaseStarted = performance.now();
+  let restoredAnchor = false;
   if (anchorRecordNumber !== null && anchorOffset !== null) {
     const selector = '.record-anchor[data-jsonl-record="' +
-      CSS.escape(String(anchorRecordNumber)) + '"][data-source-id="' +
-      CSS.escape(String(anchorSourceId || '')) + '"]';
+      CSS.escape(String(anchorRecordNumber)) + '"]';
     const anchor = transcript.querySelector(selector);
     if (anchor) {
       const delta = anchor.getBoundingClientRect().top - Number(anchorOffset);
       programmaticScrollUntil = performance.now() + 500;
       window.scrollBy(0, delta);
+      restoredAnchor = true;
     }
-  } else if (focusVirtualIndex !== null) {
-    const focusRecord = transcript.querySelector(
-      '.virtual-record[data-virtual-index="' +
-      CSS.escape(String(focusVirtualIndex)) + '"]');
-    if (focusRecord) {
-      programmaticScrollUntil = performance.now() + 2000;
-      if (focusEdge === 'start') {
-        window.scrollTo(0, 0);
-      } else if (focusEdge === 'end') {
-        window.scrollTo(0, document.documentElement.scrollHeight);
-      } else {
-        focusRecord.scrollIntoView({block:'center', behavior:'auto'});
-      }
-    }
+  }
+  if ((!restoredAnchor || !viewportIntersectsMaterializedContent()) &&
+      focusVirtualIndex !== null) {
+    focusRequestedVirtualRecord();
   }
   currentIndex = -1;
   currentEndIndex = -1;
@@ -2196,16 +3280,68 @@ function replaceTranscriptWindow(
   currentFragmentStart = -1;
   currentFragmentEnd = -1;
   currentBoundaryWordIndex = -1;
+  currentSpeechListItem = null;
   liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
   }
+  const anchorRestoreMilliseconds = performance.now() - phaseStarted;
+  postStructureStage(
+    structureProbeId,
+    'replace-window-exit',
+    expectedStructureMap,
+    previousStructureMap,
+    previousStructureStage);
+  const afterGeometry = captureGeometry();
+  const totalMilliseconds = performance.now() - diagnosticStarted;
+  const diagnostic = {
+    type:'window-transaction-diagnostic',
+    transactionId:Number(transactionId || 0),
+    requestSequence:Number(requestSequence || 0),
+    reason:String(renderReason || ''),
+    searchIndexAvailable:!!searchIndexAvailable,
+    startIndex:Number(startIndex),
+    endIndex:Number(endIndex),
+    recordCount:document.querySelectorAll('.virtual-record').length,
+    nodeCount:Array.isArray(nodeMap) ? nodeMap.length : 0,
+    wordCount:words.length,
+    beforeScrollY:beforeGeometry.scrollY,
+    beforeViewportHeight:beforeGeometry.viewportHeight,
+    beforeDocumentHeight:beforeGeometry.documentHeight,
+    beforeTopSpacerHeight:beforeGeometry.topSpacerHeight,
+    beforeBottomSpacerHeight:beforeGeometry.bottomSpacerHeight,
+    beforeVisibleStartIndex:beforeGeometry.visibleStartIndex,
+    beforeVisibleEndIndex:beforeGeometry.visibleEndIndex,
+    afterScrollY:afterGeometry.scrollY,
+    afterViewportHeight:afterGeometry.viewportHeight,
+    afterDocumentHeight:afterGeometry.documentHeight,
+    afterTopSpacerHeight:afterGeometry.topSpacerHeight,
+    afterBottomSpacerHeight:afterGeometry.bottomSpacerHeight,
+    afterVisibleStartIndex:afterGeometry.visibleStartIndex,
+    afterVisibleEndIndex:afterGeometry.visibleEndIndex,
+    innerHtmlMilliseconds:Math.round(innerHtmlMilliseconds),
+    wrapWordsMilliseconds:Math.round(wrapWordsMilliseconds),
+    recordScopesMilliseconds:Math.round(recordScopesMilliseconds),
+    nodeScopesMilliseconds:Math.round(nodeScopesMilliseconds),
+    mappingSummaryMilliseconds:Math.round(mappingSummaryMilliseconds),
+    measurementMilliseconds:Math.round(measurementMilliseconds),
+    anchorRestoreMilliseconds:Math.round(anchorRestoreMilliseconds),
+    totalMilliseconds:Math.round(totalMilliseconds)
+  };
+  chrome.webview.postMessage(diagnostic);
+  lastWindowTransactionDiagnostic = {
+    transactionId:diagnostic.transactionId,
+    requestSequence:diagnostic.requestSequence,
+    reason:diagnostic.reason,
+    completedAt:performance.now(),
+    afterVisibleStartIndex:diagnostic.afterVisibleStartIndex,
+    afterVisibleEndIndex:diagnostic.afterVisibleEndIndex
+  };
 }
 
-function replaceTranscript(html, preserve, nodeMap, wordMap = []) {
-  replaceTranscriptWindow(
-    html, preserve, nodeMap, wordMap, -1, -1, 0, 0);
+function replaceTranscript(html, preserve, nodeMap) {
+  replaceTranscriptWindow(html, preserve, nodeMap, -1, -1, 0, 0);
 }
 
 function updateFollowToggle() {
@@ -2230,16 +3366,32 @@ function setFollowSpeech(enabled, notify) {
   }
 }
 
-function applySettings(highlight, duration, follow, dark) {
+function applyRevisionVisibility(show) {
+  showRolledBackHistory = !!show;
+  for (const turn of transcript.querySelectorAll(
+      'section.transcript-turn[data-revision-historical="true"]')) {
+    turn.hidden = !showRolledBackHistory;
+  }
+}
+
+function applySettings(
+  highlight,
+  duration,
+  follow,
+  showHistory,
+  generation,
+  dark) {
   document.documentElement.classList.toggle('dark', dark);
   document.documentElement.style.setProperty('--highlight', highlight);
   document.documentElement.style.setProperty('--fade-ms', duration + 'ms');
   fadeMs = duration;
+  layoutGeneration = Number(generation || layoutGeneration);
+  applyRevisionVisibility(showHistory);
   setFollowSpeech(follow, false);
 }
 
-function makeRecordKey(recordNumber, sourceId) {
-  return sourceId + '\u0000' + recordNumber;
+function makeRecordKey(recordNumber) {
+  return String(recordNumber);
 }
 
 function appendRecordWord(map, key, word) {
@@ -2256,7 +3408,6 @@ function assignRecordScopes() {
   displayWordsByRecord = new Map();
   lexicalWordsByRecord = new Map();
   let recordNumber = '';
-  let sourceId = '';
   const walker = document.createTreeWalker(
     transcript,
     NodeFilter.SHOW_ELEMENT);
@@ -2264,16 +3415,14 @@ function assignRecordScopes() {
     const element = walker.currentNode;
     if (element.classList.contains('record-anchor')) {
       recordNumber = element.dataset.jsonlRecord || '';
-      sourceId = element.dataset.sourceId || '';
       continue;
     }
     if (!element.classList.contains('word')) continue;
 
     element.dataset.recordNumber = recordNumber;
-    element.dataset.sourceId = sourceId;
-    if (!recordNumber && !sourceId) continue;
+    if (!recordNumber) continue;
 
-    const key = makeRecordKey(recordNumber, sourceId);
+    const key = makeRecordKey(recordNumber);
     element.dataset.recordIndex = String(
       appendRecordWord(displayWordsByRecord, key, element));
     if (element.dataset.lexical === '1') {
@@ -2283,45 +3432,27 @@ function assignRecordScopes() {
   }
 }
 
-function assignStableWordScopes(wordMap) {
-  displayWordsById = new Map();
-  const mapsByRecord = new Map();
-  for (const record of wordMap || []) {
-    const recordNumber = String(record.RecordNumber ?? record.recordNumber ?? '');
-    const sourceId = String(record.SourceId ?? record.sourceId ?? '');
-    mapsByRecord.set(
-      makeRecordKey(recordNumber, sourceId),
-      record.Words ?? record.words ?? []);
-  }
+function materializeRecordWords(recordNumber) {
+  const key = makeRecordKey(recordNumber);
+  if (displayWordsByRecord.has(key)) return true;
+  const selector = '.record-anchor[data-jsonl-record=\"' +
+    CSS.escape(String(recordNumber)) + '\"]';
+  if (!transcript.querySelector(selector)) return false;
 
-  for (const [key, recordWords] of displayWordsByRecord) {
-    const mappedWords = mapsByRecord.get(key) || [];
-    if (mappedWords.length !== recordWords.length) {
-      chrome.webview.postMessage({
-        type:'stable-word-map-failure',
-        key,
-        renderedWordCount:recordWords.length,
-        mappedWordCount:mappedWords.length
-      });
-    }
-    const count = Math.min(recordWords.length, mappedWords.length);
-    for (let index = 0; index < count; ++index) {
-      const word = recordWords[index];
-      const mapped = mappedWords[index];
-      const wordId = String(mapped.WordId ?? mapped.wordId ?? '');
-      if (!wordId) continue;
-      word.dataset.wordId = wordId;
-      word.id = 'word-' + wordId;
-      displayWordsById.set(wordId, word);
-      const nodeId = Number(mapped.NodeId ?? mapped.nodeId ?? 0);
-      const nodeWordIndex = Number(
-        mapped.NodeWordIndex ?? mapped.nodeWordIndex ?? -1);
-      if (nodeId > 0 && nodeWordIndex >= 0) {
-        word.dataset.nodeId = String(nodeId);
-        word.dataset.nodeWordIndex = String(nodeWordIndex);
-      }
-    }
-  }
+  const beforeWordCount = words.length;
+  const started = performance.now();
+  wrapWordsForRecordKeys(new Set([key]), false);
+  assignRecordScopes();
+  const materialized = displayWordsByRecord.has(key);
+  chrome.webview.postMessage({
+    type:'lazy-word-materialized',
+    recordNumber:Number(recordNumber),
+    addedWordCount:words.length - beforeWordCount,
+    totalWordCount:words.length,
+    elapsedMilliseconds:Math.round(performance.now() - started),
+    materialized
+  });
+  return materialized;
 }
 
 function findSequence(
@@ -2329,8 +3460,7 @@ function findSequence(
   target,
   startAt,
   requiredNodeId,
-  requiredRecordNumber,
-  requiredSourceId) {
+  requiredRecordNumber) {
   if (!target.length || !collection.length) return -1;
   const lastStart = collection.length - target.length;
   for (let i = Math.max(0, startAt); i <= lastStart; ++i) {
@@ -2341,9 +3471,7 @@ function findSequence(
           (requiredNodeId !== null &&
            candidate.dataset.nodeId !== requiredNodeId) ||
           (requiredRecordNumber !== null &&
-           candidate.dataset.recordNumber !== requiredRecordNumber) ||
-          (requiredSourceId !== null &&
-           candidate.dataset.sourceId !== requiredSourceId)) {
+           candidate.dataset.recordNumber !== requiredRecordNumber)) {
         equal = false;
         break;
       }
@@ -2384,7 +3512,84 @@ function rememberSegmentRange(
   });
 }
 
+function diagnosticRanges(ranges) {
+  return (ranges || []).slice(0, 64).map(range => ({
+    start: range.start,
+    end: range.end,
+    displayKey: String(range.displayKey || '').slice(0, 1000),
+    lexicalKey: String(range.lexicalKey || '').slice(0, 1000)
+  }));
+}
+
+function postMappingInstallSummary(nodeMap) {
+  const scopedCounts = new Map();
+  for (const word of words) {
+    const nodeId = String(word.dataset.nodeId || '');
+    if (!nodeId) continue;
+    scopedCounts.set(nodeId, (scopedCounts.get(nodeId) || 0) + 1);
+  }
+  const nodes = [];
+  for (const item of nodeMap || []) {
+    const nodeId = String(item.NodeId ?? item.nodeId ?? '');
+    const recordNumber = Number(
+      item.RecordNumber ?? item.recordNumber ?? 0);
+    const segments = item.Segments ?? item.segments ?? [];
+    const ranges = segmentRangesByNode.get(nodeId) || [];
+    nodes.push({
+      nodeId: Number(nodeId),
+      recordNumber,
+      segmentCount: segments.length,
+      rangeCount: ranges.length,
+      scopedWordCount: scopedCounts.get(nodeId) || 0,
+    });
+  }
+  chrome.webview.postMessage({
+    type: 'mapping-install-summary',
+    mappingGeneration,
+    nodeCount: nodes.length,
+    totalWordCount: words.length,
+    nodes
+  });
+}
+
+function postFragmentRangeMiss(
+  text,
+  nodeId,
+  nodeKey,
+  displayKey,
+  lexicalKey,
+  mapped,
+  knownNode) {
+  const nodeWords = words.filter(word => word.dataset.nodeId === nodeKey);
+  chrome.webview.postMessage({
+    type: 'fragment-range-miss',
+    mappingGeneration,
+    nodeId,
+    knownNode,
+    text: String(text || '').slice(0, 500),
+    displayKey: String(displayKey || '').slice(0, 1000),
+    lexicalKey: String(lexicalKey || '').slice(0, 1000),
+    storedRangeCount: mapped.length,
+    storedRanges: diagnosticRanges(mapped),
+    currentNode,
+    currentIndex,
+    currentEndIndex,
+    currentFragmentText: String(currentFragmentText || '').slice(0, 500),
+    currentFragmentStart,
+    currentFragmentEnd,
+    currentBoundaryWordIndex,
+    nodeWordCount: nodeWords.length,
+    nodeWordSample: nodeWords.slice(0, 80).map(word => ({
+      index: Number(word.dataset.index ?? -1),
+      normalized: word.dataset.normalized || '',
+      recordNumber: word.dataset.recordNumber || '',
+      recordIndex: word.dataset.recordIndex || '',
+    }))
+  });
+}
+
 function assignNodeScopes(nodeMap) {
+  ++mappingGeneration;
   knownNodeIds = new Set();
   segmentRangesByNode = new Map();
   const displayCursors = new Map();
@@ -2394,14 +3599,12 @@ function assignNodeScopes(nodeMap) {
     knownNodeIds.add(nodeId);
     const recordNumber = String(
       item.RecordNumber ?? item.recordNumber ?? '');
-    const sourceId = String(item.SourceId ?? item.sourceId ?? '');
     const segments = item.Segments ?? item.segments ?? [];
-    const key = makeRecordKey(recordNumber, sourceId);
+    const key = makeRecordKey(recordNumber);
     const recordWords = displayWordsByRecord.get(key) || [];
     const recordLexicalWords = lexicalWordsByRecord.get(key) || [];
     let displayCursor = displayCursors.get(key) || 0;
     let lexicalCursor = lexicalCursors.get(key) || 0;
-    let mappedAny = false;
     for (const segment of segments) {
       const displayTarget = tokenizeDisplay(segment);
       const lexicalTarget = tokenize(segment);
@@ -2412,14 +3615,12 @@ function assignNodeScopes(nodeMap) {
         displayTarget,
         displayCursor,
         null,
-        null,
         null);
       if (start < 0 && displayCursor > 0) {
         start = findSequence(
           recordWords,
           displayTarget,
           0,
-          null,
           null,
           null);
       }
@@ -2442,7 +3643,6 @@ function assignNodeScopes(nodeMap) {
           ++lexicalCursor;
         }
         lexicalCursors.set(key, lexicalCursor);
-        mappedAny = true;
         continue;
       }
 
@@ -2451,14 +3651,12 @@ function assignNodeScopes(nodeMap) {
         lexicalTarget,
         lexicalCursor,
         null,
-        null,
         null);
       if (lexicalStart < 0 && lexicalCursor > 0) {
         lexicalStart = findSequence(
           recordLexicalWords,
           lexicalTarget,
           0,
-          null,
           null,
           null);
       }
@@ -2480,24 +3678,31 @@ function assignNodeScopes(nodeMap) {
         displayCursor = Number(
           recordLexicalWords[lexicalEnd].dataset.recordIndex) + 1;
         displayCursors.set(key, displayCursor);
-        mappedAny = true;
         continue;
       }
 
-      const failureKey = nodeId + ':' + recordNumber + ':' +
-        sourceId + ':' + segment;
+      const failureKey = nodeId + ':' + recordNumber + ':' + segment;
       if (!reportedMappingFailures.has(failureKey)) {
         reportedMappingFailures.add(failureKey);
         chrome.webview.postMessage({
           type: 'mapping-failure',
+          mappingGeneration,
           nodeId: Number(nodeId),
           recordNumber: Number(recordNumber),
-          sourceId,
-          text: segment.slice(0, 240)
+              text: segment.slice(0, 500),
+          displayKey: displayTarget.join('\u0000').slice(0, 1000),
+          lexicalKey: lexicalTarget.join('\u0000').slice(0, 1000),
+          displayCursor,
+          lexicalCursor,
+          recordWordCount: recordWords.length,
+          recordLexicalWordCount: recordLexicalWords.length,
+          recordWordSample: recordWords.slice(0, 80)
+            .map(word => word.dataset.normalized || ''),
+          recordLexicalWordSample: recordLexicalWords.slice(0, 80)
+            .map(word => word.dataset.normalized || '')
         });
       }
     }
-    if (!mappedAny) continue;
   }
 }
 
@@ -2554,7 +3759,12 @@ function findFragmentRange(text, nodeId) {
     (lexicalKey && range.lexicalKey === lexicalKey));
   const mappedRange = chooseNearestRange(matches, nodeId);
   if (mappedRange) return mappedRange;
-  if (knownNodeIds.has(nodeKey)) return null;
+  const knownNode = knownNodeIds.has(nodeKey);
+  if (knownNode) {
+    postFragmentRangeMiss(
+      text, nodeId, nodeKey, displayKey, lexicalKey, mapped, true);
+    return null;
+  }
 
   const globalStart = findSequence(
     words,
@@ -2569,6 +3779,8 @@ function findFragmentRange(text, nodeId) {
       end: globalStart + displayTarget.length - 1
     };
   }
+  postFragmentRangeMiss(
+    text, nodeId, nodeKey, displayKey, lexicalKey, mapped, false);
   return null;
 }
 
@@ -2585,6 +3797,78 @@ function openAncestors(element) {
   return opened;
 }
 
+const VW_MIN_VIEWPORT_HEIGHTS = 5;
+const VW_EDGE_TRIGGER_VIEWPORTS = 2;
+const VW_SCROLL_DIRECTION_EPSILON_PX = 1;
+const VW_SHIFT_PENDING_TIMEOUT_MS = 3000;
+let lastVoiceVirtualIndex = -1;
+let lastVoiceLocalY = Number.NaN;
+
+function materializedVirtualRecords() {
+  return [...transcript.querySelectorAll('.virtual-record')];
+}
+
+function materializedWindowBounds() {
+  const records = materializedVirtualRecords();
+  if (!records.length) return null;
+  return {
+    records,
+    first:records[0].getBoundingClientRect(),
+    last:records[records.length - 1].getBoundingClientRect()
+  };
+}
+
+function maybePrefetchVoiceCursor(element) {
+  if (!followSpeech || !element || virtualShiftPending) return;
+  const record = element.closest('.virtual-record');
+  const bounds = materializedWindowBounds();
+  if (!record || !bounds) return;
+
+  const virtualIndex = Number(record.dataset.virtualIndex || -1);
+  const recordRect = record.getBoundingClientRect();
+  const cursorRect = element.getBoundingClientRect();
+  const localY = cursorRect.top - recordRect.top;
+  let direction = 0;
+  if (lastVoiceVirtualIndex >= 0) {
+    if (virtualIndex > lastVoiceVirtualIndex) direction = 1;
+    else if (virtualIndex < lastVoiceVirtualIndex) direction = -1;
+    else if (Number.isFinite(lastVoiceLocalY)) {
+      if (localY > lastVoiceLocalY + VW_SCROLL_DIRECTION_EPSILON_PX) direction = 1;
+      else if (localY < lastVoiceLocalY - VW_SCROLL_DIRECTION_EPSILON_PX) direction = -1;
+    }
+  }
+  lastVoiceVirtualIndex = virtualIndex;
+  lastVoiceLocalY = localY;
+
+  const triggerDistance = window.innerHeight * VW_EDGE_TRIGGER_VIEWPORTS;
+  const nearTop = cursorRect.top - bounds.first.top <= triggerDistance;
+  const nearBottom = bounds.last.bottom - cursorRect.bottom <= triggerDistance;
+  const canMoveUp = windowStartIndex > 0;
+  const bottomSpacer = transcript.querySelector(
+    '.virtual-spacer[data-virtual-spacer="bottom"]');
+  const canMoveDown = (bottomSpacer?.getBoundingClientRect().height ?? 0) > 0;
+
+  if (nearTop && nearBottom) {
+    if (direction < 0 && canMoveUp) {
+      requestVirtualShift(-1, 'playback-up', record);
+    } else if (direction > 0 && canMoveDown) {
+      requestVirtualShift(1, 'playback-down', record);
+    } else if (canMoveDown &&
+               bounds.last.bottom - cursorRect.bottom <=
+                 cursorRect.top - bounds.first.top) {
+      requestVirtualShift(1, 'playback-down', record);
+    } else if (canMoveUp) {
+      requestVirtualShift(-1, 'playback-up', record);
+    }
+    return;
+  }
+  if (nearBottom && canMoveDown && direction >= 0) {
+    requestVirtualShift(1, 'playback-down', record);
+  } else if (nearTop && canMoveUp && direction <= 0) {
+    requestVirtualShift(-1, 'playback-up', record);
+  }
+}
+
 function reveal(element) {
   if (!followSpeech || !element) return;
   const rect = element.getBoundingClientRect();
@@ -2594,6 +3878,19 @@ function reveal(element) {
     programmaticScrollUntil = performance.now() + 500;
     element.scrollIntoView({block: 'center', behavior: 'auto'});
   }
+}
+
+function ordinalListItemForWord(word) {
+  const ordinal = word?.closest('.speech-ordinal-map');
+  return ordinal ? ordinal.closest('li') : null;
+}
+
+function clearSpeechListItemHighlight() {
+  if (!currentSpeechListItem) return;
+  currentSpeechListItem.classList.remove(
+    'speech-list-item-active',
+    'speech-list-item-paused');
+  currentSpeechListItem = null;
 }
 
 function cancelFade(word) {
@@ -2707,6 +4004,7 @@ function applyRangeClass(range, className) {
 function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   setFollowSpeech(follow, false);
   clearMarkers();
+  clearSpeechListItemHighlight();
   if (state === 'none') {
     retireCurrentWord(true);
     return;
@@ -2756,23 +4054,35 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
     wordIndex,
     fragmentChanged || wordIndex < currentBoundaryWordIndex);
   const target = words[range.start];
-  openAncestors(target);
+  const listItem = ordinalListItemForWord(target);
+  openAncestors(listItem || target);
   if (state === 'paused') {
     retireCurrentWord(false);
-    applyRangeClass(range, 'paused');
+    if (listItem) {
+      listItem.classList.add('speech-list-item-paused');
+      currentSpeechListItem = listItem;
+    } else {
+      applyRangeClass(range, 'paused');
+    }
   } else {
     if (currentIndex >= 0 &&
         (currentIndex !== range.start || currentEndIndex !== range.end)) {
       retireCurrentWord(true);
     }
-    applyRangeClass(range, 'active');
+    if (listItem) {
+      listItem.classList.add('speech-list-item-active');
+      currentSpeechListItem = listItem;
+    } else {
+      applyRangeClass(range, 'active');
+    }
   }
   currentIndex = range.start;
   currentEndIndex = range.end;
   voiceMarkerIndex = range.start;
   currentBoundaryWordIndex = wordIndex;
   currentNode = nodeId;
-  reveal(target);
+  reveal(listItem || target);
+  maybePrefetchVoiceCursor(target);
 }
 
 
@@ -2808,6 +4118,10 @@ function updateFindNavigationState() {
 function cancelFindSearch(updateStatus) {
   ++findGeneration;
   ++findNavigationGeneration;
+  chrome.webview.postMessage({
+    type:'find-navigation-invalidated',
+    navigationGeneration:findNavigationGeneration
+  });
   if (findSearchPending) {
     chrome.webview.postMessage({type:'find-cancel'});
     findSearchPending = false;
@@ -2825,11 +4139,8 @@ function normalizeFindMatch(match) {
   return {
     fileOrdinal: Number(match.FileOrdinal ?? match.fileOrdinal ?? 0),
     recordNumber: Number(match.RecordNumber ?? match.recordNumber ?? 0),
-    sourceId: String(match.SourceId ?? match.sourceId ?? ''),
     startWordIndex: Number(match.StartWordIndex ?? match.startWordIndex ?? -1),
     endWordIndex: Number(match.EndWordIndex ?? match.endWordIndex ?? -1),
-    wordIds: (match.WordIds ?? match.wordIds ?? []).map(value => String(value)),
-    seekWordId: String(match.SeekWordId ?? match.seekWordId ?? ''),
     nodeId: Number(match.NodeId ?? match.nodeId ?? 0),
     nodeWordIndex: Number(match.NodeWordIndex ?? match.nodeWordIndex ?? -1)
   };
@@ -2856,15 +4167,25 @@ async function showFindMatch(
   liveEndMarker.style.display = 'none';
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
+  if (trigger === 'enter' ||
+      trigger === 'shift-enter' ||
+      trigger === 'button-previous' ||
+      trigger === 'button-next' ||
+      trigger === 'reopened') {
+    findEditOrigin = null;
+  }
   if (followSpeech) setFollowSpeech(false, true);
-  const key = makeRecordKey(String(match.recordNumber), match.sourceId);
-  const recordWords = displayWordsByRecord.get(key);
+  const key = makeRecordKey(match.recordNumber);
+  let recordWords = displayWordsByRecord.get(key);
+  if (!recordWords &&
+      materializeRecordWords(match.recordNumber)) {
+    recordWords = displayWordsByRecord.get(key);
+  }
   if (!recordWords) {
     findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
     chrome.webview.postMessage({
       type:'window-request',
       recordNumber:match.recordNumber,
-      sourceId:match.sourceId,
       reason:'search',
       matchIndex:currentFindMatch,
       navigationGeneration
@@ -2872,15 +4193,14 @@ async function showFindMatch(
     reportFind('window-requested', {trigger, targetIndex:currentFindMatch});
     return;
   }
-  const matchedWords = match.wordIds
-    .map(wordId => displayWordsById.get(String(wordId)))
-    .filter(word => !!word);
-  if (!match.wordIds.length || matchedWords.length !== match.wordIds.length) {
-    reportFind('navigation-word-id-missing', {
+  const matchedWords = recordWords.slice(
+    match.startWordIndex, match.endWordIndex + 1);
+  const expectedWordCount = match.endWordIndex - match.startWordIndex + 1;
+  if (expectedWordCount <= 0 || matchedWords.length !== expectedWordCount) {
+    reportFind('navigation-record-index-missing', {
       trigger,
-      expectedWordCount:match.wordIds.length,
-      resolvedWordCount:matchedWords.length,
-      firstWordId:match.wordIds.length ? match.wordIds[0] : ''
+      expectedWordCount,
+      resolvedWordCount:matchedWords.length
     });
     return;
   }
@@ -2891,7 +4211,10 @@ async function showFindMatch(
   const target = matchedWords[0];
   const openedDetailsCount = openAncestors(target);
   programmaticScrollUntil = performance.now() + 1500;
-  target.scrollIntoView({block:'center', behavior:'smooth'});
+  target.scrollIntoView({
+    block:'center',
+    behavior:trigger === 'window-installed' ? 'auto' : 'smooth'
+  });
   findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
   reportFind('navigated', {
     trigger,
@@ -2952,16 +4275,26 @@ function getFindOrigin() {
       return {
         kind:'selection',
         recordNumber:Number(word.dataset.recordNumber || 0),
-        sourceId:word.dataset.sourceId || '',
         wordIndex:Number(word.dataset.recordIndex || -1)
       };
     }
   }
-  return {kind:'voice', recordNumber:0, sourceId:'', wordIndex:-1};
+  if (currentFindMatch >= 0 && currentFindMatch < findMatches.length) {
+    const match = findMatches[currentFindMatch];
+    return {
+      kind:'find',
+      recordNumber:Number(match.recordNumber || 0),
+      wordIndex:Number(match.startWordIndex ?? -1)
+    };
+  }
+  return {kind:'voice', recordNumber:0, wordIndex:-1};
 }
 
 function runFind() {
-  const origin = getFindOrigin();
+  if (findEditOrigin === null) {
+    findEditOrigin = getFindOrigin();
+  }
+  const origin = findEditOrigin;
   if (followSpeech) setFollowSpeech(false, true);
   cancelFindSearch(false);
   clearFindHighlights();
@@ -2988,7 +4321,6 @@ function runFind() {
     voicedEnabled:findVoicedEnabled,
     originKind:origin.kind,
     originRecordNumber:origin.recordNumber,
-    originSourceId:origin.sourceId,
     originWordIndex:origin.wordIndex
   });
 }
@@ -3017,6 +4349,7 @@ function openFind() {
 }
 
 function closeFind() {
+  findEditOrigin = null;
   if (findInputTimer) {
     clearTimeout(findInputTimer);
     findInputTimer = 0;
@@ -3028,12 +4361,24 @@ function closeFind() {
 }
 
 function toggleFindOption(button, setter) {
+  findEditOrigin = getFindOrigin();
   setter();
   button.classList.toggle('enabled');
   runFind();
 }
 
+findInput.addEventListener('beforeinput', () => {
+  const replacesEntireQuery = findInput.value.length > 0 &&
+    findInput.selectionStart === 0 &&
+    findInput.selectionEnd === findInput.value.length;
+  if (replacesEntireQuery || findEditOrigin === null) {
+    findEditOrigin = getFindOrigin();
+  }
+});
 findInput.addEventListener('input', () => {
+  if (findEditOrigin === null) {
+    findEditOrigin = getFindOrigin();
+  }
   if (findInputTimer) clearTimeout(findInputTimer);
   cancelFindSearch(false);
   findInputTimer = setTimeout(() => {
@@ -3047,7 +4392,8 @@ findRegex.addEventListener('click', () => toggleFindOption(findRegex, () => find
 findVoiced.addEventListener('click', () => toggleFindOption(findVoiced, () => findVoicedEnabled = !findVoicedEnabled));
 
 function isVoicedFindMatch(match) {
-  return !!match && Number(match.seekWordId || 0) > 0;
+  return !!match && Number(match.nodeId || 0) > 0 &&
+    Number(match.nodeWordIndex ?? -1) >= 0;
 }
 
 function postFindSeek(match, trigger) {
@@ -3055,13 +4401,13 @@ function postFindSeek(match, trigger) {
     trigger,
     targetMatch: currentFindMatch,
     fileOrdinal: match.fileOrdinal,
-    seekWordId:match.seekWordId
+    nodeId:match.nodeId,
+    nodeWordIndex:match.nodeWordIndex
   });
   chrome.webview.postMessage({
     type:'find-seek',
     nodeId:Number(match.nodeId),
-    nodeWordIndex:Number(match.nodeWordIndex),
-    wordId:Number(match.seekWordId)
+    nodeWordIndex:Number(match.nodeWordIndex)
   });
 }
 
@@ -3170,66 +4516,209 @@ followToggle.addEventListener('click', () => {
 });
 updateFollowToggle();
 
-let scrollFollowTimer = 0;
-let virtualShiftTimer = 0;
-function firstVisibleVirtualRecord() {
-  const records = transcript.querySelectorAll('.virtual-record');
-  for (const record of records) {
-    if (record.getBoundingClientRect().bottom >= 0) return record;
+const VW_USER_SCROLL_INTENT_MS = 1200;
+const VW_WINDOW_REPLACEMENT_SCROLL_GUARD_MS = 300;
+const VW_SCROLL_KEYS = new Set([
+  'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '
+]);
+let virtualShiftFrame = 0;
+let lastManualScrollY = window.scrollY;
+let userScrollIntentUntil = 0;
+let userScrollIntentDirection = 0;
+let lastTouchY = Number.NaN;
+let windowShiftRequestSequence = 0;
+let lastWindowTransactionDiagnostic = null;
+
+function markUserScrollIntent(direction = 0) {
+  userScrollIntentUntil = performance.now() + VW_USER_SCROLL_INTENT_MS;
+  userScrollIntentDirection = Math.sign(Number(direction) || 0);
+}
+
+function isEditableScrollTarget(target) {
+  return target instanceof Element &&
+    (target.matches('input,textarea,select') || target.isContentEditable);
+}
+
+window.addEventListener('wheel', event => {
+  markUserScrollIntent(event.deltaY);
+}, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchstart', event => {
+  lastTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  markUserScrollIntent();
+}, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('touchmove', event => {
+  const currentTouchY = event.touches.length > 0
+    ? event.touches[0].clientY
+    : Number.NaN;
+  const direction = Number.isFinite(lastTouchY) &&
+    Number.isFinite(currentTouchY)
+      ? lastTouchY - currentTouchY
+      : 0;
+  lastTouchY = currentTouchY;
+  markUserScrollIntent(direction);
+}, {
+  passive:true,
+  capture:true
+});
+window.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
+      !VW_SCROLL_KEYS.has(event.key) || isEditableScrollTarget(event.target)) {
+    return;
   }
-  return records.length ? records[records.length - 1] : null;
+  let direction = 0;
+  if (event.key === 'ArrowUp' || event.key === 'PageUp' ||
+      event.key === 'Home') {
+    direction = -1;
+  } else if (event.key === 'ArrowDown' || event.key === 'PageDown' ||
+             event.key === 'End') {
+    direction = 1;
+  } else if (event.key === ' ') {
+    direction = event.shiftKey ? -1 : 1;
+  }
+  markUserScrollIntent(direction);
+}, {capture:true});
+window.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+  if (scrollbarWidth > 0 && event.clientX >= document.documentElement.clientWidth) {
+    markUserScrollIntent();
+  }
+}, {capture:true});
+
+function firstVisibleVirtualRecord(direction = 0) {
+  const records = materializedVirtualRecords();
+  const visible = records.filter(record => {
+    const rect = record.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
+  if (visible.length) {
+    return direction > 0 ? visible[visible.length - 1] : visible[0];
+  }
+  if (!records.length) return null;
+  const firstRect = records[0].getBoundingClientRect();
+  const lastRect = records[records.length - 1].getBoundingClientRect();
+  if (direction < 0 && firstRect.top >= window.innerHeight) return records[0];
+  if (direction > 0 && lastRect.bottom <= 0) return records[records.length - 1];
+  return null;
 }
 
-function firstVisibleRecordAnchor() {
-  const record = firstVisibleVirtualRecord();
-  return record?.querySelector('.record-anchor') || null;
-}
-
-function requestVirtualShift(direction) {
+function requestVirtualShift(direction, reason = null, referenceRecord = null) {
   if (virtualShiftPending || windowStartIndex < 0 || windowEndIndex < 0) return;
-  const visibleRecord = firstVisibleVirtualRecord();
-  const anchor = firstVisibleRecordAnchor();
+  const visibleRecords = materializedVirtualRecords().filter(record => {
+    const rect = record.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
+  const visibleRecord = referenceRecord || firstVisibleVirtualRecord(direction);
+  const anchor = visibleRecord?.querySelector('.record-anchor') || null;
   if (!visibleRecord || !anchor) return;
   const visibleIndex = Number(visibleRecord.dataset.virtualIndex || -1);
   if (visibleIndex < 0) return;
+  const visibleRange = visibleRecords.length
+    ? {
+        visibleStartIndex:Number(
+          visibleRecords[0].dataset.virtualIndex || -1),
+        visibleEndIndex:Number(
+          visibleRecords[visibleRecords.length - 1].dataset.virtualIndex || -1)
+      }
+    : {};
   virtualShiftPending = true;
-  const focalIndex = direction < 0
-    ? Math.max(0, visibleIndex - 20)
-    : visibleIndex + 20;
+  const requestSequence = ++windowShiftRequestSequence;
+  const requestReason = reason || (direction < 0 ? 'scroll-up' : 'scroll-down');
+  const requestedAt = performance.now();
+  if (lastWindowTransactionDiagnostic &&
+      requestedAt - lastWindowTransactionDiagnostic.completedAt <= 300) {
+    chrome.webview.postMessage({
+      type:'window-shift-followup',
+      requestSequence,
+      reason:requestReason,
+      previousTransactionId:lastWindowTransactionDiagnostic.transactionId,
+      previousRequestSequence:lastWindowTransactionDiagnostic.requestSequence,
+      previousReason:lastWindowTransactionDiagnostic.reason,
+      elapsedSinceReplacementMilliseconds:Math.round(
+        requestedAt - lastWindowTransactionDiagnostic.completedAt),
+      sourceStartIndex:windowStartIndex,
+      sourceEndIndex:windowEndIndex,
+      visibleStartIndex:visibleRange.visibleStartIndex ?? -1,
+      visibleEndIndex:visibleRange.visibleEndIndex ?? -1,
+      scrollY:Number(window.scrollY),
+      viewportHeight:Number(window.innerHeight)
+    });
+  }
   chrome.webview.postMessage({
     type:'window-shift',
-    reason:direction < 0 ? 'scroll-up' : 'scroll-down',
-    focalIndex,
+    requestSequence,
+    reason:requestReason,
+    focalIndex:visibleIndex,
+    sourceStartIndex:windowStartIndex,
+    sourceEndIndex:windowEndIndex,
+    ...visibleRange,
+    viewportHeight:window.innerHeight,
     anchorRecordNumber:Number(anchor.dataset.jsonlRecord || 0),
-    anchorSourceId:anchor.dataset.sourceId || '',
     anchorOffset:anchor.getBoundingClientRect().top
   });
-  setTimeout(() => { virtualShiftPending = false; }, 3000);
+  setTimeout(
+    () => { virtualShiftPending = false; },
+    VW_SHIFT_PENDING_TIMEOUT_MS);
+}
+
+function maybeRequestManualVirtualShift(direction) {
+  if (direction === 0 || virtualShiftPending) return;
+  const bounds = materializedWindowBounds();
+  if (!bounds) return;
+  const triggerDistance = window.innerHeight * VW_EDGE_TRIGGER_VIEWPORTS;
+  if (direction < 0 && windowStartIndex > 0 &&
+      -bounds.first.top <= triggerDistance) {
+    requestVirtualShift(-1, 'scroll-up');
+    return;
+  }
+  const bottomSpacer = transcript.querySelector(
+    '.virtual-spacer[data-virtual-spacer="bottom"]');
+  const hasContentBelow =
+    (bottomSpacer?.getBoundingClientRect().height ?? 0) > 0;
+  if (direction > 0 && hasContentBelow &&
+      bounds.last.bottom - window.innerHeight <= triggerDistance) {
+    requestVirtualShift(1, 'scroll-down');
+  }
 }
 
 window.addEventListener('scroll', () => {
   const now = performance.now();
-  if (followSpeech && now > programmaticScrollUntil) {
-    if (scrollFollowTimer) clearTimeout(scrollFollowTimer);
-    scrollFollowTimer = setTimeout(() => {
-      scrollFollowTimer = 0;
-      if (followSpeech && performance.now() > programmaticScrollUntil) {
-        setFollowSpeech(false, true);
-      }
-    }, 120);
-  }
-  if (virtualShiftTimer) clearTimeout(virtualShiftTimer);
-  virtualShiftTimer = setTimeout(() => {
-    virtualShiftTimer = 0;
-    const visibleRecord = firstVisibleVirtualRecord();
-    const visibleIndex = Number(visibleRecord?.dataset.virtualIndex || -1);
-    if (visibleIndex >= 0 && visibleIndex <= windowStartIndex + 20 &&
-        windowStartIndex > 0) {
-      requestVirtualShift(-1);
-    } else if (visibleIndex >= windowEndIndex - 20) {
-      requestVirtualShift(1);
+  const currentY = window.scrollY;
+  const delta = currentY - lastManualScrollY;
+  lastManualScrollY = currentY;
+  if (Math.abs(delta) <= VW_SCROLL_DIRECTION_EPSILON_PX) return;
+
+  const direction = delta > 0 ? 1 : -1;
+  const explicitUserIntent = now <= userScrollIntentUntil;
+  if (now <= programmaticScrollUntil) {
+    // A physical input can override a programmatic scroll only when the
+    // resulting movement agrees with that input. Window replacement and
+    // anchor restoration can move scrollY in the opposite direction while the
+    // earlier user-intent timer is still alive; that movement is not a second
+    // user gesture and must not start a competing virtual-window shift.
+    if (!explicitUserIntent ||
+        (userScrollIntentDirection !== 0 &&
+         direction !== userScrollIntentDirection)) {
+      return;
     }
-  }, 80);
+    programmaticScrollUntil = 0;
+  }
+
+  if (followSpeech) setFollowSpeech(false, true);
+  if (virtualShiftFrame) cancelAnimationFrame(virtualShiftFrame);
+  virtualShiftFrame = requestAnimationFrame(() => {
+    virtualShiftFrame = 0;
+    if (performance.now() <= programmaticScrollUntil) return;
+    maybeRequestManualVirtualShift(direction);
+  });
 }, {passive:true});
 
 
@@ -3295,6 +4784,8 @@ chrome.webview.addEventListener('message', event => {
       data.highlight,
       data.duration,
       data.follow,
+      data.showRolledBackHistory,
+      data.layoutGeneration,
       data.dark);
     return;
   }

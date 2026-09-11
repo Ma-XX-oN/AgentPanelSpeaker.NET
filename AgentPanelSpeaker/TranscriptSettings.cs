@@ -1,8 +1,8 @@
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Defines presentation and automatic-follow behaviour for the rendered
-/// transcript.
+/// Defines presentation, speech-selection, and automatic-follow behaviour for
+/// the rendered transcript.
 /// </summary>
 internal sealed record TranscriptSettings(
   bool FollowSpeech,
@@ -11,8 +11,14 @@ internal sealed record TranscriptSettings(
   int FadeMilliseconds,
   int HighlightUpdateMilliseconds,
   int HighlightQueueCapacity,
-  bool Maximized)
+  bool Maximized,
+  bool ShowRolledBackHistory)
 {
+  /// <summary>
+  /// Gets whether Core-owned User/IDE context participates in speech.
+  /// </summary>
+  public bool SpeakUserContext { get; init; }
+
   public static TranscriptSettings Default { get; } = new(
     FollowSpeech: true,
     LightHighlightArgb: Color.FromArgb(255, 222, 149).ToArgb(),
@@ -20,7 +26,11 @@ internal sealed record TranscriptSettings(
     FadeMilliseconds: 250,
     HighlightUpdateMilliseconds: 10,
     HighlightQueueCapacity: 1,
-    Maximized: false);
+    Maximized: false,
+    ShowRolledBackHistory: false)
+  {
+    SpeakUserContext = false
+  };
 
   public TranscriptSettings Normalize()
   {

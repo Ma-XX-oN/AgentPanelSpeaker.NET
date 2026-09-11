@@ -39,6 +39,7 @@ internal sealed class SpeechService : IDisposable
   private bool _processingTimeAnnouncementRequested;
   private bool _processingTimeReturnToPause;
   private bool _restorePauseAfterCancellation;
+  private string? _pauseRestoreReason;
   private Action? _pendingPreviewStart;
   private bool _previewActive;
   private bool _previewReturnToPause;
@@ -56,6 +57,8 @@ internal sealed class SpeechService : IDisposable
   private DateTimeOffset? _pauseStartedUtc;
   private SpeechProfileSettings? _activeProfile;
   private bool _activePauseAfter;
+  private bool _showRolledBackHistory;
+  private bool _pauseBeforeNextHistory;
   private bool _disposed;
 
   /// <summary>
@@ -197,6 +200,95 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Changes rolled-back-history playback eligibility in place. Canonical
+  /// history and node identifiers remain untouched.
+  /// </summary>
+  public void SetShowRolledBackHistory(bool show)
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (_showRolledBackHistory == show)
+      {
+        return;
+      }
+      _showRolledBackHistory = show;
+      DiagnosticLog.Write("speech.rolled_back_visibility_changed", new
+      {
+        show,
+        activeKind = _activeKind.ToString(),
+        activeHistoryIndex = _activeHistoryIndex,
+        pendingHistoryIndex = _pendingHistoryIndex,
+        nextHistoryIndex = _nextHistoryIndex,
+        historyCount = _history.Count,
+        isPaused = _isPaused
+      });
+      if (show || _history.Count == 0)
+      {
+        return;
+      }
+
+      int anchor = _activeHistoryIndex >= 0
+        ? _activeHistoryIndex
+        : _pendingHistoryIndex ?? _nextHistoryIndex;
+      if (anchor < 0 || anchor >= _history.Count ||
+          !_history[anchor].HistoricalRevision)
+      {
+        return;
+      }
+
+      int candidate = FindNextEligibleLocked(anchor + 1);
+      if (_activeKind == ActiveSpeechKind.History)
+      {
+        if (_isPaused)
+        {
+          if (candidate >= 0)
+          {
+            RestartHistoryLocked(candidate);
+          }
+          else
+          {
+            MoveToPausedLiveEndLocked();
+          }
+          return;
+        }
+
+        _pendingHistoryIndex = candidate >= 0 ? candidate : null;
+        _pendingHistoryWordIndex = 0;
+        _nextHistoryIndex = candidate >= 0 ? candidate : _history.Count;
+        _pauseBeforeNextHistory = candidate >= 0;
+        _lastFenceActivity = null;
+        _engine.Cancel();
+        return;
+      }
+
+      if (_isPaused)
+      {
+        if (candidate >= 0)
+        {
+          _pendingHistoryIndex = candidate;
+          _pendingHistoryWordIndex = 0;
+          _nextHistoryIndex = candidate;
+          SetPausedNavigationPositionLocked(candidate);
+        }
+        else
+        {
+          MoveToPausedLiveEndLocked();
+        }
+        return;
+      }
+
+      _pendingHistoryIndex = null;
+      _pendingHistoryWordIndex = 0;
+      _nextHistoryIndex = candidate >= 0 ? candidate : _history.Count;
+      if (candidate < 0)
+      {
+        StartPendingOrNextLocked();
+      }
+    }
+  }
+
+  /// <summary>
   /// Gets enabled installed voices and their descriptive labels.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> GetInstalledVoices()
@@ -241,6 +333,9 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
+      LogPendingHistoryResetLocked(
+        "begin-live-session",
+        incomingHistoryCount: 0);
       _history.Clear();
       _turnCompletions.Clear();
       _backgroundWork.Clear();
@@ -248,6 +343,7 @@ internal sealed class SpeechService : IDisposable
       _pendingHistoryWordIndex = 0;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
+      _pauseBeforeNextHistory = false;
       _activeHistoryIndex = -1;
       _nextHistoryIndex = 0;
       _lastFenceActivity = null;
@@ -274,10 +370,15 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
+      LogPendingHistoryResetLocked(
+        "load-history",
+        fragments.Count,
+        startMode.ToString());
       _pendingHistoryIndex = null;
       _pendingHistoryWordIndex = 0;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
+      _pauseBeforeNextHistory = false;
       _activeHistoryIndex = -1;
       _lastFenceActivity = null;
       _history.Clear();
@@ -514,6 +615,7 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       ThrowIfDisposed();
+      LogPendingHistoryResetLocked("speak-untracked");
       _pendingHistoryIndex = null;
       _pendingHistoryWordIndex = 0;
       _pendingUntracked = new UntrackedSpeech(text.Trim(), profile.Normalize());
@@ -682,6 +784,7 @@ internal sealed class SpeechService : IDisposable
     {
       int anchor = GetNavigationAnchorLocked();
       int candidate = FindNextEligibleLocked(anchor + 1);
+      LogNavigationLocked("forward-sentence", anchor, candidate);
       if (candidate < 0)
       {
         MoveToPausedLiveEndLocked();
@@ -731,6 +834,7 @@ internal sealed class SpeechService : IDisposable
       int anchor = GetNavigationAnchorLocked();
       if (anchor >= _history.Count)
       {
+        LogNavigationLocked("forward-node", anchor, candidate: -1);
         MoveToPausedLiveEndLocked();
         text = string.Empty;
         return false;
@@ -743,6 +847,7 @@ internal sealed class SpeechService : IDisposable
         int eligible = FindNextEligibleLocked(candidate, end);
         if (eligible >= 0)
         {
+          LogNavigationLocked("forward-node", anchor, eligible);
           text = JoinEligibleNodeLocked(candidate);
           RestartHistoryLocked(eligible);
           return true;
@@ -750,6 +855,7 @@ internal sealed class SpeechService : IDisposable
         candidate = end + 1;
       }
 
+      LogNavigationLocked("forward-node", anchor, candidate: -1);
       MoveToPausedLiveEndLocked();
       text = string.Empty;
       return false;
@@ -825,6 +931,7 @@ internal sealed class SpeechService : IDisposable
       int anchor = GetNavigationAnchorLocked();
       if (anchor >= _history.Count)
       {
+        LogNavigationLocked("forward-speaker", anchor, candidate: -1);
         MoveToPausedLiveEndLocked();
         text = string.Empty;
         return false;
@@ -841,6 +948,7 @@ internal sealed class SpeechService : IDisposable
           int eligible = FindNextEligibleLocked(runStart, runEnd);
           if (eligible >= 0)
           {
+            LogNavigationLocked("forward-speaker", anchor, eligible);
             text = JoinEligibleSpeakerRunLocked(runStart);
             RestartHistoryLocked(eligible);
             return true;
@@ -849,6 +957,7 @@ internal sealed class SpeechService : IDisposable
         candidate = runEnd + 1;
       }
 
+      LogNavigationLocked("forward-speaker", anchor, candidate: -1);
       MoveToPausedLiveEndLocked();
       text = string.Empty;
       return false;
@@ -903,7 +1012,8 @@ internal sealed class SpeechService : IDisposable
         SetPausedNavigationPositionLocked(index, remaining);
         if (hadActiveSpeech)
         {
-          _restorePauseAfterCancellation = true;
+          RequestPauseRestoreAfterCancellationLocked(
+            "seek-transcript-word");
           _engine.Cancel();
         }
         text = fragment.Text;
@@ -1180,8 +1290,11 @@ internal sealed class SpeechService : IDisposable
           ? _pendingProcessingTime
           : null;
       bool restorePause = _restorePauseAfterCancellation;
+      string? restorePauseReason = _pauseRestoreReason;
       _restorePauseAfterCancellation = false;
+      _pauseRestoreReason = null;
 
+      int completedHistoryIndex = _activeHistoryIndex;
       _activeKind = ActiveSpeechKind.None;
       _activeHistoryIndex = -1;
 
@@ -1235,6 +1348,7 @@ internal sealed class SpeechService : IDisposable
         {
           _processingTimeReturnToPause = false;
           restorePause = true;
+          restorePauseReason ??= "processing-time-return-to-pause";
         }
       }
 
@@ -1246,12 +1360,22 @@ internal sealed class SpeechService : IDisposable
         DiagnosticLog.Write("speech.completed_while_paused", new
         {
           completedKind = completedKind.ToString(),
+          completedHistoryIndex,
           wasPaused,
           restorePause,
+          restorePauseReason,
           pendingHistoryIndex = _pendingHistoryIndex,
-          pendingHistoryWordIndex = _pendingHistoryWordIndex
+          pendingHistoryWordIndex = _pendingHistoryWordIndex,
+          nextHistoryIndex = _nextHistoryIndex,
+          historyCount = _history.Count
         });
         SetPausedLocked(true);
+        if (_pendingHistoryIndex is null &&
+            _nextHistoryIndex >= _history.Count)
+        {
+          ReportPlaybackPositionLocked(
+            TranscriptPlaybackState.PausedAtLiveEnd);
+        }
       }
       else
       {
@@ -1722,6 +1846,15 @@ internal sealed class SpeechService : IDisposable
     int pendingWordIndex = 0;
     if (_pendingHistoryIndex is int pendingIndex)
     {
+      DiagnosticLog.Write("speech.pending_history_consumed", new
+      {
+        pendingHistoryIndex = pendingIndex,
+        pendingHistoryWordIndex = _pendingHistoryWordIndex,
+        nextHistoryIndexBefore = _nextHistoryIndex,
+        historyCount = _history.Count,
+        isPaused = _isPaused,
+        activeKind = _activeKind.ToString()
+      });
       _nextHistoryIndex = pendingIndex;
       pendingWordIndex = Math.Max(0, _pendingHistoryWordIndex);
       _pendingHistoryIndex = null;
@@ -1742,11 +1875,14 @@ internal sealed class SpeechService : IDisposable
       }
 
       _activeHistoryIndex = index;
+      bool pauseBefore = _pauseBeforeNextHistory;
+      _pauseBeforeNextHistory = false;
       StartHistorySpeechLocked(
         fragment.Text,
         profile,
         fragment.PauseAfter,
-        pendingWordIndex);
+        pendingWordIndex,
+        pauseBefore);
       pendingWordIndex = 0;
       ReportFenceActivityLocked(fragment, spoken: true, string.Empty);
       return;
@@ -1756,6 +1892,16 @@ internal sealed class SpeechService : IDisposable
     _activeWord = string.Empty;
     _activeWordIndex = 0;
     _activeWordBaseIndex = 0;
+    _pauseBeforeNextHistory = false;
+    DiagnosticLog.Write("speech.live_end_reached", new
+    {
+      isPaused = _isPaused,
+      nextHistoryIndex = _nextHistoryIndex,
+      historyCount = _history.Count,
+      pendingHistoryIndex = _pendingHistoryIndex,
+      restorePausePending = _restorePauseAfterCancellation,
+      pauseRestoreReason = _pauseRestoreReason
+    });
     ReportPlaybackPositionLocked(
       _isPaused
         ? TranscriptPlaybackState.PausedAtLiveEnd
@@ -1771,7 +1917,8 @@ internal sealed class SpeechService : IDisposable
     string text,
     SpeechProfileSettings profile,
     bool pauseAfter,
-    int wordIndex)
+    int wordIndex,
+    bool pauseBefore = false)
   {
     MatchCollection matches = SpeechTokenization.Matches(text);
     int boundedWordIndex = matches.Count == 0
@@ -1800,7 +1947,11 @@ internal sealed class SpeechService : IDisposable
     ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
     try
     {
-      SpeakConfiguredLocked(spokenText, profile, pauseAfter);
+      SpeakConfiguredLocked(
+        spokenText,
+        profile,
+        pauseAfter,
+        pauseBefore);
     }
     catch
     {
@@ -1857,7 +2008,8 @@ internal sealed class SpeechService : IDisposable
   private void SpeakConfiguredLocked(
     string text,
     SpeechProfileSettings profile,
-    bool pauseAfter)
+    bool pauseAfter,
+    bool pauseBefore = false)
   {
     SpeechProfileSettings normalized = profile.Normalize();
     IReadOnlyList<string> spelledWords = _spelledWordsProvider();
@@ -1868,7 +2020,8 @@ internal sealed class SpeechService : IDisposable
       normalized.Pitch,
       spelledWords,
       pronunciations,
-      pauseAfter);
+      pauseAfter,
+      pauseBefore);
     DiagnosticLog.Write("speech.configure", new
     {
       normalized.VoiceName,
@@ -2041,6 +2194,11 @@ internal sealed class SpeechService : IDisposable
     out string reason)
   {
     profile = _profileProvider(fragment.Category).Normalize();
+    if (!_showRolledBackHistory && fragment.HistoricalRevision)
+    {
+      reason = "rolled-back history is hidden";
+      return false;
+    }
     if (!profile.IsSpoken)
     {
       reason = $"{fragment.Category.ToString().ToLowerInvariant()} text is not spoken";
@@ -2098,11 +2256,102 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Records which navigation path requested pause restoration before a
+  /// cancellation callback completes.
+  /// </summary>
+  private void RequestPauseRestoreAfterCancellationLocked(string reason)
+  {
+    _restorePauseAfterCancellation = true;
+    _pauseRestoreReason = reason;
+    DiagnosticLog.Write("speech.pause_restore_requested", new
+    {
+      reason,
+      activeKind = _activeKind.ToString(),
+      activeHistoryIndex = _activeHistoryIndex,
+      activeNodeId = GetHistoryNodeIdLocked(_activeHistoryIndex),
+      pendingHistoryIndex = _pendingHistoryIndex,
+      pendingHistoryWordIndex = _pendingHistoryWordIndex,
+      pendingNodeId = GetHistoryNodeIdLocked(_pendingHistoryIndex),
+      nextHistoryIndex = _nextHistoryIndex,
+      historyCount = _history.Count,
+      isPaused = _isPaused
+    });
+  }
+
+  /// <summary>
+  /// Records state that is about to discard a retained navigation target.
+  /// </summary>
+  private void LogPendingHistoryResetLocked(
+    string reason,
+    int? incomingHistoryCount = null,
+    string? startMode = null)
+  {
+    if (!_restorePauseAfterCancellation && _pendingHistoryIndex is null)
+    {
+      return;
+    }
+    DiagnosticLog.Write("speech.pending_history_reset", new
+    {
+      reason,
+      restorePausePending = _restorePauseAfterCancellation,
+      pauseRestoreReason = _pauseRestoreReason,
+      pendingHistoryIndex = _pendingHistoryIndex,
+      pendingHistoryWordIndex = _pendingHistoryWordIndex,
+      pendingNodeId = GetHistoryNodeIdLocked(_pendingHistoryIndex),
+      activeKind = _activeKind.ToString(),
+      activeHistoryIndex = _activeHistoryIndex,
+      activeNodeId = GetHistoryNodeIdLocked(_activeHistoryIndex),
+      nextHistoryIndex = _nextHistoryIndex,
+      historyCount = _history.Count,
+      incomingHistoryCount,
+      startMode,
+      isPaused = _isPaused
+    });
+  }
+
+  /// <summary>
+  /// Records one user-visible forward navigation request and its resolved
+  /// destination before playback state changes.
+  /// </summary>
+  private void LogNavigationLocked(string action, int anchor, int candidate)
+  {
+    DiagnosticLog.Write("speech.navigation_request", new
+    {
+      action,
+      anchor,
+      anchorNodeId = GetHistoryNodeIdLocked(anchor),
+      candidate,
+      candidateNodeId = GetHistoryNodeIdLocked(candidate),
+      activeKind = _activeKind.ToString(),
+      activeHistoryIndex = _activeHistoryIndex,
+      activeNodeId = GetHistoryNodeIdLocked(_activeHistoryIndex),
+      pendingHistoryIndex = _pendingHistoryIndex,
+      pendingHistoryWordIndex = _pendingHistoryWordIndex,
+      nextHistoryIndex = _nextHistoryIndex,
+      historyCount = _history.Count,
+      isPaused = _isPaused,
+      restorePausePending = _restorePauseAfterCancellation,
+      pauseRestoreReason = _pauseRestoreReason
+    });
+  }
+
+  /// <summary>
+  /// Returns a history node id without allowing diagnostic probing to throw.
+  /// </summary>
+  private long GetHistoryNodeIdLocked(int? index)
+  {
+    return index is int value && value >= 0 && value < _history.Count
+      ? _history[value].NodeId
+      : -1;
+  }
+
+  /// <summary>
   /// Cancels active playback and leaves a paused blank marker after the final
   /// fragment.
   /// </summary>
   private void MoveToPausedLiveEndLocked()
   {
+    _pauseBeforeNextHistory = false;
     _pendingHistoryIndex = null;
     _pendingHistoryWordIndex = 0;
     _pendingUntracked = null;
@@ -2121,7 +2370,7 @@ internal sealed class SpeechService : IDisposable
 
     if (_activeKind != ActiveSpeechKind.None)
     {
-      _restorePauseAfterCancellation = true;
+      RequestPauseRestoreAfterCancellationLocked("paused-live-end");
       _engine.Cancel();
       return;
     }
@@ -2135,7 +2384,23 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void MoveToLiveEndLocked()
   {
+    if (_restorePauseAfterCancellation || _pendingHistoryIndex is not null)
+    {
+      DiagnosticLog.Write("speech.live_end_reset", new
+      {
+        restorePausePending = _restorePauseAfterCancellation,
+        pauseRestoreReason = _pauseRestoreReason,
+        pendingHistoryIndex = _pendingHistoryIndex,
+        pendingHistoryWordIndex = _pendingHistoryWordIndex,
+        nextHistoryIndex = _nextHistoryIndex,
+        historyCount = _history.Count,
+        activeKind = _activeKind.ToString(),
+        activeHistoryIndex = _activeHistoryIndex
+      });
+    }
     _restorePauseAfterCancellation = false;
+    _pauseRestoreReason = null;
+    _pauseBeforeNextHistory = false;
     _pendingHistoryIndex = null;
     _pendingHistoryWordIndex = 0;
     _pendingUntracked = null;
@@ -2154,6 +2419,7 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void RestartHistoryLocked(int index)
   {
+    _pauseBeforeNextHistory = false;
     bool preservePause = _isPaused;
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
@@ -2165,7 +2431,8 @@ internal sealed class SpeechService : IDisposable
       SetPausedNavigationPositionLocked(index);
       if (_activeKind != ActiveSpeechKind.None)
       {
-        _restorePauseAfterCancellation = true;
+        RequestPauseRestoreAfterCancellationLocked(
+          "paused-navigation-restart");
         _engine.Cancel();
       }
       return;
