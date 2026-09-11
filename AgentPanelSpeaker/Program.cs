@@ -218,6 +218,19 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "ctrl-click-voice-pointer",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "ctrl-click-voice-pointer",
+          () => RunWithWinFormsMessageLoop(
+            Issue73CtrlClickVoicePointerRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -261,6 +274,8 @@ internal static class Program
       int startupPerformance = RunIsolatedTestSuite("startup-performance");
       int redundancy = RunIsolatedTestSuite("redundancy");
       int findOrigin = RunIsolatedTestSuite("find-origin");
+      int ctrlClickVoicePointer = RunIsolatedTestSuite(
+        "ctrl-click-voice-pointer");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -281,7 +296,8 @@ internal static class Program
                              realSessionFixes == 0 &&
                              startupPerformance == 0 &&
                              redundancy == 0 &&
-                             findOrigin == 0
+                             findOrigin == 0 &&
+                             ctrlClickVoicePointer == 0
         ? 0
         : 1;
       Console.WriteLine(

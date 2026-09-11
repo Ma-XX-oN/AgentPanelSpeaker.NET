@@ -273,11 +273,13 @@ private static void TestLiveMonitorToggle()
     Require(
       speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
       "SpeakUserContext ON did not make retained User Context playback-eligible.");
-    speech.MoveToPausedLiveEnd();
+    TranscriptPlaybackPosition? relocation = null;
+    speech.PlaybackPositionChanged += position => relocation = position;
 
     popup.SetSettings(
       popup.Settings with { SpeakUserContext = false },
       dark: false);
+    relocation = null;
     InvokeVoid(form, "TranscriptSettingsChanged");
     Application.DoEvents();
 
@@ -291,6 +293,17 @@ private static void TestLiveMonitorToggle()
     Require(
       !speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
       "SpeakUserContext OFF did not immediately suppress retained User Context.");
+    TranscriptPlaybackPosition relocated = relocation ??
+      throw new InvalidOperationException(
+        "Disabling SpeakUserContext left the paused cursor on newly ineligible User Context.");
+    Require(relocated.State == TranscriptPlaybackState.Paused &&
+        relocated.NodeId == user.NodeId &&
+        string.Equals(relocated.FragmentText, user.Text, StringComparison.Ordinal) &&
+        string.Equals(
+          relocated.Word,
+          SpeechTokenization.First(user.Text),
+          StringComparison.Ordinal),
+      "Disabling SpeakUserContext did not move the paused cursor forward to the next eligible User fragment.");
   }
   finally
   {

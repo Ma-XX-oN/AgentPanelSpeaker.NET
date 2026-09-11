@@ -4,6 +4,15 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
+/// Identifies one contiguous node-global word range that is currently eligible
+/// for speech and direct transcript seeking.
+/// </summary>
+internal sealed record SeekableTranscriptWordRange(
+  long NodeId,
+  int StartNodeWordIndex,
+  int WordCount);
+
+/// <summary>
 /// Serializes speech, retains navigation history, and resolves playback policy
 /// immediately before every fragment begins.
 /// </summary>
@@ -284,6 +293,76 @@ internal sealed class SpeechService : IDisposable
       if (candidate < 0)
       {
         StartPendingOrNextLocked();
+      }
+    }
+  }
+
+  /// <summary>
+  /// Revalidates a paused history cursor after a speech-eligibility policy
+  /// change. If the current fragment became ineligible, navigation advances
+  /// to the next eligible fragment, or to the paused live end when none
+  /// remains. Canonical history and node identities are unchanged.
+  /// </summary>
+  public void RevalidatePausedNavigationEligibility(string reason)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (!_isPaused || _history.Count == 0)
+      {
+        return;
+      }
+
+      int anchor = _activeHistoryIndex >= 0
+        ? _activeHistoryIndex
+        : _pendingHistoryIndex ?? _nextHistoryIndex;
+      if (anchor < 0 || anchor >= _history.Count ||
+          TryGetEligibleProfileLocked(_history[anchor], out _, out _))
+      {
+        return;
+      }
+
+      int candidate = FindNextEligibleLocked(anchor + 1);
+      DiagnosticLog.Write("speech.paused_eligibility_revalidated", new
+      {
+        reason,
+        anchor,
+        anchorNodeId = GetHistoryNodeIdLocked(anchor),
+        candidate,
+        candidateNodeId = GetHistoryNodeIdLocked(candidate),
+        activeKind = _activeKind.ToString(),
+        activeHistoryIndex = _activeHistoryIndex,
+        pendingHistoryIndex = _pendingHistoryIndex,
+        pendingHistoryWordIndex = _pendingHistoryWordIndex,
+        nextHistoryIndex = _nextHistoryIndex,
+        historyCount = _history.Count
+      });
+
+      if (_activeKind == ActiveSpeechKind.History)
+      {
+        if (candidate >= 0)
+        {
+          RestartHistoryLocked(candidate);
+        }
+        else
+        {
+          MoveToPausedLiveEndLocked();
+        }
+        return;
+      }
+
+      if (candidate >= 0)
+      {
+        _pendingHistoryIndex = candidate;
+        _pendingHistoryWordIndex = 0;
+        _nextHistoryIndex = candidate;
+        _lastFenceActivity = null;
+        SetPausedNavigationPositionLocked(candidate);
+      }
+      else
+      {
+        MoveToPausedLiveEndLocked();
       }
     }
   }
@@ -965,7 +1044,55 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Moves the paused playback marker to one lexical word within a JSONL node.
+  /// Returns the node-global word ranges that are eligible for speech under
+  /// the current profile, fence, and rolled-back-history policies.
+  /// </summary>
+  public IReadOnlyList<SeekableTranscriptWordRange>
+    GetSeekableTranscriptWordRanges()
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      var ranges = new List<SeekableTranscriptWordRange>();
+      var nodeWordOffsets = new Dictionary<long, int>();
+      foreach (SpeechFragment fragment in _history)
+      {
+        int wordCount = SpeechTokenization.Matches(fragment.Text).Count;
+        int start = nodeWordOffsets.TryGetValue(fragment.NodeId, out int offset)
+          ? offset
+          : 0;
+        nodeWordOffsets[fragment.NodeId] = checked(start + wordCount);
+        if (wordCount == 0 ||
+            !TryGetEligibleProfileLocked(fragment, out _, out _))
+        {
+          continue;
+        }
+
+        if (ranges.Count != 0)
+        {
+          SeekableTranscriptWordRange previous = ranges[^1];
+          if (previous.NodeId == fragment.NodeId &&
+              previous.StartNodeWordIndex + previous.WordCount == start)
+          {
+            ranges[^1] = previous with
+            {
+              WordCount = checked(previous.WordCount + wordCount)
+            };
+            continue;
+          }
+        }
+        ranges.Add(new SeekableTranscriptWordRange(
+          fragment.NodeId,
+          start,
+          wordCount));
+      }
+      return ranges.ToArray();
+    }
+  }
+
+  /// <summary>
+  /// Moves the paused playback marker to one node-global lexical word when the
+  /// fragment containing that word is currently eligible for speech.
   /// </summary>
   public bool TrySeekToTranscriptWord(
     long nodeId,
@@ -985,11 +1112,7 @@ internal sealed class SpeechService : IDisposable
       for (int index = 0; index < _history.Count; ++index)
       {
         SpeechFragment fragment = _history[index];
-        if (fragment.NodeId != nodeId ||
-            !TryGetEligibleProfileLocked(
-              fragment,
-              out _,
-              out _))
+        if (fragment.NodeId != nodeId)
         {
           continue;
         }
@@ -999,6 +1122,11 @@ internal sealed class SpeechService : IDisposable
         {
           remaining -= matches.Count;
           continue;
+        }
+        if (!TryGetEligibleProfileLocked(fragment, out _, out _))
+        {
+          text = string.Empty;
+          return false;
         }
 
         bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;

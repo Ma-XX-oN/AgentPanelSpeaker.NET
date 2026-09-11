@@ -45,7 +45,17 @@ internal static class Issue37VirtualWindowRegressionTestRunner
       ("virtual-window/shift-preserves-entire-physically-visible-range",
         TestShiftPreservesEntirePhysicallyVisibleRange),
       ("virtual-window/follow-off-initial-render-ignores-pending-playback",
-        TestFollowOffInitialRenderIgnoresPendingPlayback)
+        TestFollowOffInitialRenderIgnoresPendingPlayback),
+      ("virtual-window/manual-scroll-preserves-disclosure-state",
+        TestManualScrollPreservesDisclosureState),
+      ("virtual-window/disclosure-open-state-survives-eviction-and-close-clears-override",
+        TestDisclosureOpenStateSurvivesEvictionAndCloseClearsOverride),
+      ("virtual-window/manual-scroll-rematerializes-paused-marker-and-required-disclosure",
+        TestManualScrollRematerializesPausedMarkerAndRequiredDisclosure),
+      ("virtual-window/programmatic-disclosure-state-survives-eviction",
+        TestProgrammaticDisclosureStateSurvivesEviction),
+      ("virtual-window/retained-playback-never-rebinds-to-duplicate-text-in-another-node",
+        TestRetainedPlaybackNeverRebindsToDuplicateTextInAnotherNode)
     };
 
     int failures = 0;
@@ -236,6 +246,325 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         "Browser window did not remain at the live-end startup range with Follow OFF.");
       Require(browser.GetProperty("openDetails").GetInt32() == 0,
         "Follow-OFF pending playback opened a transcript disclosure during startup.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Real-machine regression: a paused marker inside a programmatically opened
+  /// disclosure may be evicted by manual virtual scrolling.  Returning to that
+  /// virtual record must redraw the retained voice marker and reopen only the
+  /// disclosure required to expose it.  Reapplying marker state must not turn
+  /// manual scrolling back into playback-controlled window navigation.
+  /// </summary>
+  private static void TestManualScrollRematerializesPausedMarkerAndRequiredDisclosure()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-marker-return-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "fixture.jsonl");
+    WriteFollowOffFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "marker rematerialization");
+      WaitForTranscriptRender(view);
+
+      IReadOnlyList<TranscriptNodeIdentity> identities =
+        ReadField<IReadOnlyList<TranscriptNodeIdentity>>(view, "_identities");
+      TranscriptNodeIdentity target = identities.FirstOrDefault(identity =>
+        identity.Segments.Any(segment =>
+          segment.Contains("Open tabs:", StringComparison.Ordinal))) ??
+        throw new InvalidOperationException(
+          "Marker-rematerialization fixture has no User Context Open tabs identity.");
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      Require(document.TryGetIndex(target.RecordNumber, out int targetIndex),
+        "User Context marker target is absent from the virtual document.");
+
+      Task materializeTarget = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        targetIndex,
+        "test-precondition",
+        null,
+        null);
+      PumpUntilCompleted(materializeTarget, "User Context target materialization");
+
+      string fragment = target.Segments.First(segment =>
+        segment.Contains("Open tabs:", StringComparison.Ordinal));
+      string word = SpeechTokenization.First(fragment);
+      view.ShowPlaybackPosition(new TranscriptPlaybackPosition(
+        TranscriptPlaybackState.Paused,
+        fragment,
+        0,
+        word,
+        target.NodeId,
+        0,
+        word.Length,
+        Stopwatch.GetTimestamp()));
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => ExecuteJsonProbe(
+          webView,
+          "JSON.stringify({paused:!!document.querySelector('.word.paused')," +
+          "open:!!document.querySelector('.word.paused')?.closest('details')?.open})")
+          .GetProperty("paused").GetBoolean(),
+        "paused User Context marker to appear");
+      JsonElement initial = ExecuteJsonProbe(
+        webView,
+        "JSON.stringify({paused:!!document.querySelector('.word.paused')," +
+        "open:!!document.querySelector('.word.paused')?.closest('details')?.open})");
+      Require(initial.GetProperty("open").GetBoolean(),
+        "Paused User Context marker did not programmatically open its disclosure.");
+
+      int awayIndex = targetIndex == 0 ? document.Count - 1 : 0;
+      Task moveAway = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        awayIndex,
+        targetIndex == 0 ? "scroll-down" : "scroll-up",
+        null,
+        null);
+      PumpUntilCompleted(moveAway, "manual scroll to evict paused marker");
+      Require(
+        targetIndex < ReadField<int>(view, "_windowStartIndex") ||
+        targetIndex > ReadField<int>(view, "_windowEndIndex"),
+        "Manual-scroll precondition did not evict the paused marker record.");
+
+      Task returnToTarget = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        targetIndex,
+        targetIndex < awayIndex ? "scroll-up" : "scroll-down",
+        null,
+        null);
+      PumpUntilCompleted(returnToTarget, "manual scroll back to paused marker record");
+      PumpMessages(200);
+
+      Require(
+        targetIndex >= ReadField<int>(view, "_windowStartIndex") &&
+        targetIndex <= ReadField<int>(view, "_windowEndIndex"),
+        "Manual scroll did not return to the paused marker record.");
+      JsonElement restored = ExecuteJsonProbe(
+        webView,
+        "JSON.stringify({paused:!!document.querySelector('.word.paused')," +
+        "open:!!document.querySelector('.word.paused')?.closest('details')?.open})");
+      Require(restored.GetProperty("paused").GetBoolean(),
+        "Paused voice cursor disappeared after manual-scroll eviction and rematerialization.");
+      Require(restored.GetProperty("open").GetBoolean(),
+        "Programmatically required disclosure stayed closed after the paused marker rematerialized.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Disclosure state belongs to the logical disclosure, not to the cause of
+  /// its last transition.  A programmatic open must survive full eviction and
+  /// rematerialization; a later programmatic close returns it to the default
+  /// closed state and removes the remembered-open state.
+  /// </summary>
+  private static void TestProgrammaticDisclosureStateSurvivesEviction()
+  {
+    using var host = CreateOffscreenHost();
+    using var view = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(view);
+    host.Show();
+    _ = host.Handle;
+    _ = view.Handle;
+    WaitForViewInitialization(view);
+
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    JsonElement result = ExecuteJsonProbe(
+      webView,
+      """
+(() => {
+  const withDetails =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:programmatic"><summary>Context</summary>' +
+    '<p>payload</p></details></section>';
+  const away =
+    '<section class="virtual-record" data-virtual-index="30"><p>far away</p></section>';
+
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  let details = document.querySelector('details[data-presentation-id="context:programmatic"]');
+  setDisclosureOpenProgrammatically(details, true);
+  replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  details = document.querySelector('details[data-presentation-id="context:programmatic"]');
+  const openAfterProgrammaticReturn = Boolean(details?.open);
+
+  setDisclosureOpenProgrammatically(details, false);
+  replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  details = document.querySelector('details[data-presentation-id="context:programmatic"]');
+  return JSON.stringify({
+    openAfterProgrammaticReturn,
+    closedAfterProgrammaticCloseAndReturn: details ? !details.open : false
+  });
+})()
+""");
+
+    Require(result.GetProperty("openAfterProgrammaticReturn").GetBoolean(),
+      "Programmatically opened disclosure lost state after eviction/rematerialization.");
+    Require(result.GetProperty("closedAfterProgrammaticCloseAndReturn").GetBoolean(),
+      "Programmatic close did not clear the remembered open disclosure state.");
+  }
+
+  /// <summary>
+  /// Real-machine regression: when the retained playback node is evicted, a
+  /// duplicate fragment in another materialized node must never inherit the
+  /// voice marker. Stable NodeId identity is authoritative across virtual DOM
+  /// replacement; the marker may be absent while its node is absent, then must
+  /// return only when that exact node rematerializes.
+  /// </summary>
+  private static void TestRetainedPlaybackNeverRebindsToDuplicateTextInAnotherNode()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue37-node-identity-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "fixture.jsonl");
+    WriteFollowOffFixture(path);
+    File.AppendAllLines(path, new[]
+    {
+      JsonSerializer.Serialize(new
+      {
+        type = "event_msg",
+        timestamp = "2026-09-07T01:59:59Z",
+        payload = new
+        {
+          type = "agent_message",
+          phase = "final",
+          message = "Open tabs:"
+        }
+      })
+    });
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "stable-node playback identity");
+      WaitForTranscriptRender(view);
+
+      IReadOnlyList<TranscriptNodeIdentity> identities =
+        ReadField<IReadOnlyList<TranscriptNodeIdentity>>(view, "_identities");
+      TranscriptNodeIdentity[] matches = identities
+        .Where(identity => identity.Segments.Any(segment =>
+          string.Equals(segment.Trim(), "Open tabs:", StringComparison.Ordinal)))
+        .ToArray();
+      Require(matches.Length >= 2,
+        $"Duplicate-text fixture exposed only {matches.Length} Open tabs node(s).");
+      TranscriptNodeIdentity target = matches[0];
+      TranscriptNodeIdentity decoy = matches[^1];
+      Require(target.NodeId != decoy.NodeId,
+        "Duplicate-text fixture did not create distinct stable node identities.");
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      Require(document.TryGetIndex(target.RecordNumber, out int targetIndex),
+        "Target playback node is absent from virtual document.");
+      Require(document.TryGetIndex(decoy.RecordNumber, out int decoyIndex),
+        "Duplicate-text decoy node is absent from virtual document.");
+      Require(Math.Abs(decoyIndex - targetIndex) > 5,
+        "Duplicate-text fixture did not separate target and decoy enough for eviction.");
+
+      Task materializeTarget = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        targetIndex,
+        "test-precondition",
+        null,
+        null);
+      PumpUntilCompleted(materializeTarget, "target playback node materialization");
+
+      view.ShowPlaybackPosition(new TranscriptPlaybackPosition(
+        TranscriptPlaybackState.Paused,
+        "Open tabs:",
+        0,
+        "Open",
+        target.NodeId,
+        0,
+        4,
+        Stopwatch.GetTimestamp()));
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpUntil(
+        () => ExecuteJsonProbe(
+          webView,
+          "JSON.stringify({node:Number(document.querySelector('.word.paused')?.dataset.nodeId||0)})")
+          .GetProperty("node").GetInt64() == target.NodeId,
+        "paused marker to bind to its target stable node");
+
+      Task materializeDecoy = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        decoyIndex,
+        decoyIndex > targetIndex ? "scroll-down" : "scroll-up",
+        null,
+        null);
+      PumpUntilCompleted(materializeDecoy, "manual scroll to duplicate-text decoy");
+      PumpMessages(200);
+      Require(
+        targetIndex < ReadField<int>(view, "_windowStartIndex") ||
+        targetIndex > ReadField<int>(view, "_windowEndIndex"),
+        "Manual-scroll precondition did not evict the authoritative playback node.");
+      Require(
+        decoyIndex >= ReadField<int>(view, "_windowStartIndex") &&
+        decoyIndex <= ReadField<int>(view, "_windowEndIndex"),
+        "Manual-scroll precondition did not materialize the duplicate-text decoy.");
+
+      JsonElement absentTarget = ExecuteJsonProbe(
+        webView,
+        "JSON.stringify({" +
+        "paused:!!document.querySelector('.word.paused')," +
+        "node:Number(document.querySelector('.word.paused')?.dataset.nodeId||0)})");
+      Require(!absentTarget.GetProperty("paused").GetBoolean(),
+        "Retained voice cursor rebound to duplicate text in another node while " +
+        $"authoritative node {target.NodeId} was evicted; rendered node was " +
+        $"{absentTarget.GetProperty("node").GetInt64()}.");
+
+      Task returnToTarget = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        targetIndex,
+        targetIndex < decoyIndex ? "scroll-up" : "scroll-down",
+        null,
+        null);
+      PumpUntilCompleted(returnToTarget, "manual scroll back to authoritative playback node");
+      PumpUntil(
+        () => ExecuteJsonProbe(
+          webView,
+          "JSON.stringify({node:Number(document.querySelector('.word.paused')?.dataset.nodeId||0)})")
+          .GetProperty("node").GetInt64() == target.NodeId,
+        "retained marker to return only to its authoritative stable node");
     }
     finally
     {
@@ -1492,6 +1821,107 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       "Directional shift evicted part of the physically visible Core-unit " +
       $"range [{visibleStartIndex}..{visibleEndIndex}]; shifted window is " +
       $"[{shifted.StartIndex}..{shifted.EndIndex}].");
+  }
+
+  /// <summary>
+  /// A disclosure opened by the user must stay open when virtualization
+  /// replaces an overlapping materialized window during ordinary scrolling.
+  /// The replacement itself may use preserve=false for scroll-position policy;
+  /// disclosure state is a separate UI invariant and must survive that swap.
+  /// </summary>
+  private static void TestManualScrollPreservesDisclosureState()
+  {
+    using var host = CreateOffscreenHost();
+    using var view = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(view);
+    host.Show();
+    _ = host.Handle;
+    _ = view.Handle;
+    WaitForViewInitialization(view);
+
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    JsonElement result = ExecuteJsonProbe(
+      webView,
+      """
+(() => {
+  const first =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:stable"><summary>Context</summary>' +
+    '<p>first window</p></details></section>';
+  const second =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:stable"><summary>Context</summary>' +
+    '<p>shifted window</p></details></section>' +
+    '<section class="virtual-record" data-virtual-index="11"><p>next</p></section>';
+  replaceTranscriptWindow(first, false, [], 10, 10, 100, 100);
+  const before = document.querySelector('details[data-presentation-id="context:stable"]');
+  if (!before) throw new Error('Initial disclosure was not materialized.');
+  before.open = true;
+  replaceTranscriptWindow(second, false, [], 10, 11, 100, 50);
+  const after = document.querySelector('details[data-presentation-id="context:stable"]');
+  return JSON.stringify({exists:Boolean(after), open:Boolean(after?.open)});
+})()
+""");
+
+    Require(result.GetProperty("exists").GetBoolean(),
+      "Overlapping disclosure disappeared during virtual-window replacement.");
+    Require(result.GetProperty("open").GetBoolean(),
+      "Virtual-window replacement collapsed a disclosure that the user opened.");
+  }
+
+  /// <summary>
+  /// SV3: disclosure state must outlive the DOM node itself. Opening a default-
+  /// closed details element creates an open override that survives eviction and
+  /// rematerialization. Closing it again returns to default and removes that
+  /// override, so a later rematerialization is closed.
+  /// </summary>
+  private static void TestDisclosureOpenStateSurvivesEvictionAndCloseClearsOverride()
+  {
+    using var host = CreateOffscreenHost();
+    using var view = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(view);
+    host.Show();
+    _ = host.Handle;
+    _ = view.Handle;
+    WaitForViewInitialization(view);
+
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    JsonElement result = ExecuteJsonProbe(
+      webView,
+      """
+(() => {
+  const withDetails =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:persist"><summary>Context</summary>' +
+    '<p>payload</p></details></section>';
+  const away =
+    '<section class="virtual-record" data-virtual-index="30"><p>far away</p></section>';
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  let details = document.querySelector('details[data-presentation-id="context:persist"]');
+  details.open = true;
+  details.dispatchEvent(new Event('toggle'));
+
+  replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  details = document.querySelector('details[data-presentation-id="context:persist"]');
+  const openAfterReturn = Boolean(details?.open);
+
+  details.open = false;
+  details.dispatchEvent(new Event('toggle'));
+  replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  details = document.querySelector('details[data-presentation-id="context:persist"]');
+  return JSON.stringify({
+    openAfterReturn,
+    closedAfterUserCloseAndReturn: details ? !details.open : false
+  });
+})()
+""");
+
+    Require(result.GetProperty("openAfterReturn").GetBoolean(),
+      "An opened disclosure lost state after eviction and rematerialization.");
+    Require(result.GetProperty("closedAfterUserCloseAndReturn").GetBoolean(),
+      "Closing a disclosure did not clear its remembered open override.");
   }
 
   private static bool ReadBrowserBoolean(WebView2 webView, string expression)

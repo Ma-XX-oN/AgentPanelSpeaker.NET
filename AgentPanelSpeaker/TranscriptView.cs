@@ -62,6 +62,8 @@ internal sealed class TranscriptView : UserControl
   private long _latestFindWindowNavigationGeneration;
   private long _windowRenderTransactionSequence;
   private readonly SemaphoreSlim _windowRenderGate = new(1, 1);
+  private IReadOnlyList<SeekableTranscriptWordRange> _seekableVoiceRanges =
+    Array.Empty<SeekableTranscriptWordRange>();
 
   private sealed class WindowScriptBuildMetrics
   {
@@ -218,6 +220,11 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
+    if (_initialized)
+    {
+      _ = ExecuteAsync(
+        "resetDisclosureOpenOverrides(); resetRetainedPlayback();");
+    }
     _pendingPosition = null;
     _lastLocatedContentPosition = null;
     CancelSearchIndexBuild();
@@ -261,7 +268,9 @@ internal sealed class TranscriptView : UserControl
     ShowLoading("Select a session to view its transcript.");
     if (_initialized)
     {
-      _ = ExecuteAsync("replaceTranscript('', false, []);");
+      _ = ExecuteAsync(
+        "resetDisclosureOpenOverrides(); resetRetainedPlayback(); " +
+        "replaceTranscript('', false, []);");
     }
   }
 
@@ -453,6 +462,40 @@ internal sealed class TranscriptView : UserControl
   }
 
   /// <summary>
+  /// Publishes the authoritative currently seekable node-global speech ranges
+  /// used by the Ctrl+click transcript affordance.
+  /// </summary>
+  public void SetSeekableVoiceRanges(
+    IReadOnlyList<SeekableTranscriptWordRange> ranges)
+  {
+    ArgumentNullException.ThrowIfNull(ranges);
+    _seekableVoiceRanges = ranges.ToArray();
+    PostSeekableVoiceRanges();
+  }
+
+  /// <summary>
+  /// Updates the page-level Ctrl voice-pointer selection mode from the host
+  /// window without walking or mutating individual transcript words.
+  /// </summary>
+  public void SetVoicePointerSelectMode(bool enabled)
+  {
+    PostMessage(new
+    {
+      type = "voice-pointer-select-mode",
+      enabled
+    });
+  }
+
+  private void PostSeekableVoiceRanges()
+  {
+    PostMessage(new
+    {
+      type = "seekable-voice-ranges",
+      ranges = _seekableVoiceRanges
+    });
+  }
+
+  /// <summary>
   /// Applies the application theme to the transcript.
   /// </summary>
   public void ApplyTheme(bool dark)
@@ -536,6 +579,7 @@ internal sealed class TranscriptView : UserControl
     LogViewState("navigation-completed", "after-visibility-update");
     ApplySettings(_settings, _dark);
     QueueSettingsApply(immediate: true);
+    PostSeekableVoiceRanges();
     if (string.IsNullOrWhiteSpace(_sessionPath))
     {
       ShowLoading("Select a session to view its transcript.");
@@ -1312,7 +1356,10 @@ internal sealed class TranscriptView : UserControl
         {
           FindSeekRequested?.Invoke(
             this,
-            new FindSeekRequestedEventArgs(validNodeId, validNodeWordIndex));
+            new FindSeekRequestedEventArgs(
+              validNodeId,
+              validNodeWordIndex,
+              ReadOptionalString(root, "source")));
           return;
         }
 
@@ -2508,6 +2555,12 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
 }
+body.voice-pointer-select-mode
+  .word.voice-selectable:not(.voice-excluded) {
+  outline: 1px solid var(--link);
+  outline-offset: 1px;
+  cursor: pointer;
+}
 li.speech-list-item-active {
   background: var(--highlight);
   border-radius: 3px;
@@ -2647,6 +2700,7 @@ let windowStartIndex = -1;
 let windowEndIndex = -1;
 let virtualShiftPending = false;
 let latestPlaybackSequence = 0;
+let retainedPlayback = null;
 let latestSettingsSequence = 0;
 const fadingAnimations = new WeakMap();
 let knownNodeIds = new Set();
@@ -2669,6 +2723,9 @@ let findRegexEnabled = false;
 let findVoicedEnabled = true;
 let findCurrentWords = [];
 let findInputTimer = 0;
+let seekableVoiceRanges = [];
+const openDisclosureOverrides = new Set();
+let discardDisclosureStateOnNextReplacement = false;
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(
@@ -2783,8 +2840,47 @@ function structureDetailsKey(details) {
   const summaryText = summary
     ? summary.textContent.trim().replace(/\s+/g, ' ')
     : '';
-  return 'summary:' + summaryText;
+  const turn = details.closest('section.transcript-turn');
+  const turnId = turn?.getAttribute('data-presentation-id') || '';
+  if (turn && turnId) {
+    const ordinal = Array.from(turn.querySelectorAll('details')).indexOf(details);
+    if (ordinal >= 0) {
+      return 'turn-details:' + turnId + ':' + ordinal;
+    }
+  }
+  const anchor = details.querySelector('.record-anchor') ||
+    turn?.querySelector('.record-anchor');
+  const recordNumber = anchor?.getAttribute('data-jsonl-record') || '';
+  return 'fallback:' + recordNumber + ':' + summaryText;
 }
+
+function resetDisclosureOpenOverrides() {
+  openDisclosureOverrides.clear();
+  discardDisclosureStateOnNextReplacement = true;
+}
+
+function rememberDisclosureState(details) {
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const key = structureDetailsKey(details);
+  if (!key) return;
+  if (details.open) openDisclosureOverrides.add(key);
+  else openDisclosureOverrides.delete(key);
+}
+
+function setDisclosureOpenProgrammatically(details, open) {
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const requested = !!open;
+  const key = structureDetailsKey(details);
+  if (key) {
+    if (requested) openDisclosureOverrides.add(key);
+    else openDisclosureOverrides.delete(key);
+  }
+  if (details.open !== requested) details.open = requested;
+}
+
+transcript.addEventListener('toggle', event => {
+  rememberDisclosureState(event.target);
+}, true);
 
 function normalizeStructureEntries(entries) {
   const result = new Map();
@@ -3004,9 +3100,11 @@ function replaceTranscriptDom(
     (window.scrollY + window.innerHeight) < 80;
   const previousY = window.scrollY;
   const openDetails = new Map();
-  if (preserve) {
+  if (!discardDisclosureStateOnNextReplacement) {
     for (const details of transcript.querySelectorAll('details')) {
-      openDetails.set(structureDetailsKey(details), details.open);
+      const key = structureDetailsKey(details);
+      if (preserve) openDetails.set(key, details.open);
+      rememberDisclosureState(details);
     }
   }
 
@@ -3015,6 +3113,7 @@ function replaceTranscriptDom(
     fragment.append(buildTranscriptDomNode(spec));
   }
   transcript.replaceChildren(fragment);
+  resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
 
   let currentStructureMap = postStructureStage(
@@ -3025,8 +3124,13 @@ function replaceTranscriptDom(
     'dom-model-serialized-html');
   for (const details of transcript.querySelectorAll('details')) {
     const key = structureDetailsKey(details);
-    if (openDetails.has(key)) details.open = openDetails.get(key);
+    if (openDetails.has(key)) {
+      setDisclosureOpenProgrammatically(details, openDetails.get(key));
+    } else if (openDisclosureOverrides.has(key)) {
+      setDisclosureOpenProgrammatically(details, true);
+    }
   }
+  discardDisclosureStateOnNextReplacement = false;
   currentStructureMap = postStructureStage(
     structureProbeId,
     'after-details-restore',
@@ -3056,6 +3160,7 @@ function replaceTranscriptDom(
     currentStructureMap,
     'after-record-scopes');
   postMappingInstallSummary(nodeMap || []);
+  restoreRetainedPlaybackProjection();
   postStructureStage(
     structureProbeId,
     'replace-dom-exit',
@@ -3066,16 +3171,6 @@ function replaceTranscriptDom(
   windowStartIndex = 0;
   windowEndIndex = Number.MAX_SAFE_INTEGER;
   virtualShiftPending = false;
-  currentIndex = -1;
-  currentEndIndex = -1;
-  voiceMarkerIndex = -1;
-  currentNode = -1;
-  currentFragmentText = null;
-  currentFragmentStart = -1;
-  currentFragmentEnd = -1;
-  currentBoundaryWordIndex = -1;
-  currentSpeechListItem = null;
-  liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
@@ -3134,9 +3229,14 @@ function replaceTranscriptWindow(
   const nearBottom = document.documentElement.scrollHeight -
     (window.scrollY + window.innerHeight) < 80;
   const previousY = window.scrollY;
-  const openDetails = preserve
-    ? [...transcript.querySelectorAll('details')].map(x => x.open)
-    : [];
+  const localDetailsState = new Map();
+  if (!discardDisclosureStateOnNextReplacement) {
+    for (const details of transcript.querySelectorAll('details')) {
+      const key = structureDetailsKey(details);
+      localDetailsState.set(key, details.open);
+      rememberDisclosureState(details);
+    }
+  }
   // Replacing spacer heights and materialized records can itself change
   // scrollY.  Mark that layout-induced movement as programmatic.  Genuine
   // wheel/touch/scroll-key/scrollbar input can explicitly override this guard.
@@ -3150,6 +3250,7 @@ function replaceTranscriptWindow(
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   let phaseStarted = performance.now();
   transcript.innerHTML = exactAssignedHtml;
+  resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
   const innerHtmlMilliseconds = performance.now() - phaseStarted;
   const exactParsedHtml = transcript.innerHTML;
@@ -3165,9 +3266,15 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-inner-html';
   windowStartIndex = startIndex;
   windowEndIndex = endIndex;
-  [...transcript.querySelectorAll('details')].forEach((item, index) => {
-    if (index < openDetails.length) item.open = openDetails[index];
-  });
+  for (const details of transcript.querySelectorAll('details')) {
+    const key = structureDetailsKey(details);
+    if (localDetailsState.has(key)) {
+      setDisclosureOpenProgrammatically(details, localDetailsState.get(key));
+    } else if (openDisclosureOverrides.has(key)) {
+      setDisclosureOpenProgrammatically(details, true);
+    }
+  }
+  discardDisclosureStateOnNextReplacement = false;
   previousStructureMap = postStructureStage(
     structureProbeId,
     'after-details-restore',
@@ -3207,6 +3314,7 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-node-scopes';
   phaseStarted = performance.now();
   postMappingInstallSummary(nodeMap || []);
+  restoreRetainedPlaybackProjection();
   const mappingSummaryMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
     structureProbeId,
@@ -3272,16 +3380,6 @@ function replaceTranscriptWindow(
       focusVirtualIndex !== null) {
     focusRequestedVirtualRecord();
   }
-  currentIndex = -1;
-  currentEndIndex = -1;
-  voiceMarkerIndex = -1;
-  currentNode = -1;
-  currentFragmentText = null;
-  currentFragmentStart = -1;
-  currentFragmentEnd = -1;
-  currentBoundaryWordIndex = -1;
-  currentSpeechListItem = null;
-  liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
@@ -3588,12 +3686,154 @@ function postFragmentRangeMiss(
   });
 }
 
+function markVoiceSelectableWords(
+  collection,
+  start,
+  end,
+  nodeId,
+  startNodeWordIndex,
+  speechTokenOffsets) {
+  let relativeLexicalIndex = 0;
+  for (let index = start; index <= end; ++index) {
+    const word = collection[index];
+    if (!word) continue;
+    const speechTokenOffset = speechTokenOffsets[relativeLexicalIndex++];
+    if (speechTokenOffset === undefined) continue;
+    word.classList.add('voice-selectable');
+    word.dataset.nodeId = String(nodeId);
+    word.dataset.nodeWordIndex = String(
+      startNodeWordIndex + speechTokenOffset);
+  }
+}
+
+function markVoiceSelectableWordsByGlobalRange(
+  collection,
+  globalStart,
+  globalEnd,
+  nodeId,
+  startNodeWordIndex,
+  speechTokenOffsets) {
+  const selected = collection.filter(word => {
+    const index = Number(word.dataset.index ?? -1);
+    return index >= globalStart && index <= globalEnd;
+  });
+  if (!selected.length) return;
+  for (let index = 0; index < selected.length; ++index) {
+    const speechTokenOffset = speechTokenOffsets[index];
+    if (speechTokenOffset === undefined) continue;
+    const word = selected[index];
+    word.classList.add('voice-selectable');
+    word.dataset.nodeId = String(nodeId);
+    word.dataset.nodeWordIndex = String(
+      startNodeWordIndex + speechTokenOffset);
+  }
+}
+
+function isSeekableVoiceWord(word) {
+  const nodeId = Number(word.dataset.nodeId || 0);
+  const nodeWordIndex = Number(word.dataset.nodeWordIndex ?? -1);
+  if (nodeId <= 0 || nodeWordIndex < 0) return false;
+  return seekableVoiceRanges.some(range =>
+    range.nodeId === nodeId &&
+    nodeWordIndex >= range.startNodeWordIndex &&
+    nodeWordIndex < range.startNodeWordIndex + range.wordCount);
+}
+
+function applyVoiceEligibilityClasses() {
+  for (const word of transcript.querySelectorAll('.word.voice-selectable')) {
+    word.classList.toggle('voice-excluded', !isSeekableVoiceWord(word));
+  }
+}
+
+function setSeekableVoiceRanges(ranges) {
+  seekableVoiceRanges = (ranges || []).map(range => ({
+    nodeId:Number(range.NodeId ?? range.nodeId ?? 0),
+    startNodeWordIndex:Number(
+      range.StartNodeWordIndex ?? range.startNodeWordIndex ?? -1),
+    wordCount:Number(range.WordCount ?? range.wordCount ?? 0)
+  })).filter(range =>
+    range.nodeId > 0 && range.startNodeWordIndex >= 0 && range.wordCount > 0);
+  applyVoiceEligibilityClasses();
+}
+
+function lexicalWordsCanJoin(left, right) {
+  if (!left || !right) return false;
+  try {
+    const range = document.createRange();
+    range.setStartAfter(left);
+    range.setEndBefore(right);
+    return !/\s/u.test(range.toString());
+  } catch {
+    return false;
+  }
+}
+
+function findSpeechLexicalAlignment(collection, target, startAt) {
+  if (!collection.length || !target.length) return null;
+  const first = Math.max(0, Number(startAt) || 0);
+  for (let candidate = first; candidate < collection.length; ++candidate) {
+    let cursor = candidate;
+    const groups = [];
+    let matched = true;
+    for (const targetToken of target) {
+      const groupStart = cursor;
+      let combined = '';
+      let complete = false;
+      while (cursor < collection.length) {
+        if (cursor > groupStart &&
+            !lexicalWordsCanJoin(collection[cursor - 1], collection[cursor])) {
+          break;
+        }
+        const piece = collection[cursor].dataset.normalized || '';
+        if (!piece) break;
+        combined += piece;
+        if (!targetToken.startsWith(combined)) break;
+        const groupEnd = cursor;
+        ++cursor;
+        if (combined === targetToken) {
+          groups.push({start:groupStart, end:groupEnd});
+          complete = true;
+          break;
+        }
+      }
+      if (!complete) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return groups;
+  }
+  return null;
+}
+
+function markAlignedVoiceSelectableWords(
+  collection,
+  groups,
+  nodeId,
+  startNodeWordIndex,
+  speechTokenOffsets) {
+  for (let targetIndex = 0; targetIndex < groups.length; ++targetIndex) {
+    const speechTokenOffset = speechTokenOffsets[targetIndex];
+    if (speechTokenOffset === undefined) continue;
+    const group = groups[targetIndex];
+    for (let index = group.start; index <= group.end; ++index) {
+      const word = collection[index];
+      if (!word) continue;
+      word.classList.add('voice-selectable');
+      word.dataset.nodeId = String(nodeId);
+      word.dataset.nodeWordIndex = String(
+        startNodeWordIndex + speechTokenOffset);
+    }
+  }
+}
+
 function assignNodeScopes(nodeMap) {
   ++mappingGeneration;
   knownNodeIds = new Set();
   segmentRangesByNode = new Map();
   const displayCursors = new Map();
   const lexicalCursors = new Map();
+  const nodeWordCursors = new Map();
   for (const item of nodeMap || []) {
     const nodeId = String(item.NodeId ?? item.nodeId ?? '');
     knownNodeIds.add(nodeId);
@@ -3605,9 +3845,19 @@ function assignNodeScopes(nodeMap) {
     const recordLexicalWords = lexicalWordsByRecord.get(key) || [];
     let displayCursor = displayCursors.get(key) || 0;
     let lexicalCursor = lexicalCursors.get(key) || 0;
+    let nodeWordIndex = nodeWordCursors.get(nodeId) || 0;
     for (const segment of segments) {
       const displayTarget = tokenizeDisplay(segment);
       const lexicalTarget = tokenize(segment);
+      const speechTokenOffsets = displayTarget
+        .map((token, index) => isLexical(token) ? index : -1)
+        .filter(index => index >= 0);
+      const segmentNodeWordStart = nodeWordIndex;
+      // SpeechService indexes every SpeechTokenization token, including
+      // punctuation/symbols.  Clickable lexical words therefore keep gaps for
+      // punctuation instead of being renumbered into a lexical-only space.
+      nodeWordIndex += displayTarget.length;
+      nodeWordCursors.set(nodeId, nodeWordIndex);
       if (!displayTarget.length && !lexicalTarget.length) continue;
 
       let start = findSequence(
@@ -3629,6 +3879,13 @@ function assignNodeScopes(nodeMap) {
         markCollectionRange(recordWords, start, end, nodeId);
         const globalStart = Number(recordWords[start].dataset.index);
         const globalEnd = Number(recordWords[end].dataset.index);
+        markVoiceSelectableWordsByGlobalRange(
+          recordLexicalWords,
+          globalStart,
+          globalEnd,
+          nodeId,
+          segmentNodeWordStart,
+          speechTokenOffsets);
         rememberSegmentRange(
           nodeId,
           globalStart,
@@ -3667,6 +3924,13 @@ function assignNodeScopes(nodeMap) {
         const tokenEnd = Number(
           recordLexicalWords[lexicalEnd].dataset.index);
         markNodeRange(tokenStart, tokenEnd, nodeId);
+        markVoiceSelectableWords(
+          recordLexicalWords,
+          lexicalStart,
+          lexicalEnd,
+          nodeId,
+          segmentNodeWordStart,
+          speechTokenOffsets);
         rememberSegmentRange(
           nodeId,
           tokenStart,
@@ -3677,6 +3941,43 @@ function assignNodeScopes(nodeMap) {
         lexicalCursors.set(key, lexicalCursor);
         displayCursor = Number(
           recordLexicalWords[lexicalEnd].dataset.recordIndex) + 1;
+        displayCursors.set(key, displayCursor);
+        continue;
+      }
+
+      let lexicalAlignment = findSpeechLexicalAlignment(
+        recordLexicalWords,
+        lexicalTarget,
+        lexicalCursor);
+      if (!lexicalAlignment && lexicalCursor > 0) {
+        lexicalAlignment = findSpeechLexicalAlignment(
+          recordLexicalWords,
+          lexicalTarget,
+          0);
+      }
+      if (lexicalAlignment && lexicalAlignment.length) {
+        const firstGroup = lexicalAlignment[0];
+        const lastGroup = lexicalAlignment[lexicalAlignment.length - 1];
+        const firstWord = recordLexicalWords[firstGroup.start];
+        const lastWord = recordLexicalWords[lastGroup.end];
+        const tokenStart = Number(firstWord.dataset.index);
+        const tokenEnd = Number(lastWord.dataset.index);
+        markNodeRange(tokenStart, tokenEnd, nodeId);
+        markAlignedVoiceSelectableWords(
+          recordLexicalWords,
+          lexicalAlignment,
+          nodeId,
+          segmentNodeWordStart,
+          speechTokenOffsets);
+        rememberSegmentRange(
+          nodeId,
+          tokenStart,
+          tokenEnd,
+          displayTarget,
+          lexicalTarget);
+        lexicalCursor = lastGroup.end + 1;
+        displayCursor = Number(lastWord.dataset.recordIndex) + 1;
+        lexicalCursors.set(key, lexicalCursor);
         displayCursors.set(key, displayCursor);
         continue;
       }
@@ -3704,6 +4005,7 @@ function assignNodeScopes(nodeMap) {
       }
     }
   }
+  applyVoiceEligibilityClasses();
 }
 
 function chooseNearestRange(matches, nodeId) {
@@ -3760,9 +4062,13 @@ function findFragmentRange(text, nodeId) {
   const mappedRange = chooseNearestRange(matches, nodeId);
   if (mappedRange) return mappedRange;
   const knownNode = knownNodeIds.has(nodeKey);
-  if (knownNode) {
+  const stableNodeId = Number(nodeId);
+  if (Number.isFinite(stableNodeId) && stableNodeId > 0) {
+    // A real playback NodeId is authoritative even while virtualization has
+    // evicted that node. Never let duplicate text in another materialized node
+    // impersonate the retained playback position.
     postFragmentRangeMiss(
-      text, nodeId, nodeKey, displayKey, lexicalKey, mapped, true);
+      text, nodeId, nodeKey, displayKey, lexicalKey, mapped, knownNode);
     return null;
   }
 
@@ -3789,7 +4095,7 @@ function openAncestors(element) {
   let parent = element?.parentElement;
   while (parent) {
     if (parent.tagName === 'DETAILS' && !parent.open) {
-      parent.open = true;
+      setDisclosureOpenProgrammatically(parent, true);
       ++opened;
     }
     parent = parent.parentElement;
@@ -3999,6 +4305,38 @@ function applyRangeClass(range, className) {
     cancelFade(word);
     word.classList.add(className);
   }
+}
+
+function resetRetainedPlayback() {
+  retainedPlayback = null;
+  resetPlaybackProjectionState();
+}
+
+function resetPlaybackProjectionState() {
+  currentIndex = -1;
+  currentEndIndex = -1;
+  voiceMarkerIndex = -1;
+  currentNode = -1;
+  currentFragmentText = null;
+  currentFragmentStart = -1;
+  currentFragmentEnd = -1;
+  currentBoundaryWordIndex = -1;
+  currentSpeechListItem = null;
+  liveEndMarker.style.display = 'none';
+}
+
+function restoreRetainedPlaybackProjection() {
+  if (!retainedPlayback) return;
+  const preservedFollow = followSpeech;
+  setPlayback(
+    retainedPlayback.state,
+    retainedPlayback.fragmentText,
+    retainedPlayback.wordIndex,
+    retainedPlayback.wordText,
+    retainedPlayback.nodeId,
+    false);
+  // Projection restoration must never change the user's follow setting.
+  setFollowSpeech(preservedFollow, false);
 }
 
 function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
@@ -4776,6 +5114,14 @@ chrome.webview.addEventListener('message', event => {
     reportFind(errorKind === 'regex' ? 'invalid-regex' : 'search-failed', {error:errorText});
     return;
   }
+  if (data.type === 'seekable-voice-ranges') {
+    setSeekableVoiceRanges(data.ranges ?? data.Ranges ?? []);
+    return;
+  }
+  if (data.type === 'voice-pointer-select-mode') {
+    setVoicePointerSelectMode(Boolean(data.enabled ?? data.Enabled));
+    return;
+  }
   if (data.type === 'settings') {
     const sequence = Number(data.sequence || 0);
     if (sequence < latestSettingsSequence) return;
@@ -4793,6 +5139,13 @@ chrome.webview.addEventListener('message', event => {
   const sequence = Number(data.sequence || 0);
   if (sequence < latestPlaybackSequence) return;
   latestPlaybackSequence = sequence;
+  retainedPlayback = {
+    state:data.state,
+    fragmentText:data.fragmentText,
+    wordIndex:data.wordIndex,
+    wordText:data.wordText,
+    nodeId:data.nodeId
+  };
   setPlayback(
     data.state,
     data.fragmentText,
@@ -4815,6 +5168,37 @@ chrome.webview.addEventListener('message', event => {
     javascriptTimestamp: String(performance.now())
   });
 });
+
+function setVoicePointerSelectMode(enabled) {
+  document.body.classList.toggle('voice-pointer-select-mode', enabled);
+}
+
+window.addEventListener('keydown', event => {
+  if (event.key === 'Control') setVoicePointerSelectMode(true);
+}, true);
+window.addEventListener('keyup', event => {
+  if (event.key === 'Control') setVoicePointerSelectMode(false);
+}, true);
+
+transcript.addEventListener('click', event => {
+  if (!event.ctrlKey || event.button !== 0 || !(event.target instanceof Element)) {
+    return;
+  }
+  const word = event.target.closest(
+    '.word.voice-selectable:not(.voice-excluded)');
+  if (!word || !transcript.contains(word)) return;
+  const nodeId = Number(word.dataset.nodeId || 0);
+  const nodeWordIndex = Number(word.dataset.nodeWordIndex ?? -1);
+  if (nodeId <= 0 || nodeWordIndex < 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  chrome.webview.postMessage({
+    type:'find-seek',
+    source:'ctrl-click',
+    nodeId,
+    nodeWordIndex
+  });
+}, true);
 
 window.addEventListener('keydown', event => {
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&

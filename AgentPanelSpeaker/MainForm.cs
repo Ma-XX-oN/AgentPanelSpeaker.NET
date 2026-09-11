@@ -19,7 +19,9 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmGetLineCount = 0x00BA;
   private const int EmLineScroll = 0x00B6;
   private const int WmSetRedraw = 0x000B;
+  private const int WmActivateApp = 0x001C;
   private const int WmKeyDown = 0x0100;
+  private const int WmKeyUp = 0x0101;
   private const int WmLButtonDown = 0x0201;
   private const int WmNcLButtonDown = 0x00A1;
   private const int WmRButtonDown = 0x0204;
@@ -29,6 +31,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int WmXButtonDown = 0x020B;
   private const int WmNcXButtonDown = 0x00AB;
   private const int WmSystemKeyDown = 0x0104;
+  private const int WmSystemKeyUp = 0x0105;
   private const uint GaRoot = 2;
   private const uint GwHwndNext = 2;
   private const uint RdwInvalidate = 0x0001;
@@ -667,12 +670,30 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
+    Activated += (_, _) =>
+    {
+      bool foregroundIsCurrentProcess = IsWindowFromCurrentProcess(
+        GetForegroundWindowForTabDiagnostics());
+      _transcriptView.SetVoicePointerSelectMode(
+        ResolveVoicePointerSelectModeForActivation(
+          (Control.ModifierKeys & Keys.Control) != 0,
+          foregroundIsCurrentProcess));
+    };
     Deactivate += (_, _) =>
     {
+      bool foregroundIsCurrentProcess = IsWindowFromCurrentProcess(
+        GetForegroundWindowForTabDiagnostics());
+      _transcriptView.SetVoicePointerSelectMode(
+        ResolveVoicePointerSelectModeForActivation(
+          (Control.ModifierKeys & Keys.Control) != 0,
+          foregroundIsCurrentProcess));
       PopupFormBase.WriteActivationDiagnostics(
         "mainform-deactivate-event",
         this);
-      HoverPopupController.HandleOwnerDeactivated(this);
+      if (!foregroundIsCurrentProcess)
+      {
+        HoverPopupController.HandleOwnerDeactivated(this);
+      }
     };
     _rewindSpeakerButton.Click += (_, _) => NavigateSpeech(
       _speech.TryRewindSpeaker,
@@ -851,7 +872,10 @@ internal sealed class MainForm : Form, IMessageFilter
     _masterSpeechProfile.Width = SpeechProfileWidth * 2 + 6;
     _masterSpeechProfile.TabIndex = 0;
     _masterSpeechProfile.ProfileChanged += (_, _) =>
+    {
       SaveControlsToSettings();
+      RefreshTranscriptVoiceSelectability();
+    };
     _masterSpeechProfile.SetTestActions(
       new SpeechProfileTestAction("Agent Main", () =>
         PreviewVoiceSettings(SpeechRole.Agent, context: false)),
@@ -1171,7 +1195,10 @@ internal sealed class MainForm : Form, IMessageFilter
       _speakUserContext = settings.Transcript.SpeakUserContext;
       _speech.SetShowRolledBackHistory(
         settings.Transcript.ShowRolledBackHistory);
+      _speech.RevalidatePausedNavigationEligibility(
+        "settings-loaded");
       _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
+      RefreshTranscriptVoiceSelectability();
       _speech.SetWordBoundaryPollMilliseconds(
         settings.Transcript.HighlightUpdateMilliseconds);
       _appliedTranscriptTrackingMilliseconds =
@@ -1285,6 +1312,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _monitor.Stop(trigger);
     _speech.CancelAll();
     _speech.BeginLiveSession();
+    RefreshTranscriptVoiceSelectability();
     AppendLog("Paused monitoring stopped for session reconfiguration.");
     UpdateControlState();
     return true;
@@ -1360,6 +1388,9 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceTypesTextBox.Text = parsed.NormalizedCsv;
     _loadingSettings = false;
     SaveControlsToSettings();
+    _speech.RevalidatePausedNavigationEligibility(
+      "fenced-code-types-changed");
+    RefreshTranscriptVoiceSelectability();
     AppendLog(
       "Spoken fenced-code types updated: " +
       (parsed.OrderedTypes.Count == 0 ? "none" : parsed.NormalizedCsv));
@@ -1378,6 +1409,9 @@ internal sealed class MainForm : Form, IMessageFilter
     UpdateVoiceRowState(role);
     row.Voice.Invalidate();
     SaveControlsToSettings();
+    _speech.RevalidatePausedNavigationEligibility(
+      "voice-profile-changed");
+    RefreshTranscriptVoiceSelectability();
     ScheduleVoiceSettingsPreview(role, context);
   }
 
@@ -1567,6 +1601,7 @@ internal sealed class MainForm : Form, IMessageFilter
       if (!reusePausedHistory)
       {
         _speech.BeginLiveSession();
+        RefreshTranscriptVoiceSelectability();
       }
       Interlocked.Increment(ref _monitorSession);
       string? explicitPath = _pathIsManual || !_followLatestCheckBox.Checked
@@ -1904,6 +1939,7 @@ internal sealed class MainForm : Form, IMessageFilter
         snapshot.Completions,
         snapshot.BackgroundWorkEvents,
         snapshot.StartMode);
+      RefreshTranscriptVoiceSelectability();
 
       if (_pendingMonitorSeekNodeId > 0 &&
           _pendingMonitorSeekWordIndex >= 0)
@@ -2024,6 +2060,7 @@ internal sealed class MainForm : Form, IMessageFilter
       else
       {
         _speech.BeginLiveSession();
+        RefreshTranscriptVoiceSelectability();
       }
       SetSessionDisplay(session);
       AppendLog($"Active session: {session.DisplayName}");
@@ -2054,6 +2091,7 @@ internal sealed class MainForm : Form, IMessageFilter
         return;
       }
       _speech.SpeakLive(fragment);
+      RefreshTranscriptVoiceSelectability();
       AppendLog($"Queued {fragment.Category}: {fragment.Text}");
       UpdateControlState();
     });
@@ -2214,7 +2252,10 @@ internal sealed class MainForm : Form, IMessageFilter
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
     _speakUserContext = settings.SpeakUserContext;
     _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);
+    _speech.RevalidatePausedNavigationEligibility(
+      "transcript-settings-changed");
     _transcriptView.ApplySettings(settings, dark);
+    RefreshTranscriptVoiceSelectability();
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
         settings.HighlightUpdateMilliseconds)
@@ -2229,12 +2270,30 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Moves the paused speech marker to the voiced word selected by Find.
+  /// Publishes current speech eligibility to the transcript. Ctrl itself only
+  /// toggles one page-level CSS class; individual word classes change only
+  /// when mapping or speech eligibility changes.
+  /// </summary>
+  private void RefreshTranscriptVoiceSelectability()
+  {
+    _transcriptView.SetSeekableVoiceRanges(
+      _speech.GetSeekableTranscriptWordRanges());
+  }
+
+  /// <summary>
+  /// Moves the paused speech marker to a voiced word selected by Find or by
+  /// direct Ctrl+click transcript navigation.
   /// </summary>
   private void TranscriptFindSeekRequested(
     object? sender,
     FindSeekRequestedEventArgs eventArgs)
   {
+    DiagnosticLog.Write("transcript.seek_requested", new
+    {
+      eventArgs.Source,
+      eventArgs.NodeId,
+      eventArgs.NodeWordIndex
+    });
     if (_speech.TrySeekToTranscriptWord(
           eventArgs.NodeId,
           eventArgs.NodeWordIndex,
@@ -2242,7 +2301,9 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       _pendingMonitorSeekNodeId = eventArgs.NodeId;
       _pendingMonitorSeekWordIndex = eventArgs.NodeWordIndex;
-      AppendLog($"Find moved speech marker: {text}");
+      AppendLog(eventArgs.Source == "ctrl-click"
+        ? $"Ctrl+click moved speech marker: {text}"
+        : $"Find moved speech marker: {text}");
     }
     else
     {
@@ -2670,10 +2731,75 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Resolves host Ctrl key messages into transcript voice-pointer selection
+  /// state without consuming the original key message.
+  /// </summary>
+  internal static bool TryGetVoicePointerSelectModeMessage(
+    int message,
+    IntPtr wordParameter,
+    out bool enabled)
+  {
+    enabled = false;
+    if (message is not (WmKeyDown or WmSystemKeyDown or
+        WmKeyUp or WmSystemKeyUp))
+    {
+      return false;
+    }
+
+    Keys keyCode = (Keys)(int)wordParameter & Keys.KeyCode;
+    if (keyCode != Keys.ControlKey)
+    {
+      return false;
+    }
+
+    enabled = message is WmKeyDown or WmSystemKeyDown;
+    return true;
+  }
+
+  /// <summary>
+  /// Resolves whether the Ctrl voice-pointer affordance remains active while
+  /// focus moves between top-level windows owned by this process.
+  /// </summary>
+  internal static bool ResolveVoicePointerSelectModeForActivation(
+    bool controlHeld,
+    bool foregroundIsCurrentProcess) =>
+    controlHeld && foregroundIsCurrentProcess;
+
+  /// <summary>
+  /// Returns whether one top-level message source belongs to the MainForm or
+  /// another top-level window owned by this process.
+  /// </summary>
+  internal static bool ShouldRouteVoicePointerMessageSource(
+    bool isMainFormRoot,
+    bool rootIsCurrentProcess) =>
+    isMainFormRoot || rootIsCurrentProcess;
+
+  private static bool IsWindowFromCurrentProcess(IntPtr window)
+  {
+    if (window == IntPtr.Zero)
+    {
+      return false;
+    }
+    _ = GetWindowThreadProcessIdForTabDiagnostics(window, out uint processId);
+    return processId == (uint)Environment.ProcessId;
+  }
+
+  /// <summary>
   /// Handles transport hotkeys before focused child windows consume them.
   /// </summary>
   public bool PreFilterMessage(ref Message message)
   {
+    if (message.Msg == WmActivateApp)
+    {
+      bool foregroundIsCurrentProcess = IsWindowFromCurrentProcess(
+        GetForegroundWindowForTabDiagnostics());
+      _transcriptView.SetVoicePointerSelectMode(
+        ResolveVoicePointerSelectModeForActivation(
+          (Control.ModifierKeys & Keys.Control) != 0,
+          foregroundIsCurrentProcess));
+      return false;
+    }
+
     if (message.Msg is WmLButtonDown or WmRButtonDown or
         WmMButtonDown or WmXButtonDown or
         WmNcLButtonDown or WmNcRButtonDown or
@@ -2684,9 +2810,22 @@ internal sealed class MainForm : Form, IMessageFilter
       return false;
     }
 
-    if (GetAncestor(message.HWnd, GaRoot) != Handle)
+    IntPtr messageRoot = GetAncestor(message.HWnd, GaRoot);
+    bool isMainFormRoot = messageRoot == Handle;
+    bool rootIsCurrentProcess = IsWindowFromCurrentProcess(messageRoot);
+    if (!ShouldRouteVoicePointerMessageSource(
+          isMainFormRoot,
+          rootIsCurrentProcess))
     {
       return false;
+    }
+
+    if (TryGetVoicePointerSelectModeMessage(
+          message.Msg,
+          message.WParam,
+          out bool voicePointerSelectMode))
+    {
+      _transcriptView.SetVoicePointerSelectMode(voicePointerSelectMode);
     }
 
     if (message.Msg is not (WmKeyDown or WmSystemKeyDown))
@@ -4059,6 +4198,7 @@ internal sealed class MainForm : Form, IMessageFilter
         snapshot.Completions,
         snapshot.BackgroundWorkEvents,
         snapshot.StartMode);
+      RefreshTranscriptVoiceSelectability();
       AppendLog(
         $"Indexed {snapshot.Fragments.Count} existing fragments for paused navigation.");
       UpdateControlState();
