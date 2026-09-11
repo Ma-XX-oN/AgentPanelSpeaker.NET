@@ -1564,7 +1564,7 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
     JsonElement result = ExecuteJsonProbe(
       webView,
       """
-(async () => {
+(() => {
   const withDetails =
     '<section class="virtual-record" data-virtual-index="10">' +
     '<details data-presentation-id="context:persist"><summary>Context</summary>' +
@@ -1575,7 +1575,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
   let details = document.querySelector('details[data-presentation-id="context:persist"]');
   details.open = true;
   details.dispatchEvent(new Event('toggle'));
-  await new Promise(resolve => setTimeout(resolve, 0));
 
   replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
   replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
@@ -1584,7 +1583,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
 
   details.open = false;
   details.dispatchEvent(new Event('toggle'));
-  await new Promise(resolve => setTimeout(resolve, 0));
   replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
   replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
   details = document.querySelector('details[data-presentation-id="context:persist"]');
