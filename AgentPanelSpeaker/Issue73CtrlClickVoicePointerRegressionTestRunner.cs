@@ -29,6 +29,8 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
         TestHostCtrlRoutingDoesNotRequireWebViewFocus),
       ("ctrl-click-voice-pointer/owned-popup-focus-preserves-held-ctrl",
         TestOwnedPopupFocusPreservesHeldCtrl),
+      ("ctrl-click-voice-pointer/owned-popup-root-routes-ctrl-messages",
+        TestOwnedPopupRootRoutesCtrlMessages),
       ("ctrl-click-voice-pointer/spoken-md-markup-split-token-is-selectable",
         TestSpokenMarkdownMarkupSplitTokenIsSelectable),
       ("ctrl-click-voice-pointer/spoken-quoted-markup-split-token-is-selectable",
@@ -572,6 +574,38 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
       Require(piece.GetProperty("nodeWordIndex").GetInt32() == 1,
         $"{description} split piece did not map to spoken token turn_ids at ordinal 1.");
     }
+  }
+
+  /// <summary>
+  /// A top-level owned popup is not the MainForm root, but it is still part of
+  /// this process and its Ctrl key messages must reach the transcript modifier
+  /// router. External-process roots must remain excluded.
+  /// </summary>
+  private static void TestOwnedPopupRootRoutesCtrlMessages()
+  {
+    MethodInfo resolver = typeof(MainForm).GetMethod(
+      "ShouldRouteVoicePointerMessageSource",
+      BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public) ??
+      throw new InvalidOperationException(
+        "MainForm popup-root voice-pointer routing resolver is missing.");
+
+    bool Resolve(bool isMainFormRoot, bool rootIsCurrentProcess)
+    {
+      object? result = resolver.Invoke(
+        null,
+        new object?[] { isMainFormRoot, rootIsCurrentProcess });
+      return result is bool value
+        ? value
+        : throw new InvalidOperationException(
+          "MainForm popup-root routing resolver returned no bool.");
+    }
+
+    Require(Resolve(isMainFormRoot: true, rootIsCurrentProcess: true),
+      "MainForm-root Ctrl messages were rejected.");
+    Require(Resolve(isMainFormRoot: false, rootIsCurrentProcess: true),
+      "Owned same-process popup Ctrl messages were rejected.");
+    Require(!Resolve(isMainFormRoot: false, rootIsCurrentProcess: false),
+      "External-process messages were accepted as transcript Ctrl input.");
   }
 
   private static TranscriptRangeProbe[] ReadRanges(object? value)
