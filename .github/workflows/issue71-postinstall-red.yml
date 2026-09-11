@@ -1,0 +1,65 @@
+name: Issue 71 post-install RED
+
+on:
+  push:
+    branches:
+      - issue-71-stale-find-materialization
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: ${{ !contains(github.event.head_commit.message, '[issue71-postinstall-red]') }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply permanent post-install regression
+        run: python scripts/apply-issue71-postinstall-red.py
+
+      - name: Commit permanent RED regression
+        shell: pwsh
+        run: |
+          git config user.name 'Ma-XX-oN'
+          git config user.email 'Ma-XX-oN@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
+          git commit -m 'test: cover issue 71 post-install invalidation [issue71-postinstall-red]'
+          git push origin HEAD:issue-71-stale-find-materialization
+
+      - name: Build Release
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact regression is RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue71-postinstall-red-stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue71-postinstall-red-stderr.txt'
+          $process = Start-Process -FilePath $exe -ArgumentList @('--test', 'real-session-fixes') -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $output = @(Get-Content $stdout)
+          $errors = @(Get-Content $stderr)
+          $output | ForEach-Object { Write-Host $_ }
+          $errors | ForEach-Object { Write-Host $_ }
+          if ($process.ExitCode -ne 1) {
+            throw "Expected RED exit 1, got $($process.ExitCode)."
+          }
+          if (-not ($output -match 'FAIL  real-session/stale-find-invalidated-after-install-stays-visible')) {
+            throw 'Exact post-install regression did not fail.'
+          }
+          if (-not ($output -match 'Find invalidation after replacement began left zero visible materialized records.')) {
+            throw 'Exact post-install blank-viewport invariant did not fail.'
+          }
+          if (-not ($output -match 'TEST-SUITE-COMPLETE real-session-fixes exit=1')) {
+            throw 'RED run did not complete the real-session suite.'
+          }
+          Write-Host 'ISSUE71-POSTINSTALL-RED-PROVEN'
