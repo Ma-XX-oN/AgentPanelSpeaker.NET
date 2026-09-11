@@ -17,12 +17,12 @@ internal static class Issue67FindOriginRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("find-origin/voice-cursor-selects-first-match-at-or-after-origin",
-        TestVoiceCursorSelectsFirstMatchAtOrAfterOrigin),
+      ("find-origin/voice-cursor-rotation-remains-correct",
+        TestVoiceCursorRotationRemainsCorrect),
       ("find-origin/previous-find-location-becomes-next-search-origin",
         TestPreviousFindLocationBecomesNextSearchOrigin),
-      ("find-origin/browser-honors-resolved-initial-match-index",
-        TestBrowserHonorsResolvedInitialMatchIndex)
+      ("find-origin/find-result-origin-is-treated-as-provided",
+        TestFindResultOriginIsTreatedAsProvided)
     };
 
     int failures = 0;
@@ -52,16 +52,17 @@ internal static class Issue67FindOriginRegressionTestRunner
   }
 
   /// <summary>
-  /// The initial result must be the first match that intersects or follows the
-  /// active voice-cursor coordinate, rather than unconditionally match zero.
+  /// Existing C# match rotation already starts a first-time Find after the
+  /// resolved voice cursor. Preserve that behavior while fixing the separate
+  /// previous-Find-origin defect.
   /// </summary>
-  private static void TestVoiceCursorSelectsFirstMatchAtOrAfterOrigin()
+  private static void TestVoiceCursorRotationRemainsCorrect()
   {
-    MethodInfo resolve = typeof(TranscriptView).GetMethod(
-      "ResolveInitialFindMatchIndex",
+    MethodInfo rotate = typeof(TranscriptView).GetMethod(
+      "RotateMatchesAfterOrigin",
       BindingFlags.NonPublic | BindingFlags.Static) ??
       throw new InvalidOperationException(
-        "TranscriptView.ResolveInitialFindMatchIndex() is missing.");
+        "TranscriptView.RotateMatchesAfterOrigin() is missing.");
 
     TranscriptSearchMatch[] matches =
     {
@@ -70,23 +71,26 @@ internal static class Issue67FindOriginRegressionTestRunner
       new(2, 20, 10, 10, 202, 0),
       new(3, 30, 1, 1, 301, 0)
     };
+    object? result = rotate.Invoke(null, new object?[] { matches, 20, 8 });
+    var rotated = result as IReadOnlyList<TranscriptSearchMatch> ??
+      throw new InvalidOperationException(
+        "RotateMatchesAfterOrigin() returned no match list.");
 
-    int insideMatch = InvokeResolver(resolve, matches, 20, 6);
-    int betweenMatches = InvokeResolver(resolve, matches, 20, 8);
-    int wrapped = InvokeResolver(resolve, matches, 40, 0);
-
-    Require(insideMatch == 1,
-      $"Voice cursor inside match 1 selected match {insideMatch}.");
-    Require(betweenMatches == 2,
-      $"Voice cursor between matches selected match {betweenMatches} instead of 2.");
-    Require(wrapped == 0,
-      $"Origin after the final match did not wrap to match zero; got {wrapped}.");
+    Require(rotated.Count == 4,
+      "Voice-origin rotation changed the number of Find matches.");
+    Require(rotated[0].RecordNumber == 20 &&
+        rotated[0].StartWordIndex == 10,
+      "Voice-origin rotation did not start at the first match after the cursor.");
+    Require(rotated[1].RecordNumber == 30,
+      "Voice-origin rotation did not preserve forward transcript order.");
+    Require(rotated[2].RecordNumber == 10,
+      "Voice-origin rotation did not preserve wrap order.");
   }
 
   /// <summary>
   /// Once Find has a current result, editing/re-running the query must use that
   /// found location as the next origin instead of falling back to the voice
-  /// cursor or the top of the transcript.
+  /// cursor. Explicit browser text selection remains higher priority.
   /// </summary>
   private static void TestPreviousFindLocationBecomesNextSearchOrigin()
   {
@@ -120,52 +124,36 @@ internal static class Issue67FindOriginRegressionTestRunner
   }
 
   /// <summary>
-  /// C# owns origin resolution. The browser must honor the resolved initial
-  /// match index carried with the result set instead of forcing index zero.
+  /// A browser-provided previous-Find origin is authoritative just like an
+  /// explicit selection. C# must not overwrite it with the voice cursor.
   /// </summary>
-  private static void TestBrowserHonorsResolvedInitialMatchIndex()
+  private static void TestFindResultOriginIsTreatedAsProvided()
   {
-    using BrowserFixture fixture = BrowserFixture.Create();
-    JsonElement result = ExecuteJsonProbe(
-      fixture.WebView,
-      """
-(() => {
-  findGeneration = 41;
-  findSearchPending = true;
-  applyCSharpFindResults({
-    requestId: 41,
-    initialMatchIndex: 2,
-    elapsedMilliseconds: 1,
-    matches: [
-      {fileOrdinal:0, recordNumber:10, startWordIndex:1, endWordIndex:1, nodeId:1, nodeWordIndex:0},
-      {fileOrdinal:1, recordNumber:20, startWordIndex:1, endWordIndex:1, nodeId:2, nodeWordIndex:0},
-      {fileOrdinal:2, recordNumber:30, startWordIndex:1, endWordIndex:1, nodeId:3, nodeWordIndex:0}
-    ]
-  });
-  return JSON.stringify({currentFindMatch});
-})()
-""");
+    MethodInfo resolve = typeof(TranscriptView).GetMethod(
+      "IsProvidedFindOriginKind",
+      BindingFlags.NonPublic | BindingFlags.Static) ??
+      throw new InvalidOperationException(
+        "TranscriptView.IsProvidedFindOriginKind() is missing.");
 
-    Require(result.GetProperty("currentFindMatch").GetInt32() == 2,
-      "Browser discarded C#'s resolved initial match index.");
+    bool selection = InvokeOriginKind(resolve, "selection");
+    bool find = InvokeOriginKind(resolve, "find");
+    bool voice = InvokeOriginKind(resolve, "voice");
+
+    Require(selection,
+      "Explicit selection origin stopped being authoritative.");
+    Require(find,
+      "Previous Find result is not treated as an authoritative origin.");
+    Require(!voice,
+      "Voice origin was incorrectly classified as browser-provided.");
   }
 
-  private static int InvokeResolver(
-    MethodInfo method,
-    IReadOnlyList<TranscriptSearchMatch> matches,
-    int recordNumber,
-    int wordIndex)
+  private static bool InvokeOriginKind(MethodInfo method, string kind)
   {
-    object? result = method.Invoke(null, new object?[]
-    {
-      matches,
-      recordNumber,
-      wordIndex
-    });
-    return result is int value
+    object? result = method.Invoke(null, new object?[] { kind });
+    return result is bool value
       ? value
       : throw new InvalidOperationException(
-        "ResolveInitialFindMatchIndex() did not return an integer.");
+        "IsProvidedFindOriginKind() did not return a Boolean.");
   }
 
   private static JsonElement ExecuteJsonProbe(WebView2 webView, string script)
