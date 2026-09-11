@@ -1,0 +1,77 @@
+name: Issue73 state projection GREEN
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+    paths:
+      - '.github/workflows/issue73-state-projection-green.yml'
+      - 'scripts/apply-issue73-state-projection-fix.py'
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply production state projection repair
+        run: python scripts/apply-issue73-state-projection-fix.py
+      - name: Verify production scope
+        shell: pwsh
+        run: |
+          $changed = @(git diff --name-only)
+          if ($changed.Count -ne 1 -or $changed[0] -ne 'AgentPanelSpeaker/TranscriptView.cs') {
+            throw "Unexpected production scope: $($changed -join ', ')"
+          }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Release
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release
+      - name: Exact issue 37 state/virtualization regressions
+        shell: pwsh
+        run: |
+          $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
+          & $exe --test virtual-window
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exact issue 73 Ctrl-click regressions
+        shell: pwsh
+        run: |
+          $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
+          & $exe --test ctrl-click-voice-pointer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exact issue 65 redundancy regressions
+        shell: pwsh
+        run: |
+          $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
+          & $exe --test redundancy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exact User Context regressions
+        shell: pwsh
+        run: |
+          $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
+          & $exe --test user-context-speech
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Focused mapping navigation speech and oracle suites
+        shell: pwsh
+        run: |
+          $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
+          $tests = @('word-materialization','find-origin','speech-ordinals','rolled-back-speech','output-oracle','independent-oracles')
+          foreach ($test in $tests) {
+            & $exe --test $test
+            if ($LASTEXITCODE -ne 0) { throw "Focused suite failed: $test" }
+          }
+      - name: Commit production GREEN
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'fix: persist virtualized playback and disclosure state (#73 #37) [issue73-state-projection-green]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
