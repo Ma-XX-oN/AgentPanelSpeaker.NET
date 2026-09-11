@@ -4062,9 +4062,13 @@ function findFragmentRange(text, nodeId) {
   const mappedRange = chooseNearestRange(matches, nodeId);
   if (mappedRange) return mappedRange;
   const knownNode = knownNodeIds.has(nodeKey);
-  if (knownNode) {
+  const stableNodeId = Number(nodeId);
+  if (Number.isFinite(stableNodeId) && stableNodeId > 0) {
+    // A real playback NodeId is authoritative even while virtualization has
+    // evicted that node. Never let duplicate text in another materialized node
+    // impersonate the retained playback position.
     postFragmentRangeMiss(
-      text, nodeId, nodeKey, displayKey, lexicalKey, mapped, true);
+      text, nodeId, nodeKey, displayKey, lexicalKey, mapped, knownNode);
     return null;
   }
 
