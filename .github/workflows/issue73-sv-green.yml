@@ -1,0 +1,104 @@
+name: Issue 73 SV GREEN
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: ${{ contains(github.event.head_commit.message, '[issue73-sv-green]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply production repairs
+        shell: pwsh
+        run: python scripts/apply-issue73-sv-fixes.py
+
+      - name: Verify production diff scope
+        shell: pwsh
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Production git diff --check failed.' }
+          $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3) } | Sort-Object)
+          $expected = @(
+            'AgentPanelSpeaker/MainForm.cs',
+            'AgentPanelSpeaker/TranscriptView.cs'
+          )
+          if (($changed -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected production changes: $($changed -join ', ')"
+          }
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run exact RED-to-GREEN suites
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          function Run-Suite([string]$suite) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-green-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-green-stderr.txt')
+            $p = Start-Process -FilePath $exe -ArgumentList @('--test',$suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            if ($p.ExitCode -ne 0) { throw "$suite exited $($p.ExitCode)." }
+            if ($text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
+              throw "$suite did not emit its successful completion marker."
+            }
+            return $text
+          }
+
+          $ctrl = Run-Suite 'ctrl-click-voice-pointer'
+          if ($ctrl -notmatch 'PASS: 8/8 issue #73 Ctrl\+click tests passed\.') {
+            throw 'Exact issue #73 suite did not finish 8/8 GREEN.'
+          }
+          $virtual = Run-Suite 'virtual-window'
+          if ($virtual -notmatch 'PASS: 12/12 issue #37 virtual-window tests passed\.') {
+            throw 'Exact issue #37 virtual-window suite did not finish 12/12 GREEN.'
+          }
+
+      - name: Run focused regression suites
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          foreach ($suite in @(
+            'word-materialization',
+            'find-origin',
+            'speech-ordinals',
+            'user-context-speech',
+            'rolled-back-speech',
+            'output-oracle',
+            'independent-oracles')) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-focused-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-focused-stderr.txt')
+            $p = Start-Process -FilePath $exe -ArgumentList @('--test',$suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            if ($p.ExitCode -ne 0 -or $text -notmatch [regex]::Escape("TEST-SUITE-COMPLETE $suite exit=0")) {
+              throw "Focused suite $suite failed or did not complete."
+            }
+          }
+
+      - name: Commit production repair
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'fix: preserve popup Ctrl, voiced markup mapping, and disclosures (#73) [issue73-sv-green-recorded]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
