@@ -357,6 +357,29 @@ public static TranscriptVirtualDocument Build(
   }
 
   /// <summary>
+  /// Creates a Find-navigation window while retaining the immediately preceding
+  /// visible atomic Core unit as local context, even when the searched unit alone
+  /// exceeds the normal physical-height target.
+  /// </summary>
+  public TranscriptWindow CreateSearchWindow(
+    int focalIndex,
+    double viewportHeight)
+  {
+    TranscriptWindow window = CreateWindow(focalIndex, viewportHeight);
+    if (_records.Length == 0)
+    {
+      return window;
+    }
+
+    int resolvedFocalIndex = ResolveVisibleFocalIndex(
+      Math.Clamp(focalIndex, 0, _records.Length - 1));
+    int previousVisibleIndex = FindPreviousVisibleIndex(resolvedFocalIndex);
+    return previousVisibleIndex >= 0 && window.StartIndex > previousVisibleIndex
+      ? BuildWindow(previousVisibleIndex, window.EndIndex)
+      : window;
+  }
+
+  /// <summary>
   /// Slides an existing physical window in one direction.  The newly exposed
   /// edge is extended by the edge-trigger depth and the opposite edge is then
   /// trimmed as far as possible without dropping below the five-viewport floor
