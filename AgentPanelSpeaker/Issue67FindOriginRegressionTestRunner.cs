@@ -22,7 +22,9 @@ internal static class Issue67FindOriginRegressionTestRunner
       ("find-origin/previous-find-location-becomes-next-search-origin",
         TestPreviousFindLocationBecomesNextSearchOrigin),
       ("find-origin/find-result-origin-is-treated-as-provided",
-        TestFindResultOriginIsTreatedAsProvided)
+        TestFindResultOriginIsTreatedAsProvided),
+      ("find-origin/query-edit-keeps-original-find-anchor",
+        TestQueryEditKeepsOriginalFindAnchor)
     };
 
     int failures = 0;
@@ -145,6 +147,70 @@ internal static class Issue67FindOriginRegressionTestRunner
       "Previous Find result is not treated as an authoritative origin.");
     Require(!voice,
       "Voice origin was incorrectly classified as browser-provided.");
+  }
+
+  /// <summary>
+  /// Search-as-you-type must keep the Find origin that existed when query
+  /// editing began. Automatic results for transient partial queries must not
+  /// become the origin of the next partial query.
+  /// </summary>
+  private static void TestQueryEditKeepsOriginalFindAnchor()
+  {
+    using BrowserFixture fixture = BrowserFixture.Create();
+    JsonElement result = ExecuteJsonProbe(
+      fixture.WebView,
+      """
+(() => {
+  findInput.value = 'expl';
+  findMatches = [{
+    fileOrdinal: 5,
+    recordNumber: 574,
+    startWordIndex: 37,
+    endWordIndex: 37,
+    nodeId: 67,
+    nodeWordIndex: 0
+  }].map(normalizeFindMatch);
+  currentFindMatch = 0;
+
+  findInput.value = 'UP';
+  findInput.dispatchEvent(new Event('input', {bubbles:true}));
+  if (findInputTimer) {
+    clearTimeout(findInputTimer);
+    findInputTimer = 0;
+  }
+
+  // Simulate the automatic result of the transient `UP` query. The real log
+  // advanced from record 574 to record 594 at this point.
+  findMatches = [{
+    fileOrdinal: 1,
+    recordNumber: 594,
+    startWordIndex: 26,
+    endWordIndex: 26,
+    nodeId: 69,
+    nodeWordIndex: 0
+  }].map(normalizeFindMatch);
+  currentFindMatch = 0;
+
+  findInput.value = 'UPda';
+  findInput.dispatchEvent(new Event('input', {bubbles:true}));
+  if (findInputTimer) {
+    clearTimeout(findInputTimer);
+    findInputTimer = 0;
+  }
+
+  return JSON.stringify(getFindOrigin());
+})()
+""");
+
+    Require(string.Equals(
+        result.GetProperty("kind").GetString(),
+        "find",
+        StringComparison.Ordinal),
+      "Query editing stopped using a Find result as its origin.");
+    Require(result.GetProperty("recordNumber").GetInt32() == 574,
+      "Transient partial-query result replaced the original Find anchor.");
+    Require(result.GetProperty("wordIndex").GetInt32() == 37,
+      "Stable query-edit origin lost its original word coordinate.");
   }
 
   private static bool InvokeOriginKind(MethodInfo method, string kind)
