@@ -26,7 +26,7 @@ jobs:
       - name: Build RED test state
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Prove expected RED
+      - name: Prove corrected RED
         shell: pwsh
         run: |
           $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
@@ -39,13 +39,13 @@ jobs:
             throw "Issue #67 unexpectedly passed before production changes."
           }
           $expected = @(
-            "FAIL  find-origin/voice-cursor-selects-first-match-at-or-after-origin",
+            "PASS  find-origin/voice-cursor-rotation-remains-correct",
             "FAIL  find-origin/previous-find-location-becomes-next-search-origin",
-            "FAIL  find-origin/browser-honors-resolved-initial-match-index"
+            "FAIL  find-origin/find-result-origin-is-treated-as-provided"
           )
           foreach ($line in $expected) {
             if (-not $text.Contains($line)) {
-              throw "Expected RED failure missing: $line"
+              throw "Expected corrected RED result missing: $line"
             }
           }
 
