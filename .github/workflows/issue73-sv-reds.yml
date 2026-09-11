@@ -1,0 +1,98 @@
+name: Issue 73 SV REDs
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: ${{ contains(github.event.head_commit.message, '[issue73-sv-reds-run]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Stage permanent SV regressions
+        shell: pwsh
+        run: python scripts/apply-issue73-sv-reds.py
+
+      - name: Verify RED diff scope
+        shell: pwsh
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'SV RED git diff --check failed.' }
+          $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3) } | Sort-Object)
+          $expected = @(
+            'AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs',
+            'AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs'
+          )
+          if (($changed -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected SV RED changes: $($changed -join ', ')"
+          }
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact SV REDs
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          function Capture-Suite([string]$suite) {
+            $stdout = Join-Path $env:RUNNER_TEMP ($suite + '-sv-red-stdout.txt')
+            $stderr = Join-Path $env:RUNNER_TEMP ($suite + '-sv-red-stderr.txt')
+            $process = Start-Process -FilePath $exe -ArgumentList @('--test', $suite) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            Write-Host $text
+            return @{ ExitCode = $process.ExitCode; Text = $text }
+          }
+
+          $ctrl = Capture-Suite 'ctrl-click-voice-pointer'
+          if ($ctrl.ExitCode -eq 0) { throw 'SV #73 regressions unexpectedly passed before production fix.' }
+          $ctrlPasses = ([regex]::Matches($ctrl.Text, '(?m)^PASS  ctrl-click-voice-pointer/')).Count
+          if ($ctrlPasses -ne 4 -or $ctrl.Text -notmatch 'FAIL: 3/7 issue #73 Ctrl\+click tests failed\.') {
+            throw "Issue #73 SV RED did not preserve exactly four prior GREEN tests; passes=$ctrlPasses."
+          }
+          foreach ($name in @(
+            'owned-popup-focus-preserves-held-ctrl',
+            'spoken-md-markup-split-token-is-selectable',
+            'spoken-quoted-markup-split-token-is-selectable')) {
+            if ($ctrl.Text -notmatch [regex]::Escape("FAIL  ctrl-click-voice-pointer/$name")) {
+              throw "Expected #73 RED did not fail: $name"
+            }
+          }
+
+          $virtual = Capture-Suite 'virtual-window'
+          if ($virtual.ExitCode -eq 0) { throw 'SV3 regressions unexpectedly passed before production fix.' }
+          $virtualPasses = ([regex]::Matches($virtual.Text, '(?m)^PASS  virtual-window/')).Count
+          if ($virtualPasses -ne 10 -or $virtual.Text -notmatch 'FAIL: 2/12 issue #37 virtual-window tests failed\.') {
+            throw "Issue #37 SV3 RED did not preserve exactly ten prior GREEN tests; passes=$virtualPasses."
+          }
+          foreach ($name in @(
+            'manual-scroll-preserves-disclosure-state',
+            'disclosure-open-state-survives-eviction-and-close-clears-override')) {
+            if ($virtual.Text -notmatch [regex]::Escape("FAIL  virtual-window/$name")) {
+              throw "Expected #37 RED did not fail: $name"
+            }
+          }
+
+      - name: Commit permanent SV REDs
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs
+          git commit -m 'test: reproduce voiced markup and disclosure eviction failures (#73) [issue73-sv-reds-recorded]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
