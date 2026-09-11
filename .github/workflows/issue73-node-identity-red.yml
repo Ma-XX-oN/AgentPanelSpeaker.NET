@@ -41,6 +41,7 @@ jobs:
             throw "Expected stable-node RED was not observed. Exit=$code"
           }
           Write-Host 'CONFIRMED RED: retained playback rebound to duplicate text in another node.'
+          $global:LASTEXITCODE = 0
       - name: Commit permanent RED regression
         shell: pwsh
         run: |
