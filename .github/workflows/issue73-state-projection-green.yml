@@ -38,34 +38,34 @@ jobs:
         shell: pwsh
         run: |
           $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
-          & $exe --test virtual-window
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','virtual-window' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
       - name: Exact issue 73 Ctrl-click regressions
         shell: pwsh
         run: |
           $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
-          & $exe --test ctrl-click-voice-pointer
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','ctrl-click-voice-pointer' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
       - name: Exact issue 65 redundancy regressions
         shell: pwsh
         run: |
           $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
-          & $exe --test redundancy
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','redundancy' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
       - name: Exact User Context regressions
         shell: pwsh
         run: |
           $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
-          & $exe --test user-context-speech
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process -FilePath $exe -ArgumentList '--test','user-context-speech' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
       - name: Focused mapping navigation speech and oracle suites
         shell: pwsh
         run: |
           $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
           $tests = @('word-materialization','find-origin','speech-ordinals','rolled-back-speech','output-oracle','independent-oracles')
           foreach ($test in $tests) {
-            & $exe --test $test
-            if ($LASTEXITCODE -ne 0) { throw "Focused suite failed: $test" }
+            $p = Start-Process -FilePath $exe -ArgumentList '--test',$test -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "Focused suite failed: $test (exit $($p.ExitCode))" }
           }
       - name: Commit production GREEN
         shell: pwsh
