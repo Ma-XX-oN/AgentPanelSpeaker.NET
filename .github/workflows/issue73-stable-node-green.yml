@@ -43,8 +43,13 @@ jobs:
           )
           foreach ($test in $tests) {
             Write-Host "=== $test ==="
-            & $exe --test $test
-            if ($LASTEXITCODE -ne 0) { throw "$test failed with exit $LASTEXITCODE" }
+            $output = & $exe --test $test 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Host $output
+            if ($code -ne 0) { throw "$test failed with exit $code" }
+            if ($output -notmatch "TEST-SUITE-COMPLETE $([regex]::Escape($test)) exit=0") {
+              throw "$test did not report its completion guard"
+            }
           }
       - name: Commit production GREEN
         shell: pwsh
