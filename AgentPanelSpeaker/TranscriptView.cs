@@ -62,6 +62,8 @@ internal sealed class TranscriptView : UserControl
   private long _latestFindWindowNavigationGeneration;
   private long _windowRenderTransactionSequence;
   private readonly SemaphoreSlim _windowRenderGate = new(1, 1);
+  private IReadOnlyList<SeekableTranscriptWordRange> _seekableVoiceRanges =
+    Array.Empty<SeekableTranscriptWordRange>();
 
   private sealed class WindowScriptBuildMetrics
   {
@@ -453,6 +455,27 @@ internal sealed class TranscriptView : UserControl
   }
 
   /// <summary>
+  /// Publishes the authoritative currently seekable node-global speech ranges
+  /// used by the Ctrl+click transcript affordance.
+  /// </summary>
+  public void SetSeekableVoiceRanges(
+    IReadOnlyList<SeekableTranscriptWordRange> ranges)
+  {
+    ArgumentNullException.ThrowIfNull(ranges);
+    _seekableVoiceRanges = ranges.ToArray();
+    PostSeekableVoiceRanges();
+  }
+
+  private void PostSeekableVoiceRanges()
+  {
+    PostMessage(new
+    {
+      type = "seekable-voice-ranges",
+      ranges = _seekableVoiceRanges
+    });
+  }
+
+  /// <summary>
   /// Applies the application theme to the transcript.
   /// </summary>
   public void ApplyTheme(bool dark)
@@ -536,6 +559,7 @@ internal sealed class TranscriptView : UserControl
     LogViewState("navigation-completed", "after-visibility-update");
     ApplySettings(_settings, _dark);
     QueueSettingsApply(immediate: true);
+    PostSeekableVoiceRanges();
     if (string.IsNullOrWhiteSpace(_sessionPath))
     {
       ShowLoading("Select a session to view its transcript.");
@@ -1312,7 +1336,10 @@ internal sealed class TranscriptView : UserControl
         {
           FindSeekRequested?.Invoke(
             this,
-            new FindSeekRequestedEventArgs(validNodeId, validNodeWordIndex));
+            new FindSeekRequestedEventArgs(
+              validNodeId,
+              validNodeWordIndex,
+              ReadOptionalString(root, "source")));
           return;
         }
 
@@ -2508,6 +2535,12 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
 }
+body.voice-pointer-select-mode
+  .word.voice-selectable:not(.voice-excluded) {
+  outline: 1px solid var(--link);
+  outline-offset: 1px;
+  cursor: pointer;
+}
 li.speech-list-item-active {
   background: var(--highlight);
   border-radius: 3px;
@@ -2669,6 +2702,7 @@ let findRegexEnabled = false;
 let findVoicedEnabled = true;
 let findCurrentWords = [];
 let findInputTimer = 0;
+let seekableVoiceRanges = [];
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(
@@ -3588,12 +3622,75 @@ function postFragmentRangeMiss(
   });
 }
 
+function markVoiceSelectableWords(
+  collection,
+  start,
+  end,
+  nodeId,
+  startNodeWordIndex) {
+  let nodeWordIndex = startNodeWordIndex;
+  for (let index = start; index <= end; ++index) {
+    const word = collection[index];
+    if (!word) continue;
+    word.classList.add('voice-selectable');
+    word.dataset.nodeId = String(nodeId);
+    word.dataset.nodeWordIndex = String(nodeWordIndex++);
+  }
+}
+
+function markVoiceSelectableWordsByGlobalRange(
+  collection,
+  globalStart,
+  globalEnd,
+  nodeId,
+  startNodeWordIndex) {
+  const selected = collection.filter(word => {
+    const index = Number(word.dataset.index ?? -1);
+    return index >= globalStart && index <= globalEnd;
+  });
+  if (!selected.length) return;
+  let nodeWordIndex = startNodeWordIndex;
+  for (const word of selected) {
+    word.classList.add('voice-selectable');
+    word.dataset.nodeId = String(nodeId);
+    word.dataset.nodeWordIndex = String(nodeWordIndex++);
+  }
+}
+
+function isSeekableVoiceWord(word) {
+  const nodeId = Number(word.dataset.nodeId || 0);
+  const nodeWordIndex = Number(word.dataset.nodeWordIndex ?? -1);
+  if (nodeId <= 0 || nodeWordIndex < 0) return false;
+  return seekableVoiceRanges.some(range =>
+    range.nodeId === nodeId &&
+    nodeWordIndex >= range.startNodeWordIndex &&
+    nodeWordIndex < range.startNodeWordIndex + range.wordCount);
+}
+
+function applyVoiceEligibilityClasses() {
+  for (const word of transcript.querySelectorAll('.word.voice-selectable')) {
+    word.classList.toggle('voice-excluded', !isSeekableVoiceWord(word));
+  }
+}
+
+function setSeekableVoiceRanges(ranges) {
+  seekableVoiceRanges = (ranges || []).map(range => ({
+    nodeId:Number(range.NodeId ?? range.nodeId ?? 0),
+    startNodeWordIndex:Number(
+      range.StartNodeWordIndex ?? range.startNodeWordIndex ?? -1),
+    wordCount:Number(range.WordCount ?? range.wordCount ?? 0)
+  })).filter(range =>
+    range.nodeId > 0 && range.startNodeWordIndex >= 0 && range.wordCount > 0);
+  applyVoiceEligibilityClasses();
+}
+
 function assignNodeScopes(nodeMap) {
   ++mappingGeneration;
   knownNodeIds = new Set();
   segmentRangesByNode = new Map();
   const displayCursors = new Map();
   const lexicalCursors = new Map();
+  const nodeWordCursors = new Map();
   for (const item of nodeMap || []) {
     const nodeId = String(item.NodeId ?? item.nodeId ?? '');
     knownNodeIds.add(nodeId);
@@ -3605,9 +3702,13 @@ function assignNodeScopes(nodeMap) {
     const recordLexicalWords = lexicalWordsByRecord.get(key) || [];
     let displayCursor = displayCursors.get(key) || 0;
     let lexicalCursor = lexicalCursors.get(key) || 0;
+    let nodeWordIndex = nodeWordCursors.get(nodeId) || 0;
     for (const segment of segments) {
       const displayTarget = tokenizeDisplay(segment);
       const lexicalTarget = tokenize(segment);
+      const segmentNodeWordStart = nodeWordIndex;
+      nodeWordIndex += lexicalTarget.length;
+      nodeWordCursors.set(nodeId, nodeWordIndex);
       if (!displayTarget.length && !lexicalTarget.length) continue;
 
       let start = findSequence(
@@ -3629,6 +3730,12 @@ function assignNodeScopes(nodeMap) {
         markCollectionRange(recordWords, start, end, nodeId);
         const globalStart = Number(recordWords[start].dataset.index);
         const globalEnd = Number(recordWords[end].dataset.index);
+        markVoiceSelectableWordsByGlobalRange(
+          recordLexicalWords,
+          globalStart,
+          globalEnd,
+          nodeId,
+          segmentNodeWordStart);
         rememberSegmentRange(
           nodeId,
           globalStart,
@@ -3667,6 +3774,12 @@ function assignNodeScopes(nodeMap) {
         const tokenEnd = Number(
           recordLexicalWords[lexicalEnd].dataset.index);
         markNodeRange(tokenStart, tokenEnd, nodeId);
+        markVoiceSelectableWords(
+          recordLexicalWords,
+          lexicalStart,
+          lexicalEnd,
+          nodeId,
+          segmentNodeWordStart);
         rememberSegmentRange(
           nodeId,
           tokenStart,
@@ -3704,6 +3817,7 @@ function assignNodeScopes(nodeMap) {
       }
     }
   }
+  applyVoiceEligibilityClasses();
 }
 
 function chooseNearestRange(matches, nodeId) {
@@ -4776,6 +4890,10 @@ chrome.webview.addEventListener('message', event => {
     reportFind(errorKind === 'regex' ? 'invalid-regex' : 'search-failed', {error:errorText});
     return;
   }
+  if (data.type === 'seekable-voice-ranges') {
+    setSeekableVoiceRanges(data.ranges ?? data.Ranges ?? []);
+    return;
+  }
   if (data.type === 'settings') {
     const sequence = Number(data.sequence || 0);
     if (sequence < latestSettingsSequence) return;
@@ -4815,6 +4933,38 @@ chrome.webview.addEventListener('message', event => {
     javascriptTimestamp: String(performance.now())
   });
 });
+
+function setVoicePointerSelectMode(enabled) {
+  document.body.classList.toggle('voice-pointer-select-mode', enabled);
+}
+
+window.addEventListener('keydown', event => {
+  if (event.key === 'Control') setVoicePointerSelectMode(true);
+}, true);
+window.addEventListener('keyup', event => {
+  if (event.key === 'Control') setVoicePointerSelectMode(false);
+}, true);
+window.addEventListener('blur', () => setVoicePointerSelectMode(false));
+
+transcript.addEventListener('click', event => {
+  if (!event.ctrlKey || event.button !== 0 || !(event.target instanceof Element)) {
+    return;
+  }
+  const word = event.target.closest(
+    '.word.voice-selectable:not(.voice-excluded)');
+  if (!word || !transcript.contains(word)) return;
+  const nodeId = Number(word.dataset.nodeId || 0);
+  const nodeWordIndex = Number(word.dataset.nodeWordIndex ?? -1);
+  if (nodeId <= 0 || nodeWordIndex < 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  chrome.webview.postMessage({
+    type:'find-seek',
+    source:'ctrl-click',
+    nodeId,
+    nodeWordIndex
+  });
+}, true);
 
 window.addEventListener('keydown', event => {
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&

@@ -851,7 +851,10 @@ internal sealed class MainForm : Form, IMessageFilter
     _masterSpeechProfile.Width = SpeechProfileWidth * 2 + 6;
     _masterSpeechProfile.TabIndex = 0;
     _masterSpeechProfile.ProfileChanged += (_, _) =>
+    {
       SaveControlsToSettings();
+      RefreshTranscriptVoiceSelectability();
+    };
     _masterSpeechProfile.SetTestActions(
       new SpeechProfileTestAction("Agent Main", () =>
         PreviewVoiceSettings(SpeechRole.Agent, context: false)),
@@ -1172,6 +1175,7 @@ internal sealed class MainForm : Form, IMessageFilter
       _speech.SetShowRolledBackHistory(
         settings.Transcript.ShowRolledBackHistory);
       _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
+      RefreshTranscriptVoiceSelectability();
       _speech.SetWordBoundaryPollMilliseconds(
         settings.Transcript.HighlightUpdateMilliseconds);
       _appliedTranscriptTrackingMilliseconds =
@@ -1285,6 +1289,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _monitor.Stop(trigger);
     _speech.CancelAll();
     _speech.BeginLiveSession();
+    RefreshTranscriptVoiceSelectability();
     AppendLog("Paused monitoring stopped for session reconfiguration.");
     UpdateControlState();
     return true;
@@ -1360,6 +1365,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceTypesTextBox.Text = parsed.NormalizedCsv;
     _loadingSettings = false;
     SaveControlsToSettings();
+    RefreshTranscriptVoiceSelectability();
     AppendLog(
       "Spoken fenced-code types updated: " +
       (parsed.OrderedTypes.Count == 0 ? "none" : parsed.NormalizedCsv));
@@ -1378,6 +1384,7 @@ internal sealed class MainForm : Form, IMessageFilter
     UpdateVoiceRowState(role);
     row.Voice.Invalidate();
     SaveControlsToSettings();
+    RefreshTranscriptVoiceSelectability();
     ScheduleVoiceSettingsPreview(role, context);
   }
 
@@ -1567,6 +1574,7 @@ internal sealed class MainForm : Form, IMessageFilter
       if (!reusePausedHistory)
       {
         _speech.BeginLiveSession();
+        RefreshTranscriptVoiceSelectability();
       }
       Interlocked.Increment(ref _monitorSession);
       string? explicitPath = _pathIsManual || !_followLatestCheckBox.Checked
@@ -1904,6 +1912,7 @@ internal sealed class MainForm : Form, IMessageFilter
         snapshot.Completions,
         snapshot.BackgroundWorkEvents,
         snapshot.StartMode);
+      RefreshTranscriptVoiceSelectability();
 
       if (_pendingMonitorSeekNodeId > 0 &&
           _pendingMonitorSeekWordIndex >= 0)
@@ -2024,6 +2033,7 @@ internal sealed class MainForm : Form, IMessageFilter
       else
       {
         _speech.BeginLiveSession();
+        RefreshTranscriptVoiceSelectability();
       }
       SetSessionDisplay(session);
       AppendLog($"Active session: {session.DisplayName}");
@@ -2054,6 +2064,7 @@ internal sealed class MainForm : Form, IMessageFilter
         return;
       }
       _speech.SpeakLive(fragment);
+      RefreshTranscriptVoiceSelectability();
       AppendLog($"Queued {fragment.Category}: {fragment.Text}");
       UpdateControlState();
     });
@@ -2215,6 +2226,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _speakUserContext = settings.SpeakUserContext;
     _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);
     _transcriptView.ApplySettings(settings, dark);
+    RefreshTranscriptVoiceSelectability();
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
     if (_appliedTranscriptTrackingMilliseconds !=
         settings.HighlightUpdateMilliseconds)
@@ -2229,7 +2241,19 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Moves the paused speech marker to the voiced word selected by Find.
+  /// Publishes current speech eligibility to the transcript. Ctrl itself only
+  /// toggles one page-level CSS class; individual word classes change only
+  /// when mapping or speech eligibility changes.
+  /// </summary>
+  private void RefreshTranscriptVoiceSelectability()
+  {
+    _transcriptView.SetSeekableVoiceRanges(
+      _speech.GetSeekableTranscriptWordRanges());
+  }
+
+  /// <summary>
+  /// Moves the paused speech marker to a voiced word selected by Find or by
+  /// direct Ctrl+click transcript navigation.
   /// </summary>
   private void TranscriptFindSeekRequested(
     object? sender,
@@ -2242,7 +2266,9 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       _pendingMonitorSeekNodeId = eventArgs.NodeId;
       _pendingMonitorSeekWordIndex = eventArgs.NodeWordIndex;
-      AppendLog($"Find moved speech marker: {text}");
+      AppendLog(eventArgs.Source == "ctrl-click"
+        ? $"Ctrl+click moved speech marker: {text}"
+        : $"Find moved speech marker: {text}");
     }
     else
     {
@@ -4059,6 +4085,7 @@ internal sealed class MainForm : Form, IMessageFilter
         snapshot.Completions,
         snapshot.BackgroundWorkEvents,
         snapshot.StartMode);
+      RefreshTranscriptVoiceSelectability();
       AppendLog(
         $"Indexed {snapshot.Fragments.Count} existing fragments for paused navigation.");
       UpdateControlState();
