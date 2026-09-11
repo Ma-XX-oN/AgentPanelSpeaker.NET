@@ -26,7 +26,9 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
       ("ctrl-click-voice-pointer/punctuation-rich-browser-coordinate-matches-speech-history",
         TestPunctuationRichBrowserCoordinateMatchesSpeechHistory),
       ("ctrl-click-voice-pointer/host-ctrl-routing-does-not-require-webview-focus",
-        TestHostCtrlRoutingDoesNotRequireWebViewFocus)
+        TestHostCtrlRoutingDoesNotRequireWebViewFocus),
+      ("ctrl-click-voice-pointer/owned-popup-focus-preserves-held-ctrl",
+        TestOwnedPopupFocusPreservesHeldCtrl)
     };
 
     int failures = 0;
@@ -464,6 +466,39 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     object?[] ordinary = { 0x0100, (IntPtr)(int)Keys.A, false };
     Require(!(bool)(resolver.Invoke(null, ordinary) ?? true),
       "An ordinary host key was incorrectly treated as Ctrl selection state.");
+  }
+
+  /// <summary>
+  /// Moving focus from MainForm to an owned popup keeps the application in the
+  /// foreground.  That same-process deactivation must therefore preserve a
+  /// physically held Ctrl affordance; only external application deactivation
+  /// may clear it.
+  /// </summary>
+  private static void TestOwnedPopupFocusPreservesHeldCtrl()
+  {
+    MethodInfo resolver = typeof(MainForm).GetMethod(
+      "ResolveVoicePointerSelectModeForActivation",
+      BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public) ??
+      throw new InvalidOperationException(
+        "MainForm activation-aware Ctrl-mode resolver is missing.");
+
+    bool Resolve(bool controlHeld, bool foregroundIsCurrentProcess)
+    {
+      object? result = resolver.Invoke(
+        null,
+        new object?[] { controlHeld, foregroundIsCurrentProcess });
+      return result is bool value
+        ? value
+        : throw new InvalidOperationException(
+          "MainForm activation-aware Ctrl-mode resolver returned no bool.");
+    }
+
+    Require(Resolve(controlHeld: true, foregroundIsCurrentProcess: true),
+      "Held Ctrl was cleared when focus moved to an owned same-process popup.");
+    Require(!Resolve(controlHeld: true, foregroundIsCurrentProcess: false),
+      "Held Ctrl remained exposed after the foreground moved outside the app.");
+    Require(!Resolve(controlHeld: false, foregroundIsCurrentProcess: true),
+      "Ctrl selection mode remained enabled after physical Ctrl release.");
   }
 
   private static TranscriptRangeProbe[] ReadRanges(object? value)

@@ -45,7 +45,9 @@ internal static class Issue37VirtualWindowRegressionTestRunner
       ("virtual-window/shift-preserves-entire-physically-visible-range",
         TestShiftPreservesEntirePhysicallyVisibleRange),
       ("virtual-window/follow-off-initial-render-ignores-pending-playback",
-        TestFollowOffInitialRenderIgnoresPendingPlayback)
+        TestFollowOffInitialRenderIgnoresPendingPlayback),
+      ("virtual-window/manual-scroll-preserves-disclosure-state",
+        TestManualScrollPreservesDisclosureState)
     };
 
     int failures = 0;
@@ -1492,6 +1494,52 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       "Directional shift evicted part of the physically visible Core-unit " +
       $"range [{visibleStartIndex}..{visibleEndIndex}]; shifted window is " +
       $"[{shifted.StartIndex}..{shifted.EndIndex}].");
+  }
+
+  /// <summary>
+  /// A disclosure opened by the user must stay open when virtualization
+  /// replaces an overlapping materialized window during ordinary scrolling.
+  /// The replacement itself may use preserve=false for scroll-position policy;
+  /// disclosure state is a separate UI invariant and must survive that swap.
+  /// </summary>
+  private static void TestManualScrollPreservesDisclosureState()
+  {
+    using var host = CreateOffscreenHost();
+    using var view = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(view);
+    host.Show();
+    _ = host.Handle;
+    _ = view.Handle;
+    WaitForViewInitialization(view);
+
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    JsonElement result = ExecuteJsonProbe(
+      webView,
+      """
+(() => {
+  const first =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:stable"><summary>Context</summary>' +
+    '<p>first window</p></details></section>';
+  const second =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:stable"><summary>Context</summary>' +
+    '<p>shifted window</p></details></section>' +
+    '<section class="virtual-record" data-virtual-index="11"><p>next</p></section>';
+  replaceTranscriptWindow(first, false, [], 10, 10, 100, 100);
+  const before = document.querySelector('details[data-presentation-id="context:stable"]');
+  if (!before) throw new Error('Initial disclosure was not materialized.');
+  before.open = true;
+  replaceTranscriptWindow(second, false, [], 10, 11, 100, 50);
+  const after = document.querySelector('details[data-presentation-id="context:stable"]');
+  return JSON.stringify({exists:Boolean(after), open:Boolean(after?.open)});
+})()
+""");
+
+    Require(result.GetProperty("exists").GetBoolean(),
+      "Overlapping disclosure disappeared during virtual-window replacement.");
+    Require(result.GetProperty("open").GetBoolean(),
+      "Virtual-window replacement collapsed a disclosure that the user opened.");
   }
 
   private static bool ReadBrowserBoolean(WebView2 webView, string expression)
