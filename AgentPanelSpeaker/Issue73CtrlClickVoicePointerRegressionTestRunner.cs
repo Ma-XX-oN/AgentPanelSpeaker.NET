@@ -275,11 +275,16 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     key:'Control', code:'ControlLeft', ctrlKey:true, bubbles:true
   }));
   window.dispatchEvent(new Event('blur'));
-  const afterBlur = document.body.classList.contains('voice-pointer-select-mode');
+  const afterBrowserBlur = document.body.classList.contains(
+    'voice-pointer-select-mode');
+  setVoicePointerSelectMode(false);
+  const afterHostDeactivate = document.body.classList.contains(
+    'voice-pointer-select-mode');
   return JSON.stringify({
     heldThroughReplacement:selectable.join(' ') === 'delta epsilon',
     afterUp,
-    afterBlur
+    afterBrowserBlur,
+    afterHostDeactivate
   });
 })()
 """);
@@ -288,8 +293,10 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
         "Newly materialized eligible words did not inherit held-Ctrl affordances.");
       Require(!replacement.GetProperty("afterUp").GetBoolean(),
         "Ctrl-up did not remove selectable-word rectangles.");
-      Require(!replacement.GetProperty("afterBlur").GetBoolean(),
-        "Window blur did not clear Ctrl selection mode.");
+      Require(replacement.GetProperty("afterBrowserBlur").GetBoolean(),
+        "WebView focus loss incorrectly impersonated Ctrl-up while the app remained active.");
+      Require(!replacement.GetProperty("afterHostDeactivate").GetBoolean(),
+        "Host deactivation did not clear Ctrl selection mode.");
     }
     finally
     {
