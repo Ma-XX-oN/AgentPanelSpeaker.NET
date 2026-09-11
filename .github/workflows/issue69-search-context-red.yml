@@ -1,0 +1,71 @@
+name: Issue 69 search predecessor RED
+
+on:
+  push:
+    branches:
+      - issue-69-search-preceding-context
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: ${{ !contains(github.event.head_commit.message, '[issue69-red-applied]') }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply permanent regression
+        run: python scripts/apply-issue69-search-context-red.py
+
+      - name: Build RED state
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove search predecessor RED
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
+          $stdout = Join-Path $env:RUNNER_TEMP "issue69-red.stdout.txt"
+          $stderr = Join-Path $env:RUNNER_TEMP "issue69-red.stderr.txt"
+          $process = Start-Process -FilePath $exe -ArgumentList "--test", "real-session-fixes" -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $text = ((Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw))
+          Write-Host $text
+          if ($process.ExitCode -eq 0) {
+            throw "Issue #69 unexpectedly passed before production changes."
+          }
+          if (-not $text.Contains("FAIL  real-session/search-window-retains-preceding-unit")) {
+            throw "Expected issue #69 RED failure was not observed."
+          }
+          $requiredPasses = @(
+            "PASS  real-session/scroll-replacement-does-not-reverse-user-intent",
+            "PASS  real-session/stale-window-shift-is-coalesced",
+            "PASS  real-session/window-replacement-emits-transaction-diagnostics",
+            "PASS  real-session/directional-shift-keeps-prefetch-headroom",
+            "PASS  real-session/live-end-window-retains-preceding-unit"
+          )
+          foreach ($line in $requiredPasses) {
+            if (-not $text.Contains($line)) {
+              throw "Existing real-session invariant did not remain GREEN: $line"
+            }
+          }
+
+      - name: Validate whitespace
+        run: git diff --check
+
+      - name: Commit permanent RED regression
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
+          git commit -m "test: reproduce search predecessor omission (#69) [issue69-red-applied]"
+          git push origin HEAD:issue-69-search-preceding-context
