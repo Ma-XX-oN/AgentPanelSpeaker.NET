@@ -118,8 +118,7 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
     IReadOnlyList<TranscriptNodeIdentity> identities =
       TranscriptNodeIdentityMap.Build(tempPath, AgentSource.Claude);
     TranscriptNodeIdentity[] thoughtIdentities = identities
-      .Where(identity =>
-        identity.SourceId is "thought-one" or "thought-two" or "thought-three")
+      .Where(identity => identity.RecordNumber is 2 or 3 or 4)
       .ToArray();
     if (thoughtIdentities.Length != 3)
     {
@@ -132,14 +131,11 @@ static void ValidateClaudeThoughtGroup(ICollection<string> failures)
     var thoughtIndexes = new List<int>();
     foreach (TranscriptNodeIdentity identity in thoughtIdentities)
     {
-      if (!document.TryGetIndex(
-            identity.RecordNumber,
-            identity.SourceId,
-            out int virtualIndex))
+      if (!document.TryGetIndex(identity.RecordNumber, out int virtualIndex))
       {
         failures.Add(
           $"Claude thought identity has no virtual-document unit: " +
-          $"{identity.RecordNumber}/{identity.SourceId}.");
+          $"record={identity.RecordNumber}.");
         continue;
       }
       thoughtIndexes.Add(virtualIndex);
@@ -418,14 +414,13 @@ static bool IdentityEquals(
 {
   return left.NodeId == right.NodeId &&
     left.RecordNumber == right.RecordNumber &&
-    string.Equals(left.SourceId, right.SourceId, StringComparison.Ordinal) &&
     left.Segments.SequenceEqual(right.Segments, StringComparer.Ordinal);
 }
 
 static string FormatIdentity(TranscriptNodeIdentity identity)
 {
   return $"node={identity.NodeId},record={identity.RecordNumber}," +
-    $"source={identity.SourceId},segments=[{string.Join("|", identity.Segments)}]";
+    $"segments=[{string.Join("|", identity.Segments)}]";
 }
 
 static void ValidateIdentityChain(
@@ -492,14 +487,12 @@ static void ValidateIdentityChain(
     }
     expectedNodeId++;
 
-    string anchor =
-      $"data-jsonl-record=\"{identity.RecordNumber}\" data-source-id=\"" +
-      $"{identity.SourceId}\"";
+    string anchor = $"data-jsonl-record=\"{identity.RecordNumber}\"";
     if (!markdown.Contains(anchor, StringComparison.Ordinal))
     {
       failures.Add(
         $"{label} canonical identity has no matching DOM anchor: " +
-        $"record={identity.RecordNumber} source={identity.SourceId}.");
+        $"record={identity.RecordNumber}.");
     }
 
     int nodeWordIndex = 0;
@@ -512,7 +505,6 @@ static void ValidateIdentityChain(
               identity.NodeId,
               nodeWordIndex,
               out int recordNumber,
-              out string sourceId,
               out int recordWordIndex))
         {
           failures.Add(
@@ -520,17 +512,13 @@ static void ValidateIdentityChain(
             $"node={identity.NodeId} word={nodeWordIndex}.");
         }
         else if (recordNumber != identity.RecordNumber ||
-                 !string.Equals(
-                   sourceId,
-                   identity.SourceId,
-                   StringComparison.Ordinal) ||
                  recordWordIndex < 0)
         {
           failures.Add(
             $"{label} speech/highlight provenance mismatch: " +
             $"node={identity.NodeId} word={nodeWordIndex} " +
-            $"expected={identity.RecordNumber}/{identity.SourceId} " +
-            $"actual={recordNumber}/{sourceId}/{recordWordIndex}.");
+            $"expectedRecord={identity.RecordNumber} " +
+            $"actual={recordNumber}/{recordWordIndex}.");
         }
         nodeWordIndex++;
       }

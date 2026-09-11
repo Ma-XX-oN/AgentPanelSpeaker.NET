@@ -79,11 +79,9 @@ internal static class Issue37WordMaterializationRegressionTestRunner
   return JSON.stringify({
     totalWordCount: document.querySelectorAll('.word').length,
     bulkWordCount: document.querySelectorAll(
-      '.word[data-record-number="{{BulkRecordNumber}}"]' +
-      '[data-source-id="{{BulkSourceId}}"]').length,
+      '.word[data-record-number="{{BulkRecordNumber}}"]').length,
     speechWordCount: document.querySelectorAll(
-      '.word[data-record-number="{{SpeechRecordNumber}}"]' +
-      '[data-source-id="{{SpeechSourceId}}"]').length,
+      '.word[data-record-number="{{SpeechRecordNumber}}"]').length,
     fillerPresent: transcript.textContent.includes('{{FindNeedle}}'),
     activeText: [...transcript.querySelectorAll('.word.active')]
       .map(word => word.textContent).join('')
@@ -108,7 +106,7 @@ internal static class Issue37WordMaterializationRegressionTestRunner
 
   /// <summary>
   /// Full-text Find still owns the complete C# corpus. Navigating to a match in
-  /// an unvoiced record must lazily materialize that record's stable word spans
+  /// an unvoiced record must lazily materialize that record's word spans
   /// and highlight the exact match without remapping the rest of the window.
   /// </summary>
   private static void TestUnvoicedFindResultMaterializesOnDemand()
@@ -137,8 +135,7 @@ internal static class Issue37WordMaterializationRegressionTestRunner
   void showFindMatch(0, 'issue37-lazy-find');
   return JSON.stringify({
     bulkWordCount: document.querySelectorAll(
-      '.word[data-record-number="{{BulkRecordNumber}}"]' +
-      '[data-source-id="{{BulkSourceId}}"]').length,
+      '.word[data-record-number="{{BulkRecordNumber}}"]').length,
     highlightedText: [...transcript.querySelectorAll('.word.find-current')]
       .map(word => word.textContent).join(''),
     currentCountText: findCount.textContent
@@ -168,7 +165,6 @@ internal static class Issue37WordMaterializationRegressionTestRunner
       new(
         SpeechNodeId,
         SpeechRecordNumber,
-        SpeechSourceId,
         new[] { SpeechFragment })
     };
     TranscriptSearchIndex searchIndex = TranscriptSearchIndex.Build(
@@ -178,13 +174,11 @@ internal static class Issue37WordMaterializationRegressionTestRunner
     TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(html);
     Require(document.TryGetIndex(
         SpeechRecordNumber,
-        SpeechSourceId,
         out int speechIndex),
       "Fixed fixture did not expose the speech record identity.");
     TranscriptWindow window = document.CreateWindow(speechIndex);
     Require(window.Records.Any(record => record.Identities.Any(identity =>
-        identity.RecordNumber == BulkRecordNumber &&
-        string.Equals(identity.SourceId, BulkSourceId, StringComparison.Ordinal))),
+        identity.RecordNumber == BulkRecordNumber)),
       "Fixed virtual window did not include the bulk record.");
 
     string replaceScript = BuildProductionReplaceWindowScript(
@@ -264,7 +258,6 @@ internal static class Issue37WordMaterializationRegressionTestRunner
     {
       window,
       false,
-      null,
       null,
       null,
       null,

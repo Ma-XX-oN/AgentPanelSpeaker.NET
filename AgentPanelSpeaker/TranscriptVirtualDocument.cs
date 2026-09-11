@@ -16,7 +16,7 @@ internal sealed class TranscriptVirtualDocument
   internal const double DefaultViewportHeight = 700.0;
   private const double MinimumEstimatedHeight = 72.0;
   private static readonly Regex AnchorRegex = new(
-    "<span class=\\\"record-anchor\\\"[^>]*data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*data-source-id=\\\"(?<source>[^\\\"]*)\\\"[^>]*></span>",
+    "<span class=\"record-anchor\"[^>]*data-jsonl-record=\"(?<record>[^\"]*)\"[^>]*></span>",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
   private static readonly Regex TagRegex = new(
     "<[^>]+>",
@@ -35,7 +35,7 @@ internal sealed class TranscriptVirtualDocument
     RegexOptions.IgnoreCase);
 
   private readonly TranscriptVirtualRecord[] _records;
-  private readonly Dictionary<string, int> _recordIndexes;
+  private readonly Dictionary<int, int> _recordIndexes;
   private readonly double[] _heights;
   private int _heightGeneration = -1;
   private bool _showRolledBackHistory;
@@ -44,12 +44,12 @@ internal sealed class TranscriptVirtualDocument
   {
     _records = records;
     _heights = records.Select(record => record.EstimatedHeight).ToArray();
-    _recordIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+    _recordIndexes = new Dictionary<int, int>();
     for (int index = 0; index < records.Length; ++index)
     {
       foreach (TranscriptVirtualIdentity identity in records[index].Identities)
       {
-        _recordIndexes[MakeKey(identity.RecordNumber, identity.SourceId)] = index;
+        _recordIndexes[identity.RecordNumber] = index;
       }
     }
   }
@@ -99,7 +99,7 @@ public static TranscriptVirtualDocument Build(
     }
 
     var identities = new List<TranscriptVirtualIdentity>();
-    var seen = new HashSet<string>(StringComparer.Ordinal);
+    var seen = new HashSet<int>();
     foreach (CanonicalHtmlSourceProjection source in unit.Source ??
         Array.Empty<CanonicalHtmlSourceProjection>())
     {
@@ -108,24 +108,18 @@ public static TranscriptVirtualDocument Build(
         continue;
       }
       int recordNumber = sourceIndex + 1;
-      string sourceId = string.IsNullOrWhiteSpace(source.RecordId)
-        ? recordNumber.ToString(CultureInfo.InvariantCulture)
-        : source.RecordId;
-      if (seen.Add(MakeKey(recordNumber, sourceId)))
+      if (seen.Add(recordNumber))
       {
-        identities.Add(new TranscriptVirtualIdentity(
-          recordNumber,
-          sourceId));
+        identities.Add(new TranscriptVirtualIdentity(recordNumber));
       }
     }
 
     TranscriptVirtualIdentity primary = identities.Count == 0
-      ? new TranscriptVirtualIdentity(0, string.Empty)
+      ? new TranscriptVirtualIdentity(0)
       : identities[0];
     string html = unit.Html ?? string.Empty;
     records.Add(new TranscriptVirtualRecord(
       primary.RecordNumber,
-      primary.SourceId,
       html,
       EstimateHeight(html),
       identities,
@@ -152,7 +146,6 @@ public static TranscriptVirtualDocument Build(
       {
         new TranscriptVirtualRecord(
           0,
-          string.Empty,
           html,
           EstimateHeight(html),
           Array.Empty<TranscriptVirtualIdentity>(),
@@ -216,12 +209,11 @@ public static TranscriptVirtualDocument Build(
       }
 
       TranscriptVirtualIdentity primary = identities.Count == 0
-        ? new TranscriptVirtualIdentity(0, string.Empty)
+        ? new TranscriptVirtualIdentity(0)
         : identities[0];
       string recordHtml = html[start..end];
       records.Add(new TranscriptVirtualRecord(
         primary.RecordNumber,
-        primary.SourceId,
         recordHtml,
         EstimateHeight(recordHtml),
         identities,
@@ -231,9 +223,9 @@ public static TranscriptVirtualDocument Build(
     return new TranscriptVirtualDocument(records.ToArray());
   }
 
-  public bool TryGetIndex(int recordNumber, string sourceId, out int index)
+  public bool TryGetIndex(int recordNumber, out int index)
   {
-    return _recordIndexes.TryGetValue(MakeKey(recordNumber, sourceId), out index);
+    return _recordIndexes.TryGetValue(recordNumber, out index);
   }
 
   /// <summary>
@@ -248,10 +240,9 @@ public static TranscriptVirtualDocument Build(
   /// <summary>
   /// Returns whether one canonical source identity is currently visible.
   /// </summary>
-  public bool IsVisible(int recordNumber, string sourceId)
+  public bool IsRecordVisible(int recordNumber)
   {
-    return TryGetIndex(recordNumber, sourceId, out int index) &&
-      IsVisible(index);
+    return TryGetIndex(recordNumber, out int index) && IsVisible(index);
   }
 
   /// <summary>
@@ -774,8 +765,7 @@ public static TranscriptVirtualDocument Build(
       NumberStyles.Integer,
       CultureInfo.InvariantCulture,
       out int recordNumber);
-    string sourceId = WebUtility.HtmlDecode(anchor.Groups["source"].Value);
-    return new TranscriptVirtualIdentity(recordNumber, sourceId);
+    return new TranscriptVirtualIdentity(recordNumber);
   }
 
   /// <summary>
@@ -881,10 +871,6 @@ public static TranscriptVirtualDocument Build(
       24.0 + (wrappedLines * 22.0) + (explicitBlocks * 10.0));
   }
 
-  private static string MakeKey(int recordNumber, string sourceId)
-  {
-    return sourceId + "\0" + recordNumber.ToString(CultureInfo.InvariantCulture);
-  }
 
   private readonly record struct HtmlRange(int Start, int End)
   {
@@ -892,13 +878,10 @@ public static TranscriptVirtualDocument Build(
   }
 }
 
-internal sealed record TranscriptVirtualIdentity(
-  int RecordNumber,
-  string SourceId);
+internal sealed record TranscriptVirtualIdentity(int RecordNumber);
 
 internal sealed record TranscriptVirtualRecord(
   int RecordNumber,
-  string SourceId,
   string Html,
   double EstimatedHeight,
   IReadOnlyList<TranscriptVirtualIdentity> Identities,

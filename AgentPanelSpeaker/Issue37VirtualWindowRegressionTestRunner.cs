@@ -137,7 +137,7 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
   Require(document.Count == 1,
     $"Expected one Core unit to remain one virtual record, got {document.Count}.");
   Require(
-    document.TryGetIndex(11, "context", out int contextIndex),
+    document.TryGetIndex(11, out int contextIndex),
     "Virtual document did not map Core source metadata to the one-based record identity.");
   TranscriptVirtualRecord contextRecord = document.Records[contextIndex];
   Require(
@@ -413,13 +413,12 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       PumpMessages(150);
 
       Task shiftTask = InvokeTask(
-      view,
-      "RenderWindowForIndexAsync",
-      0,
-      "scroll-up",
-      null,
-      string.Empty,
-      null);
+        view,
+        "RenderWindowForIndexAsync",
+        0,
+        "scroll-up",
+        null,
+        null);
     PumpUntilCompleted(
       shiftTask,
       "manual scroll window to replace the initial playback window");
@@ -559,7 +558,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       Require(
         document.TryGetIndex(
           playbackIdentity.RecordNumber,
-          playbackIdentity.SourceId,
           out int playbackVirtualIndex),
         "Playback identity was not present in the virtual document.");
 
@@ -569,7 +567,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         0,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(
         moveAway,
@@ -815,7 +812,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         middleIndex,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(
         middleWindow,
@@ -916,7 +912,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         middleIndex,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(
         resetMiddleWindow,
@@ -1014,7 +1009,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         middleIndex,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(
         middleWindow,
@@ -1137,7 +1131,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         document.Count / 2,
         "test-precondition",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(middleWindow, "middle physical virtual window");
       // Let the browser's natural-height measurements reach the virtual
@@ -1151,7 +1144,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         document.Count / 2,
         "test-measured-refinement",
         null,
-        string.Empty,
         null);
       PumpUntilCompleted(
         measuredMiddleWindow,
@@ -1302,7 +1294,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       Require(
         document.TryGetIndex(
           tallIdentity.RecordNumber,
-          tallIdentity.SourceId,
           out int tallIndex),
         "Tall playback turn is absent from the virtual document.");
 
@@ -1349,7 +1340,6 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         {
           physicalWindow,
           false,
-          null,
           null,
           null,
           null,

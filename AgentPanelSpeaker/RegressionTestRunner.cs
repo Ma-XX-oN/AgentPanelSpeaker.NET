@@ -295,9 +295,9 @@ internal static class RegressionTestRunner
   private static void TestVirtualizationAtomicity()
   {
     TranscriptVirtualDocument document = BuildVirtualFixture();
-    Require(document.TryGetIndex(2, "thought-one", out int firstIndex),
+    Require(document.TryGetIndex(2, out int firstIndex),
       "First thought has no virtual-document identity.");
-    Require(document.TryGetIndex(3, "thought-two", out int secondIndex),
+    Require(document.TryGetIndex(3, out int secondIndex),
       "Second thought has no virtual-document identity.");
     Require(firstIndex == secondIndex,
       $"Grouped thoughts were split across virtual units {firstIndex} and {secondIndex}.");
@@ -306,11 +306,11 @@ internal static class RegressionTestRunner
   private static void TestVirtualizationIdentityLookup()
   {
     TranscriptVirtualDocument document = BuildVirtualFixture();
-    Require(document.TryGetIndex(1, "regression-user", out _), "User identity was not indexed.");
-    Require(document.TryGetIndex(2, "thought-one", out _), "First thought identity was not indexed.");
-    Require(document.TryGetIndex(3, "thought-two", out _), "Second thought identity was not indexed.");
-    Require(document.TryGetIndex(4, "regression-final", out _), "Final response identity was not indexed.");
-    Require(!document.TryGetIndex(999, "missing", out _), "Unknown identity incorrectly resolved.");
+    Require(document.TryGetIndex(1, out _), "User identity was not indexed.");
+    Require(document.TryGetIndex(2, out _), "First thought identity was not indexed.");
+    Require(document.TryGetIndex(3, out _), "Second thought identity was not indexed.");
+    Require(document.TryGetIndex(4, out _), "Final response identity was not indexed.");
+    Require(!document.TryGetIndex(999, out _), "Unknown identity incorrectly resolved.");
   }
 
   private static void TestVirtualizationFullWindow()

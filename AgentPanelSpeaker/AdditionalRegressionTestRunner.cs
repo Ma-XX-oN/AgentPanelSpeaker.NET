@@ -26,8 +26,8 @@ internal static class AdditionalRegressionTestRunner
       ("search/invalid-regex", TestInvalidRegex),
       ("search/zero-length-block-anchors", TestZeroLengthRegexAnchors),
       ("mapping/repeated-text-stays-record-scoped", TestRepeatedTextMapping),
-      ("mapping/word-id-round-trip", TestWordIdRoundTrip),
-      ("mapping/unknown-word-id-rejected", TestUnknownWordId),
+      ("mapping/direct-speech-coordinate-round-trip", TestDirectSpeechCoordinateRoundTrip),
+      ("mapping/unknown-speech-coordinate-rejected", TestUnknownSpeechCoordinate),
       ("ui/transcript-settings-placement", TestTranscriptSettingsPlacement)
     };
 
@@ -252,51 +252,55 @@ internal static class AdditionalRegressionTestRunner
       "<span class=\"record-anchor\" data-jsonl-record=\"2\" data-source-id=\"b\"></span><p>same text</p>";
     TranscriptNodeIdentity[] identities =
     {
-      new(101, 1, "a", new[] { "same text" }),
-      new(202, 2, "b", new[] { "same text" })
+      new(101, 1, new[] { "same text" }),
+      new(202, 2, new[] { "same text" })
     };
     TranscriptSearchIndex index = BuildSearchIndex(html, identities);
-    Require(index.TryResolveVoiceOrigin(101, 0, out int firstRecord, out string firstSource, out _),
+    Require(index.TryResolveVoiceOrigin(101, 0, out int firstRecord, out int firstWord),
       "First repeated speech text did not resolve.");
-    Require(index.TryResolveVoiceOrigin(202, 0, out int secondRecord, out string secondSource, out _),
+    Require(index.TryResolveVoiceOrigin(202, 0, out int secondRecord, out int secondWord),
       "Second repeated speech text did not resolve.");
-    Require(firstRecord == 1 && firstSource == "a",
-      "First repeated text mapped to the wrong record.");
-    Require(secondRecord == 2 && secondSource == "b",
-      "Second repeated text mapped to the wrong record.");
+    Require(firstRecord == 1 && firstWord == 0,
+      "First repeated text mapped to the wrong record-local coordinate.");
+    Require(secondRecord == 2 && secondWord == 0,
+      "Second repeated text mapped to the wrong record-local coordinate.");
   }
 
-  private static void TestWordIdRoundTrip()
+  private static void TestDirectSpeechCoordinateRoundTrip()
   {
     const string html =
       "<span class=\"record-anchor\" data-jsonl-record=\"1\" data-source-id=\"a\"></span><p>alpha beta</p>";
     TranscriptNodeIdentity[] identities =
     {
-      new(77, 1, "a", new[] { "alpha beta" })
+      new(77, 1, new[] { "alpha beta" })
     };
     TranscriptSearchIndex index = BuildSearchIndex(html, identities);
-    TranscriptVirtualDocument virtualDocument = TranscriptVirtualDocument.Build(html);
-    TranscriptRecordWordMap map = index.GetWordMaps(virtualDocument.Records).Single();
-    Require(map.Words.Count == 2, "Expected two rendered word identities.");
-    for (int wordIndex = 0; wordIndex < map.Words.Count; ++wordIndex)
+    for (int nodeWordIndex = 0; nodeWordIndex < 2; ++nodeWordIndex)
     {
-      TranscriptWordMap word = map.Words[wordIndex];
-      Require(index.TryResolveSpeechWord(word.WordId, out long nodeId, out int nodeWordIndex),
-        $"Word id {word.WordId} did not resolve to speech coordinates.");
-      Require(nodeId == 77 && nodeWordIndex == wordIndex,
-        $"Word id {word.WordId} resolved to the wrong speech coordinate.");
+      Require(index.TryResolveVoiceOrigin(
+          77,
+          nodeWordIndex,
+          out int recordNumber,
+          out int recordWordIndex),
+        $"Speech coordinate 77:{nodeWordIndex} did not resolve.");
+      Require(recordNumber == 1 && recordWordIndex == nodeWordIndex,
+        $"Speech coordinate 77:{nodeWordIndex} mapped to the wrong record-local coordinate.");
     }
   }
 
-  private static void TestUnknownWordId()
+  private static void TestUnknownSpeechCoordinate()
   {
     TranscriptSearchIndex index = BuildSearchIndex(
       "<p>alpha</p>",
       Array.Empty<TranscriptNodeIdentity>());
-    Require(!index.TryResolveSpeechWord(long.MaxValue, out long nodeId, out int nodeWordIndex),
-      "Unknown word id unexpectedly resolved.");
-    Require(nodeId == 0 && nodeWordIndex == -1,
-      "Unknown word id returned non-sentinel speech coordinates.");
+    Require(!index.TryResolveVoiceOrigin(
+        long.MaxValue,
+        0,
+        out int recordNumber,
+        out int recordWordIndex),
+      "Unknown speech coordinate unexpectedly resolved.");
+    Require(recordNumber == 0 && recordWordIndex == -1,
+      "Unknown speech coordinate returned non-sentinel record coordinates.");
   }
 
   private static void TestTranscriptSettingsPlacement()
