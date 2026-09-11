@@ -77,7 +77,7 @@ internal sealed class TranscriptView : UserControl
     bool WordEnabled,
     bool RegexEnabled,
     bool VoicedEnabled,
-    bool HasSelectionOrigin,
+    string OriginKind,
     int OriginRecordNumber,
     int OriginWordIndex);
 
@@ -1357,10 +1357,7 @@ internal sealed class TranscriptView : UserControl
       ReadOptionalBoolean(root, "wordEnabled") == true,
       ReadOptionalBoolean(root, "regexEnabled") == true,
       ReadOptionalBoolean(root, "voicedEnabled") != false,
-      string.Equals(
-        ReadOptionalString(root, "originKind"),
-        "selection",
-        StringComparison.Ordinal),
+      ReadOptionalString(root, "originKind"),
       ReadOptionalInt32(root, "originRecordNumber") ?? 0,
       ReadOptionalInt32(root, "originWordIndex") ?? -1);
 
@@ -1407,7 +1404,8 @@ internal sealed class TranscriptView : UserControl
 
     int originRecordNumber = pending.OriginRecordNumber;
     int originWordIndex = pending.OriginWordIndex;
-    if (!pending.HasSelectionOrigin &&
+    bool hasProvidedOrigin = IsProvidedFindOriginKind(pending.OriginKind);
+    if (!hasProvidedOrigin &&
         _pendingPosition is TranscriptPlaybackPosition voicePosition &&
         index.TryResolveVoiceOrigin(
           voicePosition.NodeId,
@@ -1465,7 +1463,7 @@ internal sealed class TranscriptView : UserControl
         query = pending.Query,
         request.Regex,
         request.VoicedOnly,
-        originKind = pending.HasSelectionOrigin ? "selection" : "voice",
+        originKind = hasProvidedOrigin ? pending.OriginKind : "voice",
         originRecordNumber,
         originWordIndex,
         matchCount = matches.Count,
@@ -1515,6 +1513,12 @@ internal sealed class TranscriptView : UserControl
       }
       cancellation.Dispose();
     }
+  }
+
+  private static bool IsProvidedFindOriginKind(string originKind)
+  {
+    return string.Equals(originKind, "selection", StringComparison.Ordinal) ||
+      string.Equals(originKind, "find", StringComparison.Ordinal);
   }
 
   private static IReadOnlyList<TranscriptSearchMatch> RotateMatchesAfterOrigin(
@@ -4193,6 +4197,14 @@ function getFindOrigin() {
         wordIndex:Number(word.dataset.recordIndex || -1)
       };
     }
+  }
+  if (currentFindMatch >= 0 && currentFindMatch < findMatches.length) {
+    const match = findMatches[currentFindMatch];
+    return {
+      kind:'find',
+      recordNumber:Number(match.recordNumber || 0),
+      wordIndex:Number(match.startWordIndex ?? -1)
+    };
   }
   return {kind:'voice', recordNumber:0, wordIndex:-1};
 }
