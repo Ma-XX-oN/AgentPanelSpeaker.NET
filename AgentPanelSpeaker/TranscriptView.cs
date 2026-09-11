@@ -3361,10 +3361,7 @@ function setFollowSpeech(enabled, notify) {
     const target = words[currentIndex];
     if (target) {
       programmaticScrollUntil = performance.now() + 1500;
-      target.scrollIntoView({
-    block:'center',
-    behavior:trigger === 'window-installed' ? 'auto' : 'smooth'
-  });
+      target.scrollIntoView({block:'center', behavior:'smooth'});
     }
   }
 }
@@ -4214,7 +4211,10 @@ async function showFindMatch(
   const target = matchedWords[0];
   const openedDetailsCount = openAncestors(target);
   programmaticScrollUntil = performance.now() + 1500;
-  target.scrollIntoView({block:'center', behavior:'smooth'});
+  target.scrollIntoView({
+    block:'center',
+    behavior:trigger === 'window-installed' ? 'auto' : 'smooth'
+  });
   findCount.textContent = `${match.fileOrdinal} of ${findMatches.length}`;
   reportFind('navigated', {
     trigger,
