@@ -28,7 +28,11 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
       ("ctrl-click-voice-pointer/host-ctrl-routing-does-not-require-webview-focus",
         TestHostCtrlRoutingDoesNotRequireWebViewFocus),
       ("ctrl-click-voice-pointer/owned-popup-focus-preserves-held-ctrl",
-        TestOwnedPopupFocusPreservesHeldCtrl)
+        TestOwnedPopupFocusPreservesHeldCtrl),
+      ("ctrl-click-voice-pointer/spoken-md-markup-split-token-is-selectable",
+        TestSpokenMarkdownMarkupSplitTokenIsSelectable),
+      ("ctrl-click-voice-pointer/spoken-quoted-markup-split-token-is-selectable",
+        TestSpokenQuotedMarkupSplitTokenIsSelectable)
     };
 
     int failures = 0;
@@ -499,6 +503,75 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
       "Held Ctrl remained exposed after the foreground moved outside the app.");
     Require(!Resolve(controlHeld: false, foregroundIsCurrentProcess: true),
       "Ctrl selection mode remained enabled after physical Ctrl release.");
+  }
+
+  /// <summary>
+  /// The real SV1 failure: an enabled md fence visibly renders Markdown source
+  /// where inline backticks split one spoken token (turn_ids) into DOM pieces.
+  /// Every visible lexical piece belonging to that spoken token must advertise
+  /// the same authoritative speech coordinate.
+  /// </summary>
+  private static void TestSpokenMarkdownMarkupSplitTokenIsSelectable()
+  {
+    TestMarkupSplitTokenMapping(
+      recordNumber: 1,
+      nodeId: 501,
+      html: "<pre><code class=\"language-md\">&gt; Are `turn_id`s the id guids with author.role user?</code></pre>",
+      description: "spoken md fence");
+  }
+
+  /// <summary>
+  /// The real SV2 failure: canonical HTML can render the same spoken token
+  /// across an inline code element and adjacent text. DOM element boundaries
+  /// must not make voiced text unselectable.
+  /// </summary>
+  private static void TestSpokenQuotedMarkupSplitTokenIsSelectable()
+  {
+    TestMarkupSplitTokenMapping(
+      recordNumber: 2,
+      nodeId: 502,
+      html: "<blockquote><p>Are <code>turn_id</code>s the id guids with author.role user?</p></blockquote>",
+      description: "quoted User Context markup");
+  }
+
+  private static void TestMarkupSplitTokenMapping(
+    int recordNumber,
+    long nodeId,
+    string html,
+    string description)
+  {
+    const string spoken = "Are turn_ids the id guids with author.role user?";
+    using BrowserFixture fixture = BrowserFixture.Create();
+    string script = "(() => {" +
+      "replaceTranscript(" + JsonSerializer.Serialize(
+        $"<span class=\"record-anchor\" data-jsonl-record=\"{recordNumber}\"></span>{html}") +
+      ",false,[{NodeId:" + nodeId + ",RecordNumber:" + recordNumber +
+      ",Segments:[" + JsonSerializer.Serialize(spoken) + "]}]);" +
+      "setSeekableVoiceRanges([{NodeId:" + nodeId +
+      ",StartNodeWordIndex:0,WordCount:10}]);" +
+      "setVoicePointerSelectMode(true);" +
+      "const pieces=[...document.querySelectorAll('.word')].filter(w=>" +
+        "w.textContent==='turn_id'||w.textContent==='s');" +
+      "return JSON.stringify({pieces:pieces.map(w=>({" +
+        "text:w.textContent,selectable:w.classList.contains('voice-selectable')," +
+        "excluded:w.classList.contains('voice-excluded')," +
+        "nodeId:Number(w.dataset.nodeId||0)," +
+        "nodeWordIndex:Number(w.dataset.nodeWordIndex??-1)}))});" +
+      "})()";
+    JsonElement result = ExecuteJsonProbe(fixture.WebView, script);
+    JsonElement pieces = result.GetProperty("pieces");
+    Require(pieces.GetArrayLength() == 2,
+      $"{description} did not expose the expected turn_id + s DOM pieces.");
+    foreach (JsonElement piece in pieces.EnumerateArray())
+    {
+      Require(piece.GetProperty("selectable").GetBoolean() &&
+          !piece.GetProperty("excluded").GetBoolean(),
+        $"{description} contains voiced text that is not Ctrl-selectable.");
+      Require(piece.GetProperty("nodeId").GetInt64() == nodeId,
+        $"{description} split piece has the wrong speech node.");
+      Require(piece.GetProperty("nodeWordIndex").GetInt32() == 1,
+        $"{description} split piece did not map to spoken token turn_ids at ordinal 1.");
+    }
   }
 
   private static TranscriptRangeProbe[] ReadRanges(object? value)

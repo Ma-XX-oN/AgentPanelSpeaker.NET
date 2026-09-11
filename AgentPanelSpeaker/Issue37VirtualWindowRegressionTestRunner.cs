@@ -47,7 +47,9 @@ internal static class Issue37VirtualWindowRegressionTestRunner
       ("virtual-window/follow-off-initial-render-ignores-pending-playback",
         TestFollowOffInitialRenderIgnoresPendingPlayback),
       ("virtual-window/manual-scroll-preserves-disclosure-state",
-        TestManualScrollPreservesDisclosureState)
+        TestManualScrollPreservesDisclosureState),
+      ("virtual-window/disclosure-open-state-survives-eviction-and-close-clears-override",
+        TestDisclosureOpenStateSurvivesEvictionAndCloseClearsOverride)
     };
 
     int failures = 0;
@@ -1540,6 +1542,63 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       "Overlapping disclosure disappeared during virtual-window replacement.");
     Require(result.GetProperty("open").GetBoolean(),
       "Virtual-window replacement collapsed a disclosure that the user opened.");
+  }
+
+  /// <summary>
+  /// SV3: disclosure state must outlive the DOM node itself. Opening a default-
+  /// closed details element creates an open override that survives eviction and
+  /// rematerialization. Closing it again returns to default and removes that
+  /// override, so a later rematerialization is closed.
+  /// </summary>
+  private static void TestDisclosureOpenStateSurvivesEvictionAndCloseClearsOverride()
+  {
+    using var host = CreateOffscreenHost();
+    using var view = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(view);
+    host.Show();
+    _ = host.Handle;
+    _ = view.Handle;
+    WaitForViewInitialization(view);
+
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    JsonElement result = ExecuteJsonProbe(
+      webView,
+      """
+(async () => {
+  const withDetails =
+    '<section class="virtual-record" data-virtual-index="10">' +
+    '<details data-presentation-id="context:persist"><summary>Context</summary>' +
+    '<p>payload</p></details></section>';
+  const away =
+    '<section class="virtual-record" data-virtual-index="30"><p>far away</p></section>';
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  let details = document.querySelector('details[data-presentation-id="context:persist"]');
+  details.open = true;
+  details.dispatchEvent(new Event('toggle'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  details = document.querySelector('details[data-presentation-id="context:persist"]');
+  const openAfterReturn = Boolean(details?.open);
+
+  details.open = false;
+  details.dispatchEvent(new Event('toggle'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  replaceTranscriptWindow(away, false, [], 30, 30, 500, 50);
+  replaceTranscriptWindow(withDetails, false, [], 10, 10, 100, 100);
+  details = document.querySelector('details[data-presentation-id="context:persist"]');
+  return JSON.stringify({
+    openAfterReturn,
+    closedAfterUserCloseAndReturn: details ? !details.open : false
+  });
+})()
+""");
+
+    Require(result.GetProperty("openAfterReturn").GetBoolean(),
+      "An opened disclosure lost state after eviction and rematerialization.");
+    Require(result.GetProperty("closedAfterUserCloseAndReturn").GetBoolean(),
+      "Closing a disclosure did not clear its remembered open override.");
   }
 
   private static bool ReadBrowserBoolean(WebView2 webView, string expression)
