@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Permanent regression patch for the WebView-focus-loss edge of issue #73.
 path = Path('AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs')
 text = path.read_text(encoding='utf-8')
 
