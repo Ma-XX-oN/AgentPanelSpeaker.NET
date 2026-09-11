@@ -1,3 +1,4 @@
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Reflection;
 using System.Text.Json;
@@ -157,9 +158,32 @@ internal static class Issue67FindOriginRegressionTestRunner
   private static void TestQueryEditKeepsOriginalFindAnchor()
   {
     using BrowserFixture fixture = BrowserFixture.Create();
-    JsonElement result = ExecuteJsonProbe(
-      fixture.WebView,
-      """
+    var queryMessage = new TaskCompletionSource<JsonElement>(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+
+    void MessageReceived(
+      object? sender,
+      CoreWebView2WebMessageReceivedEventArgs eventArgs)
+    {
+      using JsonDocument document = JsonDocument.Parse(
+        eventArgs.WebMessageAsJson);
+      JsonElement root = document.RootElement;
+      if (root.TryGetProperty("type", out JsonElement typeElement) &&
+          string.Equals(
+            typeElement.GetString(),
+            "find-query",
+            StringComparison.Ordinal))
+      {
+        queryMessage.TrySetResult(root.Clone());
+      }
+    }
+
+    fixture.WebView.CoreWebView2.WebMessageReceived += MessageReceived;
+    try
+    {
+      _ = ExecuteJsonProbe(
+        fixture.WebView,
+        """
 (() => {
   findInput.value = 'expl';
   findMatches = [{
@@ -198,19 +222,27 @@ internal static class Issue67FindOriginRegressionTestRunner
     findInputTimer = 0;
   }
 
-  return JSON.stringify(getFindOrigin());
+  runFind();
+  return JSON.stringify({started:true});
 })()
 """);
+      PumpUntilCompleted(queryMessage.Task, "issue #67 find-query origin");
+      JsonElement result = queryMessage.Task.Result;
 
-    Require(string.Equals(
-        result.GetProperty("kind").GetString(),
-        "find",
-        StringComparison.Ordinal),
-      "Query editing stopped using a Find result as its origin.");
-    Require(result.GetProperty("recordNumber").GetInt32() == 574,
-      "Transient partial-query result replaced the original Find anchor.");
-    Require(result.GetProperty("wordIndex").GetInt32() == 37,
-      "Stable query-edit origin lost its original word coordinate.");
+      Require(string.Equals(
+          result.GetProperty("originKind").GetString(),
+          "find",
+          StringComparison.Ordinal),
+        "Query editing stopped using a Find result as its origin.");
+      Require(result.GetProperty("originRecordNumber").GetInt32() == 574,
+        "Transient partial-query result replaced the original Find anchor.");
+      Require(result.GetProperty("originWordIndex").GetInt32() == 37,
+        "Stable query-edit origin lost its original word coordinate.");
+    }
+    finally
+    {
+      fixture.WebView.CoreWebView2.WebMessageReceived -= MessageReceived;
+    }
   }
 
   private static bool InvokeOriginKind(MethodInfo method, string kind)
