@@ -14,12 +14,14 @@ old_policy_apply = (
   "    _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);\\n"
   "    _transcriptView.ApplySettings(settings, dark);\\n")
 new_policy_apply = old_policy_apply + "    RefreshTranscriptVoiceSelectability();\\n"
+# An earlier guarded replacement in this helper has already updated one of the
+# two source sites. Exactly one unpatched policy/apply site must remain here.
 policy_apply_count = text.count(old_policy_apply)
-if policy_apply_count != 2:
+if policy_apply_count != 1:
   raise SystemExit(
-    f"{main}: expected two speech-policy apply sites, found {policy_apply_count}")
+    f"{main}: expected one remaining speech-policy apply site, found {policy_apply_count}")
 main.write_text(
-  text.replace(old_policy_apply, new_policy_apply),
+  text.replace(old_policy_apply, new_policy_apply, 1),
   encoding="utf-8")
 '''
 
