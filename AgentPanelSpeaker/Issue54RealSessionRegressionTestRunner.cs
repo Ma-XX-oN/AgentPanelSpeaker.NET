@@ -516,6 +516,9 @@ internal static class Issue54RealSessionRegressionTestRunner
     _ = host.Handle;
     _ = view.Handle;
     WaitForViewInitialization(view);
+    PumpUntil(
+      () => ReadField<bool>(view, "_initialized"),
+      "issue #69 transcript shell initialization");
 
     FieldInfo documentField = typeof(TranscriptView).GetField(
       "_virtualDocument",
@@ -544,10 +547,11 @@ internal static class Issue54RealSessionRegressionTestRunner
     int start = ReadField<int>(view, "_windowStartIndex");
     int end = ReadField<int>(view, "_windowEndIndex");
     Require(start < focalIndex,
-      "Find materialized the tall searched Core unit without its immediately " +
-      "preceding visible turn.");
+      $"Find materialized the tall searched Core unit without its immediately " +
+      $"preceding visible turn. Observed start={start}, focal={focalIndex}, end={end}.");
     Require(end >= focalIndex,
-      "Find materialization lost the searched Core unit while retaining context.");
+      $"Find materialization lost the searched Core unit while retaining context. " +
+      $"Observed start={start}, focal={focalIndex}, end={end}.");
   }
 
   /// <summary>
