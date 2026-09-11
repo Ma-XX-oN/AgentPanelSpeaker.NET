@@ -23,6 +23,8 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
         TestCurrentSpeechEligibilityIsAuthoritative),
       ("ctrl-click-voice-pointer/browser-affordance-and-click-contract",
         TestBrowserAffordanceAndClickContract),
+      ("ctrl-click-voice-pointer/punctuation-rich-browser-coordinate-matches-speech-history",
+        TestPunctuationRichBrowserCoordinateMatchesSpeechHistory),
       ("ctrl-click-voice-pointer/host-ctrl-routing-does-not-require-webview-focus",
         TestHostCtrlRoutingDoesNotRequireWebViewFocus)
     };
@@ -136,6 +138,128 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     Require(speech.TrySeekToTranscriptWord(42, 3, out string gamma) &&
         gamma == "gamma",
       "Enabling the fence type did not make its stable word coordinate seekable.");
+  }
+
+  /// <summary>
+  /// Browser node-global coordinates must use the same speech-token ordinal
+  /// space as SpeechService.  Punctuation-rich path/file-name fragments from
+  /// the real node-308 failure must not make a click in the later (5).md entry
+  /// seek backward into the preceding (6).md fragment.
+  /// </summary>
+  private static void TestPunctuationRichBrowserCoordinateMatchesSpeechHistory()
+  {
+    const long NodeId = 308;
+    const string first =
+      "Phase 2 Classification Update (6).md: c:\\Users\\adria\\Downloads\\" +
+      "Download Conversation - 3.";
+    const string second =
+      "Phase 2 Classification Update (5).md: c:\\Users\\adria\\Downloads\\" +
+      "Download Conversation - 3.";
+
+    using var speech = new SpeechService();
+    speech.SetPolicyProviders(
+      _ => new SpeechProfileSettings("Test voice", 0, 0),
+      _ => true,
+      () => Array.Empty<string>(),
+      () => PronunciationRuleSet.Parse(string.Empty),
+      () => AudioWakeSettings.Default);
+    speech.LoadHistory(
+      new[]
+      {
+        new SpeechFragment(
+          NodeId,
+          ContentCategory.UserContext,
+          SpeechFragmentKind.Prose,
+          first),
+        new SpeechFragment(
+          NodeId,
+          ContentCategory.UserContext,
+          SpeechFragmentKind.Prose,
+          second)
+      },
+      Array.Empty<TurnCompletion>(),
+      Array.Empty<BackgroundWorkEvent>(),
+      PlaybackStartMode.Beginning);
+
+    var secondTokens = SpeechTokenization.Matches(second);
+    int secondFive = Enumerable.Range(0, secondTokens.Count).First(index =>
+      string.Equals(secondTokens[index].Value, "5", StringComparison.Ordinal));
+    int expectedNodeWordIndex =
+      SpeechTokenization.Matches(first).Count + secondFive;
+
+    using BrowserFixture fixture = BrowserFixture.Create();
+    var seekMessage = new TaskCompletionSource<JsonElement>(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+    void MessageReceived(
+      object? sender,
+      CoreWebView2WebMessageReceivedEventArgs eventArgs)
+    {
+      using JsonDocument document = JsonDocument.Parse(eventArgs.WebMessageAsJson);
+      JsonElement root = document.RootElement;
+      if (root.TryGetProperty("type", out JsonElement typeElement) &&
+          string.Equals(typeElement.GetString(), "find-seek", StringComparison.Ordinal) &&
+          root.TryGetProperty("source", out JsonElement sourceElement) &&
+          string.Equals(sourceElement.GetString(), "ctrl-click", StringComparison.Ordinal))
+      {
+        seekMessage.TrySetResult(root.Clone());
+      }
+    }
+
+    fixture.WebView.CoreWebView2.WebMessageReceived += MessageReceived;
+    try
+    {
+      ExecuteScript(
+        fixture.WebView,
+        """
+(() => {
+  const first = 'Phase 2 Classification Update (6).md: c:\\Users\\adria\\Downloads\\Download Conversation - 3.';
+  const second = 'Phase 2 Classification Update (5).md: c:\\Users\\adria\\Downloads\\Download Conversation - 3.';
+  replaceTranscript(
+    '<span class="record-anchor" data-jsonl-record="1"></span><p>' +
+      first + ' ' + second + '</p>',
+    false,
+    [{NodeId:308, RecordNumber:1, Segments:[first, second]}]);
+  setSeekableVoiceRanges([
+    {NodeId:308, StartNodeWordIndex:0, WordCount:200}
+  ]);
+  setVoicePointerSelectMode(true);
+  const fives = [...document.querySelectorAll('.word.voice-selectable')]
+    .filter(word => word.textContent === '5');
+  if (fives.length !== 1) {
+    throw new Error('Expected exactly one selectable 5 token in the later entry.');
+  }
+  fives[0].dispatchEvent(new MouseEvent('click', {
+    button:0, ctrlKey:true, bubbles:true, cancelable:true
+  }));
+})()
+""");
+      PumpUntilCompleted(
+        seekMessage.Task,
+        "issue #73 punctuation-rich Ctrl+click seek message");
+      JsonElement seek = seekMessage.Task.Result;
+      int postedIndex = seek.GetProperty("nodeWordIndex").GetInt32();
+      Require(seek.GetProperty("nodeId").GetInt64() == NodeId,
+        "Punctuation-rich Ctrl+click changed the node identity.");
+      Require(postedIndex == expectedNodeWordIndex,
+        $"Browser posted node word {postedIndex}; speech history requires " +
+        $"{expectedNodeWordIndex} for the clicked 5 in the later (5).md entry.");
+
+      TranscriptPlaybackPosition? position = null;
+      speech.PlaybackPositionChanged += value => position = value;
+      Require(
+        speech.TrySeekToTranscriptWord(NodeId, postedIndex, out string sought) &&
+          string.Equals(sought, second, StringComparison.Ordinal),
+        "The browser coordinate did not resolve to the later (5).md speech fragment.");
+      Require(position is not null &&
+          position.State == TranscriptPlaybackState.Paused &&
+          position.NodeId == NodeId &&
+          string.Equals(position.Word, "5", StringComparison.Ordinal),
+        "The browser coordinate did not place the paused voice cursor on the clicked 5 token.");
+    }
+    finally
+    {
+      fixture.WebView.CoreWebView2.WebMessageReceived -= MessageReceived;
+    }
   }
 
   /// <summary>
