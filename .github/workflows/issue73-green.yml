@@ -19,14 +19,9 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Set up .NET 10
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
       - name: Apply issue 73 production implementation
         shell: pwsh
-        run: python scripts/apply-issue73-production-v2.py
+        run: python scripts/apply-issue73-production-v3.py
 
       - name: Verify production patch scope
         shell: pwsh
@@ -49,14 +44,10 @@ jobs:
           }
           git diff --check
 
-      - name: Commit production implementation
-        shell: pwsh
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs
-          git commit -m 'feat: ctrl-click currently voiced transcript words [issue73-red-finalized] [issue73-green] [issue73-production-green]'
-          git push origin HEAD:issue-73-ctrl-click-voice-pointer
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
 
       - name: Build AgentPanelSpeaker
         shell: pwsh
@@ -103,3 +94,12 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & $exe --test independent-oracles
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit production implementation
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'feat: ctrl-click currently voiced transcript words [issue73-red-finalized] [issue73-green] [issue73-production-green]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
