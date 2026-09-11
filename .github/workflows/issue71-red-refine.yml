@@ -1,0 +1,93 @@
+name: Issue 71 exact stale Find RED
+
+on:
+  push:
+    branches:
+      - issue-71-stale-find-materialization
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: ${{ !contains(github.event.head_commit.message, '[issue71-red-proven]') && !contains(github.event.head_commit.message, '[issue71-green]') }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Refine permanent regression to real completed-search state
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path('AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        ExecuteVoidScript(
+                    webView,
+                    """
+          (() => {
+            findSearchPending = true;
+            cancelFindSearch(false);
+          })()
+          """);'''
+          new = '''        ExecuteVoidScript(
+                    webView,
+                    """
+          (() => {
+            // The previous Find search has already completed. Only its off-window
+            // materialization is still queued when the user edits the query.
+            findSearchPending = false;
+            cancelFindSearch(false);
+          })()
+          """);'''
+          if old not in text:
+            raise RuntimeError('completed-search refinement marker not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          '@ | python -
+
+      - name: Build refined RED state
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact completed-search RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue71-refined-red-stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue71-refined-red-stderr.txt'
+          $process = Start-Process -FilePath $exe -ArgumentList '--test','real-session-fixes' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $output = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
+          Write-Host $output
+          if ($process.ExitCode -ne 1) { throw "Expected RED exit 1, got $($process.ExitCode)." }
+          $failures = @($output -split "`r?`n" | Where-Object { $_ -match '^FAIL  ' })
+          if ($failures.Count -ne 1 -or $failures[0] -notmatch 'real-session/stale-find-materialization-is-cancelled-before-install') {
+            throw "Expected only the issue #71 regression to fail. Failures: $($failures -join '; ')"
+          }
+          if ($output -notmatch 'visible materialized records=0') {
+            throw 'Refined RED did not reproduce the blank-viewport invariant.'
+          }
+          if ($output -notmatch 'TEST-SUITE-COMPLETE real-session-fixes exit=1') {
+            throw 'Refined RED suite did not emit the completion marker.'
+          }
+          Write-Host 'RED-PROVEN issue #71 completed-search stale materialization race.'
+
+      - name: Validate whitespace
+        run: git diff --check
+
+      - name: Commit refined permanent regression
+        shell: pwsh
+        run: |
+          git config user.name 'Ma-XX-oN'
+          git config user.email 'Ma-XX-oN@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
+          if (git diff --cached --quiet) { throw 'No refined permanent regression change to commit.' }
+          git commit -m 'test: match completed-search stale Find race (#71) [issue71-red-proven]'
+          git push origin HEAD:issue-71-stale-find-materialization
