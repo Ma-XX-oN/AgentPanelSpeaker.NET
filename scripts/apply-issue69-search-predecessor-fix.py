@@ -42,7 +42,8 @@ view_path.write_text(view_text, encoding="utf-8", newline="\n")
 # Diagnostic-only refinement for the failed GREEN attempt.  It leaves the
 # permanent invariant unchanged and only reports the observed indexes.
 test_path = Path("AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs")
-test_text = test_path.read_text(encoding="utf-8")ntest_old = """    Require(end >= focalIndex,\n      \"Find materialization lost the searched Core unit while retaining context.\");\n"""
+test_text = test_path.read_text(encoding="utf-8")
+test_old = """    Require(end >= focalIndex,\n      \"Find materialization lost the searched Core unit while retaining context.\");\n"""
 test_new = """    Require(end >= focalIndex,\n      $\"Find materialization lost the searched Core unit while retaining context. \" +\n      $\"Observed start={start}, focal={focalIndex}, end={end}.\");\n"""
 test_text = replace_once(
   test_text,
