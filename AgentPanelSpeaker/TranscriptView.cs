@@ -2089,7 +2089,13 @@ internal sealed class TranscriptView : UserControl
         }
         return;
       }
-      TranscriptWindow window = document.CreateWindow(focalIndex, GetVirtualViewportHeight());
+      bool searchNavigation = string.Equals(
+        reason,
+        "search",
+        StringComparison.OrdinalIgnoreCase);
+      TranscriptWindow window = searchNavigation
+        ? document.CreateSearchWindow(focalIndex, GetVirtualViewportHeight())
+        : document.CreateWindow(focalIndex, GetVirtualViewportHeight());
       var timer = Stopwatch.StartNew();
       if (!await ExecuteAsync(BuildReplaceWindowScript(
             window,

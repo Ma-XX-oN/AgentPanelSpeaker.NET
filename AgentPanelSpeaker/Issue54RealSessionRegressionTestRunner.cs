@@ -29,6 +29,8 @@ internal static class Issue54RealSessionRegressionTestRunner
         TestWindowReplacementInstrumentationContract),
       ("real-session/directional-shift-keeps-prefetch-headroom",
         TestDirectionalShiftKeepsPrefetchHeadroom),
+      ("real-session/search-window-retains-preceding-unit",
+        TestSearchWindowRetainsPrecedingUnit),
       ("real-session/live-end-window-retains-preceding-unit",
         TestLiveEndWindowRetainsPrecedingUnit)
     };
@@ -476,6 +478,80 @@ internal static class Issue54RealSessionRegressionTestRunner
       shifted.EndIndex - 12 >= 4,
       "Directional shift left fewer than four viewport-heights of measured " +
       "materialized headroom beyond the visible range.");
+  }
+
+  /// <summary>
+  /// Reproduces issue #69 through the production Find materialization path. A
+  /// tall searched assistant turn must not materialize alone when a visible
+  /// predecessor Core turn exists.
+  /// </summary>
+  private static void TestSearchWindowRetainsPrecedingUnit()
+  {
+    var units = new[]
+    {
+      CreateUnit(0, "search-preceding",
+        "<p>Issue 69 preceding user turn.</p>"),
+      CreateUnit(1, "search-target",
+        "<p>Issue 69 searched assistant turn.</p>"),
+      CreateUnit(2, "search-following",
+        "<p>Issue 69 following turn.</p>")
+    };
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(units);
+    document.SetLayoutGeneration(1);
+    document.UpdateMeasuredHeights(
+      new Dictionary<int, double>
+      {
+        [0] = 120.0,
+        [1] = TranscriptVirtualDocument.DefaultViewportHeight * 6.0,
+        [2] = 120.0
+      },
+      1);
+    Require(document.TryGetIndex(2, out int focalIndex),
+      "Issue #69 fixture target record did not resolve.");
+
+    using var host = CreateOffscreenHost();
+    using var view = new TranscriptView { Dock = DockStyle.Fill };
+    host.Controls.Add(view);
+    host.Show();
+    _ = host.Handle;
+    _ = view.Handle;
+    WaitForViewInitialization(view);
+    PumpUntil(
+      () => ReadField<bool>(view, "_initialized"),
+      "issue #69 transcript shell initialization");
+
+    FieldInfo documentField = typeof(TranscriptView).GetField(
+      "_virtualDocument",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "TranscriptView._virtualDocument field was not found.");
+    documentField.SetValue(view, document);
+
+    MethodInfo render = typeof(TranscriptView).GetMethod(
+      "RenderWindowForRecordAsync",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "TranscriptView.RenderWindowForRecordAsync() was not found.");
+    object? invoked = render.Invoke(view, new object?[]
+    {
+      2,
+      "search",
+      0,
+      null
+    });
+    Task task = invoked as Task ??
+      throw new InvalidOperationException(
+        "Search-window materialization did not return a Task.");
+    PumpUntilCompleted(task, "issue #69 search-window materialization");
+
+    int start = ReadField<int>(view, "_windowStartIndex");
+    int end = ReadField<int>(view, "_windowEndIndex");
+    Require(start < focalIndex,
+      $"Find materialized the tall searched Core unit without its immediately " +
+      $"preceding visible turn. Observed start={start}, focal={focalIndex}, end={end}.");
+    Require(end >= focalIndex,
+      $"Find materialization lost the searched Core unit while retaining context. " +
+      $"Observed start={start}, focal={focalIndex}, end={end}.");
   }
 
   /// <summary>
