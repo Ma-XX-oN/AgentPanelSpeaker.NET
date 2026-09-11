@@ -1162,6 +1162,19 @@ internal sealed class TranscriptView : UserControl
         HandleFindQuery(root);
         return;
       }
+      if (type == "find-navigation-invalidated")
+      {
+        long? navigationGeneration = ReadOptionalInt64(
+          root,
+          "navigationGeneration");
+        if (navigationGeneration is long generation)
+        {
+          _latestFindWindowNavigationGeneration = Math.Max(
+            _latestFindWindowNavigationGeneration,
+            generation);
+        }
+        return;
+      }
       if (type == "find-cancel")
       {
         CancelFindSearch();
@@ -4052,6 +4065,10 @@ function updateFindNavigationState() {
 function cancelFindSearch(updateStatus) {
   ++findGeneration;
   ++findNavigationGeneration;
+  chrome.webview.postMessage({
+    type:'find-navigation-invalidated',
+    navigationGeneration:findNavigationGeneration
+  });
   if (findSearchPending) {
     chrome.webview.postMessage({type:'find-cancel'});
     findSearchPending = false;
