@@ -32,20 +32,21 @@ jobs:
       - name: Verify validated production parent and Core pin
         shell: pwsh
         run: |
-          $expectedParent = '9fb2bee56b846abc78edc6cde3d56cde8c029b66'
+          $expectedParent = 'c1544cd1dd4dda060361c354163dd577a37257c2'
           $parent = (git rev-parse HEAD^).Trim()
           if ($parent -ne $expectedParent) {
             throw "Unexpected validation parent: $parent"
+          }
+          $validatedProduction = '9fb2bee56b846abc78edc6cde3d56cde8c029b66'
+          $currentAppTree = (git rev-parse HEAD:AgentPanelSpeaker).Trim()
+          $productionAppTree = (git rev-parse "${validatedProduction}:AgentPanelSpeaker").Trim()
+          if ($currentAppTree -ne $productionAppTree) {
+            throw "Validation correction changed AgentPanelSpeaker: $productionAppTree -> $currentAppTree"
           }
           $expectedCore = '6c92799c1b14693001e8b913465f4a12b0b1e1ab'
           $actualCore = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
           if ($actualCore -ne $expectedCore) {
             throw "Unexpected Core pin: $actualCore"
-          }
-          $headTree = (git rev-parse HEAD:AgentPanelSpeaker).Trim()
-          $parentTree = (git rev-parse HEAD^:AgentPanelSpeaker).Trim()
-          if ($headTree -ne $parentTree) {
-            throw "Validation workflow commit changed AgentPanelSpeaker: $parentTree -> $headTree"
           }
 
       - name: Install Core dependencies
@@ -119,6 +120,15 @@ jobs:
       - name: Validate whitespace and clean worktree
         shell: pwsh
         run: |
+          $coreNodeModules = Join-Path $env:GITHUB_WORKSPACE 'dependencies\AIConversationCore\node_modules'
+          if (Test-Path $coreNodeModules) {
+            Remove-Item $coreNodeModules -Recurse -Force
+          }
+          $coreStatus = @(git -C dependencies/AIConversationCore status --porcelain --untracked-files=all)
+          if ($coreStatus.Count -ne 0) {
+            $coreStatus | Write-Host
+            throw 'Core validation left unexpected tracked or untracked changes.'
+          }
           git diff --check HEAD^
           if ((git status --porcelain).Count -ne 0) {
             git status --short
