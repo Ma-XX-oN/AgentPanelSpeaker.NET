@@ -1,0 +1,56 @@
+name: Issue73 stable-node playback GREEN
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+    paths:
+      - '.github/workflows/issue73-stable-node-green.yml'
+      - 'scripts/apply-issue73-stable-node-green.py'
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply stable-node production repair
+        run: python scripts/apply-issue73-stable-node-green.py
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build Release
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release
+      - name: Run exact and focused regressions
+        shell: pwsh
+        run: |
+          $exe = 'AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe'
+          $tests = @(
+            'virtual-window',
+            'ctrl-click-voice-pointer',
+            'find-origin',
+            'speech-ordinals',
+            'user-context-speech',
+            'rolled-back-speech',
+            'output-oracle',
+            'independent-oracles'
+          )
+          foreach ($test in $tests) {
+            Write-Host "=== $test ==="
+            & $exe --test $test
+            if ($LASTEXITCODE -ne 0) { throw "$test failed with exit $LASTEXITCODE" }
+          }
+      - name: Commit production GREEN
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'fix: keep retained playback bound to stable node identity (#73 #37) [issue73-stable-node-green]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
