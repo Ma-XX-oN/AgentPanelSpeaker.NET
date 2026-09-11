@@ -1,0 +1,105 @@
+name: Issue 73 Ctrl-click GREEN
+
+on:
+  push:
+    branches:
+      - issue-73-ctrl-click-voice-pointer
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: ${{ !contains(github.event.head_commit.message, '[issue73-production-green]') }}
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply issue 73 production implementation
+        shell: pwsh
+        run: python scripts/apply-issue73-production.py
+
+      - name: Verify production patch scope
+        shell: pwsh
+        run: |
+          $changed = @(git diff --name-only)
+          $expected = @(
+            'AgentPanelSpeaker/FindSeekRequestedEventArgs.cs',
+            'AgentPanelSpeaker/MainForm.cs',
+            'AgentPanelSpeaker/SpeechService.cs',
+            'AgentPanelSpeaker/TranscriptView.cs'
+          )
+          $unexpected = @($changed | Where-Object { $_ -notin $expected })
+          if ($unexpected.Count -ne 0) {
+            throw "Unexpected production files changed: $($unexpected -join ', ')"
+          }
+          foreach ($path in $expected) {
+            if ($path -notin $changed) {
+              throw "Expected production file was not changed: $path"
+            }
+          }
+          git diff --check
+
+      - name: Commit production implementation
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs
+          git commit -m 'feat: ctrl-click currently voiced transcript words [issue73-red-finalized] [issue73-green] [issue73-production-green]'
+          git push origin HEAD:issue-73-ctrl-click-voice-pointer
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run issue 73 exact regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test ctrl-click-voice-pointer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run Find origin regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test find-origin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run user-context speech regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test user-context-speech
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run rolled-back speech regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test rolled-back-speech
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run virtual-window regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test virtual-window
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run independent regression oracles
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test independent-oracles
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
