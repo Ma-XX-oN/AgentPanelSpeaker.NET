@@ -589,7 +589,9 @@ internal static class Issue54RealSessionRegressionTestRunner
           webView,
           """
 (() => {
-  findSearchPending = true;
+  // The previous Find search has already completed. Only its off-window
+  // materialization is still queued when the user edits the query.
+  findSearchPending = false;
   cancelFindSearch(false);
 })()
 """);
