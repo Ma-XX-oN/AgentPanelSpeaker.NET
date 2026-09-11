@@ -466,6 +466,19 @@ internal sealed class TranscriptView : UserControl
     PostSeekableVoiceRanges();
   }
 
+  /// <summary>
+  /// Updates the page-level Ctrl voice-pointer selection mode from the host
+  /// window without walking or mutating individual transcript words.
+  /// </summary>
+  public void SetVoicePointerSelectMode(bool enabled)
+  {
+    PostMessage(new
+    {
+      type = "voice-pointer-select-mode",
+      enabled
+    });
+  }
+
   private void PostSeekableVoiceRanges()
   {
     PostMessage(new
@@ -4894,6 +4907,10 @@ chrome.webview.addEventListener('message', event => {
     setSeekableVoiceRanges(data.ranges ?? data.Ranges ?? []);
     return;
   }
+  if (data.type === 'voice-pointer-select-mode') {
+    setVoicePointerSelectMode(Boolean(data.enabled ?? data.Enabled));
+    return;
+  }
   if (data.type === 'settings') {
     const sequence = Number(data.sequence || 0);
     if (sequence < latestSettingsSequence) return;
@@ -4944,7 +4961,6 @@ window.addEventListener('keydown', event => {
 window.addEventListener('keyup', event => {
   if (event.key === 'Control') setVoicePointerSelectMode(false);
 }, true);
-window.addEventListener('blur', () => setVoicePointerSelectMode(false));
 
 transcript.addEventListener('click', event => {
   if (!event.ctrlKey || event.button !== 0 || !(event.target instanceof Element)) {

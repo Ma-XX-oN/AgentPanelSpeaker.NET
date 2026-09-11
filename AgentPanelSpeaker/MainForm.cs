@@ -20,6 +20,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int EmLineScroll = 0x00B6;
   private const int WmSetRedraw = 0x000B;
   private const int WmKeyDown = 0x0100;
+  private const int WmKeyUp = 0x0101;
   private const int WmLButtonDown = 0x0201;
   private const int WmNcLButtonDown = 0x00A1;
   private const int WmRButtonDown = 0x0204;
@@ -29,6 +30,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private const int WmXButtonDown = 0x020B;
   private const int WmNcXButtonDown = 0x00AB;
   private const int WmSystemKeyDown = 0x0104;
+  private const int WmSystemKeyUp = 0x0105;
   private const uint GaRoot = 2;
   private const uint GwHwndNext = 2;
   private const uint RdwInvalidate = 0x0001;
@@ -667,8 +669,12 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
+    Activated += (_, _) =>
+      _transcriptView.SetVoicePointerSelectMode(
+        (Control.ModifierKeys & Keys.Control) != 0);
     Deactivate += (_, _) =>
     {
+      _transcriptView.SetVoicePointerSelectMode(false);
       PopupFormBase.WriteActivationDiagnostics(
         "mainform-deactivate-event",
         this);
@@ -2696,6 +2702,32 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
+  /// Resolves host Ctrl key messages into transcript voice-pointer selection
+  /// state without consuming the original key message.
+  /// </summary>
+  internal static bool TryGetVoicePointerSelectModeMessage(
+    int message,
+    IntPtr wordParameter,
+    out bool enabled)
+  {
+    enabled = false;
+    if (message is not (WmKeyDown or WmSystemKeyDown or
+        WmKeyUp or WmSystemKeyUp))
+    {
+      return false;
+    }
+
+    Keys keyCode = (Keys)(int)wordParameter & Keys.KeyCode;
+    if (keyCode != Keys.ControlKey)
+    {
+      return false;
+    }
+
+    enabled = message is WmKeyDown or WmSystemKeyDown;
+    return true;
+  }
+
+  /// <summary>
   /// Handles transport hotkeys before focused child windows consume them.
   /// </summary>
   public bool PreFilterMessage(ref Message message)
@@ -2713,6 +2745,14 @@ internal sealed class MainForm : Form, IMessageFilter
     if (GetAncestor(message.HWnd, GaRoot) != Handle)
     {
       return false;
+    }
+
+    if (TryGetVoicePointerSelectModeMessage(
+          message.Msg,
+          message.WParam,
+          out bool voicePointerSelectMode))
+    {
+      _transcriptView.SetVoicePointerSelectMode(voicePointerSelectMode);
     }
 
     if (message.Msg is not (WmKeyDown or WmSystemKeyDown))
