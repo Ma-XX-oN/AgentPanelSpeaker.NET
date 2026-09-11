@@ -77,7 +77,7 @@ internal sealed class TranscriptView : UserControl
     bool WordEnabled,
     bool RegexEnabled,
     bool VoicedEnabled,
-    bool HasSelectionOrigin,
+    string OriginKind,
     int OriginRecordNumber,
     int OriginWordIndex);
 
@@ -1357,10 +1357,7 @@ internal sealed class TranscriptView : UserControl
       ReadOptionalBoolean(root, "wordEnabled") == true,
       ReadOptionalBoolean(root, "regexEnabled") == true,
       ReadOptionalBoolean(root, "voicedEnabled") != false,
-      string.Equals(
-        ReadOptionalString(root, "originKind"),
-        "selection",
-        StringComparison.Ordinal),
+      ReadOptionalString(root, "originKind"),
       ReadOptionalInt32(root, "originRecordNumber") ?? 0,
       ReadOptionalInt32(root, "originWordIndex") ?? -1);
 
@@ -1407,7 +1404,8 @@ internal sealed class TranscriptView : UserControl
 
     int originRecordNumber = pending.OriginRecordNumber;
     int originWordIndex = pending.OriginWordIndex;
-    if (!pending.HasSelectionOrigin &&
+    bool hasProvidedOrigin = IsProvidedFindOriginKind(pending.OriginKind);
+    if (!hasProvidedOrigin &&
         _pendingPosition is TranscriptPlaybackPosition voicePosition &&
         index.TryResolveVoiceOrigin(
           voicePosition.NodeId,
@@ -1465,7 +1463,7 @@ internal sealed class TranscriptView : UserControl
         query = pending.Query,
         request.Regex,
         request.VoicedOnly,
-        originKind = pending.HasSelectionOrigin ? "selection" : "voice",
+        originKind = hasProvidedOrigin ? pending.OriginKind : "voice",
         originRecordNumber,
         originWordIndex,
         matchCount = matches.Count,
@@ -1515,6 +1513,12 @@ internal sealed class TranscriptView : UserControl
       }
       cancellation.Dispose();
     }
+  }
+
+  private static bool IsProvidedFindOriginKind(string originKind)
+  {
+    return string.Equals(originKind, "selection", StringComparison.Ordinal) ||
+      string.Equals(originKind, "find", StringComparison.Ordinal);
   }
 
   private static IReadOnlyList<TranscriptSearchMatch> RotateMatchesAfterOrigin(
@@ -2588,6 +2592,7 @@ const reportedMappingFailures = new Set();
 const reportedPlaybackFailures = new Set();
 let findMatches = [];
 let currentFindMatch = -1;
+let findEditOrigin = null;
 let findGeneration = 0;
 let findNavigationGeneration = 0;
 let findSearchPending = false;
@@ -4092,6 +4097,13 @@ async function showFindMatch(
   liveEndMarker.style.display = 'none';
   currentFindMatch = (index + findMatches.length) % findMatches.length;
   const match = findMatches[currentFindMatch];
+  if (trigger === 'enter' ||
+      trigger === 'shift-enter' ||
+      trigger === 'button-previous' ||
+      trigger === 'button-next' ||
+      trigger === 'reopened') {
+    findEditOrigin = null;
+  }
   if (followSpeech) setFollowSpeech(false, true);
   const key = makeRecordKey(match.recordNumber);
   let recordWords = displayWordsByRecord.get(key);
@@ -4194,11 +4206,22 @@ function getFindOrigin() {
       };
     }
   }
+  if (currentFindMatch >= 0 && currentFindMatch < findMatches.length) {
+    const match = findMatches[currentFindMatch];
+    return {
+      kind:'find',
+      recordNumber:Number(match.recordNumber || 0),
+      wordIndex:Number(match.startWordIndex ?? -1)
+    };
+  }
   return {kind:'voice', recordNumber:0, wordIndex:-1};
 }
 
 function runFind() {
-  const origin = getFindOrigin();
+  if (findEditOrigin === null) {
+    findEditOrigin = getFindOrigin();
+  }
+  const origin = findEditOrigin;
   if (followSpeech) setFollowSpeech(false, true);
   cancelFindSearch(false);
   clearFindHighlights();
@@ -4253,6 +4276,7 @@ function openFind() {
 }
 
 function closeFind() {
+  findEditOrigin = null;
   if (findInputTimer) {
     clearTimeout(findInputTimer);
     findInputTimer = 0;
@@ -4264,12 +4288,24 @@ function closeFind() {
 }
 
 function toggleFindOption(button, setter) {
+  findEditOrigin = getFindOrigin();
   setter();
   button.classList.toggle('enabled');
   runFind();
 }
 
+findInput.addEventListener('beforeinput', () => {
+  const replacesEntireQuery = findInput.value.length > 0 &&
+    findInput.selectionStart === 0 &&
+    findInput.selectionEnd === findInput.value.length;
+  if (replacesEntireQuery || findEditOrigin === null) {
+    findEditOrigin = getFindOrigin();
+  }
+});
 findInput.addEventListener('input', () => {
+  if (findEditOrigin === null) {
+    findEditOrigin = getFindOrigin();
+  }
   if (findInputTimer) clearTimeout(findInputTimer);
   cancelFindSearch(false);
   findInputTimer = setTimeout(() => {
