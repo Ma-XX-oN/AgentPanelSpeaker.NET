@@ -33,30 +33,26 @@ jobs:
       - name: Run issue 67 regressions
         shell: pwsh
         run: |
-          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
-          & $exe --test find-origin
-          if ($LASTEXITCODE -ne 0) { throw 'Issue #67 regressions failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite find-origin
 
       - name: Run word-materialization regressions
         shell: pwsh
         run: |
-          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
-          & $exe --test word-materialization
-          if ($LASTEXITCODE -ne 0) { throw 'Word-materialization regressions failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite word-materialization
 
       - name: Run virtual-window regressions
         shell: pwsh
         run: |
-          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
-          & $exe --test virtual-window
-          if ($LASTEXITCODE -ne 0) { throw 'Virtual-window regressions failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
 
       - name: Run issue 65 redundancy regressions
         shell: pwsh
         run: |
-          $exe = Resolve-Path "AgentPanelSpeaker/bin/Release/net10.0-windows10.0.22621.0/AgentPanelSpeaker.exe"
-          & $exe --test redundancy
-          if ($LASTEXITCODE -ne 0) { throw 'Issue #65 redundancy regressions failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite redundancy
 
       - name: Validate whitespace
         run: git diff --check
