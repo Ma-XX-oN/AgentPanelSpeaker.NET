@@ -2840,12 +2840,16 @@ function structureDetailsKey(details) {
     : '';
   const turn = details.closest('section.transcript-turn');
   const turnId = turn?.getAttribute('data-presentation-id') || '';
+  if (turn && turnId) {
+    const ordinal = Array.from(turn.querySelectorAll('details')).indexOf(details);
+    if (ordinal >= 0) {
+      return 'turn-details:' + turnId + ':' + ordinal;
+    }
+  }
   const anchor = details.querySelector('.record-anchor') ||
     turn?.querySelector('.record-anchor');
   const recordNumber = anchor?.getAttribute('data-jsonl-record') || '';
-  const sourceId = anchor?.getAttribute('data-source-id') || '';
-  return 'fallback:' + turnId + ':' + recordNumber + ':' + sourceId + ':' +
-    summaryText;
+  return 'fallback:' + recordNumber + ':' + summaryText;
 }
 
 function resetDisclosureOpenOverrides() {
