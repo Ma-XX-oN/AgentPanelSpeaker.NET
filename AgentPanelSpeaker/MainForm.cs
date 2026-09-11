@@ -1180,6 +1180,8 @@ internal sealed class MainForm : Form, IMessageFilter
       _speakUserContext = settings.Transcript.SpeakUserContext;
       _speech.SetShowRolledBackHistory(
         settings.Transcript.ShowRolledBackHistory);
+      _speech.RevalidatePausedNavigationEligibility(
+        "settings-loaded");
       _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
       RefreshTranscriptVoiceSelectability();
       _speech.SetWordBoundaryPollMilliseconds(
@@ -1371,6 +1373,8 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceTypesTextBox.Text = parsed.NormalizedCsv;
     _loadingSettings = false;
     SaveControlsToSettings();
+    _speech.RevalidatePausedNavigationEligibility(
+      "fenced-code-types-changed");
     RefreshTranscriptVoiceSelectability();
     AppendLog(
       "Spoken fenced-code types updated: " +
@@ -1390,6 +1394,8 @@ internal sealed class MainForm : Form, IMessageFilter
     UpdateVoiceRowState(role);
     row.Voice.Invalidate();
     SaveControlsToSettings();
+    _speech.RevalidatePausedNavigationEligibility(
+      "voice-profile-changed");
     RefreshTranscriptVoiceSelectability();
     ScheduleVoiceSettingsPreview(role, context);
   }
@@ -2231,6 +2237,8 @@ internal sealed class MainForm : Form, IMessageFilter
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
     _speakUserContext = settings.SpeakUserContext;
     _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);
+    _speech.RevalidatePausedNavigationEligibility(
+      "transcript-settings-changed");
     _transcriptView.ApplySettings(settings, dark);
     RefreshTranscriptVoiceSelectability();
     _playbackMailbox.SetCapacity(settings.HighlightQueueCapacity);
@@ -2265,6 +2273,12 @@ internal sealed class MainForm : Form, IMessageFilter
     object? sender,
     FindSeekRequestedEventArgs eventArgs)
   {
+    DiagnosticLog.Write("transcript.seek_requested", new
+    {
+      eventArgs.Source,
+      eventArgs.NodeId,
+      eventArgs.NodeWordIndex
+    });
     if (_speech.TrySeekToTranscriptWord(
           eventArgs.NodeId,
           eventArgs.NodeWordIndex,

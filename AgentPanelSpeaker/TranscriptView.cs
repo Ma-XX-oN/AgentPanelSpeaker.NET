@@ -3640,14 +3640,18 @@ function markVoiceSelectableWords(
   start,
   end,
   nodeId,
-  startNodeWordIndex) {
-  let nodeWordIndex = startNodeWordIndex;
+  startNodeWordIndex,
+  speechTokenOffsets) {
+  let relativeLexicalIndex = 0;
   for (let index = start; index <= end; ++index) {
     const word = collection[index];
     if (!word) continue;
+    const speechTokenOffset = speechTokenOffsets[relativeLexicalIndex++];
+    if (speechTokenOffset === undefined) continue;
     word.classList.add('voice-selectable');
     word.dataset.nodeId = String(nodeId);
-    word.dataset.nodeWordIndex = String(nodeWordIndex++);
+    word.dataset.nodeWordIndex = String(
+      startNodeWordIndex + speechTokenOffset);
   }
 }
 
@@ -3656,17 +3660,21 @@ function markVoiceSelectableWordsByGlobalRange(
   globalStart,
   globalEnd,
   nodeId,
-  startNodeWordIndex) {
+  startNodeWordIndex,
+  speechTokenOffsets) {
   const selected = collection.filter(word => {
     const index = Number(word.dataset.index ?? -1);
     return index >= globalStart && index <= globalEnd;
   });
   if (!selected.length) return;
-  let nodeWordIndex = startNodeWordIndex;
-  for (const word of selected) {
+  for (let index = 0; index < selected.length; ++index) {
+    const speechTokenOffset = speechTokenOffsets[index];
+    if (speechTokenOffset === undefined) continue;
+    const word = selected[index];
     word.classList.add('voice-selectable');
     word.dataset.nodeId = String(nodeId);
-    word.dataset.nodeWordIndex = String(nodeWordIndex++);
+    word.dataset.nodeWordIndex = String(
+      startNodeWordIndex + speechTokenOffset);
   }
 }
 
@@ -3719,8 +3727,14 @@ function assignNodeScopes(nodeMap) {
     for (const segment of segments) {
       const displayTarget = tokenizeDisplay(segment);
       const lexicalTarget = tokenize(segment);
+      const speechTokenOffsets = displayTarget
+        .map((token, index) => isLexical(token) ? index : -1)
+        .filter(index => index >= 0);
       const segmentNodeWordStart = nodeWordIndex;
-      nodeWordIndex += lexicalTarget.length;
+      // SpeechService indexes every SpeechTokenization token, including
+      // punctuation/symbols.  Clickable lexical words therefore keep gaps for
+      // punctuation instead of being renumbered into a lexical-only space.
+      nodeWordIndex += displayTarget.length;
       nodeWordCursors.set(nodeId, nodeWordIndex);
       if (!displayTarget.length && !lexicalTarget.length) continue;
 
@@ -3748,7 +3762,8 @@ function assignNodeScopes(nodeMap) {
           globalStart,
           globalEnd,
           nodeId,
-          segmentNodeWordStart);
+          segmentNodeWordStart,
+          speechTokenOffsets);
         rememberSegmentRange(
           nodeId,
           globalStart,
@@ -3792,7 +3807,8 @@ function assignNodeScopes(nodeMap) {
           lexicalStart,
           lexicalEnd,
           nodeId,
-          segmentNodeWordStart);
+          segmentNodeWordStart,
+          speechTokenOffsets);
         rememberSegmentRange(
           nodeId,
           tokenStart,

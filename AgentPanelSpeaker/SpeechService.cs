@@ -298,6 +298,76 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Revalidates a paused history cursor after a speech-eligibility policy
+  /// change. If the current fragment became ineligible, navigation advances
+  /// to the next eligible fragment, or to the paused live end when none
+  /// remains. Canonical history and node identities are unchanged.
+  /// </summary>
+  public void RevalidatePausedNavigationEligibility(string reason)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (!_isPaused || _history.Count == 0)
+      {
+        return;
+      }
+
+      int anchor = _activeHistoryIndex >= 0
+        ? _activeHistoryIndex
+        : _pendingHistoryIndex ?? _nextHistoryIndex;
+      if (anchor < 0 || anchor >= _history.Count ||
+          TryGetEligibleProfileLocked(_history[anchor], out _, out _))
+      {
+        return;
+      }
+
+      int candidate = FindNextEligibleLocked(anchor + 1);
+      DiagnosticLog.Write("speech.paused_eligibility_revalidated", new
+      {
+        reason,
+        anchor,
+        anchorNodeId = GetHistoryNodeIdLocked(anchor),
+        candidate,
+        candidateNodeId = GetHistoryNodeIdLocked(candidate),
+        activeKind = _activeKind.ToString(),
+        activeHistoryIndex = _activeHistoryIndex,
+        pendingHistoryIndex = _pendingHistoryIndex,
+        pendingHistoryWordIndex = _pendingHistoryWordIndex,
+        nextHistoryIndex = _nextHistoryIndex,
+        historyCount = _history.Count
+      });
+
+      if (_activeKind == ActiveSpeechKind.History)
+      {
+        if (candidate >= 0)
+        {
+          RestartHistoryLocked(candidate);
+        }
+        else
+        {
+          MoveToPausedLiveEndLocked();
+        }
+        return;
+      }
+
+      if (candidate >= 0)
+      {
+        _pendingHistoryIndex = candidate;
+        _pendingHistoryWordIndex = 0;
+        _nextHistoryIndex = candidate;
+        _lastFenceActivity = null;
+        SetPausedNavigationPositionLocked(candidate);
+      }
+      else
+      {
+        MoveToPausedLiveEndLocked();
+      }
+    }
+  }
+
+  /// <summary>
   /// Gets enabled installed voices and their descriptive labels.
   /// </summary>
   public IReadOnlyList<InstalledSpeechVoice> GetInstalledVoices()
