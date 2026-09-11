@@ -32,7 +32,7 @@ jobs:
       - name: Verify validated production parent and Core pin
         shell: pwsh
         run: |
-          $expectedParent = '5360eefe1740980f6fed46f81ff195206df1288c'
+          $expectedParent = '9fb2bee56b846abc78edc6cde3d56cde8c029b66'
           $parent = (git rev-parse HEAD^).Trim()
           if ($parent -ne $expectedParent) {
             throw "Unexpected validation parent: $parent"
@@ -132,12 +132,14 @@ jobs:
           Remove-Item .github/workflows/issue71-postinstall-red.yml
           Remove-Item .github/workflows/issue71-postinstall-green.yml
           Remove-Item .github/workflows/issue71-postinstall-final-validation.yml
+          Remove-Item .github/workflows/issue71-playback-regression-green.yml
           Remove-Item scripts/apply-issue71-postinstall-red.py
           Remove-Item scripts/apply-issue71-postinstall-fix.py
+          Remove-Item scripts/apply-issue71-playback-regression-fix.py
           git config user.name 'Ma-XX-oN'
           git config user.email 'Ma-XX-oN@users.noreply.github.com'
           git add -A
-          git commit -m 'chore: clean issue 71 atomic-repair scaffolding [issue71-postinstall-red] [issue71-postinstall-green] [issue71-postinstall-finalized]'
+          git commit -m 'chore: clean issue 71 atomic-repair scaffolding [issue71-postinstall-red] [issue71-postinstall-green] [issue71-postinstall-finalized] [issue71-playback-green]'
           $afterApp = (git rev-parse HEAD:AgentPanelSpeaker).Trim()
           if ($beforeApp -ne $afterApp) {
             throw "Cleanup changed AgentPanelSpeaker tree: $beforeApp -> $afterApp"
