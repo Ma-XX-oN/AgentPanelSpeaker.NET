@@ -38,6 +38,7 @@ jobs:
             throw 'Expected real-machine marker-rematerialization RED was not observed.'
           }
           Write-Host 'RED confirmed: exact real-machine marker-rematerialization regression failed as required.'
+          exit 0
       - name: Commit permanent RED regression
         shell: pwsh
         run: |
