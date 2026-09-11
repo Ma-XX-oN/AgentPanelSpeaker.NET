@@ -45,6 +45,9 @@ jobs:
           if (-not $text.Contains("FAIL  real-session/search-window-retains-preceding-unit")) {
             throw "Expected issue #69 RED failure was not observed."
           }
+          if (-not $text.Contains("without its immediately preceding visible turn")) {
+            throw "Issue #69 RED did not fail on the predecessor-retention invariant."
+          }
           $requiredPasses = @(
             "PASS  real-session/scroll-replacement-does-not-reverse-user-intent",
             "PASS  real-session/stale-window-shift-is-coalesced",
@@ -67,5 +70,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
-          git commit -m "test: reproduce search predecessor omission (#69) [issue69-red-applied]"
+          git commit -m "test: correct search predecessor production-path RED (#69) [issue69-red-applied]"
           git push origin HEAD:issue-69-search-preceding-context
