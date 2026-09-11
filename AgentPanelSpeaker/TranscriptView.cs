@@ -222,7 +222,8 @@ internal sealed class TranscriptView : UserControl
 
     if (_initialized)
     {
-      _ = ExecuteAsync("resetDisclosureOpenOverrides();");
+      _ = ExecuteAsync(
+        "resetDisclosureOpenOverrides(); resetRetainedPlayback();");
     }
     _pendingPosition = null;
     _lastLocatedContentPosition = null;
@@ -268,7 +269,8 @@ internal sealed class TranscriptView : UserControl
     if (_initialized)
     {
       _ = ExecuteAsync(
-        "resetDisclosureOpenOverrides(); replaceTranscript('', false, []);");
+        "resetDisclosureOpenOverrides(); resetRetainedPlayback(); " +
+        "replaceTranscript('', false, []);");
     }
   }
 
@@ -2698,6 +2700,7 @@ let windowStartIndex = -1;
 let windowEndIndex = -1;
 let virtualShiftPending = false;
 let latestPlaybackSequence = 0;
+let retainedPlayback = null;
 let latestSettingsSequence = 0;
 const fadingAnimations = new WeakMap();
 let knownNodeIds = new Set();
@@ -2722,7 +2725,6 @@ let findCurrentWords = [];
 let findInputTimer = 0;
 let seekableVoiceRanges = [];
 const openDisclosureOverrides = new Set();
-const programmaticDisclosureStates = new WeakMap();
 let discardDisclosureStateOnNextReplacement = false;
 
 function tokenize(text) {
@@ -2857,25 +2859,27 @@ function resetDisclosureOpenOverrides() {
   discardDisclosureStateOnNextReplacement = true;
 }
 
-function setDisclosureOpenProgrammatically(details, open) {
-  const requested = !!open;
-  if (!details || details.open === requested) return;
-  programmaticDisclosureStates.set(details, requested);
-  details.open = requested;
-}
-
-transcript.addEventListener('toggle', event => {
-  const details = event.target;
+function rememberDisclosureState(details) {
   if (!(details instanceof HTMLDetailsElement)) return;
-  const expected = programmaticDisclosureStates.get(details);
-  if (expected !== undefined && expected === details.open) {
-    programmaticDisclosureStates.delete(details);
-    return;
-  }
   const key = structureDetailsKey(details);
   if (!key) return;
   if (details.open) openDisclosureOverrides.add(key);
   else openDisclosureOverrides.delete(key);
+}
+
+function setDisclosureOpenProgrammatically(details, open) {
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const requested = !!open;
+  const key = structureDetailsKey(details);
+  if (key) {
+    if (requested) openDisclosureOverrides.add(key);
+    else openDisclosureOverrides.delete(key);
+  }
+  if (details.open !== requested) details.open = requested;
+}
+
+transcript.addEventListener('toggle', event => {
+  rememberDisclosureState(event.target);
 }, true);
 
 function normalizeStructureEntries(entries) {
@@ -3096,9 +3100,11 @@ function replaceTranscriptDom(
     (window.scrollY + window.innerHeight) < 80;
   const previousY = window.scrollY;
   const openDetails = new Map();
-  if (preserve) {
+  if (!discardDisclosureStateOnNextReplacement) {
     for (const details of transcript.querySelectorAll('details')) {
-      openDetails.set(structureDetailsKey(details), details.open);
+      const key = structureDetailsKey(details);
+      if (preserve) openDetails.set(key, details.open);
+      rememberDisclosureState(details);
     }
   }
 
@@ -3107,6 +3113,7 @@ function replaceTranscriptDom(
     fragment.append(buildTranscriptDomNode(spec));
   }
   transcript.replaceChildren(fragment);
+  resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
 
   let currentStructureMap = postStructureStage(
@@ -3153,6 +3160,7 @@ function replaceTranscriptDom(
     currentStructureMap,
     'after-record-scopes');
   postMappingInstallSummary(nodeMap || []);
+  restoreRetainedPlaybackProjection();
   postStructureStage(
     structureProbeId,
     'replace-dom-exit',
@@ -3163,16 +3171,6 @@ function replaceTranscriptDom(
   windowStartIndex = 0;
   windowEndIndex = Number.MAX_SAFE_INTEGER;
   virtualShiftPending = false;
-  currentIndex = -1;
-  currentEndIndex = -1;
-  voiceMarkerIndex = -1;
-  currentNode = -1;
-  currentFragmentText = null;
-  currentFragmentStart = -1;
-  currentFragmentEnd = -1;
-  currentBoundaryWordIndex = -1;
-  currentSpeechListItem = null;
-  liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
@@ -3236,7 +3234,7 @@ function replaceTranscriptWindow(
     for (const details of transcript.querySelectorAll('details')) {
       const key = structureDetailsKey(details);
       localDetailsState.set(key, details.open);
-      if (!details.open) openDisclosureOverrides.delete(key);
+      rememberDisclosureState(details);
     }
   }
   // Replacing spacer heights and materialized records can itself change
@@ -3252,6 +3250,7 @@ function replaceTranscriptWindow(
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   let phaseStarted = performance.now();
   transcript.innerHTML = exactAssignedHtml;
+  resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
   const innerHtmlMilliseconds = performance.now() - phaseStarted;
   const exactParsedHtml = transcript.innerHTML;
@@ -3315,6 +3314,7 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-node-scopes';
   phaseStarted = performance.now();
   postMappingInstallSummary(nodeMap || []);
+  restoreRetainedPlaybackProjection();
   const mappingSummaryMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
     structureProbeId,
@@ -3380,16 +3380,6 @@ function replaceTranscriptWindow(
       focusVirtualIndex !== null) {
     focusRequestedVirtualRecord();
   }
-  currentIndex = -1;
-  currentEndIndex = -1;
-  voiceMarkerIndex = -1;
-  currentNode = -1;
-  currentFragmentText = null;
-  currentFragmentStart = -1;
-  currentFragmentEnd = -1;
-  currentBoundaryWordIndex = -1;
-  currentSpeechListItem = null;
-  liveEndMarker.style.display = 'none';
   if (preserve) {
     if (nearBottom) window.scrollTo(0, document.documentElement.scrollHeight);
     else window.scrollTo(0, previousY);
@@ -4313,6 +4303,38 @@ function applyRangeClass(range, className) {
   }
 }
 
+function resetRetainedPlayback() {
+  retainedPlayback = null;
+  resetPlaybackProjectionState();
+}
+
+function resetPlaybackProjectionState() {
+  currentIndex = -1;
+  currentEndIndex = -1;
+  voiceMarkerIndex = -1;
+  currentNode = -1;
+  currentFragmentText = null;
+  currentFragmentStart = -1;
+  currentFragmentEnd = -1;
+  currentBoundaryWordIndex = -1;
+  currentSpeechListItem = null;
+  liveEndMarker.style.display = 'none';
+}
+
+function restoreRetainedPlaybackProjection() {
+  if (!retainedPlayback) return;
+  const preservedFollow = followSpeech;
+  setPlayback(
+    retainedPlayback.state,
+    retainedPlayback.fragmentText,
+    retainedPlayback.wordIndex,
+    retainedPlayback.wordText,
+    retainedPlayback.nodeId,
+    false);
+  // Projection restoration must never change the user's follow setting.
+  setFollowSpeech(preservedFollow, false);
+}
+
 function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
   setFollowSpeech(follow, false);
   clearMarkers();
@@ -5113,6 +5135,13 @@ chrome.webview.addEventListener('message', event => {
   const sequence = Number(data.sequence || 0);
   if (sequence < latestPlaybackSequence) return;
   latestPlaybackSequence = sequence;
+  retainedPlayback = {
+    state:data.state,
+    fragmentText:data.fragmentText,
+    wordIndex:data.wordIndex,
+    wordText:data.wordText,
+    nodeId:data.nodeId
+  };
   setPlayback(
     data.state,
     data.fragmentText,
