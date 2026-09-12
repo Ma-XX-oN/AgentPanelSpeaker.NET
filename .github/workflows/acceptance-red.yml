@@ -67,22 +67,6 @@ jobs:
           }
           Set-Content $issue54 ($generated.Replace($malformed, $correct)) -NoNewline
 
-          $issue26 = 'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs'
-          $generated26 = Get-Content $issue26 -Raw
-          $legacyPattern = '(?m)^      form\.Dispose\(\);$'
-          $legacyCleanupCount = ([regex]::Matches(
-            $generated26,
-            $legacyPattern)).Count
-          if ($legacyCleanupCount -ne 1) {
-            throw "Expected one legacy MainForm cleanup site, found $legacyCleanupCount."
-          }
-          $generated26 = [regex]::Replace(
-            $generated26,
-            $legacyPattern,
-            "      Application.RemoveMessageFilter(form);`r`n      form.Dispose();",
-            1)
-          Set-Content $issue26 $generated26 -NoNewline
-
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'RED edit whitespace validation failed.' }
           $changed = @(git diff --name-only)
