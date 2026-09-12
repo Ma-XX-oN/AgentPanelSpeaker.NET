@@ -36,38 +36,38 @@ jobs:
           $path = 'AgentPanelSpeaker/Program.cs'
           $text = [IO.File]::ReadAllText($path)
           if (-not $text.Contains('"core-word-id-migration"')) {
-            $needle = @'
-      if (args.Length == 2 &&
-          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
-      {
-        Environment.ExitCode = RunNamedSuite(
-          "redundancy",
-          Issue65RedundancyRegressionTestRunner.Run);
-        return;
-      }
-'@
-            $replacement = @'
-      if (args.Length == 2 &&
-          string.Equals(
-            args[1],
-            "core-word-id-migration",
-            StringComparison.OrdinalIgnoreCase))
-      {
-        Environment.ExitCode = RunNamedSuite(
-          "core-word-id-migration",
-          Issue75CoreWordIdMigrationRegressionTestRunner.Run);
-        return;
-      }
-
-      if (args.Length == 2 &&
-          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
-      {
-        Environment.ExitCode = RunNamedSuite(
-          "redundancy",
-          Issue65RedundancyRegressionTestRunner.Run);
-        return;
-      }
-'@
+            $needle = @(
+              '      if (args.Length == 2 &&',
+              '          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))',
+              '      {',
+              '        Environment.ExitCode = RunNamedSuite(',
+              '          "redundancy",',
+              '          Issue65RedundancyRegressionTestRunner.Run);',
+              '        return;',
+              '      }'
+            ) -join [Environment]::NewLine
+            $replacement = @(
+              '      if (args.Length == 2 &&',
+              '          string.Equals(',
+              '            args[1],',
+              '            "core-word-id-migration",',
+              '            StringComparison.OrdinalIgnoreCase))',
+              '      {',
+              '        Environment.ExitCode = RunNamedSuite(',
+              '          "core-word-id-migration",',
+              '          Issue75CoreWordIdMigrationRegressionTestRunner.Run);',
+              '        return;',
+              '      }',
+              '',
+              '      if (args.Length == 2 &&',
+              '          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))',
+              '      {',
+              '        Environment.ExitCode = RunNamedSuite(',
+              '          "redundancy",',
+              '          Issue65RedundancyRegressionTestRunner.Run);',
+              '        return;',
+              '      }'
+            ) -join [Environment]::NewLine
             if (-not $text.Contains($needle)) {
               throw 'Program.cs issue #75 insertion point was not found.'
             }
