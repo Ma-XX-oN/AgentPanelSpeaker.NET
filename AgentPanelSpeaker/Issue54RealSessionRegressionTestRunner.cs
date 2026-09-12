@@ -909,6 +909,10 @@ internal static class Issue54RealSessionRegressionTestRunner
         dark: false);
       view.SelectSession(path, AgentSource.Codex, "Issue 78 scroll fixture");
       WaitForTranscriptRender(view);
+      // Let the host's debounced settings post settle before manipulating only
+      // browser-side Follow state. Otherwise a pending C# settings message can
+      // overwrite the state under test after the synthetic scroll gesture.
+      PumpMessages(500);
       WebView2 webView = ReadField<WebView2>(view, "_webView");
 
       ExecuteVoidScript(
