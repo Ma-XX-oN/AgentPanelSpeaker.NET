@@ -31,7 +31,19 @@ jobs:
 
       - name: Apply Core speech word ranges
         shell: pwsh
-        run: python tools/issue75-speech-word-ranges.py
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE 'tools/issue75-speech-word-ranges.py'
+          $text = [IO.File]::ReadAllText($path)
+          $old = "paused_end = '''  /// <summary>\n  /// Returns the current navigation anchor.\n'''"
+          $new = "paused_end = '''  /// <summary>\n  /// Cancels the active prompt or starts a pending request immediately.\n'''"
+          if (-not $text.Contains($old)) {
+            throw 'Expected stale paused_end marker was not found.'
+          }
+          [IO.File]::WriteAllText(
+            $path,
+            $text.Replace($old, $new),
+            [Text.UTF8Encoding]::new($false))
+          python tools/issue75-speech-word-ranges.py
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -85,7 +97,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/SpeechFragment.cs AgentPanelSpeaker/JsonlSessionMonitor.cs AgentPanelSpeaker/SpeechService.cs
+          git add AgentPanelSpeaker/SpeechFragment.cs AgentPanelSpeaker/JsonlSessionMonitor.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
           git diff --cached --check
           git commit -m 'feat: map speech boundaries to Core word ranges (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
