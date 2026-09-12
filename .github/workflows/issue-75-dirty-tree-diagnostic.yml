@@ -1,0 +1,97 @@
+name: Issue 75 dirty-tree diagnostic
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-dirty-tree-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Define status diagnostic
+        shell: pwsh
+        run: |
+          @'
+          param([Parameter(Mandatory=$true)][string]$Stage)
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          Write-Host "STATUS AFTER: $Stage"
+          if ($status.Count -eq 0) {
+            Write-Host '<clean>'
+            exit 0
+          }
+          $status | ForEach-Object { Write-Host $_ }
+          Write-Host 'SUBMODULE STATUS:'
+          git submodule status
+          Write-Host 'SUBMODULE WORKTREE STATUS:'
+          git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=all
+          throw "Working tree became dirty after: $Stage"
+          '@ | Set-Content -Encoding utf8 $env:RUNNER_TEMP\check-status.ps1
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'checkout/setup'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: |
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'npm ci'
+
+      - name: Run Core tests
+        shell: pwsh
+        run: |
+          npm test --prefix dependencies/AIConversationCore
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'Core tests'
+
+      - name: Validate Phase 2 baseline
+        shell: pwsh
+        run: |
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'Phase 2 baseline'
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'APS build'
+
+      - name: Run built full suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'built full suite'
+
+      - name: Publish and run deployed full suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'publish failed' }
+          & tools/Invoke-TestSuite.ps1 -Executable (Join-Path $publish 'AgentPanelSpeaker.exe') -Suite all
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'publish and deployed full suite'
+
+      - name: Build and run display parity
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+          & $env:RUNNER_TEMP\check-status.ps1 -Stage 'display parity'
