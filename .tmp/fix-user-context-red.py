@@ -20,6 +20,9 @@ method = r'''  /// <summary>
   /// Speak User Context checkbox while one retained User Context fragment is
   /// actively speaking lets that now-ineligible utterance keep emitting word
   /// boundaries before playback advances to the next eligible User fragment.
+  /// The source is deliberately far too long to complete inside the transition
+  /// timeout, so reaching the User destination proves cancellation rather than
+  /// eventual natural completion.
   /// </summary>
   private static void TestActiveCheckboxCancelsIneligibleUtterance()
   {
@@ -58,7 +61,7 @@ method = r'''  /// <summary>
 
       string contextText = string.Join(
         ' ',
-        Enumerable.Repeat("active user context source", 80));
+        Enumerable.Repeat("active user context source", 800));
       const string userText = "Visible user destination.";
       speech.LoadHistory(
         new[]
@@ -102,7 +105,7 @@ method = r'''  /// <summary>
       Require(!GetField<bool>(form, "_speakUserContext"),
         "Actual Speak User Context checkbox did not disable playback policy.");
 
-      WaitUntil(
+      bool reachedUser = SpinWait.SpinUntil(
         () =>
         {
           lock (positions)
@@ -112,8 +115,10 @@ method = r'''  /// <summary>
               position.NodeId == 9002);
           }
         },
-        "Disabling the actual Speak User Context checkbox did not promptly " +
-        "resume at the next eligible User fragment.");
+        TimeSpan.FromSeconds(5));
+      Require(reachedUser,
+        "Disabling the actual Speak User Context checkbox did not cancel the " +
+        "active ineligible utterance and promptly resume at the User fragment.");
 
       TranscriptPlaybackPosition[] transition;
       lock (positions)
