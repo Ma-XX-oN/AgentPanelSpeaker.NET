@@ -1,0 +1,71 @@
+name: Issue 75 real word-id RED
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-real-wordid-red.yml'
+      - 'tools/issue75-real-wordid-red.py'
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Add permanent real production regression
+        shell: pwsh
+        run: python tools/issue75-real-wordid-red.py
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact real-path RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = (& $exe --test core-word-id-migration 2>&1 | Out-String)
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -ne 1) { throw "Expected RED exit 1, got $exitCode" }
+          if (-not $output.Contains('FAIL  core-word-id/production-history-carries-core-word-ids')) {
+            throw 'The real production history regression did not fail.'
+          }
+          if (-not $output.Contains('Production history did not carry the exact Core speech_words IDs.')) {
+            throw 'The real production regression failed for an unexpected reason.'
+          }
+          if (-not $output.Contains('TEST-SUITE-COMPLETE core-word-id-migration exit=1')) {
+            throw 'Focused suite completion marker is missing.'
+          }
+          exit 0
+
+      - name: Commit permanent RED
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
+          git diff --cached --check
+          git commit -m 'test: require real Core word IDs in history (#75)'
+          git push origin HEAD:issue-75-core-word-id-migration
