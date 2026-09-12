@@ -43,9 +43,17 @@ jobs:
           if ($count -ne 2) {
             throw "Expected two literal-regex replacement sites, found $count"
           }
+          $text = $text.Replace($old, $new)
+          $oldPath = 'c:\\Users\\adria\\Downloads\\'
+          $newPath = 'c:\\\\Users\\\\adria\\\\Downloads\\\\'
+          $pathCount = ([regex]::Matches($text, [regex]::Escape($oldPath))).Count
+          if ($pathCount -ne 4) {
+            throw "Expected four generated Windows path literals, found $pathCount"
+          }
+          $text = $text.Replace($oldPath, $newPath)
           [IO.File]::WriteAllText(
             $path,
-            $text.Replace($old, $new),
+            $text,
             [Text.UTF8Encoding]::new($false))
           python tools/issue75-word-id-boundary.py
           python tools/issue75-word-id-boundary-tests.py
