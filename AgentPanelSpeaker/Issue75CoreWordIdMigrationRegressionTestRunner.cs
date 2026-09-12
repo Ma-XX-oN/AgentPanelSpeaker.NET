@@ -43,6 +43,10 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
         TestProductionHistoryCarriesCoreWordIds),
       ("core-word-id/ordered-list-history-preserves-core-word-boundaries",
         TestOrderedListHistoryPreservesCoreWordBoundaries),
+      ("core-word-id/attached-identifier-period-preserves-one-speech-fragment",
+        TestAttachedIdentifierPeriodPreservesOneSpeechFragment),
+      ("core-word-id/attached-identifier-period-synthesizes-dot",
+        TestAttachedIdentifierPeriodSynthesizesDot),
       ("core-word-id/policy-is-centralized-without-per-word-eligibility-mutation",
         TestPolicyIsCentralizedWithoutPerWordEligibilityMutation),
       ("core-word-id/playback-highlights-exact-canonical-word-id",
@@ -527,6 +531,102 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
         "Seeking the ordered-list body word did not land on Item.");
       Require(position!.WordId == expectedWords[1].Id,
         "Ordered-list body seek changed the authoritative Core word ID.");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+
+  /// <summary>
+  /// A Core-attached period inside an identifier is not a sentence boundary.
+  /// The production Core-to-history path must retain the original adjacency.
+  /// </summary>
+  private static void TestAttachedIdentifierPeriodPreservesOneSpeechFragment()
+  {
+    SpeechFragment[] fragments = LoadAttachedIdentifierHistory();
+    Require(fragments.Length == 1,
+      "Canonical attached identifier was split into " +
+      $"{fragments.Length} speech fragments: " +
+      string.Join(" | ", fragments.Select(fragment => fragment.Text)));
+    Require(
+      fragments[0].Text.Contains(
+        "scripts/AI-transcript.py",
+        StringComparison.Ordinal),
+      $"Production speech changed attached identifier text to: {fragments[0].Text}");
+    Require(
+      !fragments[0].Text.Contains("AI-transcript. py", StringComparison.Ordinal),
+      "Production speech inserted whitespace after an attached identifier period.");
+  }
+
+  /// <summary>
+  /// Windows.Media bookmark synthesis keeps the display token `.` but voices
+  /// an attached identifier period as "dot". The production history must keep
+  /// `py` adjacent so that exact synthesis rule remains applicable.
+  /// </summary>
+  private static void TestAttachedIdentifierPeriodSynthesizesDot()
+  {
+    SpeechFragment[] fragments = LoadAttachedIdentifierHistory();
+    SpeechFragment fragment = fragments.FirstOrDefault(item =>
+      item.Text.Contains("AI-transcript", StringComparison.Ordinal)) ??
+      throw new InvalidOperationException(
+        "Production history omitted the attached identifier fragment.");
+    MatchCollection tokens = SpeechTokenization.Matches(fragment.Text);
+    int dotIndex = -1;
+    for (int index = 1; index < tokens.Count; ++index)
+    {
+      if (tokens[index].Value == "." &&
+          tokens[index - 1].Value.Contains(
+            "AI-transcript",
+            StringComparison.Ordinal))
+      {
+        dotIndex = index;
+        break;
+      }
+    }
+    Require(
+      dotIndex > 0 && dotIndex < tokens.Count,
+      $"Could not locate the identifier period in fragment: {fragment.Text}");
+
+    MethodInfo synthesis = typeof(SapiSpeechEngine).GetMethod(
+      "GetBookmarkedSynthesisText",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "Windows.Media bookmark synthesis token transform was not found.");
+    string spoken = synthesis.Invoke(
+      null,
+      new object[] { tokens, dotIndex }) as string ?? string.Empty;
+    Require(
+      string.Equals(spoken, "dot", StringComparison.Ordinal),
+      $"Attached display period synthesized as '{spoken}' instead of 'dot'.");
+  }
+
+  private static SpeechFragment[] LoadAttachedIdentifierHistory()
+  {
+    string record = ClaudeRecord(
+      "user",
+      "Open [scripts/AI-transcript.py]() now.",
+      1,
+      null);
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue75-attached-dot-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+      string sessionPath = Path.Combine(root, "session.jsonl");
+      File.WriteAllText(sessionPath, record + Environment.NewLine);
+      LocatedSession session = SessionLocator.FromPath(
+        sessionPath,
+        AgentSource.Claude);
+      using var monitor = new JsonlSessionMonitor();
+      SpeechHistorySnapshot history = monitor.LoadHistoryPreview(
+        session,
+        speakExistingLatestTurn: false);
+      return history.Fragments
+        .Where(fragment => fragment.Category == ContentCategory.User)
+        .ToArray();
     }
     finally
     {
