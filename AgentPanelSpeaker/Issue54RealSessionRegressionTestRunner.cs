@@ -915,13 +915,14 @@ internal static class Issue54RealSessionRegressionTestRunner
         webView,
         """
 (() => {
-  document.body.style.minHeight = '7000px';
   setFollowSpeech(true, false);
   userScrollIntentUntil = 0;
   userScrollIntentDirection = 0;
   programmaticScrollUntil = 0;
-  lastManualScrollY = 0;
-  window.scrollTo(0, 700);
+  // Drive the scroll handler with a deterministic nonzero delta without
+  // creating any physical wheel/touch/key/scrollbar intent. The handler must
+  // classify this as programmatic regardless of the runner's current layout.
+  lastManualScrollY = window.scrollY - 1000;
   window.dispatchEvent(new Event('scroll'));
 })()
 """);
