@@ -73,6 +73,13 @@ jobs:
           }
           $generated26 = $generated26.Replace($oldContext, $newContext)
 
+          $oldRate = '      var slowProfile = new SpeechProfileSettings(voice.Name, -10, 0)'
+          $newRate = '      var slowProfile = new SpeechProfileSettings(voice.Name, 0, 0)'
+          if (-not $generated26.Contains($oldRate)) {
+            throw 'Active User Context speech-rate anchor did not match.'
+          }
+          $generated26 = $generated26.Replace($oldRate, $newRate)
+
           $oldActive = "            return speech.IsSpeaking && positions.Any(position =>`r`n              position.State == TranscriptPlaybackState.Speaking &&`r`n              position.NodeId == context.NodeId);"
           $newActive = "            return speech.IsSpeaking && positions.Count(position =>`r`n              position.State == TranscriptPlaybackState.Speaking &&`r`n              string.Equals(`r`n                position.FragmentText,`r`n                context.Text,`r`n                StringComparison.Ordinal)) >= 4;"
           if (-not $generated26.Contains($oldActive)) {
