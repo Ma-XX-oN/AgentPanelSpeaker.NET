@@ -335,6 +335,8 @@ private static void TestLiveMonitorToggle()
   /// Speak User Context checkbox while one retained User Context fragment is
   /// actively speaking lets that now-ineligible utterance keep emitting word
   /// boundaries before playback advances to the next eligible User fragment.
+  /// The test waits for provider word-boundary advancement before toggling, so
+  /// it cannot mistake SpeechService's pre-render active state for real playback.
   /// The source is deliberately far too long to complete inside the transition
   /// timeout, so reaching the User destination proves cancellation rather than
   /// eventual natural completion.
@@ -407,8 +409,19 @@ private static void TestLiveMonitorToggle()
       Require(speech.TogglePause() == PauseToggleResult.Resumed,
         "Could not start the active User Context utterance.");
       Require(
-        SpinWait.SpinUntil(() => speech.IsSpeaking, TimeSpan.FromSeconds(3)),
-        "User Context never entered active speech.");
+        SpinWait.SpinUntil(
+          () =>
+          {
+            lock (positions)
+            {
+              return positions.Any(position =>
+                position.State == TranscriptPlaybackState.Speaking &&
+                position.NodeId == 9001 &&
+                position.WordIndex >= 2);
+            }
+          },
+          TimeSpan.FromSeconds(30)),
+        "User Context never emitted active provider word boundaries.");
 
       int transitionStart;
       lock (positions)
