@@ -848,7 +848,10 @@ internal static class Issue54RealSessionRegressionTestRunner
       // Remove only the browser-side retained projection. C# still owns the
       // authoritative current/last playback position. This makes the test prove
       // that the OFF->ON settings transition itself replays the cursor.
-      ExecuteVoidScript(webView, "resetRetainedPlayback();");
+      ExecuteVoidScript(
+        webView,
+        "resetRetainedPlayback(); retireCanonicalPlayback(false); " +
+        "requestedPlaybackWordId = 0;");
       int appliedBeforeEnable = exactPlaybackApplied;
 
       view.ApplySettings(followOn, dark: false);
@@ -1081,6 +1084,22 @@ internal static class Issue54RealSessionRegressionTestRunner
       new IntPtr(120L << 16),
       IntPtr.Zero);
     _ = form.PreFilterMessage(ref wheel);
+    // Restore the Follow setting so the test does not leave unsaved state, and
+    // unregister this synthetic form from the application message filter before
+    // disposal. The RED must come from missing diagnostics, not harness teardown.
+    Message restoreKeyDown = Message.Create(
+      form.Handle,
+      0x0100,
+      new IntPtr((int)Keys.Oemplus),
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref restoreKeyDown);
+    Message restoreKeyUp = Message.Create(
+      form.Handle,
+      0x0101,
+      new IntPtr((int)Keys.Oemplus),
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref restoreKeyUp);
+    Application.RemoveMessageFilter(form);
     PumpMessages(150);
 
     JsonElement[] events = File.ReadLines(logPath)
