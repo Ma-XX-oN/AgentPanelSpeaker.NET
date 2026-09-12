@@ -1,0 +1,83 @@
+name: Issue 75 playback word-id RED
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-playback-red.yml'
+      - 'tools/issue75-playback-wordid-red.py'
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply permanent playback RED
+        shell: pwsh
+        run: python tools/issue75-playback-wordid-red.py
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build RED
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact playback RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'issue75-playback-red.log'
+          $threw = $false
+          try {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration *> $log
+          }
+          catch {
+            $threw = $true
+          }
+          $text = Get-Content -Raw $log
+          Write-Host $text
+          if (-not $threw) {
+            throw 'Playback word-ID RED unexpectedly passed before production migration.'
+          }
+          $expected = @(
+            'FAIL  core-word-id/playback-highlights-exact-canonical-word-id',
+            'FAIL  core-word-id/off-window-playback-requests-canonical-word',
+            'FAIL  core-word-id/playback-host-retains-core-lookup-session'
+          )
+          foreach ($line in $expected) {
+            if (-not $text.Contains($line)) {
+              throw "Expected playback RED was missing: $line"
+            }
+          }
+          if (-not $text.Contains('FAIL: 3/15 issue #75 regressions failed.')) {
+            throw 'Issue #75 playback RED did not fail exactly 3 of 15 regressions.'
+          }
+
+      - name: Commit permanent playback RED
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
+          git diff --cached --check
+          git commit -m 'test: add Core word-ID playback regressions (#75)'
+          git push origin HEAD:issue-75-core-word-id-migration
