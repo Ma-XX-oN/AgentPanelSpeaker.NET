@@ -1,4 +1,4 @@
-# RED capture iteration: active gate, deterministic teardown, and non-natural completion fixture.
+# RED capture iteration: active gate, deterministic teardown, non-natural completion fixture, and explicit accepted-RED exit.
 name: Acceptance regression RED capture
 
 on:
@@ -125,6 +125,7 @@ jobs:
             'real-session/owned-editor-retains-bare-transport-keys',
             'real-session/webview-wheel-input-is-logged-and-correlated'
           )
+          exit 0
 
       - name: Commit and push verified RED regressions
         shell: pwsh
