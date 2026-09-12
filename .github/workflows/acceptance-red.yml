@@ -50,6 +50,8 @@ jobs:
 
           python .tmp/apply-acceptance-red.py
           if ($LASTEXITCODE -ne 0) { throw 'RED edit generator failed.' }
+          python .tmp/apply-webview-wheel-red.py
+          if ($LASTEXITCODE -ne 0) { throw 'WebView wheel RED generator failed.' }
 
           $generated = Get-Content $issue54 -Raw
           $malformed = "      using var dialog = new PronunciationDialog(`r`n      dialog = new PronunciationDialog(`r`n"
@@ -64,6 +66,34 @@ jobs:
 
           $issue26 = 'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs'
           $generated26 = Get-Content $issue26 -Raw
+          $oldContext = "      SpeechFragment context = history.First(fragment =>`r`n        fragment.Category == ContentCategory.UserContext);"
+          $newContext = "      SpeechFragment context = history`r`n        .Where(fragment => fragment.Category == ContentCategory.UserContext)`r`n        .OrderByDescending(fragment => fragment.Text.Length)`r`n        .First();`r`n      Require(`r`n        context.Text.Contains(`r`n          `"active user context payload`",`r`n          StringComparison.Ordinal),`r`n        `"Active-toggle fixture did not select its deliberately long User Context fragment.`");"
+          if (-not $generated26.Contains($oldContext)) {
+            throw 'Long User Context selection anchor did not match.'
+          }
+          $generated26 = $generated26.Replace($oldContext, $newContext)
+
+          $oldActive = "            return speech.IsSpeaking && positions.Any(position =>`r`n              position.State == TranscriptPlaybackState.Speaking &&`r`n              position.NodeId == context.NodeId);"
+          $newActive = "            return speech.IsSpeaking && positions.Count(position =>`r`n              position.State == TranscriptPlaybackState.Speaking &&`r`n              string.Equals(`r`n                position.FragmentText,`r`n                context.Text,`r`n                StringComparison.Ordinal)) >= 4;"
+          if (-not $generated26.Contains($oldActive)) {
+            throw 'Active User Context boundary anchor did not match.'
+          }
+          $generated26 = $generated26.Replace($oldActive, $newActive)
+
+          $oldUser = "              position.State == TranscriptPlaybackState.Speaking &&`r`n              position.NodeId == user.NodeId);"
+          $newUser = "              position.State == TranscriptPlaybackState.Speaking &&`r`n              string.Equals(`r`n                position.FragmentText,`r`n                user.Text,`r`n                StringComparison.Ordinal));"
+          if (-not $generated26.Contains($oldUser)) {
+            throw 'Next User fragment anchor did not match.'
+          }
+          $generated26 = $generated26.Replace($oldUser, $newUser)
+
+          $oldContinuation = "          position.State == TranscriptPlaybackState.Speaking &&`r`n          position.NodeId == context.NodeId),"
+          $newContinuation = "          position.State == TranscriptPlaybackState.Speaking &&`r`n          string.Equals(`r`n            position.FragmentText,`r`n            context.Text,`r`n            StringComparison.Ordinal)),"
+          if (-not $generated26.Contains($oldContinuation)) {
+            throw 'User Context continuation assertion anchor did not match.'
+          }
+          $generated26 = $generated26.Replace($oldContinuation, $newContinuation)
+
           $disposeLine = '      form.Dispose();'
           $disposeCount = ([regex]::Matches(
             $generated26,
@@ -131,7 +161,8 @@ jobs:
           )
           Assert-ExpectedRed 'real-session-fixes' @(
             'real-session/pending-manual-scroll-converges-after-replacement',
-            'real-session/owned-editor-retains-bare-transport-keys'
+            'real-session/owned-editor-retains-bare-transport-keys',
+            'real-session/webview-wheel-input-is-logged-and-correlated'
           )
 
       - name: Commit and push verified RED regressions
@@ -142,7 +173,7 @@ jobs:
           git add AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
           git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
           git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
-          git commit -m 'test: reproduce four real-machine acceptance regressions'
+          git commit -m 'test: reproduce real-machine acceptance regressions'
           $red = git rev-parse HEAD
           "Verified RED commit: $red" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           git push origin HEAD:acceptance-regressions-20260912
