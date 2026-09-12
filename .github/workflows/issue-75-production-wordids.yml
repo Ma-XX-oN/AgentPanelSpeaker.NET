@@ -1,0 +1,83 @@
+name: Issue 75 production word IDs
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-production-wordids.yml'
+      - 'tools/issue75-production-wordids.py'
+
+permissions:
+  contents: write
+
+jobs:
+  production:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply production word-ID propagation
+        shell: pwsh
+        run: python tools/issue75-production-wordids.py
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify issue 75 transition
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = (& $exe --test core-word-id-migration 2>&1 | Out-String)
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -ne 1) { throw "Expected remaining #75 RED exit 1, got $exitCode" }
+          if (-not $output.Contains('PASS  core-word-id/production-history-carries-core-word-ids')) {
+            throw 'Real production history word-ID regression did not turn GREEN.'
+          }
+          $remaining = @(
+            'FAIL  core-word-id/ctrl-click-posts-exact-canonical-word-id',
+            'FAIL  core-word-id/speech-seek-uses-only-canonical-word-id',
+            'FAIL  core-word-id/policy-is-centralized-without-per-word-eligibility-mutation'
+          )
+          foreach ($line in $remaining) {
+            if (-not $output.Contains($line)) { throw "Missing intended remaining RED: $line" }
+          }
+          if (-not $output.Contains('FAIL: 3/11 issue #75 regressions failed.')) {
+            throw 'Unexpected #75 focused failure count.'
+          }
+          exit 0
+
+      - name: Verify speech ordinal regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test speech-ordinals
+          if ($LASTEXITCODE -ne 0) { throw 'Speech ordinal regression failed.' }
+
+      - name: Commit verified production propagation
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/ExtractionOptions.cs AgentPanelSpeaker/CanonicalProjectionExtractor.cs AgentPanelSpeaker/JsonlSessionMonitor.cs
+          git diff --cached --check
+          git commit -m 'feat: propagate Core word IDs into production history (#75)'
+          git push origin HEAD:issue-75-core-word-id-migration
