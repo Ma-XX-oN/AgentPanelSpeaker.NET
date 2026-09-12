@@ -1,4 +1,4 @@
-name: Issue 75 pin Core structural speech prefix
+name: Issue 75 pin corrected Core word identity
 
 on:
   push:
@@ -31,10 +31,11 @@ jobs:
       - name: Pin verified Core head
         shell: pwsh
         run: |
-          git -C dependencies/AIConversationCore fetch origin 8646e2465a0570f5caa663a9109392078e964e45
-          git -C dependencies/AIConversationCore checkout --detach 8646e2465a0570f5caa663a9109392078e964e45
+          $expected = '169814bf407ac3b5c9f3757b724df10aeddef5de'
+          git -C dependencies/AIConversationCore fetch origin $expected
+          git -C dependencies/AIConversationCore checkout --detach $expected
           $actual = git -C dependencies/AIConversationCore rev-parse HEAD
-          if ($actual -ne '8646e2465a0570f5caa663a9109392078e964e45') {
+          if ($actual.Trim() -ne $expected) {
             throw "Unexpected Core head: $actual"
           }
 
@@ -42,7 +43,7 @@ jobs:
         shell: pwsh
         run: |
           $old = 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002'
-          $new = '8646e2465a0570f5caa663a9109392078e964e45'
+          $new = '169814bf407ac3b5c9f3757b724df10aeddef5de'
           $files = @(
             'AgentPanelSpeaker/AIConversationCoreClient.cs',
             'tools/AIConversationCore-worker.mjs',
@@ -63,9 +64,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Verify pinned Core structural-prefix regression
+      - name: Verify corrected Core ordinal word identity
         shell: pwsh
-        run: node --test dependencies/AIConversationCore/tests/canonical-word-speech-prefix.test.js
+        run: node --test dependencies/AIConversationCore/tests/canonical-list-ordinal-word-identity.test.js
 
       - name: Build AgentPanelSpeaker against pinned Core
         shell: pwsh
@@ -77,12 +78,12 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core
 
-      - name: Commit runtime Core guard alignment
+      - name: Commit complete Core pin
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT
+          git add dependencies/AIConversationCore AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
-          git commit -m 'build: align runtime Core pin (#75)'
+          git commit -m 'build: pin corrected Core ordinal identity (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
