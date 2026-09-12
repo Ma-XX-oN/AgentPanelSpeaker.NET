@@ -1,0 +1,115 @@
+name: Corrected acceptance RED verification
+
+on:
+  push:
+    branches:
+      - acceptance-regressions-20260912
+    paths:
+      - '.github/workflows/user-context-red-correction.yml'
+      - '.tmp/correct-user-context-boundary-red.py'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-red:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out RED branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Apply corrected RED gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .tmp/correct-user-context-boundary-red.py
+          if ($LASTEXITCODE -ne 0) { throw 'Corrected RED generator failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Corrected RED whitespace validation failed.' }
+          $changed = @(git diff --name-only)
+          $expected = @('AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs')
+          if (@(Compare-Object $changed $expected).Count -ne 0) {
+            throw "Unexpected corrected RED changed files: $($changed -join ', ')"
+          }
+
+      - name: Build unfixed production with corrected RED
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact corrected RED failures
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+
+          function Assert-ExpectedRed {
+            param(
+              [string]$Suite,
+              [string[]]$Expected
+            )
+
+            $output = & $exe --test $Suite 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+            Write-Host $output
+            if ($exitCode -eq 0) {
+              throw "Suite '$Suite' unexpectedly passed; RED was not reproduced."
+            }
+
+            $failures = @($output -split "`r?`n" | Where-Object { $_ -like 'FAIL  *' })
+            foreach ($name in $Expected) {
+              $line = "FAIL  $name"
+              if ($failures -notcontains $line) {
+                throw "Suite '$Suite' did not reproduce expected RED '$name'. Failures: $($failures -join '; ')"
+              }
+            }
+            if ($failures.Count -ne $Expected.Count) {
+              throw "Suite '$Suite' produced unexpected extra REDs: $($failures -join '; ')"
+            }
+          }
+
+          Assert-ExpectedRed 'user-context-speech' @(
+            'user-context-speech/active-checkbox-cancels-ineligible-utterance'
+          )
+          Assert-ExpectedRed 'core-word-id-migration' @(
+            'core-word-id/attached-identifier-period-preserves-one-speech-fragment',
+            'core-word-id/attached-identifier-period-synthesizes-dot'
+          )
+          Assert-ExpectedRed 'real-session-fixes' @(
+            'real-session/pending-manual-scroll-converges-after-replacement',
+            'real-session/owned-editor-retains-bare-transport-keys',
+            'real-session/webview-wheel-input-is-logged-and-correlated'
+          )
+          exit 0
+
+      - name: Commit corrected permanent RED
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
+          git commit -m 'test: gate active User Context RED on provider boundaries'
+          $red = git rev-parse HEAD
+          "Corrected verified RED commit: $red" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          git push origin HEAD:acceptance-regressions-20260912
+
+      - name: Mark corrected run as RED evidence
+        shell: pwsh
+        run: |
+          Write-Error 'Corrected expected RED regressions were reproduced and committed. This failure intentionally records RED evidence.'
