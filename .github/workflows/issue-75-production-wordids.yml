@@ -35,6 +35,18 @@ jobs:
       - name: Apply Core word-ID and centralized policy migration
         shell: pwsh
         run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE 'tools/issue75-central-voice-policy-tests.py'
+          $text = [IO.File]::ReadAllText($path)
+          $old = 're.subn(pattern, replacement, text, count=1, flags=re.S)'
+          $new = 're.subn(pattern, lambda _: replacement, text, count=1, flags=re.S)'
+          $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+          if ($count -ne 2) {
+            throw "Expected two literal-regex replacement sites, found $count"
+          }
+          [IO.File]::WriteAllText(
+            $path,
+            $text.Replace($old, $new),
+            [Text.UTF8Encoding]::new($false))
           python tools/issue75-word-id-boundary.py
           python tools/issue75-word-id-boundary-tests.py
           python tools/issue75-central-voice-policy.py
