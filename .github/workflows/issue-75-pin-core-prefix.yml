@@ -1,0 +1,61 @@
+name: Issue 75 pin Core structural speech prefix
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-pin-core-prefix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  pin:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Pin verified Core head
+        shell: pwsh
+        run: |
+          git -C dependencies/AIConversationCore fetch origin 8646e2465a0570f5caa663a9109392078e964e45
+          git -C dependencies/AIConversationCore checkout --detach 8646e2465a0570f5caa663a9109392078e964e45
+          $actual = git -C dependencies/AIConversationCore rev-parse HEAD
+          if ($actual -ne '8646e2465a0570f5caa663a9109392078e964e45') {
+            throw "Unexpected Core head: $actual"
+          }
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Verify pinned Core structural-prefix regression
+        shell: pwsh
+        run: node --test dependencies/AIConversationCore/tests/canonical-word-speech-prefix.test.js
+
+      - name: Build AgentPanelSpeaker against pinned Core
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Commit Core pin
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dependencies/AIConversationCore
+          git diff --cached --check
+          git commit -m 'build: pin Core structural speech-prefix contract (#75)'
+          git push origin HEAD:issue-75-core-word-id-migration
