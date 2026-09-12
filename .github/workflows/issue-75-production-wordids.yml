@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/issue-75-production-wordids.yml'
       - 'tools/issue75-word-id-boundary.py'
+      - 'tools/issue75-word-id-boundary-tests.py'
 
 permissions:
   contents: write
@@ -31,7 +32,9 @@ jobs:
 
       - name: Apply Core word-id interaction boundary
         shell: pwsh
-        run: python tools/issue75-word-id-boundary.py
+        run: |
+          python tools/issue75-word-id-boundary.py
+          python tools/issue75-word-id-boundary-tests.py
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -77,11 +80,23 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite speech-ordinals
 
+      - name: Verify User Context regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite user-context-speech
+
       - name: Verify Find origin regression
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite find-origin
+
+      - name: Verify independent oracle regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite independent-oracles
 
       - name: Verify Ctrl-click regression
         shell: pwsh
@@ -94,7 +109,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs
+          git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs
           git diff --cached --check
           git commit -m 'feat: use Core word IDs for transcript seeking (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
