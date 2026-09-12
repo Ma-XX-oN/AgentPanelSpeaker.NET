@@ -23,6 +23,7 @@ internal sealed record CanonicalSpeechWordProjection(
   [property: JsonPropertyName("id")] long Id,
   [property: JsonPropertyName("text")] string Text,
   [property: JsonPropertyName("separator_before")] string SeparatorBefore,
+  [property: JsonPropertyName("groups")] string[] Groups,
   [property: JsonPropertyName("provenance")]
     CanonicalSpeechWordProvenanceProjection? Provenance);
 

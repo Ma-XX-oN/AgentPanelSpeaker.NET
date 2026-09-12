@@ -53,7 +53,8 @@ internal sealed record SpeechFragment(
   int? RevisionDepth = null,
   bool ProjectionVisible = true,
   bool RevisionHistoryControlled = false,
-  bool HistoricalRevision = false);
+  bool HistoricalRevision = false,
+  IReadOnlyList<long>? WordIds = null);
 
 /// <summary>
 /// Identifies how existing history should begin playback.

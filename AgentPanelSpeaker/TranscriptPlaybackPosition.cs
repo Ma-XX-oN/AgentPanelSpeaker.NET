@@ -11,7 +11,8 @@ internal sealed record TranscriptPlaybackPosition(
   long NodeId,
   int CharacterPosition,
   int CharacterCount,
-  long BoundaryTimestamp);
+  long BoundaryTimestamp,
+  long? WordId = null);
 
 internal enum TranscriptPlaybackState
 {

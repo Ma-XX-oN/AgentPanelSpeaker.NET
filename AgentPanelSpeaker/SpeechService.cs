@@ -1091,8 +1091,74 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Moves the paused playback marker to one node-global lexical word when the
-  /// fragment containing that word is currently eligible for speech.
+  /// Moves the paused playback marker to one immutable Core transcript word ID
+  /// when its containing fragment is currently eligible for speech.
+  /// </summary>
+  public bool TrySeekToTranscriptWord(long wordId, out string text)
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (wordId < 1)
+      {
+        text = string.Empty;
+        return false;
+      }
+
+      for (int index = 0; index < _history.Count; ++index)
+      {
+        SpeechFragment fragment = _history[index];
+        IReadOnlyList<long>? wordIds = fragment.WordIds;
+        if (wordIds is null)
+        {
+          continue;
+        }
+        int localWordIndex = -1;
+        for (int candidate = 0; candidate < wordIds.Count; ++candidate)
+        {
+          if (wordIds[candidate] == wordId)
+          {
+            localWordIndex = candidate;
+            break;
+          }
+        }
+        if (localWordIndex < 0)
+        {
+          continue;
+        }
+        if (!TryGetEligibleProfileLocked(fragment, out _, out _))
+        {
+          text = string.Empty;
+          return false;
+        }
+
+        bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;
+        _pendingUntracked = null;
+        ClearProcessingTimeAnnouncementLocked();
+        _pendingHistoryIndex = index;
+        _pendingHistoryWordIndex = localWordIndex;
+        _nextHistoryIndex = index;
+        _lastFenceActivity = null;
+        SetPausedLocked(true);
+        SetPausedNavigationPositionLocked(index, localWordIndex);
+        if (hadActiveSpeech)
+        {
+          RequestPauseRestoreAfterCancellationLocked(
+            "seek-canonical-transcript-word");
+          _engine.Cancel();
+        }
+        text = fragment.Text;
+        return true;
+      }
+
+      text = string.Empty;
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Legacy node/ordinal seek retained only until issue #76 removes the old
+  /// browser mapping path. New transcript interaction must use Core word IDs.
   /// </summary>
   public bool TrySeekToTranscriptWord(
     long nodeId,
@@ -2208,7 +2274,25 @@ internal sealed class SpeechService : IDisposable
       nodeId,
       _activeCharacterPosition,
       _activeCharacterCount,
-      _activeBoundaryTimestamp));
+      _activeBoundaryTimestamp,
+      GetActiveWordIdLocked()));
+  }
+
+  /// <summary>
+  /// Resolves the current speech token index to its immutable Core word ID.
+  /// App-synthesized narration intentionally has no transcript word identity.
+  /// </summary>
+  private long? GetActiveWordIdLocked()
+  {
+    if (_activeHistoryIndex < 0 || _activeHistoryIndex >= _history.Count)
+    {
+      return null;
+    }
+    IReadOnlyList<long>? wordIds = _history[_activeHistoryIndex].WordIds;
+    return wordIds is not null &&
+      _activeWordIndex >= 0 && _activeWordIndex < wordIds.Count
+        ? wordIds[_activeWordIndex]
+        : null;
   }
 
 
