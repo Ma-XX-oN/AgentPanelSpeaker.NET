@@ -6,7 +6,7 @@ on:
       - issue-75-core-word-id-migration
     paths:
       - '.github/workflows/issue-75-playback-red.yml'
-      - 'tools/issue75-playback-wordid-red.py'
+      - 'tools/issue75-playback-red-harness.py'
 
 permissions:
   contents: write
@@ -29,9 +29,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Apply permanent playback RED
+      - name: Apply WinForms RED harness
         shell: pwsh
-        run: python tools/issue75-playback-wordid-red.py
+        run: python tools/issue75-playback-red-harness.py
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -71,13 +71,16 @@ jobs:
           if (-not $text.Contains('FAIL: 3/15 issue #75 regressions failed.')) {
             throw 'Issue #75 playback RED did not fail exactly 3 of 15 regressions.'
           }
+          if ($text.Contains('CoreWebView2Controller members can only be accessed from the UI thread')) {
+            throw 'Playback RED is still failing on WebView2 harness thread affinity.'
+          }
 
-      - name: Commit permanent playback RED
+      - name: Commit corrected permanent RED harness
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
+          git add AgentPanelSpeaker/Program.cs
           git diff --cached --check
-          git commit -m 'test: add Core word-ID playback regressions (#75)'
+          git commit -m 'test: run Core word-ID playback regressions on UI loop (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
