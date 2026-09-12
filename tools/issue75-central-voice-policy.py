@@ -134,6 +134,13 @@ function markAlignedVoiceSelectableWords() {}
 
 function lexicalWordsCanJoin''')
 
+# The original aligned mapping helper is declared later than lexicalWordsCanJoin;
+# remove that second declaration so it cannot reintroduce eligibility classes.
+replace_regex(
+  'AgentPanelSpeaker/TranscriptView.cs',
+  r'''function markAlignedVoiceSelectableWords\(.*?\n\}\n\nfunction assignNodeScopes''',
+  '''function assignNodeScopes''')
+
 # Every materialization refreshes one centralized stylesheet rule after the
 # legacy playback scope install, rather than mutating each word's policy class.
 replace_once(
