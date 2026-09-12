@@ -1,4 +1,4 @@
-# RED capture iteration: active gate and deterministic MainForm teardown.
+# RED capture iteration: active gate, deterministic teardown, and non-natural completion fixture.
 name: Acceptance regression RED capture
 
 on:
