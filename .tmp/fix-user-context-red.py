@@ -138,4 +138,17 @@ method = r'''  /// <summary>
 
 '''
 
-path.write_text(text[:summary] + method + text[end:], encoding="utf-8")
+text = text[:summary] + method + text[end:]
+old_live_cleanup = '''      GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
+        "issue26-regression-cleanup");
+      form.Dispose();
+'''
+new_live_cleanup = '''      GetField<JsonlSessionMonitor>(form, "_monitor").Stop(
+        "issue26-regression-cleanup");
+      Application.RemoveMessageFilter(form);
+      form.Dispose();
+'''
+if text.count(old_live_cleanup) != 1:
+  raise RuntimeError("Live User Context cleanup anchor did not match exactly.")
+text = text.replace(old_live_cleanup, new_live_cleanup, 1)
+path.write_text(text, encoding="utf-8")
