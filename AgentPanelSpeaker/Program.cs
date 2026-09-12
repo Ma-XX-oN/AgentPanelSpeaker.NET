@@ -244,6 +244,18 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "legacy-word-mapping-debt",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "legacy-word-mapping-debt",
+          Issue76LegacyWordMappingDebtRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -291,6 +303,8 @@ internal static class Program
         "ctrl-click-voice-pointer");
       int coreWordIdMigration = RunIsolatedTestSuite(
         "core-word-id-migration");
+      int legacyWordMappingDebt = RunIsolatedTestSuite(
+        "legacy-word-mapping-debt");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -313,7 +327,8 @@ internal static class Program
                              redundancy == 0 &&
                              findOrigin == 0 &&
                              ctrlClickVoicePointer == 0 &&
-                             coreWordIdMigration == 0
+                             coreWordIdMigration == 0 &&
+                             legacyWordMappingDebt == 0
         ? 0
         : 1;
       Console.WriteLine(
