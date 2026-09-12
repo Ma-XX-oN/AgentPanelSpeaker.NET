@@ -1,0 +1,121 @@
+name: Issue46 active User Context RED verification
+
+on:
+  push:
+    branches:
+      - acceptance-regressions-20260912
+    paths:
+      - '.github/workflows/issue46-active-user-context-red.yml'
+      - '.tmp/apply-issue46-active-user-context-red.py'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-red:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out RED branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Apply corrected permanent RED set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .tmp/apply-issue46-active-user-context-red.py
+          if ($LASTEXITCODE -ne 0) { throw 'Issue46 RED generator failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Issue46 RED whitespace validation failed.' }
+          $changed = @(git diff --name-only)
+          $expected = @(
+            'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs',
+            'AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs'
+          )
+          if (@(Compare-Object $changed $expected).Count -ne 0) {
+            throw "Unexpected corrected RED changed files: $($changed -join ', ')"
+          }
+
+      - name: Build unfixed production with corrected REDs
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact six RED failures
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+
+          function Run-ExpectedRed {
+            param(
+              [string]$Suite,
+              [string[]]$Expected,
+              [string]$ExpectedMessage = ''
+            )
+            $output = & $exe --test $Suite 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+            Write-Host $output
+            if ($exitCode -eq 0) {
+              throw "Suite '$Suite' unexpectedly passed; RED was not reproduced."
+            }
+            $failures = @($output -split "`r?`n" | Where-Object { $_ -like 'FAIL  *' })
+            foreach ($name in $Expected) {
+              $line = "FAIL  $name"
+              if ($failures -notcontains $line) {
+                throw "Suite '$Suite' did not reproduce expected RED '$name'. Failures: $($failures -join '; ')"
+              }
+            }
+            if ($failures.Count -ne $Expected.Count) {
+              throw "Suite '$Suite' produced unexpected extra REDs: $($failures -join '; ')"
+            }
+            if ($ExpectedMessage.Length -ne 0 -and -not $output.Contains($ExpectedMessage)) {
+              throw "Suite '$Suite' failed for the wrong reason; expected message was absent."
+            }
+          }
+
+          Run-ExpectedRed 'independent-oracles' @(
+            'independent-oracle/issue26-active-toggle-cancels-playback'
+          ) 'Disabling the actual Speak User/IDE context checkbox did not cancel the active ineligible User Context and advance playback to the User prompt.'
+
+          Run-ExpectedRed 'core-word-id-migration' @(
+            'core-word-id/attached-identifier-period-preserves-one-speech-fragment',
+            'core-word-id/attached-identifier-period-synthesizes-dot'
+          )
+
+          Run-ExpectedRed 'real-session-fixes' @(
+            'real-session/pending-manual-scroll-converges-after-replacement',
+            'real-session/owned-editor-retains-bare-transport-keys',
+            'real-session/webview-wheel-input-is-logged-and-correlated'
+          )
+
+      - name: Commit corrected permanent REDs
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
+          git commit -m 'test: reproduce active User Context cancellation via real checkbox'
+          $red = git rev-parse HEAD
+          "Corrected permanent RED commit: $red" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          git push origin HEAD:acceptance-regressions-20260912
+
+      - name: Mark run as RED evidence
+        shell: pwsh
+        run: |
+          Write-Error 'All six expected RED regressions were reproduced and the corrected permanent RED set was committed. This failure intentionally records RED evidence.'
