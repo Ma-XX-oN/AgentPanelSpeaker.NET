@@ -20,7 +20,7 @@ if start < 0:
 settle_anchor = '''      WaitForTranscriptRender(view);\n      WebView2 webView = ReadField<WebView2>(view, "_webView");\n'''
 settle_replacement = '''      WaitForTranscriptRender(view);\n      // Let the host's debounced settings post settle before manipulating only\n      // browser-side Follow state. Otherwise a pending C# settings message can\n      // overwrite the state under test after the synthetic scroll gesture.\n      PumpMessages(500);\n      WebView2 webView = ReadField<WebView2>(view, "_webView");\n'''
 segment = text[start:]
-if 'Let the host\'s debounced settings post settle' not in segment:
+if "Let the host's debounced settings post settle" not in segment:
   relative = segment.find(settle_anchor)
   if relative < 0:
     raise SystemExit('Issue #78 settings-settle anchor was not found.')
@@ -59,3 +59,9 @@ elif 'Application.RemoveMessageFilter(form);' not in text:
   raise SystemExit('Issue #77 cleanup anchor was not found.')
 
 path.write_text(text, encoding='utf-8')
+
+# Apply the final causal-isolation probes after the earlier fixture repairs have
+# been written. Keeping them in a separate script makes each correction explicit
+# while this entry point remains what the test-first workflow invokes.
+stabilizer = Path('scripts/stabilize-acceptance-regressions.py')
+exec(compile(stabilizer.read_text(encoding='utf-8-sig'), str(stabilizer), 'exec'))
