@@ -1,3 +1,4 @@
+# RED capture iteration: active gate aligned with the existing issue #35 test.
 name: Acceptance regression RED capture
 
 on:
