@@ -1,0 +1,98 @@
+name: Issue 75 canonical word-ID RED
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-red.yml'
+      - 'AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs'
+      - 'AgentPanelSpeaker/Program.cs'
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Wire permanent issue 75 focused suite
+        shell: pwsh
+        run: |
+          $path = 'AgentPanelSpeaker/Program.cs'
+          $text = [IO.File]::ReadAllText($path)
+          if (-not $text.Contains('"core-word-id-migration"')) {
+            $needle = @'
+      if (args.Length == 2 &&
+          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "redundancy",
+          Issue65RedundancyRegressionTestRunner.Run);
+        return;
+      }
+'@
+            $replacement = @'
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "core-word-id-migration",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "core-word-id-migration",
+          Issue75CoreWordIdMigrationRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "redundancy",
+          Issue65RedundancyRegressionTestRunner.Run);
+        return;
+      }
+'@
+            if (-not $text.Contains($needle)) {
+              throw 'Program.cs issue #75 insertion point was not found.'
+            }
+            [IO.File]::WriteAllText(
+              $path,
+              $text.Replace($needle, $replacement),
+              [Text.UTF8Encoding]::new($false))
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add $path
+            git diff --cached --check
+            git commit -m 'test: wire issue 75 Core word-ID regression suite'
+            git push origin HEAD:issue-75-core-word-id-migration
+          }
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run issue 75 RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration
