@@ -52,6 +52,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'RED edit generator failed.' }
           python .tmp/apply-webview-wheel-red.py
           if ($LASTEXITCODE -ne 0) { throw 'WebView wheel RED generator failed.' }
+          python .tmp/fix-user-context-red.py
+          if ($LASTEXITCODE -ne 0) { throw 'User Context RED generator failed.' }
 
           $generated = Get-Content $issue54 -Raw
           $malformed = "      using var dialog = new PronunciationDialog(`r`n      dialog = new PronunciationDialog(`r`n"
@@ -66,51 +68,29 @@ jobs:
 
           $issue26 = 'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs'
           $generated26 = Get-Content $issue26 -Raw
-          $oldContext = "      SpeechFragment context = history.First(fragment =>`r`n        fragment.Category == ContentCategory.UserContext);"
-          $newContext = "      SpeechFragment context = history`r`n        .Where(fragment => fragment.Category == ContentCategory.UserContext)`r`n        .OrderByDescending(fragment => fragment.Text.Length)`r`n        .First();`r`n      Require(`r`n        context.Text.Contains(`r`n          `"active user context payload`",`r`n          StringComparison.Ordinal),`r`n        `"Active-toggle fixture did not select its deliberately long User Context fragment.`");"
-          if (-not $generated26.Contains($oldContext)) {
-            throw 'Long User Context selection anchor did not match.'
-          }
-          $generated26 = $generated26.Replace($oldContext, $newContext)
-
-          $oldRate = '      var slowProfile = new SpeechProfileSettings(voice.Name, -10, 0)'
-          $newRate = '      var slowProfile = new SpeechProfileSettings(voice.Name, 0, 0)'
-          if (-not $generated26.Contains($oldRate)) {
-            throw 'Active User Context speech-rate anchor did not match.'
-          }
-          $generated26 = $generated26.Replace($oldRate, $newRate)
-
-          $oldActive = "            return speech.IsSpeaking && positions.Any(position =>`r`n              position.State == TranscriptPlaybackState.Speaking &&`r`n              position.NodeId == context.NodeId);"
-          $newActive = "            return speech.IsSpeaking && positions.Count(position =>`r`n              position.State == TranscriptPlaybackState.Speaking &&`r`n              string.Equals(`r`n                position.FragmentText,`r`n                context.Text,`r`n                StringComparison.Ordinal)) >= 4;"
-          if (-not $generated26.Contains($oldActive)) {
-            throw 'Active User Context boundary anchor did not match.'
-          }
-          $generated26 = $generated26.Replace($oldActive, $newActive)
-
-          $oldUser = "              position.State == TranscriptPlaybackState.Speaking &&`r`n              position.NodeId == user.NodeId);"
-          $newUser = "              position.State == TranscriptPlaybackState.Speaking &&`r`n              string.Equals(`r`n                position.FragmentText,`r`n                user.Text,`r`n                StringComparison.Ordinal));"
-          if (-not $generated26.Contains($oldUser)) {
-            throw 'Next User fragment anchor did not match.'
-          }
-          $generated26 = $generated26.Replace($oldUser, $newUser)
-
-          $oldContinuation = "          position.State == TranscriptPlaybackState.Speaking &&`r`n          position.NodeId == context.NodeId),"
-          $newContinuation = "          position.State == TranscriptPlaybackState.Speaking &&`r`n          string.Equals(`r`n            position.FragmentText,`r`n            context.Text,`r`n            StringComparison.Ordinal)),"
-          if (-not $generated26.Contains($oldContinuation)) {
-            throw 'User Context continuation assertion anchor did not match.'
-          }
-          $generated26 = $generated26.Replace($oldContinuation, $newContinuation)
-
-          $disposeLine = '      form.Dispose();'
-          $disposeCount = ([regex]::Matches(
+          $liveCleanup = "      form.Dispose();"
+          $liveCleanupCount = ([regex]::Matches(
             $generated26,
-            [regex]::Escape($disposeLine))).Count
-          if ($disposeCount -ne 2) {
-            throw "Expected two MainForm cleanup sites, found $disposeCount."
+            [regex]::Escape($liveCleanup))).Count
+          if ($liveCleanupCount -ne 2) {
+            throw "Expected active and live-monitor MainForm cleanup sites, found $liveCleanupCount."
           }
-          $generated26 = $generated26.Replace(
-            $disposeLine,
-            "      Application.RemoveMessageFilter(form);`r`n$disposeLine")
+          $activeCleanup = "      Application.RemoveMessageFilter(form);`r`n      form.Dispose();"
+          if (-not $generated26.Contains($activeCleanup)) {
+            throw 'Active User Context cleanup was not generated correctly.'
+          }
+          $remainingDispose = $generated26.IndexOf(
+            $liveCleanup,
+            $generated26.IndexOf($activeCleanup) + $activeCleanup.Length)
+          if ($remainingDispose -lt 0) {
+            $remainingDispose = $generated26.IndexOf($liveCleanup)
+          }
+          if ($remainingDispose -ge 0) {
+            $generated26 = $generated26.Remove($remainingDispose, $liveCleanup.Length)
+            $generated26 = $generated26.Insert(
+              $remainingDispose,
+              "      Application.RemoveMessageFilter(form);`r`n      form.Dispose();")
+          }
           Set-Content $issue26 $generated26 -NoNewline
 
           git diff --check
