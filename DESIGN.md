@@ -12,7 +12,7 @@ The canonical provenance chain is:
 
 AgentPanelSpeaker continues to own application policy: session discovery and follow-latest selection, live file tailing, duplicate suppression, speech segmentation and role/fenced-code policy, SAPI timing/playback, WebView2 virtualization, Find/navigation, and highlight behaviour.
 
-The bridge is intentionally pinned to AIConversationCore commit `169814bf407ac3b5c9f3757b724df10aeddef5de`; the C# client, Node worker, bundled runtime, and integration workflow reject a mismatched core revision.
+The bridge is intentionally pinned to AIConversationCore commit `76042b398c2f50ff2b146f86e98e3d43881ba216`; the C# client, Node worker, bundled runtime, and integration workflow reject a mismatched core revision.
 
 ## Canonical transcript word identity
 
