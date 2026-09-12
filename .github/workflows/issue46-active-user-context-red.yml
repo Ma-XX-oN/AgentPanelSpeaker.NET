@@ -46,7 +46,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Issue46 RED whitespace validation failed.' }
           $changed = @(git diff --name-only)
           $expected = @(
-            'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs',
             'AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs'
           )
           if (@(Compare-Object $changed $expected).Count -ne 0) {
@@ -109,7 +108,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
+          git add AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
           git commit -m 'test: reproduce active User Context cancellation via real checkbox'
           $red = git rev-parse HEAD
           "Corrected permanent RED commit: $red" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
