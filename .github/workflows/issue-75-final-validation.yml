@@ -172,4 +172,4 @@ jobs:
           git diff --check FETCH_HEAD HEAD
           if ((git status --porcelain).Length -ne 0) { throw 'Validation left the working tree dirty.' }
 
-# retrigger after correcting stale raw-HTML assertions
+# retrigger after verified stale-assertion cleanup
