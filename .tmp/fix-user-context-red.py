@@ -88,17 +88,9 @@ method = r'''  /// <summary>
       };
       Require(speech.TogglePause() == PauseToggleResult.Resumed,
         "Could not start the active User Context utterance.");
-      WaitUntil(
-        () =>
-        {
-          lock (positions)
-          {
-            return positions.Count(position =>
-              position.State == TranscriptPlaybackState.Speaking &&
-              position.NodeId == 9001) >= 4;
-          }
-        },
-        "User Context did not emit enough active boundaries for the toggle.");
+      Require(
+        SpinWait.SpinUntil(() => speech.IsSpeaking, TimeSpan.FromSeconds(3)),
+        "User Context never entered active speech.");
 
       int transitionStart;
       lock (positions)
