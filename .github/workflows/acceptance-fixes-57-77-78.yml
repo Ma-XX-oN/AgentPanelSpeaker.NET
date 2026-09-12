@@ -1,0 +1,167 @@
+name: Acceptance fixes 57 77 78
+
+on:
+  push:
+    branches:
+      - acceptance-fixes-57-77-78
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repair branch and Core submodule
+        uses: actions/checkout@v4
+        with:
+          ref: acceptance-fixes-57-77-78
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply permanent RED regressions
+        shell: pwsh
+        run: |
+          python scripts/apply-acceptance-fixes-57-77-78.py --phase test
+          git diff --check
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
+          if (-not (git diff --cached --quiet)) {
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: reproduce acceptance Follow and input regressions (#57 #77 #78)'
+            git push origin HEAD:acceptance-fixes-57-77-78
+          }
+
+      - name: Build RED test commit
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove exact regressions RED before production changes
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = & $exe --test real-session-fixes 2>&1 | Out-String
+          $exit = $LASTEXITCODE
+          $output | Write-Host
+          $required = @(
+            'FAIL  real-session/follow-enable-reattaches-retained-core-word',
+            'FAIL  real-session/programmatic-scroll-does-not-disable-follow',
+            'FAIL  real-session/follow-opens-canonical-disclosure-only-when-enabled',
+            'FAIL  real-session/input-diagnostics-capture-key-mouse-and-follow-state'
+          )
+          foreach ($needle in $required) {
+            if (-not $output.Contains($needle)) {
+              throw "Expected permanent RED was not observed: $needle"
+            }
+          }
+          if ($exit -eq 0) {
+            throw 'RED gate unexpectedly returned success.'
+          }
+
+      - name: Apply production fixes and diagnostic contract
+        shell: pwsh
+        run: |
+          python scripts/apply-acceptance-fixes-57-77-78.py --phase production
+          git diff --check
+
+      - name: Build production repair
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: GREEN exact real-session regressions
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test real-session-fixes
+          if ($LASTEXITCODE -ne 0) { throw 'Real-session regression suite failed.' }
+
+      - name: GREEN focused interaction and virtualization suites
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $suites = @(
+            'core-word-id-migration',
+            'ctrl-click-voice-pointer',
+            'virtual-window',
+            'word-materialization',
+            'find-origin'
+          )
+          foreach ($suite in $suites) {
+            & $exe --test $suite
+            if ($LASTEXITCODE -ne 0) { throw "Focused suite failed: $suite" }
+          }
+
+      - name: Commit focused-GREEN production repair
+        shell: pwsh
+        run: |
+          git add AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/InputDiagnosticTracker.cs README.md
+          git diff --check --cached
+          if (-not (git diff --cached --quiet)) {
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: restore Follow contract and correlate physical input (#57 #77 #78)'
+            git push origin HEAD:acceptance-fixes-57-77-78
+          }
+
+      - name: Verify pinned Core revision
+        shell: pwsh
+        run: |
+          $expected = '76042b398c2f50ff2b146f86e98e3d43881ba216'
+          $actual = git -C dependencies/AIConversationCore rev-parse HEAD
+          if ($actual.Trim() -ne $expected) {
+            throw "Unexpected AIConversationCore submodule revision: $actual"
+          }
+
+      - name: Install and test pinned Core
+        shell: pwsh
+        run: |
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          npm test --prefix dependencies/AIConversationCore
+          if ($LASTEXITCODE -ne 0) { throw 'AIConversationCore regression suite failed.' }
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          if ($LASTEXITCODE -ne 0) { throw 'Phase 2 baseline validation failed.' }
+
+      - name: Verify full built AgentPanelSpeaker suite
+        shell: pwsh
+        run: |
+          & tools/Invoke-TestSuite.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'Test-suite completion guard failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          if ($LASTEXITCODE -ne 0) { throw 'Full built AgentPanelSpeaker suite failed.' }
+
+      - name: Publish and verify deployed application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          if ($LASTEXITCODE -ne 0) { throw 'Full published AgentPanelSpeaker suite failed.' }
+
+      - name: Build and run display parity validation
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Display parity harness build failed.' }
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+          if ($LASTEXITCODE -ne 0) { throw 'Display parity validation failed.' }
+
+      - name: Validate final patch integrity
+        shell: pwsh
+        run: |
+          git fetch origin issue-75-core-word-id-migration --depth=1
+          git diff --check FETCH_HEAD HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Whitespace/patch integrity failed.' }
+          git status --short
