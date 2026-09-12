@@ -49,6 +49,7 @@ internal sealed class TranscriptView : UserControl
   private long _playbackMessageSequence;
   private TranscriptSearchIndex? _searchIndex;
   private TranscriptVirtualDocument? _virtualDocument;
+  private string? _coreSessionId;
   private IReadOnlyList<TranscriptNodeIdentity> _identities =
     Array.Empty<TranscriptNodeIdentity>();
   private int _windowStartIndex = -1;
@@ -239,6 +240,7 @@ internal sealed class TranscriptView : UserControl
     _lastLength = -1;
     _renderGeneration++;
     CancelActiveRender();
+    ReleaseCoreSession();
     ShowLoading(GetLoadingText());
     QueueRefresh(force: true);
   }
@@ -264,6 +266,7 @@ internal sealed class TranscriptView : UserControl
     _lastLength = -1;
     _renderGeneration++;
     CancelActiveRender();
+    ReleaseCoreSession();
     _refreshTimer.Stop();
     ShowLoading("Select a session to view its transcript.");
     if (_initialized)
@@ -306,14 +309,17 @@ internal sealed class TranscriptView : UserControl
 
   /// <summary>
   /// Updates the filled or paused transcript marker through a low-latency,
-  /// one-way WebView message.
+  /// one-way WebView message. Core-backed transcript positions cross this
+  /// boundary only as immutable Core word IDs.
   /// </summary>
   public void ShowPlaybackPosition(TranscriptPlaybackPosition position)
   {
     _pendingPosition = position;
-    if (position.NodeId > 0 &&
-        (position.State is TranscriptPlaybackState.Speaking or
-          TranscriptPlaybackState.Paused))
+    bool contentPosition =
+      position.State is TranscriptPlaybackState.Speaking or
+        TranscriptPlaybackState.Paused;
+    if (contentPosition &&
+        (position.WordId is > 0 || position.NodeId > 0))
     {
       _lastLocatedContentPosition = position;
     }
@@ -322,6 +328,17 @@ internal sealed class TranscriptView : UserControl
       return;
     }
 
+    // A Core-backed word is resolved directly by the WebView when materialized.
+    // If absent, the WebView requests window-for-word and the host asks Core for
+    // the containing unit. Never fall back to NodeId/text for this path.
+    if (position.WordId is > 0)
+    {
+      PostPlaybackPosition(position);
+      return;
+    }
+
+    // Non-canonical synthesized narration retains the pre-migration node path
+    // until issue #76 completes its separate impact analysis.
     TranscriptNodeIdentity? identity = _identities.FirstOrDefault(
       item => item.NodeId == position.NodeId);
     if (_settings.FollowSpeech && identity is not null &&
@@ -401,6 +418,7 @@ internal sealed class TranscriptView : UserControl
       position.CharacterPosition,
       position.CharacterCount,
       position.BoundaryTimestamp,
+      position.WordId,
       postedTimestamp = Stopwatch.GetTimestamp()
     });
     PostMessage(new
@@ -412,6 +430,7 @@ internal sealed class TranscriptView : UserControl
       wordIndex = position.WordIndex,
       wordText = position.Word,
       nodeId = position.NodeId,
+      wordId = position.WordId,
       characterPosition = position.CharacterPosition,
       characterCount = position.CharacterCount,
       boundaryTimestamp = position.BoundaryTimestamp,
@@ -513,6 +532,7 @@ internal sealed class TranscriptView : UserControl
       _renderGeneration++;
       CancelActiveRender();
       CancelSearchIndexBuild();
+      ReleaseCoreSession();
       _refreshTimer.Stop();
       _refreshTimer.Dispose();
       _settingsApplyTimer.Stop();
@@ -678,6 +698,8 @@ internal sealed class TranscriptView : UserControl
     });
     var renderTimer = Stopwatch.StartNew();
     string structureProbeId = $"{generation}:{Guid.NewGuid():N}";
+    string? preparedCoreSessionId = null;
+    bool coreSessionAdopted = false;
 
     try
     {
@@ -706,26 +728,37 @@ internal sealed class TranscriptView : UserControl
             source,
             _pipeline,
             token));
-        token.ThrowIfCancellationRequested();
-        string html = presentation.Html;
-        TranscriptStructureSnapshot rendererStructure =
-          TranscriptStructureProbe.CaptureHtml(
-            structureProbeId,
-            "dom-model-html",
-            html);
-        TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
-          presentation.Units);
-        document.SetShowRolledBackHistory(
-          _settings.ShowRolledBackHistory);
-        document.SetLayoutGeneration(_layoutGeneration);
-        return new TranscriptRenderPayload(
-          document,
-          identities,
-          html,
-          rendererStructure,
-          presentation.Nodes);
+        try
+        {
+          token.ThrowIfCancellationRequested();
+          string html = presentation.Html;
+          TranscriptStructureSnapshot rendererStructure =
+            TranscriptStructureProbe.CaptureHtml(
+              structureProbeId,
+              "dom-model-html",
+              html);
+          TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
+            presentation.Units);
+          document.SetShowRolledBackHistory(
+            _settings.ShowRolledBackHistory);
+          document.SetLayoutGeneration(_layoutGeneration);
+          return new TranscriptRenderPayload(
+            document,
+            identities,
+            html,
+            rendererStructure,
+            presentation.Nodes,
+            presentation.CoreSessionId);
+        }
+        catch
+        {
+          TranscriptPresentationDomFormatter.CloseRetainedSession(
+            presentation.CoreSessionId);
+          throw;
+        }
       }, token);
 
+      preparedCoreSessionId = payload.CoreSessionId;
       long preparationMilliseconds = renderTimer.ElapsedMilliseconds;
       cancellation.Token.ThrowIfCancellationRequested();
       if (generation != _renderGeneration ||
@@ -734,6 +767,8 @@ internal sealed class TranscriptView : UserControl
         return;
       }
 
+      ReplaceCoreSession(preparedCoreSessionId);
+      coreSessionAdopted = true;
       _virtualDocument = payload.Document;
       _identities = payload.Identities;
       int focalIndex = ResolveInitialWindowIndex(payload.Document, payload.Identities);
@@ -788,6 +823,7 @@ internal sealed class TranscriptView : UserControl
       int latestIndex = -1;
       if (_settings.FollowSpeech &&
           _pendingPosition is TranscriptPlaybackPosition latestPosition &&
+          latestPosition.WordId is null &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
@@ -798,6 +834,7 @@ internal sealed class TranscriptView : UserControl
       }
       else if (_settings.FollowSpeech &&
           _lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+          located.WordId is null &&
           TryResolvePositionIndex(
             payload.Document,
             payload.Identities,
@@ -859,11 +896,12 @@ internal sealed class TranscriptView : UserControl
       _restoredFromSettings = false;
       QueueSettingsApply(immediate: true);
       if (_lastLocatedContentPosition is TranscriptPlaybackPosition locatedPosition &&
-          TryResolvePositionIndex(
-            payload.Document,
-            payload.Identities,
-            locatedPosition,
-            out _))
+          (locatedPosition.WordId is > 0 ||
+           TryResolvePositionIndex(
+             payload.Document,
+             payload.Identities,
+             locatedPosition,
+             out _)))
       {
         PostPlaybackPosition(locatedPosition);
       }
@@ -902,6 +940,11 @@ internal sealed class TranscriptView : UserControl
     }
     finally
     {
+      if (!coreSessionAdopted)
+      {
+        TranscriptPresentationDomFormatter.CloseRetainedSession(
+          preparedCoreSessionId);
+      }
       if (ReferenceEquals(_renderCancellation, cancellation))
       {
         _renderCancellation = null;
@@ -1327,6 +1370,15 @@ internal sealed class TranscriptView : UserControl
             ReadOptionalString(root, "reason"),
             ReadOptionalInt32(root, "matchIndex"),
             navigationGeneration);
+        }
+        return;
+      }
+      if (type == "window-for-word")
+      {
+        long? wordId = ReadOptionalInt64(root, "wordId");
+        if (wordId is > 0)
+        {
+          _ = RenderWindowForWordAsync(wordId.Value, "playback-word");
         }
         return;
       }
@@ -1950,7 +2002,8 @@ internal sealed class TranscriptView : UserControl
     IReadOnlyList<TranscriptNodeIdentity> Identities,
     string SearchHtml,
     TranscriptStructureSnapshot RendererStructure,
-    IReadOnlyList<TranscriptDomNode> DomNodes);
+    IReadOnlyList<TranscriptDomNode> DomNodes,
+    string? CoreSessionId);
 
 
   private double GetVirtualViewportHeight()
@@ -2432,6 +2485,99 @@ internal sealed class TranscriptView : UserControl
     }
   }
 
+  /// <summary>
+  /// Materializes the Core-owned virtual unit containing one off-window
+  /// transcript word. Core is the only word-to-unit resolver.
+  /// </summary>
+  private async Task RenderWindowForWordAsync(long wordId, string reason)
+  {
+    if (wordId < 1 ||
+        _virtualDocument is not TranscriptVirtualDocument document ||
+        string.IsNullOrWhiteSpace(_coreSessionId))
+    {
+      return;
+    }
+
+    string sessionId = _coreSessionId;
+    AIConversationCoreWordLocation? location;
+    try
+    {
+      location = await Task.Run(() =>
+        TranscriptPresentationDomFormatter.LocateRetainedWord(
+          sessionId,
+          wordId));
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or ArgumentException)
+    {
+      DiagnosticLog.Write("transcript.playback_word_lookup_failed", new
+      {
+        wordId,
+        reason,
+        exception = exception.ToString()
+      });
+      return;
+    }
+
+    if (!ReferenceEquals(document, _virtualDocument) ||
+        !string.Equals(sessionId, _coreSessionId, StringComparison.Ordinal))
+    {
+      return;
+    }
+    if (location is null)
+    {
+      DiagnosticLog.Write("transcript.playback_word_missing", new
+      {
+        wordId,
+        reason
+      });
+      return;
+    }
+    if (!document.TryGetUnitIndex(location.Unit.Id, out int index))
+    {
+      DiagnosticLog.Write("transcript.playback_word_unit_missing", new
+      {
+        wordId,
+        unitId = location.Unit.Id,
+        reason
+      });
+      return;
+    }
+    if (index >= _windowStartIndex && index <= _windowEndIndex)
+    {
+      DiagnosticLog.Write("transcript.playback_word_dom_missing", new
+      {
+        wordId,
+        unitId = location.Unit.Id,
+        index,
+        reason
+      });
+      return;
+    }
+
+    await RenderWindowForIndexAsync(
+      index,
+      reason,
+      anchorRecordNumber: null,
+      anchorOffset: null);
+  }
+
+  private void ReplaceCoreSession(string? sessionId)
+  {
+    if (string.Equals(_coreSessionId, sessionId, StringComparison.Ordinal))
+    {
+      return;
+    }
+    string? previous = _coreSessionId;
+    _coreSessionId = sessionId;
+    TranscriptPresentationDomFormatter.CloseRetainedSession(previous);
+  }
+
+  private void ReleaseCoreSession()
+  {
+    ReplaceCoreSession(null);
+  }
+
   private Task RenderWindowForNodeAsync(long nodeId, string reason)
   {
     TranscriptNodeIdentity? identity = _identities.FirstOrDefault(
@@ -2543,9 +2689,11 @@ details {
   background: color-mix(in srgb, var(--panel) 65%, transparent);
 }
 summary { cursor: pointer; color: var(--muted); font-weight: 600; }
-.word { border-radius: 2px; }
-.word.active { background: var(--highlight); }
-.word.paused {
+.word, [id^="word-"], [data-word-id] { border-radius: 2px; }
+.word.active, [id^="word-"].active, [data-word-id].active {
+  background: var(--highlight);
+}
+.word.paused, [id^="word-"].paused, [data-word-id].paused {
   outline: 2px solid var(--highlight);
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
@@ -2681,6 +2829,9 @@ let currentFragmentStart = -1;
 let currentFragmentEnd = -1;
 let currentBoundaryWordIndex = -1;
 let currentSpeechListItem = null;
+let currentCanonicalPlaybackWordId = 0;
+let currentCanonicalPlaybackElements = [];
+let requestedPlaybackWordId = 0;
 let fadeMs = 250;
 let followSpeech = true;
 let showRolledBackHistory = false;
@@ -3153,6 +3304,7 @@ function replaceTranscriptDom(
     currentStructureMap,
     'after-record-scopes');
   postMappingInstallSummary(nodeMap || []);
+  requestedPlaybackWordId = 0;
   restoreRetainedPlaybackProjection();
   postStructureStage(
     structureProbeId,
@@ -3307,6 +3459,7 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-node-scopes';
   phaseStarted = performance.now();
   postMappingInstallSummary(nodeMap || []);
+  requestedPlaybackWordId = 0;
   restoreRetainedPlaybackProjection();
   const mappingSummaryMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
@@ -3448,11 +3601,14 @@ function setFollowSpeech(enabled, notify) {
   if (notify) {
     chrome.webview.postMessage({type:'follow-changed', enabled:followSpeech});
   }
-  if (followSpeech && currentIndex >= 0) {
-    const target = words[currentIndex];
+  if (followSpeech) {
+    const target = currentCanonicalPlaybackElements[0] ||
+      (currentIndex >= 0 ? words[currentIndex] : null);
     if (target) {
       programmaticScrollUntil = performance.now() + 1500;
       target.scrollIntoView({block:'center', behavior:'smooth'});
+    } else if (currentCanonicalPlaybackWordId > 0) {
+      requestCanonicalPlaybackWindow(currentCanonicalPlaybackWordId);
     }
   }
 }
@@ -4248,6 +4404,76 @@ function resetPlaybackProjectionState() {
   liveEndMarker.style.display = 'none';
 }
 
+function canonicalPlaybackElements(wordId) {
+  const id = Number(wordId);
+  if (!Number.isSafeInteger(id) || id < 1) return [];
+  const result = [];
+  const owner = document.getElementById('word-' + id);
+  if (owner) result.push(owner);
+  const selector = '[data-word-id="' + CSS.escape(String(id)) + '"]';
+  for (const piece of transcript.querySelectorAll(selector)) {
+    if (!result.includes(piece)) result.push(piece);
+  }
+  return result;
+}
+
+function retireCanonicalPlayback(useFade) {
+  if (!currentCanonicalPlaybackElements.length) {
+    currentCanonicalPlaybackWordId = 0;
+    return;
+  }
+  const highlight = getComputedStyle(document.documentElement)
+    .getPropertyValue('--highlight').trim();
+  for (const element of currentCanonicalPlaybackElements) {
+    element.classList.remove('active', 'paused');
+    cancelFade(element);
+    if (useFade && fadeMs > 0) {
+      const animation = element.animate(
+        [
+          {backgroundColor: highlight},
+          {backgroundColor: 'transparent'}
+        ],
+        {duration: fadeMs, easing: 'linear'});
+      fadingAnimations.set(element, animation);
+      animation.onfinish = () => fadingAnimations.delete(element);
+      animation.oncancel = () => fadingAnimations.delete(element);
+    }
+  }
+  currentCanonicalPlaybackElements = [];
+  currentCanonicalPlaybackWordId = 0;
+}
+
+function requestCanonicalPlaybackWindow(wordId) {
+  const id = Number(wordId);
+  if (!followSpeech || !Number.isSafeInteger(id) || id < 1 ||
+      requestedPlaybackWordId === id) {
+    return;
+  }
+  requestedPlaybackWordId = id;
+  chrome.webview.postMessage({type:'window-for-word', wordId:id});
+}
+
+function setCanonicalPlayback(state, wordId) {
+  retireCurrentWord(true);
+  retireCanonicalPlayback(true);
+  currentCanonicalPlaybackWordId = wordId;
+  const elements = canonicalPlaybackElements(wordId);
+  if (!elements.length) {
+    requestCanonicalPlaybackWindow(wordId);
+    return;
+  }
+  requestedPlaybackWordId = 0;
+  currentCanonicalPlaybackElements = elements;
+  const className = state === 'paused' ? 'paused' : 'active';
+  for (const element of elements) {
+    cancelFade(element);
+    element.classList.add(className);
+  }
+  const target = elements[0];
+  maybePrefetchVoiceCursor(target);
+  reveal(target);
+}
+
 function restoreRetainedPlaybackProjection() {
   if (!retainedPlayback) return;
   const preservedFollow = followSpeech;
@@ -4257,21 +4483,31 @@ function restoreRetainedPlaybackProjection() {
     retainedPlayback.wordIndex,
     retainedPlayback.wordText,
     retainedPlayback.nodeId,
-    false);
+    false,
+    retainedPlayback.wordId);
   // Projection restoration must never change the user's follow setting.
   setFollowSpeech(preservedFollow, false);
 }
 
-function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
+function setPlayback(
+  state,
+  fragmentText,
+  wordIndex,
+  wordText,
+  nodeId,
+  follow,
+  wordId = null) {
   setFollowSpeech(follow, false);
   clearMarkers();
   clearSpeechListItemHighlight();
   if (state === 'none') {
     retireCurrentWord(true);
+    retireCanonicalPlayback(true);
     return;
   }
   if (state === 'waiting-end' || state === 'paused-end') {
     retireCurrentWord(true);
+    retireCanonicalPlayback(true);
     liveEndMarker.textContent = state === 'waiting-end'
       ? 'Waiting for new text...'
       : 'Press play to wait for more text.';
@@ -4280,6 +4516,15 @@ function setPlayback(state, fragmentText, wordIndex, wordText, nodeId, follow) {
     return;
   }
 
+  const canonicalWordIdValue = Number(wordId ?? 0);
+  if (Number.isSafeInteger(canonicalWordIdValue) && canonicalWordIdValue > 0) {
+    setCanonicalPlayback(state, canonicalWordIdValue);
+    return;
+  }
+
+  // Legacy non-canonical narration path. Core-backed playback returned above
+  // and is never allowed to fall back to node/text matching.
+  retireCanonicalPlayback(true);
   const fragmentChanged = currentFragmentText !== fragmentText ||
     currentNode !== nodeId || currentFragmentStart < 0;
   if (fragmentChanged) {
@@ -4796,7 +5041,10 @@ findPopup.addEventListener('keydown', event => {
 
 followToggle.addEventListener('click', () => {
   setFollowSpeech(!followSpeech, true);
-  if (followSpeech && currentNode >= 0 && currentIndex < 0) {
+  if (followSpeech && currentCanonicalPlaybackWordId > 0 &&
+      canonicalPlaybackElements(currentCanonicalPlaybackWordId).length === 0) {
+    requestCanonicalPlaybackWindow(currentCanonicalPlaybackWordId);
+  } else if (followSpeech && currentNode >= 0 && currentIndex < 0) {
     chrome.webview.postMessage({type:'window-for-node', nodeId:currentNode});
   }
 });
@@ -5092,7 +5340,8 @@ chrome.webview.addEventListener('message', event => {
     fragmentText:data.fragmentText,
     wordIndex:data.wordIndex,
     wordText:data.wordText,
-    nodeId:data.nodeId
+    nodeId:data.nodeId,
+    wordId:data.wordId
   };
   setPlayback(
     data.state,
@@ -5100,11 +5349,13 @@ chrome.webview.addEventListener('message', event => {
     data.wordIndex,
     data.wordText,
     data.nodeId,
-    data.follow);
+    data.follow,
+    data.wordId);
   chrome.webview.postMessage({
     type: 'playback-applied',
     sequence: data.sequence,
     nodeId: data.nodeId,
+    wordId: data.wordId,
     wordIndex: data.wordIndex,
     wordText: data.wordText || '',
     fragmentText: data.fragmentText || '',
