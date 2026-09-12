@@ -6,7 +6,7 @@ on:
       - acceptance-fixes-20260912
     paths:
       - '.github/workflows/acceptance-fixes.yml'
-      - '.tmp/apply-acceptance-fixes-v4.py'
+      - '.tmp/apply-acceptance-fixes-v5.py'
 
 permissions:
   contents: write
@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python .tmp/apply-acceptance-fixes-v4.py
+          python .tmp/apply-acceptance-fixes-v5.py
           if ($LASTEXITCODE -ne 0) { throw 'Production repair generator failed.' }
 
           git diff --check
@@ -60,6 +60,7 @@ jobs:
             'AgentPanelSpeaker/InputDiagnosticTracker.cs',
             'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs',
             'AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs',
+            'AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs',
             'AgentPanelSpeaker/JsonlSessionMonitor.cs',
             'AgentPanelSpeaker/MainForm.cs',
             'AgentPanelSpeaker/SpeechService.cs',
@@ -112,6 +113,7 @@ jobs:
           git add AgentPanelSpeaker/InputDiagnosticTracker.cs
           git add AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
           git add AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
           git add AgentPanelSpeaker/JsonlSessionMonitor.cs
           git add AgentPanelSpeaker/MainForm.cs
           git add AgentPanelSpeaker/SpeechService.cs
