@@ -52,13 +52,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'RED edit generator failed.' }
 
           $generated = Get-Content $issue54 -Raw
-          $malformed = @"
-      using var dialog = new PronunciationDialog(
-      dialog = new PronunciationDialog(
-"@
-          $correct = @"
-      dialog = new PronunciationDialog(
-"@
+          $malformed = "      using var dialog = new PronunciationDialog(`r`n      dialog = new PronunciationDialog(`r`n"
+          $correct = "      dialog = new PronunciationDialog(`r`n"
           $occurrences = ([regex]::Matches(
             $generated,
             [regex]::Escape($malformed))).Count
