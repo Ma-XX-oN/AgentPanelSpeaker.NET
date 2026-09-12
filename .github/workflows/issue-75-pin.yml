@@ -1,0 +1,86 @@
+name: Issue 75 Core pin update
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-pin.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  pin:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Update every old Core hard pin
+        shell: pwsh
+        run: |
+          $old = '6c92799c1b14693001e8b913465f4a12' + 'b0b1e1ab'
+          $new = 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002'
+          $files = @(git grep -l -- $old)
+          if ($LASTEXITCODE -ne 0 -or $files.Count -eq 0) {
+            throw 'No old Core hard-pin references were found.'
+          }
+          Write-Host ('Updating Core pins in: ' + ($files -join ', '))
+          foreach ($file in $files) {
+            $text = [IO.File]::ReadAllText($file)
+            $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+            if ($count -lt 1) { throw "Expected old Core pin in $file" }
+            [IO.File]::WriteAllText($file, $text.Replace($old, $new), [Text.UTF8Encoding]::new($false))
+          }
+          $remaining = @(git grep -l -- $old)
+          if ($LASTEXITCODE -eq 0 -and $remaining.Count -ne 0) {
+            throw ('Old Core pin remains in: ' + ($remaining -join ', '))
+          }
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Verify worker pin
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $response = '{"operation":"ping"}' | node tools/AIConversationCore-worker.mjs | ConvertFrom-Json
+          if (-not $response.ok) { throw $response.error }
+          if ($response.core_commit -ne 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002') {
+            throw "Unexpected worker Core commit: $($response.core_commit)"
+          }
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run bridge regressions
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test bridge
+          if ($LASTEXITCODE -ne 0) { throw 'Bridge regression suite failed.' }
+
+      - name: Commit coherent Core pin
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/AIConversationCore-worker.mjs AgentPanelSpeaker/AIConversationCoreClient.cs .github/workflows/core-integration-validation.yml
+          git diff --cached --check
+          git commit -m 'build: align Core hard pins with word separator contract (#75)'
+          git push origin HEAD:issue-75-core-word-id-migration
