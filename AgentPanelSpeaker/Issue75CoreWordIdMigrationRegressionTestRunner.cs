@@ -30,6 +30,14 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
         TestDuplicateTextLookupIsIdExact),
       ("core-word-id/off-window-lookup-materializes-core-unit",
         TestOffWindowLookupMaterializesCoreUnit),
+      ("core-word-id/speech-fragment-carries-canonical-word-ids",
+        TestSpeechFragmentCarriesCanonicalWordIds),
+      ("core-word-id/speech-seek-uses-only-canonical-word-id",
+        TestSpeechSeekUsesOnlyCanonicalWordId),
+      ("core-word-id/decimal-seek-preserves-canonical-word-id",
+        TestDecimalSeekPreservesCanonicalWordId),
+      ("core-word-id/playback-position-carries-canonical-word-id",
+        TestPlaybackPositionCarriesCanonicalWordId),
       ("core-word-id/policy-is-centralized-without-per-word-eligibility-mutation",
         TestPolicyIsCentralizedWithoutPerWordEligibilityMutation)
     };
@@ -241,6 +249,129 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
     {
       client.CloseRetainedSession(retained.Id);
     }
+  }
+
+  /// <summary>
+  /// Speech fragments that originate from canonical transcript content must
+  /// carry the immutable Core word handles assigned before app speech cleanup.
+  /// </summary>
+  private static void TestSpeechFragmentCarriesCanonicalWordIds()
+  {
+    RequireProperty(typeof(SpeechFragment), "WordIds");
+    RequireProperty(typeof(CanonicalSpeechWordProjection), "Groups");
+  }
+
+  /// <summary>
+  /// Direct transcript seeking must accept one numeric Core word ID. The legacy
+  /// node-plus-ordinal overload is not a valid cross-boundary word identity.
+  /// </summary>
+  private static void TestSpeechSeekUsesOnlyCanonicalWordId()
+  {
+    MethodInfo? canonical = typeof(SpeechService).GetMethod(
+      "TrySeekToTranscriptWord",
+      BindingFlags.Instance | BindingFlags.Public,
+      binder: null,
+      types: new[] { typeof(long), typeof(string).MakeByRefType() },
+      modifiers: null);
+    Require(canonical is not null,
+      "SpeechService lacks TrySeekToTranscriptWord(long wordId, out string text).");
+
+    MethodInfo? legacy = typeof(SpeechService).GetMethod(
+      "TrySeekToTranscriptWord",
+      BindingFlags.Instance | BindingFlags.Public,
+      binder: null,
+      types: new[] { typeof(long), typeof(int), typeof(string).MakeByRefType() },
+      modifiers: null);
+    Require(legacy is null,
+      "SpeechService still exposes nodeId + nodeWordIndex as transcript word identity.");
+  }
+
+  /// <summary>
+  /// A canonical decimal ID must seek the exact decimal and the resulting
+  /// paused playback position must report that same immutable Core handle.
+  /// </summary>
+  private static void TestDecimalSeekPreservesCanonicalWordId()
+  {
+    RequireProperty(typeof(SpeechFragment), "WordIds");
+    RequireProperty(typeof(TranscriptPlaybackPosition), "WordId");
+    SpeechFragment fragment = CreateSpeechFragment(
+      "alpha 13.234 omega",
+      new long[] { 101, 102, 103 });
+
+    using var speech = new SpeechService();
+    speech.SetPolicyProviders(
+      _ => new SpeechProfileSettings("Test voice", 0, 0),
+      _ => true,
+      () => Array.Empty<string>(),
+      () => PronunciationRuleSet.Parse(string.Empty),
+      () => AudioWakeSettings.Default);
+    speech.LoadHistory(
+      new[] { fragment },
+      Array.Empty<TurnCompletion>(),
+      Array.Empty<BackgroundWorkEvent>(),
+      PlaybackStartMode.Beginning);
+
+    TranscriptPlaybackPosition? position = null;
+    speech.PlaybackPositionChanged += value => position = value;
+    MethodInfo method = typeof(SpeechService).GetMethod(
+      "TrySeekToTranscriptWord",
+      BindingFlags.Instance | BindingFlags.Public,
+      binder: null,
+      types: new[] { typeof(long), typeof(string).MakeByRefType() },
+      modifiers: null) ?? throw new InvalidOperationException(
+        "Canonical word-ID seek overload is missing.");
+    object?[] arguments = { 102L, null };
+    bool sought = method.Invoke(speech, arguments) is true;
+    Require(sought, "Canonical decimal word ID 102 was not seekable.");
+    Require(string.Equals(arguments[1] as string, fragment.Text, StringComparison.Ordinal),
+      "Canonical seek did not resolve the expected speech fragment.");
+    Require(position is not null &&
+        position.State == TranscriptPlaybackState.Paused &&
+        string.Equals(position.Word, "13.234", StringComparison.Ordinal),
+      "Canonical decimal seek did not place playback on the decimal token.");
+    long positionedId = Convert.ToInt64(
+      RequireObjectProperty(position!, "WordId"),
+      CultureInfo.InvariantCulture);
+    Require(positionedId == 102L,
+      $"Playback reported canonical word {positionedId} instead of 102.");
+  }
+
+  /// <summary>
+  /// Playback notifications sent toward the transcript must expose the same
+  /// canonical numeric word handle rather than requiring text/ordinal recovery.
+  /// </summary>
+  private static void TestPlaybackPositionCarriesCanonicalWordId()
+  {
+    RequireProperty(typeof(TranscriptPlaybackPosition), "WordId");
+  }
+
+  private static SpeechFragment CreateSpeechFragment(
+    string text,
+    IReadOnlyList<long> wordIds)
+  {
+    ConstructorInfo constructor = typeof(SpeechFragment)
+      .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+      .OrderByDescending(value => value.GetParameters().Length)
+      .First();
+    ParameterInfo[] parameters = constructor.GetParameters();
+    var arguments = new object?[parameters.Length];
+    for (int index = 0; index < parameters.Length; ++index)
+    {
+      ParameterInfo parameter = parameters[index];
+      arguments[index] = parameter.Name switch
+      {
+        "NodeId" => 42L,
+        "Category" => ContentCategory.Assistant,
+        "Kind" => SpeechFragmentKind.Prose,
+        "Text" => text,
+        "WordIds" => wordIds,
+        _ when parameter.HasDefaultValue => parameter.DefaultValue,
+        _ => parameter.ParameterType.IsValueType
+          ? Activator.CreateInstance(parameter.ParameterType)
+          : null
+      };
+    }
+    return (SpeechFragment)constructor.Invoke(arguments);
   }
 
   /// <summary>
