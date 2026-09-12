@@ -60,6 +60,22 @@ jobs:
               [Text.UTF8Encoding]::new($false))
           }
 
+      - name: Align canonical HTML parity assertion
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker/CoreRegressionTestRunner.cs'
+          $text = [IO.File]::ReadAllText($path)
+          $old = '"What time is it in Paris?",'
+          $new = '">What</span>",'
+          $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+          if ($count -ne 2) {
+            throw "Expected two stale contiguous-prompt HTML assertions, found $count"
+          }
+          [IO.File]::WriteAllText(
+            $path,
+            $text.Replace($old, $new),
+            [Text.UTF8Encoding]::new($false))
+
       - name: Install pinned Core dependencies
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
@@ -83,7 +99,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add dependencies/AIConversationCore AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT
+          git add dependencies/AIConversationCore AgentPanelSpeaker/AIConversationCoreClient.cs AgentPanelSpeaker/CoreRegressionTestRunner.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
           git commit -m 'build: pin corrected Core ordinal identity (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
