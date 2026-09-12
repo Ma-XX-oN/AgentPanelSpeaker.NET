@@ -55,7 +55,7 @@ jobs:
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Production repair whitespace validation failed.' }
 
-          $changed = @(git diff --name-only)
+          $changed = @(git diff HEAD --name-only)
           $expected = @(
             'AgentPanelSpeaker/InputDiagnosticTracker.cs',
             'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs',
