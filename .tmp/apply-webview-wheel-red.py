@@ -76,7 +76,7 @@ method = r'''
         .Skip(before)
         .Select(line => JsonDocument.Parse(line).RootElement.Clone())
         .ToArray();
-      JsonElement? wheel = events.FirstOrDefault(record =>
+      JsonElement[] wheelEvents = events.Where(record =>
         record.TryGetProperty("Event", out JsonElement eventElement) &&
         eventElement.GetString() == "input.physical" &&
         record.TryGetProperty("Data", out JsonElement data) &&
@@ -85,21 +85,21 @@ method = r'''
         data.TryGetProperty("phase", out JsonElement phaseElement) &&
         phaseElement.GetString() == "wheel" &&
         data.TryGetProperty("route", out JsonElement routeElement) &&
-        routeElement.GetString() == "webview");
-      Require(wheel is JsonElement,
+        routeElement.GetString() == "webview").ToArray();
+      Require(wheelEvents.Length != 0,
         "A physical wheel handled inside WebView2 was omitted from input.physical diagnostics.");
 
-      JsonElement wheelData = wheel.Value.GetProperty("Data");
+      JsonElement wheelData = wheelEvents[^1].GetProperty("Data");
       long wheelInputId = wheelData.GetProperty("inputId").GetInt64();
-      JsonElement? followChange = events.FirstOrDefault(record =>
+      JsonElement[] followChanges = events.Where(record =>
         record.TryGetProperty("Event", out JsonElement eventElement) &&
         eventElement.GetString() == "follow.changed" &&
         record.TryGetProperty("Data", out JsonElement data) &&
         data.TryGetProperty("reason", out JsonElement reasonElement) &&
-        reasonElement.GetString() == "manual-scroll");
-      Require(followChange is JsonElement,
+        reasonElement.GetString() == "manual-scroll").ToArray();
+      Require(followChanges.Length != 0,
         "The WebView wheel fixture did not produce its manual-scroll Follow transition.");
-      JsonElement followData = followChange.Value.GetProperty("Data");
+      JsonElement followData = followChanges[^1].GetProperty("Data");
       Require(
         followData.TryGetProperty("physicalInputId", out JsonElement inputElement) &&
         inputElement.ValueKind == JsonValueKind.Number &&
