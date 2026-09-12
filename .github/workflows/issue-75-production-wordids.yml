@@ -45,6 +45,18 @@ jobs:
             [Text.UTF8Encoding]::new($false))
           python tools/issue75-speech-word-ranges.py
 
+          $testPath = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs'
+          $testText = [IO.File]::ReadAllText($testPath)
+          $usingOld = "using System.Text.Json;`n"
+          $usingNew = "using System.Text.Json;`nusing System.Text.RegularExpressions;`n"
+          if (-not $testText.Contains($usingOld)) {
+            throw 'Expected Issue75 test using anchor was not found.'
+          }
+          [IO.File]::WriteAllText(
+            $testPath,
+            $testText.Replace($usingOld, $usingNew),
+            [Text.UTF8Encoding]::new($false))
+
       - name: Install pinned Core dependencies
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
