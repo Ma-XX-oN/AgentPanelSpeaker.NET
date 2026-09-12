@@ -35,8 +35,9 @@ jobs:
         run: |
           python scripts/apply-acceptance-fixes-57-77-78.py --phase test
           python scripts/correct-acceptance-red-fixtures.py
+          python scripts/align-virtual-window-input-tests.py
           git diff --check
-          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs
           if (-not (git diff --cached --quiet)) {
             git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: isolate acceptance RED regressions (#57 #77 #78)'
             git push origin HEAD:acceptance-fixes-57-77-78
