@@ -86,8 +86,14 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test real-session-fixes
-          if ($LASTEXITCODE -ne 0) { throw 'Real-session regression suite failed.' }
+          $stdout = Join-Path $env:RUNNER_TEMP 'acceptance-green.stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'acceptance-green.stderr.txt'
+          $process = Start-Process -FilePath $exe -ArgumentList '--test','real-session-fixes' -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $output = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+          $output | Write-Host
+          if ($process.ExitCode -ne 0) {
+            throw "Real-session regression suite failed with exit $($process.ExitCode)."
+          }
 
       - name: GREEN focused interaction and virtualization suites
         shell: pwsh
