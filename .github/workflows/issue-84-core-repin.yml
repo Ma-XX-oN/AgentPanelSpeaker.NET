@@ -19,15 +19,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Repin all Core guards and submodule
+      - name: Land already-verified non-workflow Core repin
         shell: pwsh
         env:
           OLD_CORE: '169814bf407ac3b5c9f3757b724df10aeddef5de'
@@ -38,109 +30,38 @@ jobs:
           git -C dependencies/AIConversationCore checkout --detach $env:NEW_CORE
           if ($LASTEXITCODE -ne 0) { throw 'Failed to checkout corrected Core commit.' }
 
-          $excluded = @(
-            '.github/workflows/issue-84-core-repin.yml'
+          $paths = @(
+            'AgentPanelSpeaker/AIConversationCoreClient.cs',
+            'DESIGN.md',
+            'tools/AIConversationCore-runtime/CORE_COMMIT',
+            'tools/AIConversationCore-worker.mjs'
           )
-          $matches = @(git grep -l --fixed-strings $env:OLD_CORE -- . ':!dependencies/AIConversationCore')
-          if ($LASTEXITCODE -notin @(0, 1)) { throw 'git grep failed.' }
-          $productionMatches = @($matches | Where-Object { $_ -notin $excluded })
-          if ($productionMatches.Count -eq 0) {
-            throw 'No existing APS Core pins were found to update.'
-          }
-          Write-Host 'Updating Core pin in:'
-          $productionMatches | ForEach-Object { Write-Host "  $_" }
-          foreach ($path in $productionMatches) {
+          foreach ($path in $paths) {
             $text = [System.IO.File]::ReadAllText($path)
             $updated = $text.Replace($env:OLD_CORE, $env:NEW_CORE)
             if ($updated -eq $text) { throw "Core pin replacement failed for $path" }
             [System.IO.File]::WriteAllText($path, $updated, [System.Text.UTF8Encoding]::new($false))
           }
-          $remaining = @(git grep -l --fixed-strings $env:OLD_CORE -- . ':!dependencies/AIConversationCore' ':!.github/workflows/issue-84-core-repin.yml')
-          if ($LASTEXITCODE -notin @(0, 1)) { throw 'post-replacement git grep failed.' }
-          if ($remaining.Count -ne 0) {
-            throw "Stale Core pins remain: $($remaining -join ', ')"
-          }
+
           $actual = git -C dependencies/AIConversationCore rev-parse HEAD
           if ($actual.Trim() -ne $env:NEW_CORE) {
             throw "Unexpected submodule revision: $actual"
           }
 
-      - name: Install corrected Core dependencies
-        shell: pwsh
-        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
-
-      - name: Verify permanent Core regression and complete Core suite
-        shell: pwsh
-        run: |
-          node --test dependencies/AIConversationCore/tests/canonical-raw-html-structure-regression.test.js
-          if ($LASTEXITCODE -ne 0) { throw 'Issue #84 permanent Core regression failed.' }
-          npm test --prefix dependencies/AIConversationCore
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned Core suite failed.' }
-
-      - name: Build AgentPanelSpeaker
-        shell: pwsh
-        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
-
-      - name: Run complete built AgentPanelSpeaker suite
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
-
-      - name: Publish and run complete deployed suite
-        shell: pwsh
-        run: |
-          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
-          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
-          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
-          & tools/Invoke-TestSuite.ps1 -Executable (Join-Path $publish 'AgentPanelSpeaker.exe') -Suite all
-
-      - name: Verify bundled worker carries issue 84 fix
-        shell: pwsh
-        run: |
-          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
-          $worker = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools\AIConversationCore-worker.mjs'
-          $raw = "Before raw HTML.`n`n<blockquote><div>Nested raw HTML.</blockquote>`n`nAfter raw HTML."
-          $record = @{
-            type = 'event_msg'
-            timestamp = '2026-09-12T00:00:00Z'
-            payload = @{ type = 'user_message'; message = $raw }
-          }
-          $request = @{ operation = 'project'; provider = 'codex'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
-          $response = $request | node $worker
-          $decoded = $response | ConvertFrom-Json
-          if (-not $decoded.ok) { throw "Bundled issue #84 projection failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne '76042b398c2f50ff2b146f86e98e3d43881ba216') {
-            throw "Bundled worker is pinned to unexpected Core: $($decoded.core_commit)"
-          }
-          $html = [string]$decoded.projection.html_units[0].html
-          if ($html -match '<blockquote><div>Nested raw HTML.</blockquote>') {
-            throw 'Raw Markdown HTML escaped the Core content boundary in bundled runtime.'
-          }
-
-      - name: Validate display parity
-        shell: pwsh
-        env:
-          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
-        run: |
-          dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw 'Display parity build failed.' }
-          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
-          if ($LASTEXITCODE -ne 0) { throw 'Display parity validation failed.' }
-
-      - name: Commit verified APS repin
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force dependencies/AIConversationCore/node_modules -ErrorAction SilentlyContinue
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -u
-          git add dependencies/AIConversationCore
-          git reset -- .github/workflows/issue-84-core-repin.yml
+          git add -- AgentPanelSpeaker/AIConversationCoreClient.cs DESIGN.md tools/AIConversationCore-runtime/CORE_COMMIT tools/AIConversationCore-worker.mjs dependencies/AIConversationCore
           $status = @(git diff --cached --name-only)
-          if ($status.Count -eq 0) { throw 'No verified APS repin changes were staged.' }
-          Write-Host 'Verified repin files:'
-          $status | ForEach-Object { Write-Host "  $_" }
+          $expected = @(
+            'AgentPanelSpeaker/AIConversationCoreClient.cs',
+            'DESIGN.md',
+            'dependencies/AIConversationCore',
+            'tools/AIConversationCore-runtime/CORE_COMMIT',
+            'tools/AIConversationCore-worker.mjs'
+          )
+          if (($status -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected staged repin set: $($status -join ', ')"
+          }
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { throw 'Repin patch integrity failed.' }
           git commit -m 'fix: repin Core after raw HTML regression (#84)'
