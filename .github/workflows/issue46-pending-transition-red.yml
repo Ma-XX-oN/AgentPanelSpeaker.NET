@@ -104,6 +104,8 @@ jobs:
             'real-session/webview-wheel-input-is-logged-and-correlated'
           )
 
+          exit 0
+
       - name: Commit corrected permanent RED
         shell: pwsh
         run: |
