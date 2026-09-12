@@ -1,4 +1,4 @@
-name: Issue 75 Core speech word ranges
+name: Issue 75 Core word-id interaction boundary
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - issue-75-core-word-id-migration
     paths:
       - '.github/workflows/issue-75-production-wordids.yml'
-      - 'tools/issue75-speech-word-ranges.py'
+      - 'tools/issue75-word-id-boundary.py'
 
 permissions:
   contents: write
@@ -29,33 +29,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Apply Core speech word ranges
+      - name: Apply Core word-id interaction boundary
         shell: pwsh
-        run: |
-          $path = Join-Path $env:GITHUB_WORKSPACE 'tools/issue75-speech-word-ranges.py'
-          $text = [IO.File]::ReadAllText($path)
-          $old = "paused_end = '''  /// <summary>\n  /// Returns the current navigation anchor.\n'''"
-          $new = "paused_end = '''  /// <summary>\n  /// Cancels the active prompt or starts a pending request immediately.\n'''"
-          if (-not $text.Contains($old)) {
-            throw 'Expected stale paused_end marker was not found.'
-          }
-          [IO.File]::WriteAllText(
-            $path,
-            $text.Replace($old, $new),
-            [Text.UTF8Encoding]::new($false))
-          python tools/issue75-speech-word-ranges.py
-
-          $testPath = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs'
-          $testText = [IO.File]::ReadAllText($testPath)
-          $usingOld = "using System.Text.Json;`n"
-          $usingNew = "using System.Text.Json;`nusing System.Text.RegularExpressions;`n"
-          if (-not $testText.Contains($usingOld)) {
-            throw 'Expected Issue75 test using anchor was not found.'
-          }
-          [IO.File]::WriteAllText(
-            $testPath,
-            $testText.Replace($usingOld, $usingNew),
-            [Text.UTF8Encoding]::new($false))
+        run: python tools/issue75-word-id-boundary.py
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -69,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          $log = Join-Path $env:RUNNER_TEMP 'issue75-speech-word-ranges.log'
+          $log = Join-Path $env:RUNNER_TEMP 'issue75-word-id-boundary.log'
           $threw = $false
           try {
             & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration *> $log
@@ -79,22 +55,19 @@ jobs:
           }
           $text = Get-Content -Raw $log
           Write-Host $text
-          if (-not $threw) { throw 'Expected three remaining #75 REDs.' }
-          if (-not $text.Contains('PASS  core-word-id/ordered-list-history-preserves-core-word-boundaries')) {
-            throw 'Ordered-list Core boundary regression did not turn GREEN.'
-          }
-          $remaining = @(
-            'FAIL  core-word-id/ctrl-click-posts-exact-canonical-word-id',
-            'FAIL  core-word-id/speech-seek-uses-only-canonical-word-id',
-            'FAIL  core-word-id/policy-is-centralized-without-per-word-eligibility-mutation'
+          if (-not $threw) { throw 'Expected only the policy RED to remain.' }
+          $requiredGreen = @(
+            'PASS  core-word-id/ctrl-click-posts-exact-canonical-word-id',
+            'PASS  core-word-id/speech-seek-uses-only-canonical-word-id',
+            'PASS  core-word-id/ordered-list-history-preserves-core-word-boundaries'
           )
-          foreach ($line in $remaining) {
-            if (-not $text.Contains($line)) { throw "Missing intended remaining RED: $line" }
+          foreach ($line in $requiredGreen) {
+            if (-not $text.Contains($line)) { throw "Required #75 transition did not turn GREEN: $line" }
           }
-          if ($text.Contains('FAIL  core-word-id/ordered-list-history-preserves-core-word-boundaries')) {
-            throw 'Ordered-list Core boundary regression is still RED.'
+          if (-not $text.Contains('FAIL  core-word-id/policy-is-centralized-without-per-word-eligibility-mutation')) {
+            throw 'The expected policy-only RED was not present.'
           }
-          if (-not $text.Contains('FAIL: 3/12 issue #75 regressions failed.')) {
+          if (-not $text.Contains('FAIL: 1/12 issue #75 regressions failed.')) {
             throw 'Unexpected #75 focused failure count.'
           }
 
@@ -104,12 +77,24 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite speech-ordinals
 
-      - name: Commit verified speech word ranges
+      - name: Verify Find origin regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite find-origin
+
+      - name: Verify Ctrl-click regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite ctrl-click-voice-pointer
+
+      - name: Commit verified Core word-id boundary
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/SpeechFragment.cs AgentPanelSpeaker/JsonlSessionMonitor.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
+          git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs
           git diff --cached --check
-          git commit -m 'feat: map speech boundaries to Core word ranges (#75)'
+          git commit -m 'feat: use Core word IDs for transcript seeking (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
