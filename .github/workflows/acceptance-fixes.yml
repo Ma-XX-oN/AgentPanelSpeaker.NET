@@ -6,7 +6,7 @@ on:
       - acceptance-fixes-20260912
     paths:
       - '.github/workflows/acceptance-fixes.yml'
-      - '.tmp/apply-acceptance-fixes-v5.py'
+      - '.tmp/apply-acceptance-fixes-v6.py'
 
 permissions:
   contents: write
@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python .tmp/apply-acceptance-fixes-v5.py
+          python .tmp/apply-acceptance-fixes-v6.py
           if ($LASTEXITCODE -ne 0) { throw 'Production repair generator failed.' }
 
           git diff --check
