@@ -50,6 +50,23 @@ jobs:
 
           python .tmp/apply-acceptance-red.py
           if ($LASTEXITCODE -ne 0) { throw 'RED edit generator failed.' }
+
+          $generated = Get-Content $issue54 -Raw
+          $malformed = @"
+      using var dialog = new PronunciationDialog(
+      dialog = new PronunciationDialog(
+"@
+          $correct = @"
+      dialog = new PronunciationDialog(
+"@
+          $occurrences = ([regex]::Matches(
+            $generated,
+            [regex]::Escape($malformed))).Count
+          if ($occurrences -ne 1) {
+            throw "Expected one malformed editor constructor pair, found $occurrences."
+          }
+          Set-Content $issue54 ($generated.Replace($malformed, $correct)) -NoNewline
+
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'RED edit whitespace validation failed.' }
           $changed = @(git diff --name-only)
