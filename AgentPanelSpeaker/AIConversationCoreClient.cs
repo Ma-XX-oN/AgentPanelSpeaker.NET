@@ -49,7 +49,7 @@ internal sealed record AIConversationCoreSessionDiagnostics(
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "6c92799c1b14693001e8b913465f4a12b0b1e1ab";
+    "c97dc6f6a0d6e2bd6d21bc145da722645b19e002";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
