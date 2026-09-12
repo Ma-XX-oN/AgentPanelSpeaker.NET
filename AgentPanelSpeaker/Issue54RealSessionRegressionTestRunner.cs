@@ -1,5 +1,6 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 
@@ -34,7 +35,15 @@ internal static class Issue54RealSessionRegressionTestRunner
       ("real-session/stale-find-materialization-is-cancelled-before-install",
         TestStaleFindMaterializationIsCancelledBeforeInstall),
       ("real-session/stale-find-invalidated-after-install-stays-visible",
-        TestStaleFindInvalidatedAfterInstallStaysVisible)
+        TestStaleFindInvalidatedAfterInstallStaysVisible),
+      ("real-session/follow-enable-reattaches-retained-core-word",
+        TestFollowEnableReattachesRetainedCoreWord),
+      ("real-session/programmatic-scroll-does-not-disable-follow",
+        TestProgrammaticScrollDoesNotDisableFollow),
+      ("real-session/follow-opens-canonical-disclosure-only-when-enabled",
+        TestFollowOpensCanonicalDisclosureOnlyWhenEnabled),
+      ("real-session/input-diagnostics-capture-key-mouse-and-follow-state",
+        TestInputDiagnosticsCaptureKeyMouseAndFollowState)
     };
 
     int failures = 0;
@@ -739,6 +748,407 @@ internal static class Issue54RealSessionRegressionTestRunner
     {
       try { Directory.Delete(root, recursive: true); } catch { }
     }
+  }
+
+  /// <summary>
+  /// Reproduces issue #57 on the current Core-word path. Follow OFF may retain
+  /// a canonical paused cursor outside the materialized window. Turning Follow
+  /// ON must replay that retained Core word, materialize its Core unit, and
+  /// apply the marker without requiring another speech callback.
+  /// </summary>
+  private static void TestFollowEnableReattachesRetainedCoreWord()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue57-core-follow-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue57-core-follow.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+
+      TranscriptSettings followOff =
+        TranscriptSettings.Default with { FollowSpeech = false };
+      TranscriptSettings followOn =
+        TranscriptSettings.Default with { FollowSpeech = true };
+      view.ApplySettings(followOff, dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Issue 57 Core follow fixture");
+      WaitForTranscriptRender(view);
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int initialStart = ReadField<int>(view, "_windowStartIndex");
+      Require(initialStart > 0,
+        "Issue #57 Core fixture did not leave earlier units unloaded.");
+
+      int targetIndex = -1;
+      long targetWordId = 0;
+      for (int index = 0; index < initialStart; ++index)
+      {
+        long candidate = FirstCanonicalWordId(document.Records[index].Html);
+        if (candidate <= 0)
+        {
+          continue;
+        }
+        targetIndex = index;
+        targetWordId = candidate;
+        break;
+      }
+      Require(targetIndex >= 0 && targetWordId > 0,
+        "Issue #57 Core fixture exposed no off-window canonical word.");
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      int exactPlaybackApplied = 0;
+      webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+      {
+        try
+        {
+          using JsonDocument message = JsonDocument.Parse(
+            eventArgs.WebMessageAsJson);
+          JsonElement rootElement = message.RootElement;
+          if (rootElement.TryGetProperty("type", out JsonElement typeElement) &&
+              typeElement.GetString() == "playback-applied" &&
+              rootElement.TryGetProperty("wordId", out JsonElement wordElement) &&
+              wordElement.TryGetInt64(out long appliedWordId) &&
+              appliedWordId == targetWordId)
+          {
+            ++exactPlaybackApplied;
+          }
+        }
+        catch (JsonException)
+        {
+        }
+      };
+
+      var position = new TranscriptPlaybackPosition(
+        TranscriptPlaybackState.Paused,
+        "retained canonical cursor",
+        0,
+        "retained",
+        0,
+        0,
+        8,
+        Stopwatch.GetTimestamp(),
+        targetWordId);
+      view.ShowPlaybackPosition(position);
+      PumpMessages(300);
+      Require(
+        targetIndex < ReadField<int>(view, "_windowStartIndex") ||
+        targetIndex > ReadField<int>(view, "_windowEndIndex"),
+        "Follow OFF unexpectedly materialized the retained Core word.");
+
+      // Remove only the browser-side retained projection. C# still owns the
+      // authoritative current/last playback position. This makes the test prove
+      // that the OFF->ON settings transition itself replays the cursor.
+      ExecuteVoidScript(webView, "resetRetainedPlayback();");
+      int appliedBeforeEnable = exactPlaybackApplied;
+
+      view.ApplySettings(followOn, dark: false);
+      PumpUntil(
+        () =>
+          targetIndex >= ReadField<int>(view, "_windowStartIndex") &&
+          targetIndex <= ReadField<int>(view, "_windowEndIndex") &&
+          exactPlaybackApplied > appliedBeforeEnable,
+        "Follow ON to reattach the retained canonical cursor",
+        timeoutMilliseconds: 8000);
+
+      int appliedAfterEnable = exactPlaybackApplied;
+      int startAfterEnable = ReadField<int>(view, "_windowStartIndex");
+      int endAfterEnable = ReadField<int>(view, "_windowEndIndex");
+      view.ApplySettings(followOn, dark: true);
+      PumpMessages(500);
+      Require(exactPlaybackApplied == appliedAfterEnable,
+        "Reapplying settings while Follow was already ON replayed the cursor.");
+      Require(
+        ReadField<int>(view, "_windowStartIndex") == startAfterEnable &&
+        ReadField<int>(view, "_windowEndIndex") == endAfterEnable,
+        "Reapplying settings while Follow was already ON moved the window.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Reproduces issue #78. A scroll event with no physical user-scroll intent
+  /// is programmatic and may not silently turn Follow off. A real wheel gesture
+  /// followed by scrolling must still turn Follow off.
+  /// </summary>
+  private static void TestProgrammaticScrollDoesNotDisableFollow()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue78-scroll-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue78-scroll.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = true },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Issue 78 scroll fixture");
+      WaitForTranscriptRender(view);
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  document.body.style.minHeight = '7000px';
+  setFollowSpeech(true, false);
+  userScrollIntentUntil = 0;
+  userScrollIntentDirection = 0;
+  programmaticScrollUntil = 0;
+  lastManualScrollY = 0;
+  window.scrollTo(0, 700);
+  window.dispatchEvent(new Event('scroll'));
+})()
+""");
+      PumpMessages(250);
+      Require(
+        ExecuteIntScript(webView, "followSpeech ? 1 : 0") == 1,
+        "A programmatic scroll with no user input silently disabled Follow.");
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  setFollowSpeech(true, false);
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: 160,
+    bubbles: true,
+    cancelable: true
+  }));
+  const next = window.scrollY + 220;
+  window.scrollTo(0, next);
+  window.dispatchEvent(new Event('scroll'));
+})()
+""");
+      PumpMessages(250);
+      Require(
+        ExecuteIntScript(webView, "followSpeech ? 1 : 0") == 0,
+        "A physical wheel-scroll intent did not disable Follow.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Locks the documented Follow disclosure contract on the canonical WordId
+  /// path: Follow OFF does not chase speech into a collapsed disclosure, while
+  /// Follow ON opens the required disclosure when restoring retained playback.
+  /// </summary>
+  private static void TestFollowOpensCanonicalDisclosureOnlyWhenEnabled()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue78-details-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "issue78-details.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Issue 78 disclosure fixture");
+      WaitForTranscriptRender(view);
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+
+      const long probeWordId = 900000001;
+      ExecuteVoidScript(
+        webView,
+        $$"""
+(() => {
+  const details = document.createElement('details');
+  details.id = 'issue78-follow-details';
+  details.innerHTML = '<summary>Thought probe</summary>' +
+    '<p><span id="word-{{probeWordId}}">probe</span></p>';
+  transcript.append(details);
+  setFollowSpeech(false, false);
+  setCanonicalPlayback('speaking', {{probeWordId}});
+})()
+""");
+      Require(
+        ExecuteIntScript(
+          webView,
+          "document.getElementById('issue78-follow-details').open ? 1 : 0") == 0,
+        "Follow OFF opened a collapsed canonical disclosure.");
+
+      ExecuteVoidScript(
+        webView,
+        $$"""
+(() => {
+  retireCanonicalPlayback(false);
+  const details = document.getElementById('issue78-follow-details');
+  details.open = false;
+  retainedPlayback = {
+    state:'speaking',
+    fragmentText:'probe',
+    wordIndex:0,
+    wordText:'probe',
+    nodeId:0,
+    wordId:{{probeWordId}}
+  };
+  setFollowSpeech(true, false);
+  restoreRetainedPlaybackProjection();
+})()
+""");
+      Require(
+        ExecuteIntScript(
+          webView,
+          "document.getElementById('issue78-follow-details').open ? 1 : 0") == 1,
+        "Follow ON did not open the disclosure containing retained playback.");
+      Require(
+        ExecuteIntScript(webView, "followSpeech ? 1 : 0") == 1,
+        "Retained-playback restoration changed Follow from ON to OFF.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Reproduces issue #77. The structured JSONL log must contain the physical
+  /// key/mouse timeline plus the recognized Follow command and explicit state
+  /// transition. Activity-text output and settings dirty-state are insufficient.
+  /// </summary>
+  private static void TestInputDiagnosticsCaptureKeyMouseAndFollowState()
+  {
+    DiagnosticLog.Initialize();
+    string logPath = DiagnosticLog.FilePath;
+    int before = File.Exists(logPath) ? File.ReadLines(logPath).Count() : 0;
+
+    using var form = new MainForm();
+    _ = form.Handle;
+
+    Message keyDown = Message.Create(
+      form.Handle,
+      0x0100,
+      new IntPtr((int)Keys.Oemplus),
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref keyDown);
+    Message keyUp = Message.Create(
+      form.Handle,
+      0x0101,
+      new IntPtr((int)Keys.Oemplus),
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref keyUp);
+    Message mouseDown = Message.Create(
+      form.Handle,
+      0x0201,
+      IntPtr.Zero,
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref mouseDown);
+    Message mouseUp = Message.Create(
+      form.Handle,
+      0x0202,
+      IntPtr.Zero,
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref mouseUp);
+    Message wheel = Message.Create(
+      form.Handle,
+      0x020A,
+      new IntPtr(120L << 16),
+      IntPtr.Zero);
+    _ = form.PreFilterMessage(ref wheel);
+    PumpMessages(150);
+
+    JsonElement[] events = File.ReadLines(logPath)
+      .Skip(before)
+      .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+      .ToArray();
+
+    bool HasInputPhase(string kind, string phase) => events.Any(record =>
+      record.TryGetProperty("Event", out JsonElement eventElement) &&
+      eventElement.GetString() == "input.physical" &&
+      record.TryGetProperty("Data", out JsonElement data) &&
+      data.TryGetProperty("kind", out JsonElement kindElement) &&
+      kindElement.GetString() == kind &&
+      data.TryGetProperty("phase", out JsonElement phaseElement) &&
+      phaseElement.GetString() == phase);
+
+    Require(HasInputPhase("keyboard", "down"),
+      "Structured diagnostics omitted physical key-down.");
+    Require(HasInputPhase("keyboard", "up"),
+      "Structured diagnostics omitted physical key-up.");
+    Require(HasInputPhase("mouse", "down"),
+      "Structured diagnostics omitted physical mouse-down.");
+    Require(HasInputPhase("mouse", "up"),
+      "Structured diagnostics omitted physical mouse-up.");
+    Require(HasInputPhase("mouse", "wheel"),
+      "Structured diagnostics omitted physical mouse wheel input.");
+
+    Require(events.Any(record =>
+      record.TryGetProperty("Event", out JsonElement eventElement) &&
+      eventElement.GetString() == "input.command" &&
+      record.TryGetProperty("Data", out JsonElement data) &&
+      data.TryGetProperty("command", out JsonElement commandElement) &&
+      commandElement.GetString() == "ToggleFollow"),
+      "Structured diagnostics omitted the recognized ToggleFollow command.");
+
+    Require(events.Any(record =>
+      record.TryGetProperty("Event", out JsonElement eventElement) &&
+      eventElement.GetString() == "follow.changed" &&
+      record.TryGetProperty("Data", out JsonElement data) &&
+      data.TryGetProperty("oldValue", out JsonElement oldElement) &&
+      data.TryGetProperty("newValue", out JsonElement newElement) &&
+      oldElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+      newElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+      oldElement.GetBoolean() != newElement.GetBoolean()),
+      "Structured diagnostics omitted explicit old/new Follow state.");
+  }
+
+  private static long FirstCanonicalWordId(string html)
+  {
+    const string prefix = "id=\"word-";
+    int start = html.IndexOf(prefix, StringComparison.Ordinal);
+    if (start < 0)
+    {
+      return 0;
+    }
+    start += prefix.Length;
+    int end = html.IndexOf('"', start);
+    if (end <= start)
+    {
+      return 0;
+    }
+    return long.TryParse(
+      html.AsSpan(start, end - start),
+      System.Globalization.NumberStyles.None,
+      System.Globalization.CultureInfo.InvariantCulture,
+      out long wordId)
+        ? wordId
+        : 0;
   }
 
   private static CanonicalHtmlUnitProjection CreateUnit(
