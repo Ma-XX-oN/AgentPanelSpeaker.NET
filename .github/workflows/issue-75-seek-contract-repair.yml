@@ -36,6 +36,7 @@ jobs:
         run: |
           python -m py_compile tools/issue75-seek-contract-repair.py
           if ($LASTEXITCODE -ne 0) { throw 'Repair helper does not compile.' }
+          Remove-Item -Recurse -Force tools/__pycache__ -ErrorAction SilentlyContinue
           if (git status --porcelain) { throw 'Starting worktree is not clean.' }
 
       - name: Add permanent regression only
