@@ -117,6 +117,47 @@ internal sealed class InputDiagnosticTracker
   }
 
   /// <summary>
+  /// Records one vertical-wheel input consumed inside WebView2 and returns its
+  /// identity in the same physical-input timeline used by native WinForms input.
+  /// </summary>
+  public long ObserveWebViewWheel(
+    int delta,
+    Keys modifiers,
+    bool followSpeech,
+    bool speaking,
+    bool paused,
+    string targetTag,
+    string targetId)
+  {
+    long inputId = NextInputId();
+    _recentMouseInputId = inputId;
+    _recentInputId = inputId;
+    DiagnosticLog.Write("input.physical", new
+    {
+      inputId,
+      kind = "mouse",
+      phase = "wheel",
+      code = "vertical-wheel",
+      modifiers = modifiers.ToString(),
+      repeat = false,
+      delta,
+      route = "webview",
+      nativeMessage = (string?)null,
+      targetHwnd = (string?)null,
+      targetType = string.IsNullOrWhiteSpace(targetTag)
+        ? "WebView2.DOM"
+        : $"WebView2.DOM.{targetTag}",
+      targetName = string.IsNullOrWhiteSpace(targetId) ? null : targetId,
+      targetPath = "MainForm/TranscriptView/WebView2",
+      followSpeech,
+      speaking,
+      paused,
+      timestamp = Stopwatch.GetTimestamp()
+    });
+    return inputId;
+  }
+
+  /// <summary>
   /// Returns the most recent physical identity for one key.
   /// </summary>
   public long? GetRecentKeyInputId(Keys keyCode)

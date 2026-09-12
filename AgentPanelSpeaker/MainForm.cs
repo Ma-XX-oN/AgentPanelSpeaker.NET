@@ -669,6 +669,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FindSeekRequested += TranscriptFindSeekRequested;
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
+    _transcriptView.PhysicalWheelInput += TranscriptPhysicalWheelInput;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     Activated += (_, _) =>
     {
@@ -1195,7 +1196,7 @@ internal sealed class MainForm : Form, IMessageFilter
       _speakUserContext = settings.Transcript.SpeakUserContext;
       _speech.SetShowRolledBackHistory(
         settings.Transcript.ShowRolledBackHistory);
-      _speech.RevalidatePausedNavigationEligibility(
+      _speech.RevalidateHistoryEligibility(
         "settings-loaded");
       _transcriptView.ApplySettings(settings.Transcript, transcriptDark);
       RefreshTranscriptVoiceSelectability();
@@ -1388,7 +1389,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _fenceTypesTextBox.Text = parsed.NormalizedCsv;
     _loadingSettings = false;
     SaveControlsToSettings();
-    _speech.RevalidatePausedNavigationEligibility(
+    _speech.RevalidateHistoryEligibility(
       "fenced-code-types-changed");
     RefreshTranscriptVoiceSelectability();
     AppendLog(
@@ -1409,7 +1410,7 @@ internal sealed class MainForm : Form, IMessageFilter
     UpdateVoiceRowState(role);
     row.Voice.Invalidate();
     SaveControlsToSettings();
-    _speech.RevalidatePausedNavigationEligibility(
+    _speech.RevalidateHistoryEligibility(
       "voice-profile-changed");
     RefreshTranscriptVoiceSelectability();
     ScheduleVoiceSettingsPreview(role, context);
@@ -2230,6 +2231,26 @@ internal sealed class MainForm : Form, IMessageFilter
     target.Focus();
   }
 
+  /// <summary>
+  /// Adds a WebView-consumed wheel event to the shared physical-input timeline
+  /// before browser scroll handling can change Follow state.
+  /// </summary>
+  private void TranscriptPhysicalWheelInput(
+    int delta,
+    Keys modifiers,
+    string targetTag,
+    string targetId)
+  {
+    _inputDiagnostics.ObserveWebViewWheel(
+      delta,
+      modifiers,
+      _transcriptSettingsPopup.Settings.FollowSpeech,
+      _speech.IsSpeaking,
+      _speech.IsPaused,
+      targetTag,
+      targetId);
+  }
+
   private void TranscriptFollowSpeechChanged(bool enabled, string reason)
   {
     bool oldFollow = _transcriptSettingsPopup.Settings.FollowSpeech;
@@ -2261,7 +2282,7 @@ internal sealed class MainForm : Form, IMessageFilter
     TranscriptSettings settings = _transcriptSettingsPopup.Settings;
     _speakUserContext = settings.SpeakUserContext;
     _speech.SetShowRolledBackHistory(settings.ShowRolledBackHistory);
-    _speech.RevalidatePausedNavigationEligibility(
+    _speech.RevalidateHistoryEligibility(
       "transcript-settings-changed");
     _transcriptView.ApplySettings(settings, dark);
     RefreshTranscriptVoiceSelectability();
@@ -2877,7 +2898,8 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       return Finish(false, "message-filter");
     }
-    if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
+    if (hasNoModifiers &&
+        IsTransportShortcutBlockedByFocusedControl(message.HWnd))
     {
       return Finish(false, "message-filter");
     }
@@ -3384,9 +3406,13 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Returns whether a text-entry control should retain one bare shortcut.
   /// </summary>
-  private bool IsTransportShortcutBlockedByFocusedControl()
+  private bool IsTransportShortcutBlockedByFocusedControl(
+    IntPtr messageTarget = default)
   {
-    Control? focused = this;
+    Control? focused = messageTarget != IntPtr.Zero
+      ? Control.FromChildHandle(messageTarget)
+      : this;
+    focused ??= this;
     while (focused is ContainerControl container &&
            container.ActiveControl is Control active)
     {

@@ -297,18 +297,18 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Revalidates a paused history cursor after a speech-eligibility policy
-  /// change. If the current fragment became ineligible, navigation advances
-  /// to the next eligible fragment, or to the paused live end when none
-  /// remains. Canonical history and node identities are unchanged.
+  /// Revalidates retained history after a speech-eligibility policy change.
+  /// A paused cursor moves to the next eligible fragment. An actively speaking
+  /// history fragment that became ineligible is cancelled and playback resumes
+  /// at the next eligible fragment without rebuilding canonical history.
   /// </summary>
-  public void RevalidatePausedNavigationEligibility(string reason)
+  public void RevalidateHistoryEligibility(string reason)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(reason);
     lock (_sync)
     {
       ThrowIfDisposed();
-      if (!_isPaused || _history.Count == 0)
+      if (_history.Count == 0)
       {
         return;
       }
@@ -323,7 +323,7 @@ internal sealed class SpeechService : IDisposable
       }
 
       int candidate = FindNextEligibleLocked(anchor + 1);
-      DiagnosticLog.Write("speech.paused_eligibility_revalidated", new
+      DiagnosticLog.Write("speech.eligibility_revalidated", new
       {
         reason,
         anchor,
@@ -335,19 +335,36 @@ internal sealed class SpeechService : IDisposable
         pendingHistoryIndex = _pendingHistoryIndex,
         pendingHistoryWordIndex = _pendingHistoryWordIndex,
         nextHistoryIndex = _nextHistoryIndex,
-        historyCount = _history.Count
+        historyCount = _history.Count,
+        isPaused = _isPaused
       });
 
       if (_activeKind == ActiveSpeechKind.History)
       {
-        if (candidate >= 0)
+        if (_isPaused)
         {
-          RestartHistoryLocked(candidate);
+          if (candidate >= 0)
+          {
+            RestartHistoryLocked(candidate);
+          }
+          else
+          {
+            MoveToPausedLiveEndLocked();
+          }
+          return;
         }
-        else
-        {
-          MoveToPausedLiveEndLocked();
-        }
+
+        _pendingHistoryIndex = candidate >= 0 ? candidate : null;
+        _pendingHistoryWordIndex = 0;
+        _nextHistoryIndex = candidate >= 0 ? candidate : _history.Count;
+        _pauseBeforeNextHistory = candidate >= 0;
+        _lastFenceActivity = null;
+        _engine.Cancel();
+        return;
+      }
+
+      if (!_isPaused)
+      {
         return;
       }
 

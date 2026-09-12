@@ -196,6 +196,11 @@ internal sealed class TranscriptView : UserControl
   public event Action<bool, string>? FollowSpeechChanged;
 
   /// <summary>
+  /// Raised for a vertical-wheel input received inside WebView2.
+  /// </summary>
+  public event Action<int, Keys, string, string>? PhysicalWheelInput;
+
+  /// <summary>
   /// Selects a transcript source and immediately renders its current content.
   /// </summary>
   public void SelectSession(
@@ -1444,6 +1449,33 @@ internal sealed class TranscriptView : UserControl
         {
           _ = RenderWindowForNodeAsync(validNodeId, "playback");
         }
+        return;
+      }
+      if (type == "physical-wheel")
+      {
+        int delta = (int)Math.Round(ReadOptionalDouble(root, "delta") ?? 0);
+        Keys modifiers = Keys.None;
+        if (ReadOptionalBoolean(root, "ctrlKey") == true)
+        {
+          modifiers |= Keys.Control;
+        }
+        if (ReadOptionalBoolean(root, "altKey") == true)
+        {
+          modifiers |= Keys.Alt;
+        }
+        if (ReadOptionalBoolean(root, "shiftKey") == true)
+        {
+          modifiers |= Keys.Shift;
+        }
+        if (ReadOptionalBoolean(root, "metaKey") == true)
+        {
+          modifiers |= Keys.LWin;
+        }
+        PhysicalWheelInput?.Invoke(
+          delta,
+          modifiers,
+          ReadOptionalString(root, "targetTag"),
+          ReadOptionalString(root, "targetId"));
         return;
       }
       if (type == "follow-changed")
@@ -3550,6 +3582,25 @@ function replaceTranscriptWindow(
     });
   }
   virtualShiftPending = false;
+  if (renderReason === 'scroll-up' || renderReason === 'scroll-down') {
+    const fallbackDirection = renderReason === 'scroll-up' ? -1 : 1;
+    const continueManualScrollConvergence = () => {
+      const remainingGuard = programmaticScrollUntil - performance.now();
+      if (remainingGuard > 0) {
+        setTimeout(
+          () => requestAnimationFrame(continueManualScrollConvergence),
+          Math.ceil(remainingGuard) + 1);
+        return;
+      }
+      requestAnimationFrame(() => {
+        const convergenceDirection = userScrollIntentDirection !== 0
+          ? userScrollIntentDirection
+          : fallbackDirection;
+        maybeRequestManualVirtualShift(convergenceDirection);
+      });
+    };
+    requestAnimationFrame(continueManualScrollConvergence);
+  }
   function viewportIntersectsMaterializedContent() {
     return [...transcript.querySelectorAll('.virtual-record')].some(record => {
       const rect = record.getBoundingClientRect();
@@ -5144,6 +5195,17 @@ function isEditableScrollTarget(target) {
 }
 
 window.addEventListener('wheel', event => {
+  const target = event.target instanceof Element ? event.target : null;
+  chrome.webview.postMessage({
+    type:'physical-wheel',
+    delta:event.deltaY,
+    ctrlKey:event.ctrlKey,
+    altKey:event.altKey,
+    shiftKey:event.shiftKey,
+    metaKey:event.metaKey,
+    targetTag:target?.tagName ?? '',
+    targetId:target?.id ?? ''
+  });
   markUserScrollIntent(event.deltaY);
 }, {
   passive:true,
@@ -5331,6 +5393,9 @@ window.addEventListener('scroll', () => {
     programmaticScrollUntil = 0;
   }
 
+  // Physical input establishes manual-scroll ownership. Geometry, not the
+  // short attribution timer, drives subsequent materialization convergence.
+  userScrollIntentDirection = direction;
   if (followSpeech) setFollowSpeech(false, true, 'manual-scroll');
   if (virtualShiftFrame) cancelAnimationFrame(virtualShiftFrame);
   virtualShiftFrame = requestAnimationFrame(() => {

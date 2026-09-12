@@ -604,13 +604,18 @@ internal static class Issue54RealSessionRegressionTestRunner
     '<div class="virtual-record" data-virtual-index="' + index + '">' +
     '<span class="record-anchor" data-jsonl-record="' + (index + 1) + '"></span>' +
     '<p>convergence record ' + index + '</p></div>').join('');
+  // Keep the replacement in its estimated virtual position. The first
+  // materialized records deliberately straddle the viewport's upper edge so
+  // geometry, rather than a surviving physical-intent timer, must request the
+  // next adjacent canonical batch.
+  const topSpacerHeight = Math.max(0, window.scrollY - 100);
   replaceTranscriptWindow(
     html,
     false,
     [],
     start,
     end,
-    0,
+    topSpacerHeight,
     5000,
     null,
     null,
@@ -1402,6 +1407,7 @@ internal static class Issue54RealSessionRegressionTestRunner
 
   [System.Runtime.InteropServices.DllImport(
     "user32.dll",
+    EntryPoint = "SendMessageW",
     CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
   private static extern IntPtr SendMessageForEditorAcceptance(
     IntPtr window,

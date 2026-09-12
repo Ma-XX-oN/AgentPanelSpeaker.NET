@@ -2157,13 +2157,15 @@ so the same artwork remains usable in dark, light, and system themes.
 ## Diagnostic input/command/state contract
 
 The structured JSONL diagnostic log is the authoritative correlation surface for
-real-machine acceptance. Every keyboard key-down/key-up and mouse button,
-double-click, or wheel message delivered to Agent Panel Speaker is recorded as
-`input.physical` at the Win32 message-filter boundary. A physical input keeps one
-`inputId` across its down/up pair; repeated routing observations are not recorded
-as separate physical presses. The log records key/button identity, modifiers,
-managed target identity/path, and playback/Follow state, but does not copy the
-contents of editable controls.
+real-machine acceptance. Every keyboard key-down/key-up and mouse button, double-click, or wheel input
+delivered to Agent Panel Speaker is recorded as `input.physical`. WinForms-owned
+input enters the shared `InputDiagnosticTracker` at the Win32 message-filter
+boundary. Wheel input consumed inside WebView2 is reported by the browser and
+enters that same tracker with `route=webview` before its scroll can change Follow
+state. A physical input keeps one `inputId` across its down/up pair; repeated
+routing observations are not recorded as separate physical presses. The log
+records key/button identity, modifiers, managed or DOM target context, and
+playback/Follow state, but does not copy the contents of editable controls.
 
 Recognized application actions are recorded separately as `input.command` and
 carry the physical input ID when available. Follow transitions are recorded as
