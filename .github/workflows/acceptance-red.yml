@@ -1,4 +1,4 @@
-# RED capture iteration: active gate aligned with the existing issue #35 test.
+# RED capture iteration: active gate and deterministic MainForm teardown.
 name: Acceptance regression RED capture
 
 on:
