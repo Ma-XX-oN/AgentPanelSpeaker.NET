@@ -1147,6 +1147,7 @@ internal sealed class SpeechService : IDisposable
           return false;
         }
 
+        bool preservePause = _isPaused;
         bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;
         _pendingUntracked = null;
         ClearProcessingTimeAnnouncementLocked();
@@ -1154,13 +1155,19 @@ internal sealed class SpeechService : IDisposable
         _pendingHistoryWordIndex = localWordIndex;
         _nextHistoryIndex = index;
         _lastFenceActivity = null;
-        SetPausedLocked(true);
-        SetPausedNavigationPositionLocked(index, localWordIndex);
-        if (hadActiveSpeech)
+        if (preservePause)
         {
-          RequestPauseRestoreAfterCancellationLocked(
-            "seek-canonical-transcript-word");
-          _engine.Cancel();
+          SetPausedNavigationPositionLocked(index, localWordIndex);
+          if (hadActiveSpeech)
+          {
+            RequestPauseRestoreAfterCancellationLocked(
+              "seek-canonical-transcript-word");
+            _engine.Cancel();
+          }
+        }
+        else
+        {
+          RestartPendingLocked();
         }
         text = fragment.Text;
         return true;

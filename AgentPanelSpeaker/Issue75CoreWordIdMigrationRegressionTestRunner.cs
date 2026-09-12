@@ -647,6 +647,8 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
       "Browser still stamps per-word voice-excluded classes.");
     Require(!shell.Contains("applyVoiceEligibilityClasses", StringComparison.Ordinal),
       "Browser still performs a transcript-wide per-word eligibility scan.");
+    Require(!shell.Contains("markAlignedVoiceSelectableWords(", StringComparison.Ordinal),
+      "Browser still calls the removed legacy aligned-word eligibility stamper.");
     Require(!shell.Contains("dataset.nodeWordIndex", StringComparison.Ordinal),
       "Browser still reconstructs per-word speech ordinals in the DOM.");
     Require(shell.Contains("setVoicePolicy", StringComparison.Ordinal),

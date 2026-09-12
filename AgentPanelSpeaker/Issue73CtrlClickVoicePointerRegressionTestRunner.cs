@@ -21,6 +21,10 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     {
       ("ctrl-click-voice-pointer/current-speech-eligibility-is-authoritative",
         TestCurrentSpeechEligibilityIsAuthoritative),
+      ("ctrl-click-voice-pointer/active-seek-preserves-playing-state",
+        TestActiveSeekPreservesPlayingState),
+      ("ctrl-click-voice-pointer/physical-click-correlation-is-fresh",
+        TestPhysicalClickCorrelationIsFresh),
       ("ctrl-click-voice-pointer/browser-affordance-and-click-contract",
         TestBrowserAffordanceAndClickContract),
       ("ctrl-click-voice-pointer/punctuation-rich-browser-coordinate-matches-speech-history",
@@ -171,6 +175,116 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     Require(speech.TrySeekToTranscriptWord(1004, out string gamma) &&
         gamma == "gamma",
       "Enabling the fence type did not make its Core word ID seekable.");
+  }
+
+  /// <summary>
+  /// A Ctrl+click while playback is active changes the playback cursor but
+  /// does not change transport state to paused.
+  /// </summary>
+  private static void TestActiveSeekPreservesPlayingState()
+  {
+    using var speech = new SpeechService();
+    speech.SetPolicyProviders(
+      _ => new SpeechProfileSettings("Test voice", 0, 0),
+      _ => true,
+      () => Array.Empty<string>(),
+      () => PronunciationRuleSet.Parse(string.Empty),
+      () => AudioWakeSettings.Default);
+    speech.LoadHistory(
+      new[]
+      {
+        new SpeechFragment(
+          42,
+          ContentCategory.Assistant,
+          SpeechFragmentKind.Prose,
+          "alpha beta",
+          TranscriptWords: new[]
+          {
+            new SpeechFragmentWord(9001, "alpha", 0, 5),
+            new SpeechFragmentWord(9002, "beta", 6, 4)
+          })
+      },
+      Array.Empty<TurnCompletion>(),
+      Array.Empty<BackgroundWorkEvent>(),
+      PlaybackStartMode.Beginning);
+
+    FieldInfo pausedField = typeof(SpeechService).GetField(
+      "_isPaused",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("SpeechService pause state is missing.");
+    FieldInfo activeKindField = typeof(SpeechService).GetField(
+      "_activeKind",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("SpeechService active kind is missing.");
+    pausedField.SetValue(speech, false);
+    activeKindField.SetValue(
+      speech,
+      Enum.Parse(activeKindField.FieldType, "History"));
+
+    TranscriptPlaybackPosition? observed = null;
+    speech.PlaybackPositionChanged += value => observed = value;
+    Require(
+      speech.TrySeekToTranscriptWord(9002, out string sought) &&
+        string.Equals(sought, "alpha beta", StringComparison.Ordinal),
+      "Active Core-word seek did not resolve the clicked word.");
+    Require(!speech.IsPaused,
+      "Active Core-word seek paused playback.");
+    Require(observed is null ||
+        observed.State != TranscriptPlaybackState.Paused,
+      "Active Core-word seek emitted a paused playback position.");
+  }
+
+  /// <summary>
+  /// A trusted WebView Ctrl+click must enter the shared physical-input
+  /// timeline before the seek command so command correlation cannot reuse a
+  /// stale mouse identity from an unrelated native control.
+  /// </summary>
+  private static void TestPhysicalClickCorrelationIsFresh()
+  {
+    MethodInfo shellMethod = typeof(TranscriptView).GetMethod(
+      "BuildShellHtml",
+      BindingFlags.NonPublic | BindingFlags.Static) ??
+      throw new InvalidOperationException(
+        "TranscriptView.BuildShellHtml() was not found.");
+    string shell = shellMethod.Invoke(null, null) as string ??
+      throw new InvalidOperationException("Transcript shell was empty.");
+    int seekIndex = shell.IndexOf("source:'ctrl-click'", StringComparison.Ordinal);
+    Require(seekIndex >= 0, "Ctrl+click browser handler is missing.");
+    int start = Math.Max(0, seekIndex - 1500);
+    string block = shell.Substring(
+      start,
+      Math.Min(shell.Length - start, seekIndex - start + 300));
+    Require(block.Contains("type:'physical-mouse-click'", StringComparison.Ordinal) &&
+        block.Contains("event.isTrusted", StringComparison.Ordinal),
+      "Ctrl+click does not emit a trusted WebView physical mouse event.");
+
+    EventInfo? inputEvent = typeof(TranscriptView).GetEvent(
+      "PhysicalMouseClickInput",
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    Require(inputEvent is not null,
+      "TranscriptView exposes no physical Ctrl+click input event.");
+
+    MethodInfo? observe = typeof(InputDiagnosticTracker).GetMethod(
+      "ObserveWebViewMouseClick",
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    Require(observe is not null,
+      "InputDiagnosticTracker cannot record a WebView mouse click.");
+    var input = new InputDiagnosticTracker();
+    object?[] arguments =
+    {
+      Keys.Control,
+      false,
+      true,
+      false,
+      "SPAN",
+      "word-9002"
+    };
+    long first = Convert.ToInt64(observe!.Invoke(input, arguments));
+    long second = Convert.ToInt64(observe.Invoke(input, arguments));
+    Require(first > 0 && second > first,
+      "WebView mouse clicks did not receive fresh physical input IDs.");
+    Require(input.RecentMouseInputId == second,
+      "Most recent mouse input did not advance to the trusted WebView click.");
   }
 
   /// <summary>

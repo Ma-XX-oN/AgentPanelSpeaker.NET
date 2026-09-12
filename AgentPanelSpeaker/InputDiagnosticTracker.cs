@@ -129,6 +129,53 @@ internal sealed class InputDiagnosticTracker
     string targetTag,
     string targetId)
   {
+    return ObserveWebViewMouse(
+      "wheel",
+      "vertical-wheel",
+      delta,
+      modifiers,
+      followSpeech,
+      speaking,
+      paused,
+      targetTag,
+      targetId);
+  }
+
+  /// <summary>
+  /// Records one trusted left-click consumed inside WebView2 and returns its
+  /// identity in the shared physical-input timeline.
+  /// </summary>
+  public long ObserveWebViewMouseClick(
+    Keys modifiers,
+    bool followSpeech,
+    bool speaking,
+    bool paused,
+    string targetTag,
+    string targetId)
+  {
+    return ObserveWebViewMouse(
+      "click",
+      "left",
+      0,
+      modifiers,
+      followSpeech,
+      speaking,
+      paused,
+      targetTag,
+      targetId);
+  }
+
+  private long ObserveWebViewMouse(
+    string phase,
+    string code,
+    int delta,
+    Keys modifiers,
+    bool followSpeech,
+    bool speaking,
+    bool paused,
+    string targetTag,
+    string targetId)
+  {
     long inputId = NextInputId();
     _recentMouseInputId = inputId;
     _recentInputId = inputId;
@@ -136,8 +183,8 @@ internal sealed class InputDiagnosticTracker
     {
       inputId,
       kind = "mouse",
-      phase = "wheel",
-      code = "vertical-wheel",
+      phase,
+      code,
       modifiers = modifiers.ToString(),
       repeat = false,
       delta,

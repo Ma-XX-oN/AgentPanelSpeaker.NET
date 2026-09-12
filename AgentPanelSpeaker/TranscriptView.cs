@@ -201,6 +201,11 @@ internal sealed class TranscriptView : UserControl
   public event Action<int, Keys, string, string>? PhysicalWheelInput;
 
   /// <summary>
+  /// Raised for a trusted left-click received inside WebView2.
+  /// </summary>
+  public event Action<Keys, string, string>? PhysicalMouseClickInput;
+
+  /// <summary>
   /// Selects a transcript source and immediately renders its current content.
   /// </summary>
   public void SelectSession(
@@ -1451,29 +1456,20 @@ internal sealed class TranscriptView : UserControl
         }
         return;
       }
+      if (type == "physical-mouse-click")
+      {
+        PhysicalMouseClickInput?.Invoke(
+          ReadModifierKeys(root),
+          ReadOptionalString(root, "targetTag"),
+          ReadOptionalString(root, "targetId"));
+        return;
+      }
       if (type == "physical-wheel")
       {
         int delta = (int)Math.Round(ReadOptionalDouble(root, "delta") ?? 0);
-        Keys modifiers = Keys.None;
-        if (ReadOptionalBoolean(root, "ctrlKey") == true)
-        {
-          modifiers |= Keys.Control;
-        }
-        if (ReadOptionalBoolean(root, "altKey") == true)
-        {
-          modifiers |= Keys.Alt;
-        }
-        if (ReadOptionalBoolean(root, "shiftKey") == true)
-        {
-          modifiers |= Keys.Shift;
-        }
-        if (ReadOptionalBoolean(root, "metaKey") == true)
-        {
-          modifiers |= Keys.LWin;
-        }
         PhysicalWheelInput?.Invoke(
           delta,
-          modifiers,
+          ReadModifierKeys(root),
           ReadOptionalString(root, "targetTag"),
           ReadOptionalString(root, "targetId"));
         return;
@@ -1758,6 +1754,28 @@ internal sealed class TranscriptView : UserControl
     CancellationTokenSource? cancellation = _findCancellation;
     _findCancellation = null;
     cancellation?.Cancel();
+  }
+
+  private static Keys ReadModifierKeys(JsonElement root)
+  {
+    Keys modifiers = Keys.None;
+    if (ReadOptionalBoolean(root, "ctrlKey") == true)
+    {
+      modifiers |= Keys.Control;
+    }
+    if (ReadOptionalBoolean(root, "altKey") == true)
+    {
+      modifiers |= Keys.Alt;
+    }
+    if (ReadOptionalBoolean(root, "shiftKey") == true)
+    {
+      modifiers |= Keys.Shift;
+    }
+    if (ReadOptionalBoolean(root, "metaKey") == true)
+    {
+      modifiers |= Keys.LWin;
+    }
+    return modifiers;
   }
 
   private static string ReadOptionalString(
@@ -4161,12 +4179,6 @@ function assignNodeScopes(nodeMap) {
         const tokenStart = Number(firstWord.dataset.index);
         const tokenEnd = Number(lastWord.dataset.index);
         markNodeRange(tokenStart, tokenEnd, nodeId);
-        markAlignedVoiceSelectableWords(
-          recordLexicalWords,
-          lexicalAlignment,
-          nodeId,
-          segmentNodeWordStart,
-          speechTokenOffsets);
         rememberSegmentRange(
           nodeId,
           tokenStart,
@@ -5565,6 +5577,17 @@ transcript.addEventListener('click', event => {
   if (wordId <= 0) return;
   event.preventDefault();
   event.stopPropagation();
+  if (event.isTrusted) {
+    chrome.webview.postMessage({
+      type:'physical-mouse-click',
+      ctrlKey:event.ctrlKey,
+      altKey:event.altKey,
+      shiftKey:event.shiftKey,
+      metaKey:event.metaKey,
+      targetTag:event.target.tagName,
+      targetId:event.target.id || ''
+    });
+  }
   chrome.webview.postMessage({
     type:'find-seek',
     source:'ctrl-click',

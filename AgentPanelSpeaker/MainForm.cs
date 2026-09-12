@@ -670,6 +670,7 @@ internal sealed class MainForm : Form, IMessageFilter
     _transcriptView.FindSeekEndRequested += TranscriptFindSeekEndRequested;
     _transcriptView.FollowSpeechChanged += TranscriptFollowSpeechChanged;
     _transcriptView.PhysicalWheelInput += TranscriptPhysicalWheelInput;
+    _transcriptView.PhysicalMouseClickInput += TranscriptPhysicalMouseClickInput;
     _processingTimeButton.Click += ProcessingTimeButtonClicked;
     Activated += (_, _) =>
     {
@@ -2229,6 +2230,24 @@ internal sealed class MainForm : Form, IMessageFilter
       ? _maximizeTranscriptButton
       : _diagnosticTabs;
     target.Focus();
+  }
+
+  /// <summary>
+  /// Adds a trusted WebView click to the shared physical-input timeline before
+  /// the corresponding Ctrl+click seek command is dispatched.
+  /// </summary>
+  private void TranscriptPhysicalMouseClickInput(
+    Keys modifiers,
+    string targetTag,
+    string targetId)
+  {
+    _ = _inputDiagnostics.ObserveWebViewMouseClick(
+      modifiers,
+      _transcriptSettingsPopup.Settings.FollowSpeech,
+      _speech.IsSpeaking,
+      _speech.IsPaused,
+      targetTag,
+      targetId);
   }
 
   /// <summary>
