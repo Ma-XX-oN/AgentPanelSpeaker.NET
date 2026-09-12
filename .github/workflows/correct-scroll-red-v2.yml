@@ -1,0 +1,98 @@
+name: Corrected scroll convergence RED verification
+
+on:
+  push:
+    branches:
+      - acceptance-regressions-20260912
+    paths:
+      - '.github/workflows/correct-scroll-red-v2.yml'
+      - '.tmp/correct-scroll-red-v2.py'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-red:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out RED branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Apply corrected permanent scroll RED
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .tmp/correct-scroll-red-v2.py
+          if ($LASTEXITCODE -ne 0) { throw 'Corrected scroll RED generator failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Corrected scroll RED whitespace validation failed.' }
+          $changed = @(git diff --name-only)
+          if ($changed.Count -ne 1 -or $changed[0] -ne 'AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs') {
+            throw "Unexpected corrected RED changed files: $($changed -join ', ')"
+          }
+
+      - name: Build unfixed production with corrected RED
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact real-session RED failures
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = & $exe --test real-session-fixes 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -eq 0) { throw 'Corrected real-session suite unexpectedly passed on unfixed production.' }
+          $failures = @($output -split "`r?`n" | Where-Object { $_ -like 'FAIL  *' })
+          $expected = @(
+            'FAIL  real-session/pending-manual-scroll-converges-after-replacement',
+            'FAIL  real-session/owned-editor-retains-bare-transport-keys',
+            'FAIL  real-session/webview-wheel-input-is-logged-and-correlated'
+          )
+          foreach ($line in $expected) {
+            if ($failures -notcontains $line) {
+              throw "Missing expected RED '$line'. Failures: $($failures -join '; ')"
+            }
+          }
+          if ($failures.Count -ne $expected.Count) {
+            throw "Unexpected additional REDs: $($failures -join '; ')"
+          }
+          $message = 'A completed manual-scroll replacement remained at the unloaded upper edge after the physical-intent timer expired and did not request the next adjacent canonical window.'
+          if (-not $output.Contains($message)) {
+            throw 'Corrected scroll RED failed for the wrong reason.'
+          }
+          exit 0
+
+      - name: Commit corrected permanent regression
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
+          git commit -m 'test: correct rapid-scroll convergence fixture'
+          $red = git rev-parse HEAD
+          "Corrected scroll RED commit: $red" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          git push origin HEAD:acceptance-regressions-20260912
+
+      - name: Mark run as RED evidence
+        shell: pwsh
+        run: |
+          Write-Error 'Corrected rapid-scroll regression reproduced the exact unfixed behavior and was committed. This failure intentionally records RED evidence.'
