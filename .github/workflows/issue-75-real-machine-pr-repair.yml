@@ -57,6 +57,7 @@ jobs:
             throw 'Ctrl+click regressions did not prove both failures RED.'
           }
           Write-Host 'RED-PROVEN fast-scroll, active-seek, and click-correlation.'
+          exit 0
 
       - name: Apply production repairs
         shell: pwsh
