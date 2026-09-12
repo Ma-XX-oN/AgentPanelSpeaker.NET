@@ -38,6 +38,25 @@ jobs:
             throw "Unexpected Core head: $actual"
           }
 
+      - name: Align runtime Core guards
+        shell: pwsh
+        run: |
+          $old = 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002'
+          $new = '8646e2465a0570f5caa663a9109392078e964e45'
+          $files = @(
+            'AgentPanelSpeaker/AIConversationCoreClient.cs',
+            'tools/AIConversationCore-worker.mjs'
+          )
+          foreach ($file in $files) {
+            $text = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE $file))
+            $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+            if ($count -ne 1) { throw "$file expected one old Core SHA, found $count" }
+            [IO.File]::WriteAllText(
+              (Join-Path $env:GITHUB_WORKSPACE $file),
+              $text.Replace($old, $new),
+              [Text.UTF8Encoding]::new($false))
+          }
+
       - name: Install pinned Core dependencies
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
@@ -50,12 +69,19 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Commit Core pin
+      - name: Verify APS Core bridge against exact pin
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test core
+          if ($LASTEXITCODE -ne 0) { throw 'APS Core regression suite failed against the exact Core pin.' }
+
+      - name: Commit runtime Core guard alignment
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add dependencies/AIConversationCore
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs
           git diff --cached --check
-          git commit -m 'build: pin Core structural speech-prefix contract (#75)'
+          git commit -m 'build: align runtime Core pin (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
