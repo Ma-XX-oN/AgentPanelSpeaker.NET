@@ -1372,7 +1372,7 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         "WebView2 core initialization for manual-follow regression");
 
       bool? notifiedFollowState = null;
-      view.FollowSpeechChanged += enabled => notifiedFollowState = enabled;
+      view.FollowSpeechChanged += (enabled, _) => notifiedFollowState = enabled;
       view.SelectSession(
         path,
         AgentSource.Codex,

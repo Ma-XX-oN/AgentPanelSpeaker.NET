@@ -115,6 +115,7 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   private readonly JsonlSessionMonitor _monitor = new();
+  private readonly InputDiagnosticTracker _inputDiagnostics = new();
   private readonly SpeechService _speech = new();
   private readonly ToolTip _toolTip = new();
   private readonly System.Windows.Forms.Timer _fenceDebounceTimer = new();
@@ -2229,16 +2230,28 @@ internal sealed class MainForm : Form, IMessageFilter
     target.Focus();
   }
 
-  private void TranscriptFollowSpeechChanged(bool enabled)
+  private void TranscriptFollowSpeechChanged(bool enabled, string reason)
   {
-    if (_transcriptSettingsPopup.Settings.FollowSpeech == enabled)
+    bool oldFollow = _transcriptSettingsPopup.Settings.FollowSpeech;
+    if (oldFollow == enabled)
     {
       return;
     }
+    long? physicalInputId = _inputDiagnostics.RecentInputId;
     _transcriptSettingsPopup.SetSettings(
       _transcriptSettingsPopup.Settings with { FollowSpeech = enabled },
       ThemeManager.IsDark(GetSelectedTheme()));
     TranscriptSettingsChanged();
+    DiagnosticLog.Write("follow.changed", new
+    {
+      physicalInputId,
+      source = "browser",
+      reason,
+      oldValue = oldFollow,
+      newValue = enabled,
+      speaking = _speech.IsSpeaking,
+      paused = _speech.IsPaused
+    });
     AppendLog($"Transcript follow mode {(enabled ? "enabled" : "disabled")}.");
   }
 
@@ -2286,6 +2299,9 @@ internal sealed class MainForm : Form, IMessageFilter
   {
     DiagnosticLog.Write("transcript.seek_requested", new
     {
+      physicalInputId = eventArgs.Source == "ctrl-click"
+        ? _inputDiagnostics.RecentMouseInputId
+        : _inputDiagnostics.RecentInputId,
       eventArgs.Source,
       eventArgs.WordId
     });
@@ -2325,7 +2341,7 @@ internal sealed class MainForm : Form, IMessageFilter
     string shortcut = (eventArgs.KeyCode & Keys.Modifiers) == Keys.Alt
       ? $"Alt+{FormatTransportKey(keyCode)}"
       : FormatTransportKey(keyCode);
-    _ = ActivateTransportShortcut(keyCode, shortcut);
+    _ = ActivateTransportShortcut(keyCode, shortcut, "webview-bridge");
   }
 
   private void SetDiagnosticsMaximized(bool maximized, bool save = true)
@@ -2627,7 +2643,7 @@ internal sealed class MainForm : Form, IMessageFilter
     TransportKeyPressedEventArgs eventArgs)
   {
     string shortcut = FormatTransportKey(eventArgs.KeyCode);
-    _ = ActivateTransportShortcut(eventArgs.KeyCode, shortcut);
+    _ = ActivateTransportShortcut(eventArgs.KeyCode, shortcut, "profile-control");
   }
 
   /// <summary>
@@ -2794,16 +2810,6 @@ internal sealed class MainForm : Form, IMessageFilter
       return false;
     }
 
-    if (message.Msg is WmLButtonDown or WmRButtonDown or
-        WmMButtonDown or WmXButtonDown or
-        WmNcLButtonDown or WmNcRButtonDown or
-        WmNcMButtonDown or WmNcXButtonDown)
-    {
-      HoverPopupController.HandleGlobalPointerDown(
-        Control.FromChildHandle(message.HWnd));
-      return false;
-    }
-
     IntPtr messageRoot = GetAncestor(message.HWnd, GaRoot);
     bool isMainFormRoot = messageRoot == Handle;
     bool rootIsCurrentProcess = IsWindowFromCurrentProcess(messageRoot);
@@ -2812,6 +2818,29 @@ internal sealed class MainForm : Form, IMessageFilter
           rootIsCurrentProcess))
     {
       return false;
+    }
+
+    long? physicalInputId = _inputDiagnostics.ObserveNativeMessage(
+      message,
+      Control.ModifierKeys & Keys.Modifiers,
+      _transcriptSettingsPopup.Settings.FollowSpeech,
+      _speech.IsSpeaking,
+      _speech.IsPaused);
+
+    bool Finish(bool handled, string route)
+    {
+      _inputDiagnostics.LogDispatch(physicalInputId, route, handled);
+      return handled;
+    }
+
+    if (message.Msg is WmLButtonDown or WmRButtonDown or
+        WmMButtonDown or WmXButtonDown or
+        WmNcLButtonDown or WmNcRButtonDown or
+        WmNcMButtonDown or WmNcXButtonDown)
+    {
+      HoverPopupController.HandleGlobalPointerDown(
+        Control.FromChildHandle(message.HWnd));
+      return Finish(false, "popup-pointer-filter");
     }
 
     if (TryGetVoicePointerSelectModeMessage(
@@ -2824,31 +2853,43 @@ internal sealed class MainForm : Form, IMessageFilter
 
     if (message.Msg is not (WmKeyDown or WmSystemKeyDown))
     {
-      return false;
+      return Finish(false, "message-filter");
     }
 
     Keys keyCode = (Keys)(int)message.WParam & Keys.KeyCode;
     Keys modifiers = Control.ModifierKeys & Keys.Modifiers;
     if (keyCode == Keys.F && modifiers == Keys.Control)
     {
+      _inputDiagnostics.LogCommand(
+        physicalInputId,
+        "OpenFind",
+        "message-filter",
+        "Ctrl+F",
+        _transcriptSettingsPopup.Settings.FollowSpeech,
+        _speech.IsSpeaking,
+        _speech.IsPaused);
       _transcriptView.OpenFind();
-      return true;
+      return Finish(true, "message-filter");
     }
     bool hasAltOnly = modifiers == Keys.Alt;
     bool hasNoModifiers = modifiers == Keys.None;
     if (!hasAltOnly && !hasNoModifiers)
     {
-      return false;
+      return Finish(false, "message-filter");
     }
     if (hasNoModifiers && IsTransportShortcutBlockedByFocusedControl())
     {
-      return false;
+      return Finish(false, "message-filter");
     }
 
     string shortcut = hasAltOnly
       ? $"Alt+{FormatTransportKey(keyCode)}"
       : FormatTransportKey(keyCode);
-    return ActivateTransportShortcut(keyCode, shortcut);
+    bool handled = ActivateTransportShortcut(
+      keyCode,
+      shortcut,
+      "message-filter");
+    return Finish(handled, "message-filter");
   }
 
   /// <summary>
@@ -2902,7 +2943,10 @@ internal sealed class MainForm : Form, IMessageFilter
     string shortcut = hasAltOnly
       ? $"Alt+{FormatTransportKey(keyCode)}"
       : FormatTransportKey(keyCode);
-    bool result = ActivateTransportShortcut(keyCode, shortcut) ||
+    bool result = ActivateTransportShortcut(
+      keyCode,
+      shortcut,
+      "process-cmd-key") ||
       base.ProcessCmdKey(ref message, keyData);
     CompleteMainTabDiagnostics(keyData, tabBefore, result);
     return result;
@@ -3207,18 +3251,43 @@ internal sealed class MainForm : Form, IMessageFilter
   /// <summary>
   /// Activates one transport command from the form or profile editor.
   /// </summary>
-  private bool ActivateTransportShortcut(Keys keyCode, string shortcut)
+  private bool ActivateTransportShortcut(
+    Keys keyCode,
+    string shortcut,
+    string route = "native")
   {
+    long? physicalInputId = _inputDiagnostics.GetRecentKeyInputId(keyCode);
     if (keyCode == Keys.Oemplus)
     {
+      bool oldFollow = _transcriptSettingsPopup.Settings.FollowSpeech;
+      bool newFollow = !oldFollow;
+      _inputDiagnostics.LogCommand(
+        physicalInputId,
+        "ToggleFollow",
+        route,
+        shortcut,
+        oldFollow,
+        _speech.IsSpeaking,
+        _speech.IsPaused);
       _transcriptSettingsPopup.SetSettings(
         _transcriptSettingsPopup.Settings with
         {
-          FollowSpeech = !_transcriptSettingsPopup.Settings.FollowSpeech
+          FollowSpeech = newFollow
         },
         ThemeManager.IsDark(GetSelectedTheme()));
       TranscriptSettingsChanged();
-      AppendLog($"Transcript follow mode {(_transcriptSettingsPopup.Settings.FollowSpeech ? "enabled" : "disabled")}.");
+      DiagnosticLog.Write("follow.changed", new
+      {
+        physicalInputId,
+        source = "keyboard",
+        route,
+        oldValue = oldFollow,
+        newValue = newFollow,
+        shortcut,
+        speaking = _speech.IsSpeaking,
+        paused = _speech.IsPaused
+      });
+      AppendLog($"Transcript follow mode {(newFollow ? "enabled" : "disabled")}.");
       return true;
     }
 
@@ -3227,6 +3296,15 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       return false;
     }
+
+    _inputDiagnostics.LogCommand(
+      physicalInputId,
+      action.ToString(),
+      route,
+      shortcut,
+      _transcriptSettingsPopup.Settings.FollowSpeech,
+      _speech.IsSpeaking,
+      _speech.IsPaused);
 
     if (action == HotkeyAction.ToggleTranscriptSize)
     {

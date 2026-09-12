@@ -193,7 +193,7 @@ internal sealed class TranscriptView : UserControl
   /// <summary>
   /// Raised when the transcript overlay or manual scrolling changes follow mode.
   /// </summary>
-  public event Action<bool>? FollowSpeechChanged;
+  public event Action<bool, string>? FollowSpeechChanged;
 
   /// <summary>
   /// Selects a transcript source and immediately renders its current content.
@@ -283,7 +283,29 @@ internal sealed class TranscriptView : UserControl
   public void ApplySettings(TranscriptSettings settings, bool dark)
   {
     LogViewState("apply-settings", "begin", requestedDark: dark);
-    _settings = settings.Normalize();
+    TranscriptSettings normalized = settings.Normalize();
+    bool oldFollow = _settings.FollowSpeech;
+    bool followEnabled = !oldFollow && normalized.FollowSpeech;
+    TranscriptPlaybackPosition? reattachPosition = null;
+    if (followEnabled)
+    {
+      if (_pendingPosition is TranscriptPlaybackPosition current &&
+          current.State is TranscriptPlaybackState.Speaking or
+            TranscriptPlaybackState.Paused &&
+          (current.WordId is > 0 || current.NodeId > 0))
+      {
+        reattachPosition = current;
+      }
+      else if (_lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+               located.State is TranscriptPlaybackState.Speaking or
+                 TranscriptPlaybackState.Paused &&
+               (located.WordId is > 0 || located.NodeId > 0))
+      {
+        reattachPosition = located;
+      }
+    }
+
+    _settings = normalized;
     _virtualDocument?.SetShowRolledBackHistory(
       _settings.ShowRolledBackHistory);
     _dark = dark;
@@ -302,7 +324,21 @@ internal sealed class TranscriptView : UserControl
     _failureLabel.ForeColor = text;
     if (_initialized)
     {
-      QueueSettingsApply(immediate: false);
+      QueueSettingsApply(immediate: followEnabled);
+    }
+    DiagnosticLog.Write("transcript.follow_settings_transition", new
+    {
+      oldValue = oldFollow,
+      newValue = _settings.FollowSpeech,
+      followEnabled,
+      retainedWordId = reattachPosition?.WordId,
+      retainedNodeId = reattachPosition?.NodeId,
+      windowStartIndex = _windowStartIndex,
+      windowEndIndex = _windowEndIndex
+    });
+    if (reattachPosition is not null)
+    {
+      ShowPlaybackPosition(reattachPosition);
     }
     LogViewState("apply-settings", "end", requestedDark: dark);
   }
@@ -393,10 +429,20 @@ internal sealed class TranscriptView : UserControl
     TranscriptSettings settings = _settings;
     bool dark = _dark;
     Color colour = settings.GetHighlightColour(dark);
+    long sequence = ++_settingsMessageSequence;
+    DiagnosticLog.Write("transcript.settings_posted", new
+    {
+      sequence,
+      followSpeech = settings.FollowSpeech,
+      settings.ShowRolledBackHistory,
+      layoutGeneration = _layoutGeneration,
+      windowStartIndex = _windowStartIndex,
+      windowEndIndex = _windowEndIndex
+    });
     PostMessage(new
     {
       type = "settings",
-      sequence = ++_settingsMessageSequence,
+      sequence,
       highlight = ToCss(colour),
       duration = settings.FadeMilliseconds,
       follow = settings.FollowSpeech,
@@ -419,6 +465,9 @@ internal sealed class TranscriptView : UserControl
       position.CharacterCount,
       position.BoundaryTimestamp,
       position.WordId,
+      followSpeech = _settings.FollowSpeech,
+      windowStartIndex = _windowStartIndex,
+      windowEndIndex = _windowEndIndex,
       postedTimestamp = Stopwatch.GetTimestamp()
     });
     PostMessage(new
@@ -1201,6 +1250,12 @@ internal sealed class TranscriptView : UserControl
           rangeEnd = ReadOptionalInt32(root, "rangeEnd"),
           boundaryWordIndex = ReadOptionalInt32(root, "boundaryWordIndex"),
           boundaryTimestamp = ReadOptionalInt64(root, "boundaryTimestamp"),
+          followSpeech = ReadOptionalBoolean(root, "followSpeech"),
+          targetVisible = ReadOptionalBoolean(root, "targetVisible"),
+          windowStartIndex = ReadOptionalInt32(root, "windowStartIndex"),
+          windowEndIndex = ReadOptionalInt32(root, "windowEndIndex"),
+          scrollY = ReadOptionalDouble(root, "scrollY"),
+          viewportHeight = ReadOptionalDouble(root, "viewportHeight"),
           javascriptTimestamp = ReadOptionalString(root, "javascriptTimestamp"),
           receivedTimestamp = Stopwatch.GetTimestamp()
         });
@@ -1394,7 +1449,16 @@ internal sealed class TranscriptView : UserControl
       if (type == "follow-changed")
       {
         bool enabled = ReadOptionalBoolean(root, "enabled") == true;
-        FollowSpeechChanged?.Invoke(enabled);
+        string reason = ReadOptionalString(root, "reason");
+        DiagnosticLog.Write("transcript.follow_browser_changed", new
+        {
+          enabled,
+          reason,
+          windowStartIndex = _windowStartIndex,
+          windowEndIndex = _windowEndIndex,
+          pendingWordId = _pendingPosition?.WordId
+        });
+        FollowSpeechChanged?.Invoke(enabled, reason);
         return;
       }
       if (type == "find-seek")
@@ -3595,11 +3659,15 @@ function updateFollowToggle() {
     : 'Not following speech; click or press = to follow';
 }
 
-function setFollowSpeech(enabled, notify) {
+function setFollowSpeech(enabled, notify, reason = 'unspecified') {
   followSpeech = !!enabled;
   updateFollowToggle();
   if (notify) {
-    chrome.webview.postMessage({type:'follow-changed', enabled:followSpeech});
+    chrome.webview.postMessage({
+      type:'follow-changed',
+      enabled:followSpeech,
+      reason
+    });
   }
   if (followSpeech) {
     const target = currentCanonicalPlaybackElements[0] ||
@@ -4470,6 +4538,7 @@ function setCanonicalPlayback(state, wordId) {
     element.classList.add(className);
   }
   const target = elements[0];
+  if (followSpeech) openAncestors(target);
   maybePrefetchVoiceCursor(target);
   reveal(target);
 }
@@ -4483,7 +4552,7 @@ function restoreRetainedPlaybackProjection() {
     retainedPlayback.wordIndex,
     retainedPlayback.wordText,
     retainedPlayback.nodeId,
-    false,
+    preservedFollow,
     retainedPlayback.wordId);
   // Projection restoration must never change the user's follow setting.
   setFollowSpeech(preservedFollow, false);
@@ -4680,7 +4749,7 @@ async function showFindMatch(
       trigger === 'reopened') {
     findEditOrigin = null;
   }
-  if (followSpeech) setFollowSpeech(false, true);
+  if (followSpeech) setFollowSpeech(false, true, 'find-navigation');
   const key = makeRecordKey(match.recordNumber);
   let recordWords = displayWordsByRecord.get(key);
   if (!recordWords &&
@@ -5040,7 +5109,7 @@ findPopup.addEventListener('keydown', event => {
 });
 
 followToggle.addEventListener('click', () => {
-  setFollowSpeech(!followSpeech, true);
+  setFollowSpeech(!followSpeech, true, 'overlay-click');
   if (followSpeech && currentCanonicalPlaybackWordId > 0 &&
       canonicalPlaybackElements(currentCanonicalPlaybackWordId).length === 0) {
     requestCanonicalPlaybackWindow(currentCanonicalPlaybackWordId);
@@ -5060,6 +5129,7 @@ let lastManualScrollY = window.scrollY;
 let userScrollIntentUntil = 0;
 let userScrollIntentDirection = 0;
 let lastTouchY = Number.NaN;
+let scrollbarPointerActive = false;
 let windowShiftRequestSequence = 0;
 let lastWindowTransactionDiagnostic = null;
 
@@ -5123,8 +5193,18 @@ window.addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
   const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
   if (scrollbarWidth > 0 && event.clientX >= document.documentElement.clientWidth) {
+    scrollbarPointerActive = true;
     markUserScrollIntent();
   }
+}, {capture:true});
+window.addEventListener('pointermove', () => {
+  if (scrollbarPointerActive) markUserScrollIntent();
+}, {capture:true});
+window.addEventListener('pointerup', () => {
+  scrollbarPointerActive = false;
+}, {capture:true});
+window.addEventListener('pointercancel', () => {
+  scrollbarPointerActive = false;
 }, {capture:true});
 
 function firstVisibleVirtualRecord(direction = 0) {
@@ -5231,22 +5311,27 @@ window.addEventListener('scroll', () => {
   if (Math.abs(delta) <= VW_SCROLL_DIRECTION_EPSILON_PX) return;
 
   const direction = delta > 0 ? 1 : -1;
-  const explicitUserIntent = now <= userScrollIntentUntil;
+  const explicitUserIntent =
+    scrollbarPointerActive || now <= userScrollIntentUntil;
+  // A scroll event by itself is not evidence of user intent. Playback reveal,
+  // smooth scrolling, spacer replacement, and anchor restoration all generate
+  // scroll events. Only an explicit physical wheel/touch/key/scrollbar action
+  // is allowed to disable Follow or drive manual virtual-window shifting.
+  if (!explicitUserIntent) return;
   if (now <= programmaticScrollUntil) {
     // A physical input can override a programmatic scroll only when the
     // resulting movement agrees with that input. Window replacement and
     // anchor restoration can move scrollY in the opposite direction while the
     // earlier user-intent timer is still alive; that movement is not a second
     // user gesture and must not start a competing virtual-window shift.
-    if (!explicitUserIntent ||
-        (userScrollIntentDirection !== 0 &&
-         direction !== userScrollIntentDirection)) {
+    if (userScrollIntentDirection !== 0 &&
+        direction !== userScrollIntentDirection) {
       return;
     }
     programmaticScrollUntil = 0;
   }
 
-  if (followSpeech) setFollowSpeech(false, true);
+  if (followSpeech) setFollowSpeech(false, true, 'manual-scroll');
   if (virtualShiftFrame) cancelAnimationFrame(virtualShiftFrame);
   virtualShiftFrame = requestAnimationFrame(() => {
     virtualShiftFrame = 0;
@@ -5351,6 +5436,10 @@ chrome.webview.addEventListener('message', event => {
     data.nodeId,
     data.follow,
     data.wordId);
+  const appliedTarget = data.wordId
+    ? document.getElementById(`word-${data.wordId}`)
+    : document.querySelector('.word.speaking,.word.paused');
+  const appliedRect = appliedTarget?.getBoundingClientRect();
   chrome.webview.postMessage({
     type: 'playback-applied',
     sequence: data.sequence,
@@ -5360,10 +5449,32 @@ chrome.webview.addEventListener('message', event => {
     wordText: data.wordText || '',
     fragmentText: data.fragmentText || '',
     state: data.state || '',
+    follow: followSpeech,
+    requestedPlaybackWordId,
+    windowStartIndex,
+    windowEndIndex,
+    markerVisible: currentCanonicalPlaybackElements.length > 0
+      ? currentCanonicalPlaybackElements.some(element => {
+          const rect = element.getBoundingClientRect();
+          return rect.bottom > 0 && rect.top < window.innerHeight;
+        })
+      : currentIndex >= 0 && words[currentIndex]
+        ? (() => {
+            const rect = words[currentIndex].getBoundingClientRect();
+            return rect.bottom > 0 && rect.top < window.innerHeight;
+          })()
+        : false,
     rangeStart: currentIndex,
     rangeEnd: currentEndIndex,
     boundaryWordIndex: currentBoundaryWordIndex,
     boundaryTimestamp: data.boundaryTimestamp,
+    followSpeech,
+    targetVisible: !!appliedRect &&
+      appliedRect.bottom > 0 && appliedRect.top < window.innerHeight,
+    windowStartIndex,
+    windowEndIndex,
+    scrollY: window.scrollY,
+    viewportHeight: window.innerHeight,
     javascriptTimestamp: String(performance.now())
   });
 });
@@ -5402,7 +5513,7 @@ window.addEventListener('keydown', event => {
       !findPopup.contains(document.activeElement)) {
     event.preventDefault();
     event.stopPropagation();
-    setFollowSpeech(false, true);
+    setFollowSpeech(false, true, 'keyboard-edge');
     chrome.webview.postMessage({
       type:'window-edge',
       edge:event.key === 'Home' ? 'start' : 'end'
