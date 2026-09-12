@@ -75,6 +75,7 @@ jobs:
         shell: pwsh
         run: |
           python scripts/apply-acceptance-fixes-57-77-78.py --phase production
+          python scripts/finalize-acceptance-production.py
           git diff --check
 
       - name: Build production repair
@@ -107,7 +108,7 @@ jobs:
       - name: Commit focused-GREEN production repair
         shell: pwsh
         run: |
-          git add AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/InputDiagnosticTracker.cs README.md
+          git add AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/InputDiagnosticTracker.cs AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs README.md
           git diff --check --cached
           if (-not (git diff --cached --quiet)) {
             git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: restore Follow contract and correlate physical input (#57 #77 #78)'
