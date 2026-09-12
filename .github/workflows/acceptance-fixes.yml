@@ -1,0 +1,114 @@
+name: Acceptance production repair validation
+
+on:
+  push:
+    branches:
+      - acceptance-fixes-20260912
+    paths:
+      - '.github/workflows/acceptance-fixes.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  validate-fixes:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repair branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Apply production repairs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .tmp/apply-acceptance-fixes-v2.py
+          if ($LASTEXITCODE -ne 0) { throw 'Production repair generator failed.' }
+
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Production repair whitespace validation failed.' }
+
+          $changed = @(git diff --name-only)
+          $expected = @(
+            'AgentPanelSpeaker/InputDiagnosticTracker.cs',
+            'AgentPanelSpeaker/JsonlSessionMonitor.cs',
+            'AgentPanelSpeaker/MainForm.cs',
+            'AgentPanelSpeaker/SpeechService.cs',
+            'AgentPanelSpeaker/TranscriptView.cs',
+            'README.md'
+          )
+          if (@(Compare-Object $changed $expected).Count -ne 0) {
+            throw "Unexpected production changed files: $($changed -join ', ')"
+          }
+
+      - name: Build repaired application
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run exact RED suites GREEN
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $suites = @(
+            'user-context-speech',
+            'core-word-id-migration',
+            'real-session-fixes'
+          )
+          foreach ($suite in $suites) {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
+            if ($LASTEXITCODE -ne 0) {
+              throw "Exact repaired suite '$suite' failed."
+            }
+          }
+
+      - name: Run directly impacted regression suites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $suites = @(
+            'rolled-back-speech',
+            'virtual-window',
+            'word-materialization',
+            'ctrl-click-voice-pointer'
+          )
+          foreach ($suite in $suites) {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
+            if ($LASTEXITCODE -ne 0) {
+              throw "Impacted suite '$suite' failed."
+            }
+          }
+
+      - name: Commit verified production repairs
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/InputDiagnosticTracker.cs
+          git add AgentPanelSpeaker/JsonlSessionMonitor.cs
+          git add AgentPanelSpeaker/MainForm.cs
+          git add AgentPanelSpeaker/SpeechService.cs
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git add README.md
+          git commit -m 'fix: repair real-machine acceptance regressions'
+          $fixed = git rev-parse HEAD
+          "Verified production repair commit: $fixed" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          git push origin HEAD:acceptance-fixes-20260912
