@@ -863,6 +863,11 @@ internal static class Issue54RealSessionRegressionTestRunner
         "Follow ON to reattach the retained canonical cursor",
         timeoutMilliseconds: 8000);
 
+      // The OFF->ON transition can still be completing its asynchronous Core
+      // materialization when the first applied marker arrives. Let that one
+      // transition settle before taking the inverse-contract baseline. Any
+      // later marker can then be attributed to the already-ON settings apply.
+      PumpMessages(500);
       int appliedAfterEnable = exactPlaybackApplied;
       int startAfterEnable = ReadField<int>(view, "_windowStartIndex");
       int endAfterEnable = ReadField<int>(view, "_windowEndIndex");
@@ -945,8 +950,11 @@ internal static class Issue54RealSessionRegressionTestRunner
     bubbles: true,
     cancelable: true
   }));
-  const next = window.scrollY + 220;
-  window.scrollTo(0, next);
+  // The initial virtual window is normally at the end of the transcript, so a
+  // real downward scroll can clamp at the document boundary on CI. Drive the
+  // scroll handler with a deterministic positive delta after the physical wheel
+  // event; this tests intent classification without depending on page geometry.
+  lastManualScrollY = window.scrollY - 220;
   window.dispatchEvent(new Event('scroll'));
 })()
 """);
