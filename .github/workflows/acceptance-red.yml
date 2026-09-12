@@ -35,12 +35,23 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Apply RED-only acceptance patch
+      - name: Apply RED-only acceptance edits
         shell: pwsh
         run: |
-          git apply --check .tmp/acceptance-red.patch
-          git apply .tmp/acceptance-red.patch
+          $ErrorActionPreference = 'Stop'
+          python .tmp/apply-acceptance-red.py
+          if ($LASTEXITCODE -ne 0) { throw 'RED edit generator failed.' }
           git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'RED edit whitespace validation failed.' }
+          $changed = @(git diff --name-only)
+          $expected = @(
+            'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs',
+            'AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs',
+            'AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs'
+          )
+          if (@(Compare-Object $changed $expected).Count -ne 0) {
+            throw "Unexpected RED changed files: $($changed -join ', ')"
+          }
 
       - name: Compile RED regressions before recording them
         shell: pwsh
