@@ -69,29 +69,16 @@ jobs:
 
           $issue26 = 'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs'
           $generated26 = Get-Content $issue26 -Raw
-          $liveCleanup = "      form.Dispose();"
-          $liveCleanupCount = ([regex]::Matches(
+          $legacyCleanup = "      form.Dispose();"
+          $legacyCleanupCount = ([regex]::Matches(
             $generated26,
-            [regex]::Escape($liveCleanup))).Count
-          if ($liveCleanupCount -ne 2) {
-            throw "Expected active and live-monitor MainForm cleanup sites, found $liveCleanupCount."
+            [regex]::Escape($legacyCleanup))).Count
+          if ($legacyCleanupCount -ne 1) {
+            throw "Expected one legacy MainForm cleanup site, found $legacyCleanupCount."
           }
-          $activeCleanup = "      Application.RemoveMessageFilter(form);`r`n      form.Dispose();"
-          if (-not $generated26.Contains($activeCleanup)) {
-            throw 'Active User Context cleanup was not generated correctly.'
-          }
-          $remainingDispose = $generated26.IndexOf(
-            $liveCleanup,
-            $generated26.IndexOf($activeCleanup) + $activeCleanup.Length)
-          if ($remainingDispose -lt 0) {
-            $remainingDispose = $generated26.IndexOf($liveCleanup)
-          }
-          if ($remainingDispose -ge 0) {
-            $generated26 = $generated26.Remove($remainingDispose, $liveCleanup.Length)
-            $generated26 = $generated26.Insert(
-              $remainingDispose,
-              "      Application.RemoveMessageFilter(form);`r`n      form.Dispose();")
-          }
+          $generated26 = $generated26.Replace(
+            $legacyCleanup,
+            "      Application.RemoveMessageFilter(form);`r`n      form.Dispose();")
           Set-Content $issue26 $generated26 -NoNewline
 
           git diff --check
