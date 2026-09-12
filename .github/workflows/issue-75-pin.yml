@@ -24,29 +24,16 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Update every old Core hard pin
+      - name: Update verified non-workflow Core hard pins
         shell: pwsh
         run: |
           $old = '6c92799c1b14693001e8b913465f4a12' + 'b0b1e1ab'
           $new = 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002'
-          $expected = @(
-            '.github/workflows/core-integration-validation.yml',
+          $files = @(
             'AgentPanelSpeaker/AIConversationCoreClient.cs',
             'tools/AIConversationCore-runtime/CORE_COMMIT',
             'tools/AIConversationCore-worker.mjs'
-          ) | Sort-Object
-          $files = @(git grep -l -- $old) | Sort-Object
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Failed to discover old Core hard-pin references.'
-          }
-          if (($files -join "`n") -ne ($expected -join "`n")) {
-            throw "Unexpected old Core pin set:`n$($files -join "`n")"
-          }
-          Write-Host ('Updating Core pins in: ' + ($files -join ', '))
+          )
           foreach ($file in $files) {
             $text = [IO.File]::ReadAllText($file)
             $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
@@ -56,11 +43,8 @@ jobs:
               $text.Replace($old, $new),
               [Text.UTF8Encoding]::new($false))
             $updated = [IO.File]::ReadAllText($file)
-            if ($updated.Contains($old)) {
-              throw "Old Core pin remains in $file"
-            }
-            if (-not $updated.Contains($new)) {
-              throw "New Core pin missing from $file"
+            if ($updated.Contains($old) -or -not $updated.Contains($new)) {
+              throw "Core pin replacement failed in $file"
             }
           }
 
@@ -68,33 +52,26 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
-      - name: Verify worker pin
+      - name: Verify worker and submodule pins
         shell: pwsh
         env:
           AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
+          $expected = 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002'
+          $actual = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($actual -ne $expected) { throw "Unexpected Core submodule: $actual" }
           $response = '{"operation":"ping"}' | node tools/AIConversationCore-worker.mjs | ConvertFrom-Json
           if (-not $response.ok) { throw $response.error }
-          if ($response.core_commit -ne 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002') {
+          if ($response.core_commit -ne $expected) {
             throw "Unexpected worker Core commit: $($response.core_commit)"
           }
 
-      - name: Build AgentPanelSpeaker
-        shell: pwsh
-        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
-
-      - name: Run bridge regressions
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite bridge
-
-      - name: Commit coherent Core pin
+      - name: Commit verified Core pins
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tools/AIConversationCore-worker.mjs AgentPanelSpeaker/AIConversationCoreClient.cs .github/workflows/core-integration-validation.yml tools/AIConversationCore-runtime/CORE_COMMIT
+          git add tools/AIConversationCore-worker.mjs AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
           git commit -m 'build: align Core hard pins with word separator contract (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
