@@ -1,4 +1,4 @@
-name: Issue 75 production Core word boundaries
+name: Issue 75 Core speech word ranges
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - issue-75-core-word-id-migration
     paths:
       - '.github/workflows/issue-75-production-wordids.yml'
-      - 'tools/issue75-production-wordids.py'
+      - 'tools/issue75-speech-word-ranges.py'
 
 permissions:
   contents: write
@@ -29,25 +29,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Apply Core-boundary history propagation
+      - name: Apply Core speech word ranges
         shell: pwsh
-        run: python tools/issue75-production-wordids.py
-
-      - name: Keep User Context parity test segmentation-neutral
-        shell: pwsh
-        run: |
-          $path = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs'
-          $text = [IO.File]::ReadAllText($path)
-          $old = 'string.Equals(fragment.Text, nestedFragment, StringComparison.Ordinal)'
-          $new = 'fragment.Text.Contains("Nested numbered item with a table inside it", StringComparison.Ordinal)'
-          $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
-          if ($count -ne 1) {
-            throw "Expected one raw-Markdown speech-fragment lookup, found $count"
-          }
-          [IO.File]::WriteAllText(
-            $path,
-            $text.Replace($old, $new),
-            [Text.UTF8Encoding]::new($false))
+        run: python tools/issue75-speech-word-ranges.py
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -61,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          $log = Join-Path $env:RUNNER_TEMP 'issue75-production-wordids.log'
+          $log = Join-Path $env:RUNNER_TEMP 'issue75-speech-word-ranges.log'
           $threw = $false
           try {
             & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration *> $log
@@ -71,26 +55,22 @@ jobs:
           }
           $text = Get-Content -Raw $log
           Write-Host $text
-          if (-not $threw) { throw 'Expected remaining #75 REDs.' }
-          if (-not $text.Contains('PASS  core-word-id/production-history-carries-core-word-ids')) {
-            throw 'Ordinary production history Core IDs did not turn GREEN.'
-          }
-          if (-not $text.Contains('FAIL  core-word-id/ordered-list-history-preserves-core-word-boundaries')) {
-            throw 'Ordered-list boundary regression unexpectedly disappeared.'
-          }
-          if (-not $text.Contains('Seeking the ordered-list body word did not land on Item.')) {
-            throw 'Ordered-list RED did not advance to the speech-boundary defect.'
+          if (-not $threw) { throw 'Expected three remaining #75 REDs.' }
+          if (-not $text.Contains('PASS  core-word-id/ordered-list-history-preserves-core-word-boundaries')) {
+            throw 'Ordered-list Core boundary regression did not turn GREEN.'
           }
           $remaining = @(
             'FAIL  core-word-id/ctrl-click-posts-exact-canonical-word-id',
             'FAIL  core-word-id/speech-seek-uses-only-canonical-word-id',
-            'FAIL  core-word-id/ordered-list-history-preserves-core-word-boundaries',
             'FAIL  core-word-id/policy-is-centralized-without-per-word-eligibility-mutation'
           )
           foreach ($line in $remaining) {
             if (-not $text.Contains($line)) { throw "Missing intended remaining RED: $line" }
           }
-          if (-not $text.Contains('FAIL: 4/12 issue #75 regressions failed.')) {
+          if ($text.Contains('FAIL  core-word-id/ordered-list-history-preserves-core-word-boundaries')) {
+            throw 'Ordered-list Core boundary regression is still RED.'
+          }
+          if (-not $text.Contains('FAIL: 3/12 issue #75 regressions failed.')) {
             throw 'Unexpected #75 focused failure count.'
           }
 
@@ -100,12 +80,12 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite speech-ordinals
 
-      - name: Commit verified Core-boundary propagation
+      - name: Commit verified speech word ranges
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/ExtractionOptions.cs AgentPanelSpeaker/CanonicalProjectionExtractor.cs AgentPanelSpeaker/JsonlSessionMonitor.cs AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs
+          git add AgentPanelSpeaker/SpeechFragment.cs AgentPanelSpeaker/JsonlSessionMonitor.cs AgentPanelSpeaker/SpeechService.cs
           git diff --cached --check
-          git commit -m 'feat: propagate Core word boundaries into history (#75)'
+          git commit -m 'feat: map speech boundaries to Core word ranges (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
