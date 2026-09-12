@@ -30,7 +30,20 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Detect committed production repair
+        id: repair_state
+        shell: pwsh
+        run: |
+          $committed = $false
+          git merge-base --is-ancestor 8bfcd25 HEAD
+          if ($LASTEXITCODE -eq 0) {
+            $committed = $true
+          }
+          "committed=$($committed.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Write-Host "Production repair already committed: $committed"
+
       - name: Apply permanent RED regressions
+        if: steps.repair_state.outputs.committed != 'true'
         shell: pwsh
         run: |
           python scripts/apply-acceptance-fixes-57-77-78.py --phase test
@@ -44,10 +57,12 @@ jobs:
           }
 
       - name: Build RED test commit
+        if: steps.repair_state.outputs.committed != 'true'
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
       - name: Prove exact regressions RED before production changes
+        if: steps.repair_state.outputs.committed != 'true'
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
@@ -73,6 +88,7 @@ jobs:
           }
 
       - name: Apply production fixes and diagnostic contract
+        if: steps.repair_state.outputs.committed != 'true'
         shell: pwsh
         run: |
           python scripts/apply-acceptance-fixes-57-77-78.py --phase production
@@ -119,6 +135,7 @@ jobs:
           }
 
       - name: Commit focused-GREEN production repair
+        if: steps.repair_state.outputs.committed != 'true'
         shell: pwsh
         run: |
           git add AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/InputDiagnosticTracker.cs AgentPanelSpeaker/Issue37VirtualWindowRegressionTestRunner.cs README.md
@@ -149,11 +166,22 @@ jobs:
       - name: Verify full built AgentPanelSpeaker suite
         shell: pwsh
         run: |
-          & tools/Invoke-TestSuite.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw 'Test-suite completion guard failed.' }
+          $pwsh = (Get-Command pwsh).Source
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools\Invoke-TestSuite.ps1'
+          $selfOut = Join-Path $env:RUNNER_TEMP 'suite-selftest.stdout.txt'
+          $selfErr = Join-Path $env:RUNNER_TEMP 'suite-selftest.stderr.txt'
+          $self = Start-Process -FilePath $pwsh -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-File',$script,'-SelfTest') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $selfOut -RedirectStandardError $selfErr
+          Get-Content $selfOut -ErrorAction SilentlyContinue | Write-Host
+          Get-Content $selfErr -ErrorAction SilentlyContinue | Write-Host
+          if ($self.ExitCode -ne 0) { throw "Test-suite completion guard failed with exit $($self.ExitCode)." }
+
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
-          if ($LASTEXITCODE -ne 0) { throw 'Full built AgentPanelSpeaker suite failed.' }
+          $suiteOut = Join-Path $env:RUNNER_TEMP 'suite-all.stdout.txt'
+          $suiteErr = Join-Path $env:RUNNER_TEMP 'suite-all.stderr.txt'
+          $suite = Start-Process -FilePath $pwsh -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-File',$script,'-Executable',$exe,'-Suite','all') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $suiteOut -RedirectStandardError $suiteErr
+          Get-Content $suiteOut -ErrorAction SilentlyContinue | Write-Host
+          Get-Content $suiteErr -ErrorAction SilentlyContinue | Write-Host
+          if ($suite.ExitCode -ne 0) { throw "Full built AgentPanelSpeaker suite failed with exit $($suite.ExitCode)." }
 
       - name: Publish and verify deployed application
         shell: pwsh
@@ -163,8 +191,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
           $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
           if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
-          if ($LASTEXITCODE -ne 0) { throw 'Full published AgentPanelSpeaker suite failed.' }
+
+          $pwsh = (Get-Command pwsh).Source
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools\Invoke-TestSuite.ps1'
+          $suiteOut = Join-Path $env:RUNNER_TEMP 'published-suite-all.stdout.txt'
+          $suiteErr = Join-Path $env:RUNNER_TEMP 'published-suite-all.stderr.txt'
+          $suite = Start-Process -FilePath $pwsh -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-File',$script,'-Executable',$exe,'-Suite','all') -Wait -PassThru -NoNewWindow -RedirectStandardOutput $suiteOut -RedirectStandardError $suiteErr
+          Get-Content $suiteOut -ErrorAction SilentlyContinue | Write-Host
+          Get-Content $suiteErr -ErrorAction SilentlyContinue | Write-Host
+          if ($suite.ExitCode -ne 0) { throw "Full published AgentPanelSpeaker suite failed with exit $($suite.ExitCode)." }
 
       - name: Build and run display parity validation
         shell: pwsh
