@@ -39,6 +39,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $issue54 = 'AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs'
+          $text = Get-Content $issue54 -Raw
+          $old = '  /// Reproduces issue #58 without splitting Core atomic units. A final turn can'
+          $new = "  /// Reproduces issue #58 without splitting Core atomic units.`r`n  /// A final turn can"
+          if (-not $text.Contains($old)) {
+            throw 'Issue #58 comment anchor did not match expected source.'
+          }
+          Set-Content $issue54 ($text.Replace($old, $new)) -NoNewline
+
           python .tmp/apply-acceptance-red.py
           if ($LASTEXITCODE -ne 0) { throw 'RED edit generator failed.' }
           git diff --check
