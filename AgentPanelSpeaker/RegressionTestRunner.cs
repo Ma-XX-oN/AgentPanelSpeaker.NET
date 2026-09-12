@@ -269,8 +269,8 @@ internal static class RegressionTestRunner
   {
     TranscriptPresentationDomResult result = BuildPresentationFixture();
     string html = result.Html;
-    Require(html.Contains(UnicodeProbe, StringComparison.Ordinal),
-      "Presentation HTML lost the Unicode probe.");
+    Require(ContainsCanonicalBlockText(result, UnicodeProbe),
+      "Presentation projection lost the canonical Unicode block text.");
     Require(!html.Contains("â€”", StringComparison.Ordinal),
       "Presentation HTML contains em-dash mojibake.");
     Require(html.Contains("<summary>Having 2 thoughts</summary>", StringComparison.Ordinal),
@@ -509,9 +509,15 @@ internal static class RegressionTestRunner
     TranscriptPresentationDomResult result = BuildPresentationFixture();
     int detailsStart = result.Html.IndexOf("<details", StringComparison.OrdinalIgnoreCase);
     int detailsEnd = result.Html.IndexOf("</details>", StringComparison.OrdinalIgnoreCase);
-    int firstThought = result.Html.IndexOf(UnicodeProbe, StringComparison.Ordinal);
-    int secondThought = result.Html.IndexOf("Second thought — naïve façade", StringComparison.Ordinal);
-    int finalResponse = result.Html.IndexOf("Before horizontal rule", StringComparison.Ordinal);
+    int firstThought = result.Html.IndexOf(
+      "data-source-id=\"thought-one\"",
+      StringComparison.Ordinal);
+    int secondThought = result.Html.IndexOf(
+      "data-source-id=\"thought-two\"",
+      StringComparison.Ordinal);
+    int finalResponse = result.Html.IndexOf(
+      "data-source-id=\"regression-final\"",
+      StringComparison.Ordinal);
     Require(detailsStart >= 0 && detailsEnd > detailsStart,
       "Reasoning disclosure is incomplete.");
     Require(firstThought > detailsStart && firstThought < detailsEnd,
@@ -615,6 +621,25 @@ internal static class RegressionTestRunner
       textElement.ValueKind == JsonValueKind.String &&
       textElement.GetString() == expected);
     Require(found, $"Core projection did not round-trip expected text: {expected}");
+  }
+
+  private static bool ContainsCanonicalBlockText(
+    TranscriptPresentationDomResult result,
+    string expected)
+  {
+    return result.Units
+      .SelectMany(unit =>
+        unit.SpeechWords ?? Array.Empty<CanonicalSpeechWordProjection>())
+      .Where(word => !string.IsNullOrWhiteSpace(word.Provenance?.BlockId))
+      .GroupBy(
+        word => word.Provenance!.BlockId!,
+        StringComparer.Ordinal)
+      .Any(group => string.Equals(
+        string.Concat(group
+          .OrderBy(word => word.Provenance!.BlockWordIndex)
+          .Select(word => word.SeparatorBefore + word.Text)),
+        expected,
+        StringComparison.Ordinal));
   }
 
   private static void RequireCoreContract(AIConversationProjection projection)

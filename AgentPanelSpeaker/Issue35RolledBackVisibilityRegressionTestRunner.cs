@@ -141,10 +141,10 @@ internal static class Issue35RolledBackVisibilityRegressionTestRunner
           pipeline);
 
       Require(
-        result.Html.Contains("Original question", StringComparison.Ordinal),
+        ContainsCanonicalBlockText(result, "Original question"),
         "Production DOM projection discarded the historical original turn.");
       Require(
-        result.Html.Contains("Edited question", StringComparison.Ordinal),
+        ContainsCanonicalBlockText(result, "Edited question"),
         "Production DOM projection lost the active edited turn.");
       Require(
         result.Html.Contains("revision-original", StringComparison.Ordinal),
@@ -310,6 +310,25 @@ internal static class Issue35RolledBackVisibilityRegressionTestRunner
       Environment.NewLine,
       records.Select(record => JsonSerializer.Serialize(record))) +
       Environment.NewLine;
+  }
+
+  private static bool ContainsCanonicalBlockText(
+    TranscriptPresentationDomResult result,
+    string expected)
+  {
+    return result.Units
+      .SelectMany(unit =>
+        unit.SpeechWords ?? Array.Empty<CanonicalSpeechWordProjection>())
+      .Where(word => !string.IsNullOrWhiteSpace(word.Provenance?.BlockId))
+      .GroupBy(
+        word => word.Provenance!.BlockId!,
+        StringComparer.Ordinal)
+      .Any(group => string.Equals(
+        string.Concat(group
+          .OrderBy(word => word.Provenance!.BlockWordIndex)
+          .Select(word => word.SeparatorBefore + word.Text)),
+        expected,
+        StringComparison.Ordinal));
   }
 
   private static T GetField<T>(object target, string name)
