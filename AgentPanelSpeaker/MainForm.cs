@@ -2330,8 +2330,8 @@ internal sealed class MainForm : Form, IMessageFilter
   }
 
   /// <summary>
-  /// Moves the paused speech marker to a voiced word selected by Find or by
-  /// direct Ctrl+click transcript navigation.
+  /// Moves Find to a paused voiced word. Ctrl+click uses the same authoritative
+  /// word seek while preserving playback only when playback is already active.
   /// </summary>
   private void TranscriptFindSeekRequested(
     object? sender,
@@ -2345,9 +2345,7 @@ internal sealed class MainForm : Form, IMessageFilter
       eventArgs.Source,
       eventArgs.WordId
     });
-    if (_speech.TrySeekToTranscriptWord(
-          eventArgs.WordId,
-          out string text))
+    if (TrySeekTranscriptWord(_speech, eventArgs, out string text))
     {
       _pendingMonitorSeekWordId = eventArgs.WordId;
       AppendLog(eventArgs.Source == "ctrl-click"
@@ -2366,6 +2364,18 @@ internal sealed class MainForm : Form, IMessageFilter
   /// Moves Find and paused speech navigation to the blank transcript-end
   /// position when no later voiced result exists.
   /// </summary>
+  private static bool TrySeekTranscriptWord(
+    SpeechService speech,
+    FindSeekRequestedEventArgs eventArgs,
+    out string text)
+  {
+    return eventArgs.Source == "ctrl-click"
+      ? speech.TrySeekToTranscriptWordPreservingActivePlayback(
+          eventArgs.WordId,
+          out text)
+      : speech.TrySeekToTranscriptWord(eventArgs.WordId, out text);
+  }
+
   private void TranscriptFindSeekEndRequested(object? sender, EventArgs eventArgs)
   {
     _speech.MoveToPausedLiveEnd();

@@ -1113,69 +1113,100 @@ internal sealed class SpeechService : IDisposable
   {
     lock (_sync)
     {
-      ThrowIfDisposed();
-      if (wordId < 1)
+      return TrySeekToTranscriptWordLocked(
+        wordId,
+        continueActivePlayback: false,
+        out text);
+    }
+  }
+
+  /// <summary>
+  /// Seeks to one immutable Core transcript word while preserving active
+  /// playback. If playback is not currently active, the ordinary paused-marker
+  /// seek contract is retained.
+  /// </summary>
+  public bool TrySeekToTranscriptWordPreservingActivePlayback(
+    long wordId,
+    out string text)
+  {
+    lock (_sync)
+    {
+      bool continueActivePlayback =
+        _activeKind != ActiveSpeechKind.None && !_isPaused;
+      return TrySeekToTranscriptWordLocked(
+        wordId,
+        continueActivePlayback,
+        out text);
+    }
+  }
+
+  private bool TrySeekToTranscriptWordLocked(
+    long wordId,
+    bool continueActivePlayback,
+    out string text)
+  {
+    ThrowIfDisposed();
+    if (wordId < 1)
+    {
+      text = string.Empty;
+      return false;
+    }
+
+    for (int index = 0; index < _history.Count; ++index)
+    {
+      SpeechFragment fragment = _history[index];
+      IReadOnlyList<SpeechFragmentWord>? words = fragment.TranscriptWords;
+      if (words is null)
+      {
+        continue;
+      }
+      int localWordIndex = -1;
+      for (int candidate = 0; candidate < words.Count; ++candidate)
+      {
+        if (words[candidate].Id == wordId)
+        {
+          localWordIndex = candidate;
+          break;
+        }
+      }
+      if (localWordIndex < 0)
+      {
+        continue;
+      }
+      if (!TryGetEligibleProfileLocked(fragment, out _, out _))
       {
         text = string.Empty;
         return false;
       }
 
-      for (int index = 0; index < _history.Count; ++index)
+      bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;
+      _pendingUntracked = null;
+      ClearProcessingTimeAnnouncementLocked();
+      _pendingHistoryIndex = index;
+      _pendingHistoryWordIndex = localWordIndex;
+      _nextHistoryIndex = index;
+      _lastFenceActivity = null;
+      if (continueActivePlayback)
       {
-        SpeechFragment fragment = _history[index];
-        IReadOnlyList<SpeechFragmentWord>? words = fragment.TranscriptWords;
-        if (words is null)
-        {
-          continue;
-        }
-        int localWordIndex = -1;
-        for (int candidate = 0; candidate < words.Count; ++candidate)
-        {
-          if (words[candidate].Id == wordId)
-          {
-            localWordIndex = candidate;
-            break;
-          }
-        }
-        if (localWordIndex < 0)
-        {
-          continue;
-        }
-        if (!TryGetEligibleProfileLocked(fragment, out _, out _))
-        {
-          text = string.Empty;
-          return false;
-        }
-
-        bool preservePause = _isPaused;
-        bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;
-        _pendingUntracked = null;
-        ClearProcessingTimeAnnouncementLocked();
-        _pendingHistoryIndex = index;
-        _pendingHistoryWordIndex = localWordIndex;
-        _nextHistoryIndex = index;
-        _lastFenceActivity = null;
-        if (preservePause)
-        {
-          SetPausedNavigationPositionLocked(index, localWordIndex);
-          if (hadActiveSpeech)
-          {
-            RequestPauseRestoreAfterCancellationLocked(
-              "seek-canonical-transcript-word");
-            _engine.Cancel();
-          }
-        }
-        else
-        {
-          RestartPendingLocked();
-        }
-        text = fragment.Text;
-        return true;
+        RestartPendingLocked();
       }
-
-      text = string.Empty;
-      return false;
+      else
+      {
+        SetPausedLocked(true);
+        SetPausedNavigationPositionLocked(index, localWordIndex);
+        if (hadActiveSpeech)
+        {
+          RequestPauseRestoreAfterCancellationLocked(
+            "seek-canonical-transcript-word");
+          _engine.Cancel();
+        }
+      }
+      text = fragment.Text;
+      return true;
     }
+
+    text = string.Empty;
+    return false;
   }
 
   /// <summary>

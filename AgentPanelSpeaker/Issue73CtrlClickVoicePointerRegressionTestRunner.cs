@@ -21,6 +21,8 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     {
       ("ctrl-click-voice-pointer/current-speech-eligibility-is-authoritative",
         TestCurrentSpeechEligibilityIsAuthoritative),
+      ("ctrl-click-voice-pointer/paused-seek-contract-remains-stable",
+        TestPausedSeekContractRemainsStable),
       ("ctrl-click-voice-pointer/active-seek-preserves-playing-state",
         TestActiveSeekPreservesPlayingState),
       ("ctrl-click-voice-pointer/physical-click-correlation-is-fresh",
@@ -178,10 +180,10 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
   }
 
   /// <summary>
-  /// A Ctrl+click while playback is active changes the playback cursor but
-  /// does not change transport state to paused.
+  /// The authoritative general speech-history seek API remains a paused-marker
+  /// operation even when the transport was active before the seek.
   /// </summary>
-  private static void TestActiveSeekPreservesPlayingState()
+  private static void TestPausedSeekContractRemainsStable()
   {
     using var speech = new SpeechService();
     speech.SetPolicyProviders(
@@ -226,12 +228,85 @@ internal static class Issue73CtrlClickVoicePointerRegressionTestRunner
     Require(
       speech.TrySeekToTranscriptWord(9002, out string sought) &&
         string.Equals(sought, "alpha beta", StringComparison.Ordinal),
-      "Active Core-word seek did not resolve the clicked word.");
+      "Paused Core-word seek did not resolve the selected word.");
+    Require(speech.IsPaused,
+      "Paused Core-word seek did not enter paused state.");
+    Require(observed is not null &&
+        observed.State == TranscriptPlaybackState.Paused &&
+        string.Equals(observed.Word, "beta", StringComparison.Ordinal),
+      "Paused Core-word seek did not publish the selected paused word.");
+  }
+
+  /// <summary>
+  /// Ctrl+click is transport-sensitive: when playback is already active it
+  /// redirects playback to the clicked word without changing transport to
+  /// paused. The production MainForm router is exercised without constructing
+  /// a form or mutating the application message-filter lifetime.
+  /// </summary>
+  private static void TestActiveSeekPreservesPlayingState()
+  {
+    using var speech = new SpeechService();
+    speech.SetPolicyProviders(
+      _ => new SpeechProfileSettings("Test voice", 0, 0),
+      _ => true,
+      () => Array.Empty<string>(),
+      () => PronunciationRuleSet.Parse(string.Empty),
+      () => AudioWakeSettings.Default);
+    speech.LoadHistory(
+      new[]
+      {
+        new SpeechFragment(
+          42,
+          ContentCategory.Assistant,
+          SpeechFragmentKind.Prose,
+          "alpha beta",
+          TranscriptWords: new[]
+          {
+            new SpeechFragmentWord(9001, "alpha", 0, 5),
+            new SpeechFragmentWord(9002, "beta", 6, 4)
+          })
+      },
+      Array.Empty<TurnCompletion>(),
+      Array.Empty<BackgroundWorkEvent>(),
+      PlaybackStartMode.Beginning);
+
+    FieldInfo pausedField = typeof(SpeechService).GetField(
+      "_isPaused",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("SpeechService pause state is missing.");
+    FieldInfo activeKindField = typeof(SpeechService).GetField(
+      "_activeKind",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("SpeechService active kind is missing.");
+    pausedField.SetValue(speech, false);
+    activeKindField.SetValue(
+      speech,
+      Enum.Parse(activeKindField.FieldType, "History"));
+
+    MethodInfo router = typeof(MainForm).GetMethod(
+      "TrySeekTranscriptWord",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "MainForm transcript seek router is missing.");
+    object?[] arguments =
+    {
+      speech,
+      new FindSeekRequestedEventArgs(9002, "ctrl-click"),
+      null
+    };
+    Require(router.Invoke(null, arguments) is true &&
+        string.Equals(arguments[2] as string, "alpha beta", StringComparison.Ordinal),
+      "Active Ctrl+click did not resolve the clicked word through MainForm.");
+
     Require(!speech.IsPaused,
-      "Active Core-word seek paused playback.");
-    Require(observed is null ||
-        observed.State != TranscriptPlaybackState.Paused,
-      "Active Core-word seek emitted a paused playback position.");
+      "Active Ctrl+click changed transport state to paused.");
+    FieldInfo pendingWordField = typeof(SpeechService).GetField(
+      "_pendingHistoryWordIndex",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "SpeechService pending word index is missing.");
+    Require((int)pendingWordField.GetValue(speech)! == 1,
+      "Active Ctrl+click did not queue the exact clicked word.");
   }
 
   /// <summary>
