@@ -33,6 +33,33 @@ jobs:
         shell: pwsh
         run: python tools/issue75-production-wordids.py
 
+      - name: Align User Context acceptance with canonical visible speech
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs'
+          $text = [IO.File]::ReadAllText($path)
+          $old = @'
+      SpeechFragment speechFragment = history.Fragments.First(fragment =>
+        string.Equals(fragment.Text, nestedFragment, StringComparison.Ordinal));
+'@
+          $new = @'
+      const string canonicalSpeechFragment =
+        "1. Nested numbered item with a table inside it";
+      SpeechFragment speechFragment = history.Fragments.First(fragment =>
+        string.Equals(
+          fragment.Text,
+          canonicalSpeechFragment,
+          StringComparison.Ordinal));
+'@
+          $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+          if ($count -ne 1) {
+            throw "Expected one raw-Markdown speech-fragment lookup, found $count"
+          }
+          [IO.File]::WriteAllText(
+            $path,
+            $text.Replace($old, $new),
+            [Text.UTF8Encoding]::new($false))
+
       - name: Install pinned Core dependencies
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
@@ -89,7 +116,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/ExtractionOptions.cs AgentPanelSpeaker/CanonicalProjectionExtractor.cs AgentPanelSpeaker/JsonlSessionMonitor.cs
+          git add AgentPanelSpeaker/ExtractionOptions.cs AgentPanelSpeaker/CanonicalProjectionExtractor.cs AgentPanelSpeaker/JsonlSessionMonitor.cs AgentPanelSpeaker/Issue24ProductionPathRegressionTestRunner.cs
           git diff --cached --check
           git commit -m 'feat: propagate Core word boundaries into history (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
