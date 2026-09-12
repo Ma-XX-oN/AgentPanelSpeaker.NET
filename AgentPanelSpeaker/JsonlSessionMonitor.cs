@@ -773,6 +773,11 @@ internal sealed class JsonlSessionMonitor : IDisposable
       {
         ++end;
       }
+      if (end < words.Count && words[end].SeparatorBefore.Length == 0)
+      {
+        continue;
+      }
+
       AddCanonicalProsePart(
         words,
         start,

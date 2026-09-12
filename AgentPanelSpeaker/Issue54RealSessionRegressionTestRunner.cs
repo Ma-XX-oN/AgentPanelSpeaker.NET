@@ -30,6 +30,8 @@ internal static class Issue54RealSessionRegressionTestRunner
         TestWindowReplacementInstrumentationContract),
       ("real-session/directional-shift-keeps-prefetch-headroom",
         TestDirectionalShiftKeepsPrefetchHeadroom),
+      ("real-session/pending-manual-scroll-converges-after-replacement",
+        TestPendingManualScrollConvergesAfterReplacement),
       ("real-session/live-end-window-retains-preceding-unit",
         TestLiveEndWindowRetainsPrecedingUnit),
       ("real-session/stale-find-materialization-is-cancelled-before-install",
@@ -42,8 +44,12 @@ internal static class Issue54RealSessionRegressionTestRunner
         TestProgrammaticScrollDoesNotDisableFollow),
       ("real-session/follow-opens-canonical-disclosure-only-when-enabled",
         TestFollowOpensCanonicalDisclosureOnlyWhenEnabled),
+      ("real-session/owned-editor-retains-bare-transport-keys",
+        TestOwnedEditorRetainsBareTransportKeys),
       ("real-session/input-diagnostics-capture-key-mouse-and-follow-state",
-        TestInputDiagnosticsCaptureKeyMouseAndFollowState)
+        TestInputDiagnosticsCaptureKeyMouseAndFollowState),
+      ("real-session/webview-wheel-input-is-logged-and-correlated",
+        TestWebViewWheelInputIsLoggedAndCorrelated)
     };
 
     int failures = 0;
@@ -489,10 +495,157 @@ internal static class Issue54RealSessionRegressionTestRunner
       shifted.EndIndex - 12 >= 4,
       "Directional shift left fewer than four viewport-heights of measured " +
       "materialized headroom beyond the visible range.");
+    int expectedCount = shifted.EndIndex - shifted.StartIndex + 1;
+    Require(
+      shifted.Records.Count == expectedCount,
+      $"Shifted window {shifted.StartIndex}..{shifted.EndIndex} contains " +
+      $"{shifted.Records.Count} records instead of contiguous count {expectedCount}.");
+    int[] expectedRecordNumbers = document.Records
+      .Skip(shifted.StartIndex)
+      .Take(expectedCount)
+      .Select(record => record.RecordNumber)
+      .ToArray();
+    Require(
+      shifted.Records.Select(record => record.RecordNumber)
+        .SequenceEqual(expectedRecordNumbers),
+      "Directional shift skipped or reordered canonical records.");
   }
 
   /// <summary>
-  /// Reproduces issue #58 without splitting Core atomic units. A final turn can
+  /// Reproduces the rapid-scroll stall: physical same-direction demand arrives
+  /// while a virtual shift is pending, its short intent timer expires, and the
+  /// completed replacement still leaves the viewport at an unloaded edge.
+  /// Completion must continue materialization without requiring another
+  /// physical input and without treating programmatic scroll as new user input.
+  /// </summary>
+  private static void TestPendingManualScrollConvergesAfterReplacement()
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-scroll-convergence-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string path = Path.Combine(root, "scroll-convergence.jsonl");
+    WriteFixture(path);
+
+    try
+    {
+      using var host = CreateOffscreenHost();
+      using var view = new TranscriptView { Dock = DockStyle.Fill };
+      host.Controls.Add(view);
+      host.Show();
+      _ = host.Handle;
+      _ = view.Handle;
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      view.SelectSession(path, AgentSource.Codex, "Scroll convergence fixture");
+      WaitForTranscriptRender(view);
+
+      TranscriptVirtualDocument document =
+        ReadField<TranscriptVirtualDocument>(view, "_virtualDocument");
+      int middleIndex = document.Count / 2;
+      Task middleWindow = InvokeTask(
+        view,
+        "RenderWindowForIndexAsync",
+        middleIndex,
+        "convergence-precondition",
+        null,
+        null);
+      PumpUntilCompleted(middleWindow, "middle convergence window");
+      int currentStart = ReadField<int>(view, "_windowStartIndex");
+      Require(currentStart > 2,
+        "Convergence fixture did not leave canonical content above the window.");
+
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      var reasons = new List<string>();
+      webView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+      {
+        try
+        {
+          using JsonDocument message = JsonDocument.Parse(
+            eventArgs.WebMessageAsJson);
+          JsonElement rootElement = message.RootElement;
+          if (rootElement.TryGetProperty("type", out JsonElement typeElement) &&
+              typeElement.GetString() == "window-shift" &&
+              rootElement.TryGetProperty("reason", out JsonElement reasonElement))
+          {
+            reasons.Add(reasonElement.GetString() ?? string.Empty);
+          }
+        }
+        catch (JsonException)
+        {
+        }
+      };
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  virtualShiftPending = true;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY:-240,
+    bubbles:true,
+    cancelable:true
+  }));
+  window.scrollBy(0, -240);
+})()
+""");
+      PumpMessages(1400);
+      int beforeReplacement = reasons.Count;
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  const start = Math.max(3, Number(windowStartIndex));
+  const end = start + 2;
+  const html = [start, start + 1, end].map(index =>
+    '<div class="virtual-record" data-virtual-index="' + index + '">' +
+    '<span class="record-anchor" data-jsonl-record="' + (index + 1) + '"></span>' +
+    '<p>convergence record ' + index + '</p></div>').join('');
+  // Keep the replacement in its estimated virtual position. The first
+  // materialized records deliberately straddle the viewport's upper edge so
+  // geometry, rather than a surviving physical-intent timer, must request the
+  // next adjacent canonical batch.
+  const topSpacerHeight = Math.max(0, window.scrollY - 100);
+  replaceTranscriptWindow(
+    html,
+    false,
+    [],
+    start,
+    end,
+    topSpacerHeight,
+    5000,
+    null,
+    null,
+    null,
+    null,
+    [],
+    '',
+    9001,
+    'scroll-up',
+    77,
+    false);
+})()
+""");
+      PumpMessages(1000);
+
+      Require(
+        reasons.Skip(beforeReplacement).Any(reason => reason == "scroll-up"),
+        "A completed manual-scroll replacement remained at the unloaded upper " +
+        "edge after the physical-intent timer expired and did not request the " +
+        "next adjacent canonical window.");
+    }
+    finally
+    {
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
+  }
+
+  /// <summary>
+  /// Reproduces issue #58 without splitting Core atomic units.
+  /// A final turn can
   /// itself exceed the five-viewport materialization target; live-end startup
   /// must still retain at least one earlier visible unit so the user can see
   /// preceding context without first scrolling into an unloaded spacer.
@@ -1053,6 +1206,84 @@ internal static class Issue54RealSessionRegressionTestRunner
     }
   }
 
+
+  /// <summary>
+  /// Bare transport keys belong to a writable editor in an owned top-level
+  /// window. MainForm's global filter must decline the key and let the native
+  /// edit control process it normally; it must never synthesize or redirect it.
+  /// </summary>
+  private static void TestOwnedEditorRetainsBareTransportKeys()
+  {
+    using var form = new MainForm();
+    form.Show();
+    _ = form.Handle;
+    PronunciationDialog? dialog = null;
+    try
+    {
+      SpeechService speech = ReadField<SpeechService>(form, "_speech");
+      InstalledSpeechVoice voice = speech.GetInstalledVoices().FirstOrDefault() ??
+        throw new InvalidOperationException(
+          "No installed speech voice is available for editor routing acceptance.");
+      var profile = new SpeechProfileSettings(voice.Name, 0, 0)
+      {
+        Volume = 100
+      };
+      dialog = new PronunciationDialog(
+        string.Empty,
+        string.Empty,
+        speech,
+        () => profile,
+        () => AudioWakeSettings.Default with { Enabled = false },
+        _ => { },
+        default);
+      dialog.Show(form);
+      PumpMessages(150);
+
+      RichTextBox editor =
+        ReadField<RichTextBox>(dialog, "_pronunciationsTextBox");
+      TabPage page = FindAncestor<TabPage>(editor) ??
+        throw new InvalidOperationException(
+          "Pronunciation RichTextBox is not hosted by a TabPage.");
+      if (page.Parent is not TabControl tabs)
+      {
+        throw new InvalidOperationException(
+          "Pronunciation RichTextBox TabPage has no TabControl parent.");
+      }
+      tabs.SelectedTab = page;
+      editor.Focus();
+      PumpMessages(100);
+      Require(editor.Focused,
+        "Pronunciation RichTextBox did not acquire focus for routing acceptance.");
+
+      Message keyDown = Message.Create(
+        editor.Handle,
+        0x0100,
+        new IntPtr((int)Keys.H),
+        IntPtr.Zero);
+      bool handled = form.PreFilterMessage(ref keyDown);
+      Require(
+        !handled,
+        "MainForm consumed bare H as transport navigation while the owned " +
+        "Pronunciation RichTextBox had focus.");
+
+      editor.Clear();
+      _ = SendMessageForEditorAcceptance(
+        editor.Handle,
+        0x0102,
+        new IntPtr('h'),
+        IntPtr.Zero);
+      PumpMessages(50);
+      Require(
+        string.Equals(editor.Text, "h", StringComparison.Ordinal),
+        "Normal native editor handling did not receive the unconsumed character.");
+    }
+    finally
+    {
+      dialog?.Dispose();
+      Application.RemoveMessageFilter(form);
+    }
+  }
+
   /// <summary>
   /// Reproduces issue #77. The structured JSONL log must contain the physical
   /// key/mouse timeline plus the recognized Follow command and explicit state
@@ -1158,6 +1389,131 @@ internal static class Issue54RealSessionRegressionTestRunner
       newElement.ValueKind is JsonValueKind.True or JsonValueKind.False &&
       oldElement.GetBoolean() != newElement.GetBoolean()),
       "Structured diagnostics omitted explicit old/new Follow state.");
+  }
+
+
+  private static T? FindAncestor<T>(Control control)
+    where T : Control
+  {
+    for (Control? current = control; current is not null; current = current.Parent)
+    {
+      if (current is T typed)
+      {
+        return typed;
+      }
+    }
+    return null;
+  }
+
+  [System.Runtime.InteropServices.DllImport(
+    "user32.dll",
+    EntryPoint = "SendMessageW",
+    CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+  private static extern IntPtr SendMessageForEditorAcceptance(
+    IntPtr window,
+    int message,
+    IntPtr wordParameter,
+    IntPtr longParameter);
+
+
+  /// <summary>
+  /// Reproduces the real-machine #77 gap where a wheel consumed by WebView2
+  /// changes Follow through manual scrolling but never appears as the physical
+  /// input correlated to that state transition.
+  /// </summary>
+  private static void TestWebViewWheelInputIsLoggedAndCorrelated()
+  {
+    DiagnosticLog.Initialize();
+    string logPath = DiagnosticLog.FilePath;
+    int before = File.Exists(logPath) ? File.ReadLines(logPath).Count() : 0;
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-webview-wheel-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    string sessionPath = Path.Combine(root, "webview-wheel.jsonl");
+    WriteFixture(sessionPath);
+
+    MainForm? form = null;
+    try
+    {
+      form = new MainForm
+      {
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      form.Show();
+      _ = form.Handle;
+      TranscriptView view = ReadField<TranscriptView>(form, "_transcriptView");
+      WaitForViewInitialization(view);
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = true },
+        dark: false);
+      view.SelectSession(
+        sessionPath,
+        AgentSource.Codex,
+        "WebView wheel correlation fixture");
+      WaitForTranscriptRender(view);
+      WebView2 webView = ReadField<WebView2>(view, "_webView");
+      PumpMessages(1700);
+
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  programmaticScrollUntil = 0;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY:120,
+    bubbles:true,
+    cancelable:true
+  }));
+  window.scrollBy(0, Math.max(80, window.innerHeight * 0.2));
+})()
+""");
+      PumpMessages(500);
+
+      JsonElement[] events = File.ReadLines(logPath)
+        .Skip(before)
+        .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+        .ToArray();
+      JsonElement[] wheelEvents = events.Where(record =>
+        record.TryGetProperty("Event", out JsonElement eventElement) &&
+        eventElement.GetString() == "input.physical" &&
+        record.TryGetProperty("Data", out JsonElement data) &&
+        data.TryGetProperty("kind", out JsonElement kindElement) &&
+        kindElement.GetString() == "mouse" &&
+        data.TryGetProperty("phase", out JsonElement phaseElement) &&
+        phaseElement.GetString() == "wheel" &&
+        data.TryGetProperty("route", out JsonElement routeElement) &&
+        routeElement.GetString() == "webview").ToArray();
+      Require(wheelEvents.Length != 0,
+        "A physical wheel handled inside WebView2 was omitted from input.physical diagnostics.");
+
+      JsonElement wheelData = wheelEvents[^1].GetProperty("Data");
+      long wheelInputId = wheelData.GetProperty("inputId").GetInt64();
+      JsonElement[] followChanges = events.Where(record =>
+        record.TryGetProperty("Event", out JsonElement eventElement) &&
+        eventElement.GetString() == "follow.changed" &&
+        record.TryGetProperty("Data", out JsonElement data) &&
+        data.TryGetProperty("reason", out JsonElement reasonElement) &&
+        reasonElement.GetString() == "manual-scroll").ToArray();
+      Require(followChanges.Length != 0,
+        "The WebView wheel fixture did not produce its manual-scroll Follow transition.");
+      JsonElement followData = followChanges[^1].GetProperty("Data");
+      Require(
+        followData.TryGetProperty("physicalInputId", out JsonElement inputElement) &&
+        inputElement.ValueKind == JsonValueKind.Number &&
+        inputElement.GetInt64() == wheelInputId,
+        "The manual-scroll Follow transition was not correlated to the physical WebView wheel.");
+    }
+    finally
+    {
+      if (form is not null)
+      {
+        Application.RemoveMessageFilter(form);
+        form.Dispose();
+      }
+      try { Directory.Delete(root, recursive: true); } catch { }
+    }
   }
 
   private static long FirstCanonicalWordId(string html)
