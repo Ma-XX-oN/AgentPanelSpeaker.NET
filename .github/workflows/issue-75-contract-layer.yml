@@ -70,6 +70,7 @@ jobs:
           if (-not $output.Contains('TEST-SUITE-COMPLETE core-word-id-migration exit=1')) {
             throw 'Focused suite completion marker is missing.'
           }
+          exit 0
 
       - name: Commit verified contract layer
         shell: pwsh
