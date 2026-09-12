@@ -62,6 +62,27 @@ jobs:
           }
           Set-Content $issue54 ($generated.Replace($malformed, $correct)) -NoNewline
 
+          $issue26 = 'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs'
+          $generated26 = Get-Content $issue26 -Raw
+          $oldOrder = "      (`"user-context-speech/live-monitor-toggle`",`r`n        TestLiveMonitorToggle),`r`n      (`"user-context-speech/active-checkbox-cancels-ineligible-utterance`",`r`n        TestActiveCheckboxCancelsIneligibleUtterance)"
+          $newOrder = "      (`"user-context-speech/active-checkbox-cancels-ineligible-utterance`",`r`n        TestActiveCheckboxCancelsIneligibleUtterance),`r`n      (`"user-context-speech/live-monitor-toggle`",`r`n        TestLiveMonitorToggle)"
+          if (-not $generated26.Contains($oldOrder)) {
+            throw 'User Context RED ordering anchor did not match.'
+          }
+          $generated26 = $generated26.Replace($oldOrder, $newOrder)
+          foreach ($cleanupReason in @(
+            'issue26-active-regression-cleanup',
+            'issue26-regression-cleanup')) {
+            $oldCleanup = "        GetField<JsonlSessionMonitor>(form, `"_monitor`").Stop(`r`n          `"$cleanupReason`" );"
+            $oldCleanup = $oldCleanup.Replace('`" );', '`");')
+            if (-not $generated26.Contains($oldCleanup)) {
+              throw "User Context cleanup anchor did not match: $cleanupReason"
+            }
+            $newCleanup = $oldCleanup + "`r`n        Application.RemoveMessageFilter(form);"
+            $generated26 = $generated26.Replace($oldCleanup, $newCleanup)
+          }
+          Set-Content $issue26 $generated26 -NoNewline
+
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'RED edit whitespace validation failed.' }
           $changed = @(git diff --name-only)
