@@ -45,14 +45,16 @@ jobs:
           $new = '8646e2465a0570f5caa663a9109392078e964e45'
           $files = @(
             'AgentPanelSpeaker/AIConversationCoreClient.cs',
-            'tools/AIConversationCore-worker.mjs'
+            'tools/AIConversationCore-worker.mjs',
+            'tools/AIConversationCore-runtime/CORE_COMMIT'
           )
           foreach ($file in $files) {
-            $text = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE $file))
+            $path = Join-Path $env:GITHUB_WORKSPACE $file
+            $text = [IO.File]::ReadAllText($path)
             $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
             if ($count -ne 1) { throw "$file expected one old Core SHA, found $count" }
             [IO.File]::WriteAllText(
-              (Join-Path $env:GITHUB_WORKSPACE $file),
+              $path,
               $text.Replace($old, $new),
               [Text.UTF8Encoding]::new($false))
           }
@@ -73,15 +75,14 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test core
-          if ($LASTEXITCODE -ne 0) { throw 'APS Core regression suite failed against the exact Core pin.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core
 
       - name: Commit runtime Core guard alignment
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs
+          git add AgentPanelSpeaker/AIConversationCoreClient.cs tools/AIConversationCore-worker.mjs tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
           git commit -m 'build: align runtime Core pin (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
