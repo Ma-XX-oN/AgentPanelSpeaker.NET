@@ -107,8 +107,14 @@ jobs:
             'find-origin'
           )
           foreach ($suite in $suites) {
-            & $exe --test $suite
-            if ($LASTEXITCODE -ne 0) { throw "Focused suite failed: $suite" }
+            $stdout = Join-Path $env:RUNNER_TEMP "$suite.stdout.txt"
+            $stderr = Join-Path $env:RUNNER_TEMP "$suite.stderr.txt"
+            $process = Start-Process -FilePath $exe -ArgumentList '--test',$suite -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $output = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            $output | Write-Host
+            if ($process.ExitCode -ne 0) {
+              throw "Focused suite failed: $suite (exit $($process.ExitCode))"
+            }
           }
 
       - name: Commit focused-GREEN production repair
