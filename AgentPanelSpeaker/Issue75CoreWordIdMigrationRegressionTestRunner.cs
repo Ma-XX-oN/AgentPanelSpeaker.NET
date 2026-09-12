@@ -1,0 +1,972 @@
+using System.Collections;
+using System.Globalization;
+using System.Reflection;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace AgentPanelSpeaker;
+
+/// <summary>
+/// Permanent regressions for issue #75 canonical Core word-ID migration.
+/// </summary>
+internal static class Issue75CoreWordIdMigrationRegressionTestRunner
+{
+  private sealed record WordProbe(long Id, string Text, string SeparatorBefore);
+
+  /// <summary>
+  /// Runs the issue #75 canonical-word migration regression suite.
+  /// </summary>
+  /// <returns>Zero when every regression passes.</returns>
+  public static int Run()
+  {
+    var tests = new (string Name, Action Body)[]
+    {
+      ("core-word-id/ctrl-click-posts-exact-canonical-word-id",
+        TestCtrlClickPostsExactCanonicalWordId),
+      ("core-word-id/decimal-is-one-selectable-canonical-word",
+        TestDecimalIsOneSelectableCanonicalWord),
+      ("core-word-id/markup-split-keeps-one-canonical-word",
+        TestMarkupSplitKeepsOneCanonicalWord),
+      ("core-word-id/duplicate-text-lookup-is-id-exact",
+        TestDuplicateTextLookupIsIdExact),
+      ("core-word-id/off-window-lookup-materializes-core-unit",
+        TestOffWindowLookupMaterializesCoreUnit),
+      ("core-word-id/speech-fragment-carries-canonical-word-ids",
+        TestSpeechFragmentCarriesCanonicalWordIds),
+      ("core-word-id/speech-seek-uses-only-canonical-word-id",
+        TestSpeechSeekUsesOnlyCanonicalWordId),
+      ("core-word-id/decimal-seek-preserves-canonical-word-id",
+        TestDecimalSeekPreservesCanonicalWordId),
+      ("core-word-id/playback-position-carries-canonical-word-id",
+        TestPlaybackPositionCarriesCanonicalWordId),
+      ("core-word-id/production-history-carries-core-word-ids",
+        TestProductionHistoryCarriesCoreWordIds),
+      ("core-word-id/ordered-list-history-preserves-core-word-boundaries",
+        TestOrderedListHistoryPreservesCoreWordBoundaries),
+      ("core-word-id/policy-is-centralized-without-per-word-eligibility-mutation",
+        TestPolicyIsCentralizedWithoutPerWordEligibilityMutation),
+      ("core-word-id/playback-highlights-exact-canonical-word-id",
+        TestPlaybackHighlightsExactCanonicalWordId),
+      ("core-word-id/off-window-playback-requests-canonical-word",
+        TestOffWindowPlaybackRequestsCanonicalWord),
+      ("core-word-id/playback-host-retains-core-lookup-session",
+        TestPlaybackHostRetainsCoreLookupSession)
+    };
+
+    int failures = 0;
+    Console.WriteLine();
+    Console.WriteLine(
+      $"Issue #75 Core word-ID migration suite: {tests.Length} tests");
+    foreach ((string name, Action body) in tests)
+    {
+      try
+      {
+        body();
+        Console.WriteLine($"PASS  {name}");
+      }
+      catch (Exception exception)
+      {
+        ++failures;
+        Console.WriteLine($"FAIL  {name}");
+        Console.WriteLine(
+          $"      {exception.GetType().Name}: {exception.Message}");
+      }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine(failures == 0
+      ? $"PASS: {tests.Length}/{tests.Length} issue #75 regressions passed."
+      : $"FAIL: {failures}/{tests.Length} issue #75 regressions failed.");
+    return failures == 0 ? 0 : 1;
+  }
+
+  /// <summary>
+  /// Ctrl+click must cross the browser/host boundary using only the numeric
+  /// Core word handle represented by the static Core DOM ID `word-N`.
+  /// </summary>
+  private static void TestCtrlClickPostsExactCanonicalWordId()
+  {
+    Type argsType = typeof(FindSeekRequestedEventArgs);
+    RequireProperty(argsType, "WordId");
+    RequireNoProperty(argsType, "NodeId");
+    RequireNoProperty(argsType, "NodeWordIndex");
+
+    string shell = ShellHtml();
+    string block = Around(shell, "source:'ctrl-click'", 1400);
+    Require(block.Contains("wordId", StringComparison.Ordinal),
+      "Ctrl+click does not post a canonical wordId.");
+    Require(
+      block.Contains("word.id", StringComparison.Ordinal) ||
+      block.Contains("word-", StringComparison.Ordinal),
+      "Ctrl+click does not derive its handle from the Core word-N DOM identity.");
+    Require(!block.Contains("nodeWordIndex", StringComparison.Ordinal),
+      "Ctrl+click still crosses the boundary with NodeWordIndex.");
+    Require(!block.Contains("dataset.nodeId", StringComparison.Ordinal),
+      "Ctrl+click still crosses the boundary with reconstructed NodeId identity.");
+  }
+
+  /// <summary>
+  /// Core's decimal token must remain one word in the C# projection and the
+  /// exact same numeric identity must be present once in the rendered DOM.
+  /// </summary>
+  private static void TestDecimalIsOneSelectableCanonicalWord()
+  {
+    AIConversationProjection projection = ProjectClaude("alpha 13.234 omega");
+    CanonicalHtmlUnitProjection unit = RequireOnlyHtmlUnit(projection);
+    WordProbe[] words = ReadSpeechWords(unit);
+    WordProbe[] decimalWords = words
+      .Where(word => string.Equals(word.Text, "13.234", StringComparison.Ordinal))
+      .ToArray();
+
+    Require(decimalWords.Length == 1,
+      $"Expected one canonical decimal word, got {decimalWords.Length}.");
+    long wordId = decimalWords[0].Id;
+    Require(wordId > 0, "Canonical decimal word ID is not positive.");
+    Require(CountOccurrences(unit.Html, $"id=\"word-{wordId}\"") == 1,
+      "Canonical decimal word ID is not represented exactly once in Core HTML.");
+  }
+
+  /// <summary>
+  /// Inline Markdown may change descendants inside a word but must not create
+  /// another canonical word identity for the formatted suffix.
+  /// </summary>
+  private static void TestMarkupSplitKeepsOneCanonicalWord()
+  {
+    AIConversationProjection projection = ProjectClaude("turn_id**s**");
+    CanonicalHtmlUnitProjection unit = RequireOnlyHtmlUnit(projection);
+    WordProbe[] words = ReadSpeechWords(unit);
+
+    Require(words.Length == 1,
+      $"Expected one canonical word for markup-split token, got {words.Length}.");
+    Require(string.Equals(words[0].Text, "turn_ids", StringComparison.Ordinal),
+      $"Unexpected canonical markup-split word text: {words[0].Text}.");
+    string id = $"id=\"word-{words[0].Id}\"";
+    int idIndex = unit.Html.IndexOf(id, StringComparison.Ordinal);
+    int strongIndex = unit.Html.IndexOf("<strong>s</strong>", StringComparison.Ordinal);
+    int closeIndex = idIndex < 0
+      ? -1
+      : unit.Html.IndexOf("</span>", idIndex, StringComparison.Ordinal);
+    Require(idIndex >= 0 && strongIndex > idIndex && closeIndex > strongIndex,
+      "Formatted suffix is not nested inside the one canonical word-N element.");
+    Require(CountOccurrences(unit.Html, id) == 1,
+      "Markup-split word identity appears more than once in Core HTML.");
+  }
+
+  /// <summary>
+  /// Duplicate visible text may never substitute for the requested Core word ID.
+  /// The retained-session lookup must return the exact word and containing unit.
+  /// </summary>
+  private static void TestDuplicateTextLookupIsIdExact()
+  {
+    string[] records =
+    {
+      ClaudeRecord("user", "repeat first", 1, null),
+      ClaudeRecord("assistant", "repeat second", 2, "word-id-1")
+    };
+
+    using var client = new AIConversationCoreClient();
+    AIConversationCoreRetainedSession retained = client.CreateRetainedSession(
+      AgentSource.Claude,
+      records);
+    try
+    {
+      CanonicalHtmlUnitProjection[] units = RequireHtmlUnits(retained.Projection);
+      Require(units.Length >= 2,
+        $"Duplicate-text fixture requires at least two Core units, got {units.Length}.");
+      WordProbe first = ReadSpeechWords(units[0]).Single(word =>
+        string.Equals(word.Text, "repeat", StringComparison.Ordinal));
+      WordProbe second = ReadSpeechWords(units[1]).Single(word =>
+        string.Equals(word.Text, "repeat", StringComparison.Ordinal));
+      Require(first.Id != second.Id,
+        "Duplicate visible text unexpectedly shares one canonical word ID.");
+
+      object location = LocateRetainedWord(client, retained.Id, second.Id);
+      object locatedWord = RequireObjectProperty(location, "Word");
+      object locatedUnit = RequireObjectProperty(location, "Unit");
+      long locatedId = Convert.ToInt64(
+        RequireObjectProperty(locatedWord, "Id"),
+        CultureInfo.InvariantCulture);
+      string locatedUnitId = Convert.ToString(
+        RequireObjectProperty(locatedUnit, "Id"),
+        CultureInfo.InvariantCulture) ?? string.Empty;
+
+      Require(locatedId == second.Id,
+        $"Lookup returned word {locatedId} instead of requested {second.Id}.");
+      Require(string.Equals(locatedUnitId, units[1].Id, StringComparison.Ordinal),
+        "Duplicate text in another unit captured the canonical lookup.");
+    }
+    finally
+    {
+      client.CloseRetainedSession(retained.Id);
+    }
+  }
+
+  /// <summary>
+  /// An off-window word must resolve through Core to a unit ID, then the virtual
+  /// document must materialize a window around that Core unit without a local
+  /// word-to-unit identity map.
+  /// </summary>
+  private static void TestOffWindowLookupMaterializesCoreUnit()
+  {
+    string[] records = Enumerable.Range(0, 24)
+      .Select(index => ClaudeRecord(
+        index % 2 == 0 ? "user" : "assistant",
+        $"target{index} " + new string('x', 1200),
+        index + 1,
+        index == 0 ? null : $"word-id-{index}"))
+      .ToArray();
+
+    using var client = new AIConversationCoreClient();
+    AIConversationCoreRetainedSession retained = client.CreateRetainedSession(
+      AgentSource.Claude,
+      records);
+    try
+    {
+      CanonicalHtmlUnitProjection[] units = RequireHtmlUnits(retained.Projection);
+      Require(units.Length >= 12,
+        $"Off-window fixture produced only {units.Length} Core units.");
+      CanonicalHtmlUnitProjection targetUnit = units[^1];
+      WordProbe targetWord = ReadSpeechWords(targetUnit)[0];
+
+      var document = TranscriptVirtualDocument.Build(units);
+      TranscriptWindow initial = document.CreateWindow(0, 100.0);
+      object location = LocateRetainedWord(client, retained.Id, targetWord.Id);
+      object locatedUnit = RequireObjectProperty(location, "Unit");
+      string locatedUnitId = Convert.ToString(
+        RequireObjectProperty(locatedUnit, "Id"),
+        CultureInfo.InvariantCulture) ?? string.Empty;
+      Require(string.Equals(locatedUnitId, targetUnit.Id, StringComparison.Ordinal),
+        "Core lookup did not return the target off-window unit.");
+
+      MethodInfo resolver = typeof(TranscriptVirtualDocument).GetMethod(
+        "TryGetUnitIndex",
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+        throw new InvalidOperationException(
+          "TranscriptVirtualDocument.TryGetUnitIndex(string, out int) is missing.");
+      object?[] arguments = { locatedUnitId, -1 };
+      bool resolved = resolver.Invoke(document, arguments) is true;
+      int targetIndex = arguments[1] is int value ? value : -1;
+      Require(resolved && targetIndex >= 0,
+        "Virtual document could not resolve the Core-returned unit ID.");
+      Require(targetIndex < initial.StartIndex || targetIndex > initial.EndIndex,
+        "Off-window fixture target was unexpectedly already materialized.");
+
+      TranscriptWindow targetWindow = document.CreateWindow(targetIndex, 100.0);
+      Require(
+        targetIndex >= targetWindow.StartIndex && targetIndex <= targetWindow.EndIndex,
+        "Core-returned unit index was not materialized in the target window.");
+    }
+    finally
+    {
+      client.CloseRetainedSession(retained.Id);
+    }
+  }
+
+  /// <summary>
+  /// Speech fragments that originate from canonical transcript content must
+  /// carry the immutable Core word handles assigned before app speech cleanup.
+  /// </summary>
+  private static void TestSpeechFragmentCarriesCanonicalWordIds()
+  {
+    RequireProperty(typeof(SpeechFragment), "WordIds");
+    RequireProperty(typeof(CanonicalSpeechWordProjection), "Groups");
+  }
+
+  /// <summary>
+  /// Direct transcript seeking must accept one numeric Core word ID. The legacy
+  /// node-plus-ordinal overload is not a valid cross-boundary word identity.
+  /// </summary>
+  private static void TestSpeechSeekUsesOnlyCanonicalWordId()
+  {
+    MethodInfo? canonical = typeof(SpeechService).GetMethod(
+      "TrySeekToTranscriptWord",
+      BindingFlags.Instance | BindingFlags.Public,
+      binder: null,
+      types: new[] { typeof(long), typeof(string).MakeByRefType() },
+      modifiers: null);
+    Require(canonical is not null,
+      "SpeechService lacks TrySeekToTranscriptWord(long wordId, out string text).");
+
+    MethodInfo? legacy = typeof(SpeechService).GetMethod(
+      "TrySeekToTranscriptWord",
+      BindingFlags.Instance | BindingFlags.Public,
+      binder: null,
+      types: new[] { typeof(long), typeof(int), typeof(string).MakeByRefType() },
+      modifiers: null);
+    Require(legacy is null,
+      "SpeechService still exposes nodeId + nodeWordIndex as transcript word identity.");
+  }
+
+  /// <summary>
+  /// A canonical decimal ID must seek the exact decimal and the resulting
+  /// paused playback position must report that same immutable Core handle.
+  /// </summary>
+  private static void TestDecimalSeekPreservesCanonicalWordId()
+  {
+    RequireProperty(typeof(SpeechFragment), "WordIds");
+    RequireProperty(typeof(TranscriptPlaybackPosition), "WordId");
+    SpeechFragment fragment = CreateSpeechFragment(
+      "alpha 13.234 omega",
+      new long[] { 101, 102, 103 });
+
+    using var speech = new SpeechService();
+    speech.SetPolicyProviders(
+      _ => new SpeechProfileSettings("Test voice", 0, 0),
+      _ => true,
+      () => Array.Empty<string>(),
+      () => PronunciationRuleSet.Parse(string.Empty),
+      () => AudioWakeSettings.Default);
+    speech.LoadHistory(
+      new[] { fragment },
+      Array.Empty<TurnCompletion>(),
+      Array.Empty<BackgroundWorkEvent>(),
+      PlaybackStartMode.Beginning);
+
+    TranscriptPlaybackPosition? position = null;
+    speech.PlaybackPositionChanged += value => position = value;
+    MethodInfo method = typeof(SpeechService).GetMethod(
+      "TrySeekToTranscriptWord",
+      BindingFlags.Instance | BindingFlags.Public,
+      binder: null,
+      types: new[] { typeof(long), typeof(string).MakeByRefType() },
+      modifiers: null) ?? throw new InvalidOperationException(
+        "Canonical word-ID seek overload is missing.");
+    object?[] arguments = { 102L, null };
+    bool sought = method.Invoke(speech, arguments) is true;
+    Require(sought, "Canonical decimal word ID 102 was not seekable.");
+    Require(string.Equals(arguments[1] as string, fragment.Text, StringComparison.Ordinal),
+      "Canonical seek did not resolve the expected speech fragment.");
+    Require(position is not null &&
+        position.State == TranscriptPlaybackState.Paused &&
+        string.Equals(position.Word, "13.234", StringComparison.Ordinal),
+      "Canonical decimal seek did not place playback on the decimal token.");
+    long positionedId = Convert.ToInt64(
+      RequireObjectProperty(position!, "WordId"),
+      CultureInfo.InvariantCulture);
+    Require(positionedId == 102L,
+      $"Playback reported canonical word {positionedId} instead of 102.");
+  }
+
+  /// <summary>
+  /// Playback notifications sent toward the transcript must expose the same
+  /// canonical numeric word handle rather than requiring text/ordinal recovery.
+  /// </summary>
+  private static void TestPlaybackPositionCarriesCanonicalWordId()
+  {
+    RequireProperty(typeof(TranscriptPlaybackPosition), "WordId");
+  }
+
+  private static SpeechFragment CreateSpeechFragment(
+    string text,
+    IReadOnlyList<long> wordIds)
+  {
+    ConstructorInfo constructor = typeof(SpeechFragment)
+      .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+      .OrderByDescending(value => value.GetParameters().Length)
+      .First();
+    ParameterInfo[] parameters = constructor.GetParameters();
+    var arguments = new object?[parameters.Length];
+    for (int index = 0; index < parameters.Length; ++index)
+    {
+      ParameterInfo parameter = parameters[index];
+      arguments[index] = parameter.Name switch
+      {
+        "NodeId" => 42L,
+        "Category" => ContentCategory.Assistant,
+        "Kind" => SpeechFragmentKind.Prose,
+        "Text" => text,
+        "TranscriptWords" => BuildTestTranscriptWords(text, wordIds),
+        _ when parameter.HasDefaultValue => parameter.DefaultValue,
+        _ => parameter.ParameterType.IsValueType
+          ? Activator.CreateInstance(parameter.ParameterType)
+          : null
+      };
+    }
+    return (SpeechFragment)constructor.Invoke(arguments);
+  }
+
+  private static IReadOnlyList<SpeechFragmentWord> BuildTestTranscriptWords(
+    string text,
+    IReadOnlyList<long> wordIds)
+  {
+    MatchCollection matches = SpeechTokenization.Matches(text);
+    Require(matches.Count == wordIds.Count,
+      "Synthetic test fixture word count does not match supplied IDs.");
+    return matches.Cast<Match>()
+      .Select((match, index) => new SpeechFragmentWord(
+        wordIds[index],
+        match.Value,
+        match.Index,
+        match.Length))
+      .ToArray();
+  }
+
+  /// <summary>
+  /// The real monitor/history path must carry the same immutable Core word IDs
+  /// exposed by the canonical HTML/speech projection for the source record.
+  /// </summary>
+  private static void TestProductionHistoryCarriesCoreWordIds()
+  {
+    string record = ClaudeRecord("user", "alpha 13.234 omega", 1, null);
+    using var core = new AIConversationCoreClient();
+    AIConversationProjection projection = core.Project(
+      AgentSource.Claude,
+      new[] { record });
+    long[] expected = RequireOnlyHtmlUnit(projection)
+      .SpeechWords?
+      .Select(word => word.Id)
+      .ToArray() ?? Array.Empty<long>();
+    Require(expected.Length == 3,
+      $"Expected three Core words in production fixture, got {expected.Length}.");
+
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue75-real-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+      string sessionPath = Path.Combine(root, "session.jsonl");
+      File.WriteAllText(sessionPath, record + Environment.NewLine);
+      LocatedSession session = SessionLocator.FromPath(
+        sessionPath,
+        AgentSource.Claude);
+      using var monitor = new JsonlSessionMonitor();
+      SpeechHistorySnapshot history = monitor.LoadHistoryPreview(
+        session,
+        speakExistingLatestTurn: false);
+      SpeechFragment fragment = history.Fragments.Single(item =>
+        item.Category == ContentCategory.User &&
+        string.Equals(item.Text, "alpha 13.234 omega", StringComparison.Ordinal));
+      long[] actual = fragment.WordIds?.ToArray() ?? Array.Empty<long>();
+      Require(actual.SequenceEqual(expected),
+        "Production history did not carry the exact Core speech_words IDs.");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Ordered-list ordinals are ordinary Core words. Production history must
+  /// carry that exact identity without decomposing `1.` into consumer tokens,
+  /// and seeking the following body word must land on that body word.
+  /// </summary>
+  private static void TestOrderedListHistoryPreservesCoreWordBoundaries()
+  {
+    string record = ClaudeRecord("user", "1. Item", 1, null);
+    using var core = new AIConversationCoreClient();
+    AIConversationProjection projection = core.Project(
+      AgentSource.Claude,
+      new[] { record });
+    CanonicalSpeechWordProjection[] expectedWords =
+      RequireOnlyHtmlUnit(projection).SpeechWords ??
+      Array.Empty<CanonicalSpeechWordProjection>();
+    Require(expectedWords.Length == 2,
+      $"Expected ordinal and body Core words, got {expectedWords.Length}.");
+    Require(string.Equals(expectedWords[0].Text, "1.", StringComparison.Ordinal),
+      $"Core ordinal is not one canonical word: {expectedWords[0].Text}.");
+    Require(string.Equals(expectedWords[1].Text, "Item", StringComparison.Ordinal),
+      $"Unexpected ordered-list body word: {expectedWords[1].Text}.");
+
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue75-ordinal-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    try
+    {
+      string sessionPath = Path.Combine(root, "session.jsonl");
+      File.WriteAllText(sessionPath, record + Environment.NewLine);
+      LocatedSession session = SessionLocator.FromPath(
+        sessionPath,
+        AgentSource.Claude);
+      using var monitor = new JsonlSessionMonitor();
+      SpeechHistorySnapshot history = monitor.LoadHistoryPreview(
+        session,
+        speakExistingLatestTurn: false);
+      SpeechFragment fragment = history.Fragments.Single(item =>
+        item.Category == ContentCategory.User &&
+        string.Equals(item.Text, "1. Item", StringComparison.Ordinal));
+      long[] expectedIds = expectedWords.Select(word => word.Id).ToArray();
+      long[] actualIds = fragment.WordIds?.ToArray() ?? Array.Empty<long>();
+      Require(actualIds.SequenceEqual(expectedIds),
+        "Production ordered-list history did not carry Core ordinal/body IDs.");
+      IReadOnlyList<SpeechFragmentWord> mappedWords = fragment.TranscriptWords ??
+        throw new InvalidOperationException(
+          "Production ordered-list fragment omitted Core word ranges.");
+      Require(mappedWords.Count == 2,
+        $"Expected two ordered-list Core ranges, got {mappedWords.Count}.");
+      Require(mappedWords[0].Text == "1." &&
+          mappedWords[0].CharacterStart == 0 &&
+          mappedWords[0].CharacterLength == 2,
+        "Ordered-list ordinal is not one exact Core-backed speech range.");
+      Require(mappedWords[1].Text == "Item" &&
+          mappedWords[1].CharacterStart == 3 &&
+          mappedWords[1].CharacterLength == 4,
+        "Ordered-list body word range is not exact.");
+
+      using var speech = new SpeechService();
+      speech.SetPolicyProviders(
+        _ => new SpeechProfileSettings("Test voice", 0, 0),
+        _ => true,
+        () => Array.Empty<string>(),
+        () => PronunciationRuleSet.Parse(string.Empty),
+        () => AudioWakeSettings.Default);
+      speech.LoadHistory(
+        history.Fragments,
+        history.Completions,
+        history.BackgroundWorkEvents,
+        PlaybackStartMode.Beginning);
+      TranscriptPlaybackPosition? position = null;
+      speech.PlaybackPositionChanged += value => position = value;
+
+      bool sought = speech.TrySeekToTranscriptWord(expectedWords[1].Id, out _);
+      Require(sought, "Ordered-list body Core word ID was not seekable.");
+      Require(position is not null &&
+          string.Equals(position.Word, "Item", StringComparison.Ordinal),
+        "Seeking the ordered-list body word did not land on Item.");
+      Require(position!.WordId == expectedWords[1].Id,
+        "Ordered-list body seek changed the authoritative Core word ID.");
+    }
+    finally
+    {
+      Directory.Delete(root, recursive: true);
+    }
+  }
+
+  /// <summary>
+  /// Policy changes must be centralized. Static Core word elements may not be
+  /// reclassified one by one when speech/category/fence eligibility changes.
+  /// </summary>
+  private static void TestPolicyIsCentralizedWithoutPerWordEligibilityMutation()
+  {
+    string shell = ShellHtml();
+    Require(!shell.Contains("voice-selectable", StringComparison.Ordinal),
+      "Browser still stamps per-word voice-selectable classes.");
+    Require(!shell.Contains("voice-excluded", StringComparison.Ordinal),
+      "Browser still stamps per-word voice-excluded classes.");
+    Require(!shell.Contains("applyVoiceEligibilityClasses", StringComparison.Ordinal),
+      "Browser still performs a transcript-wide per-word eligibility scan.");
+    Require(!shell.Contains("dataset.nodeWordIndex", StringComparison.Ordinal),
+      "Browser still reconstructs per-word speech ordinals in the DOM.");
+    Require(shell.Contains("setVoicePolicy", StringComparison.Ordinal),
+      "Browser has no centralized voice-policy state operation.");
+    Require(shell.Contains("isVoiceWordEligible", StringComparison.Ordinal),
+      "Ctrl+click does not consult centralized policy state.");
+  }
+
+  /// <summary>
+  /// A Core-backed playback notification must highlight the exact canonical
+  /// word owner even when another visible word has identical text. Text/node
+  /// matching is not a valid identity fallback when WordId is present.
+  /// </summary>
+  private static void TestPlaybackHighlightsExactCanonicalWordId()
+  {
+    using BrowserFixture fixture = BrowserFixture.Create();
+    ExecuteBrowserScript(
+      fixture.WebView,
+      """
+(() => {
+  replaceTranscript(
+    '<span class="record-anchor" data-jsonl-record="1"></span>' +
+      '<p><span id="word-7001">same</span> ' +
+      '<span id="word-7002">same</span></p>',
+    false,
+    []);
+})()
+""");
+
+    fixture.WebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new
+    {
+      type = "playback",
+      sequence = 1,
+      state = "speaking",
+      fragmentText = "same",
+      wordIndex = 0,
+      wordText = "same",
+      nodeId = 999,
+      wordId = 7002,
+      characterPosition = 0,
+      characterCount = 4,
+      boundaryTimestamp = 1,
+      follow = false
+    }));
+    PumpFor(250);
+
+    JsonElement result = ExecuteBrowserJsonProbe(
+      fixture.WebView,
+      """
+(() => JSON.stringify({
+  first:document.getElementById('word-7001')?.classList.contains('active') === true,
+  second:document.getElementById('word-7002')?.classList.contains('active') === true
+}))()
+""");
+    Require(!result.GetProperty("first").GetBoolean(),
+      "Duplicate visible text captured playback from the requested Core word ID.");
+    Require(result.GetProperty("second").GetBoolean(),
+      "Playback did not highlight the exact requested Core word owner.");
+  }
+
+  /// <summary>
+  /// If a Core playback word is outside the materialized virtual window, the
+  /// browser must request that exact numeric word from the host rather than
+  /// searching visible text or reconstructing a record/node coordinate.
+  /// </summary>
+  private static void TestOffWindowPlaybackRequestsCanonicalWord()
+  {
+    using BrowserFixture fixture = BrowserFixture.Create();
+    var request = new TaskCompletionSource<JsonElement>(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+    fixture.WebView.CoreWebView2.WebMessageReceived += (_, eventArgs) =>
+    {
+      using JsonDocument document = JsonDocument.Parse(eventArgs.WebMessageAsJson);
+      JsonElement root = document.RootElement;
+      if (root.TryGetProperty("type", out JsonElement type) &&
+          string.Equals(type.GetString(), "window-for-word", StringComparison.Ordinal))
+      {
+        request.TrySetResult(root.Clone());
+      }
+    };
+
+    ExecuteBrowserScript(
+      fixture.WebView,
+      """
+(() => {
+  replaceTranscript(
+    '<span class="record-anchor" data-jsonl-record="1"></span>' +
+      '<p><span id="word-8001">visible</span></p>',
+    false,
+    []);
+})()
+""");
+    fixture.WebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new
+    {
+      type = "playback",
+      sequence = 1,
+      state = "speaking",
+      fragmentText = "duplicate",
+      wordIndex = 0,
+      wordText = "duplicate",
+      nodeId = 123,
+      wordId = 9001,
+      characterPosition = 0,
+      characterCount = 9,
+      boundaryTimestamp = 1,
+      follow = true
+    }));
+    PumpFor(300);
+
+    Require(request.Task.IsCompleted,
+      "Off-window Core playback did not request host materialization by word ID.");
+    JsonElement message = request.Task.GetAwaiter().GetResult();
+    Require(message.GetProperty("wordId").GetInt64() == 9001,
+      "Off-window playback requested a different canonical word ID.");
+    Require(!message.TryGetProperty("nodeId", out _) &&
+        !message.TryGetProperty("nodeWordIndex", out _),
+      "Off-window playback still crosses the host boundary with legacy identity.");
+  }
+
+  /// <summary>
+  /// The display projection must retain a Core session for authoritative
+  /// word-to-unit lookup, and TranscriptView must expose one word-ID window
+  /// materialization path. A consumer word-to-unit map is not acceptable.
+  /// </summary>
+  private static void TestPlaybackHostRetainsCoreLookupSession()
+  {
+    RequireProperty(typeof(TranscriptPresentationDomResult), "CoreSessionId");
+
+    MethodInfo? locate = typeof(TranscriptPresentationDomFormatter).GetMethod(
+      "LocateRetainedWord",
+      BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+      binder: null,
+      types: new[] { typeof(string), typeof(long) },
+      modifiers: null);
+    Require(locate is not null,
+      "Transcript display projection exposes no retained Core word lookup.");
+
+    MethodInfo? render = typeof(TranscriptView).GetMethod(
+      "RenderWindowForWordAsync",
+      BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+    Require(render is not null,
+      "TranscriptView has no Core word-ID window-materialization path.");
+  }
+
+  private static AIConversationProjection ProjectClaude(string text)
+  {
+    using var client = new AIConversationCoreClient();
+    return client.Project(
+      AgentSource.Claude,
+      new[] { ClaudeRecord("user", text, 1, null) });
+  }
+
+  private static string ClaudeRecord(
+    string role,
+    string text,
+    int ordinal,
+    string? parentUuid)
+  {
+    return JsonSerializer.Serialize(new
+    {
+      parentUuid,
+      isSidechain = false,
+      uuid = $"word-id-{ordinal}",
+      type = role,
+      timestamp = $"2026-09-11T12:{ordinal % 60:00}:00.000Z",
+      message = new
+      {
+        role,
+        content = new[] { new { type = "text", text } }
+      }
+    });
+  }
+
+  private static CanonicalHtmlUnitProjection RequireOnlyHtmlUnit(
+    AIConversationProjection projection)
+  {
+    CanonicalHtmlUnitProjection[] units = RequireHtmlUnits(projection);
+    Require(units.Length == 1,
+      $"Expected one Core HTML unit, got {units.Length}.");
+    return units[0];
+  }
+
+  private static CanonicalHtmlUnitProjection[] RequireHtmlUnits(
+    AIConversationProjection projection)
+  {
+    CanonicalHtmlUnitProjection[]? units = projection.HtmlUnits;
+    if (units is null)
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore projection omitted html_units.");
+    }
+    return units;
+  }
+
+  private static WordProbe[] ReadSpeechWords(CanonicalHtmlUnitProjection unit)
+  {
+    PropertyInfo property = typeof(CanonicalHtmlUnitProjection).GetProperty(
+      "SpeechWords",
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "CanonicalHtmlUnitProjection.SpeechWords is missing.");
+    if (property.GetValue(unit) is not IEnumerable values)
+    {
+      throw new InvalidOperationException(
+        "CanonicalHtmlUnitProjection.SpeechWords is not enumerable.");
+    }
+
+    var words = new List<WordProbe>();
+    foreach (object? item in values)
+    {
+      if (item is null)
+      {
+        continue;
+      }
+      long id = Convert.ToInt64(
+        RequireObjectProperty(item, "Id"),
+        CultureInfo.InvariantCulture);
+      string text = Convert.ToString(
+        RequireObjectProperty(item, "Text"),
+        CultureInfo.InvariantCulture) ?? string.Empty;
+      string separator = Convert.ToString(
+        RequireObjectProperty(item, "SeparatorBefore"),
+        CultureInfo.InvariantCulture) ?? string.Empty;
+      words.Add(new WordProbe(id, text, separator));
+    }
+    return words.ToArray();
+  }
+
+  private static object LocateRetainedWord(
+    AIConversationCoreClient client,
+    string sessionId,
+    long wordId)
+  {
+    MethodInfo method = typeof(AIConversationCoreClient).GetMethod(
+      "LocateRetainedWord",
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "AIConversationCoreClient.LocateRetainedWord() is missing.");
+    object? location = method.Invoke(
+      client,
+      new object?[] { sessionId, wordId, new AIConversationCoreProjectOptions() });
+    return location ?? throw new InvalidOperationException(
+      $"Core retained-session lookup returned null for word {wordId}.");
+  }
+
+  private static object RequireObjectProperty(object target, string propertyName)
+  {
+    PropertyInfo property = target.GetType().GetProperty(
+      propertyName,
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        $"{target.GetType().Name}.{propertyName} is missing.");
+    return property.GetValue(target) ?? throw new InvalidOperationException(
+      $"{target.GetType().Name}.{propertyName} is null.");
+  }
+
+  private static string ShellHtml()
+  {
+    MethodInfo method = typeof(TranscriptView).GetMethod(
+      "BuildShellHtml",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("TranscriptView.BuildShellHtml is missing.");
+    return method.Invoke(null, null) as string ??
+      throw new InvalidOperationException("BuildShellHtml did not return HTML.");
+  }
+
+  private static string Around(string text, string needle, int radius)
+  {
+    int index = text.IndexOf(needle, StringComparison.Ordinal);
+    if (index < 0)
+    {
+      throw new InvalidOperationException(
+        $"Expected shell marker was not found: {needle}");
+    }
+    int start = Math.Max(0, index - radius);
+    int end = Math.Min(text.Length, index + needle.Length + radius);
+    return text[start..end];
+  }
+
+  private static int CountOccurrences(string text, string value)
+  {
+    int count = 0;
+    int index = 0;
+    while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+    {
+      ++count;
+      index += value.Length;
+    }
+    return count;
+  }
+
+  private static void RequireProperty(Type type, string propertyName)
+  {
+    Require(
+      type.GetProperty(
+        propertyName,
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null,
+      $"{type.Name}.{propertyName} is missing.");
+  }
+
+  private static void RequireNoProperty(Type type, string propertyName)
+  {
+    Require(
+      type.GetProperty(
+        propertyName,
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is null,
+      $"{type.Name} still exposes legacy {propertyName} identity.");
+  }
+
+  private static JsonElement ExecuteBrowserJsonProbe(
+    Microsoft.Web.WebView2.WinForms.WebView2 webView,
+    string script)
+  {
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(script);
+    PumpUntilCompleted(task, "issue #75 browser JSON probe");
+    string encoded = JsonSerializer.Deserialize<string>(task.Result) ??
+      throw new InvalidOperationException("Browser probe returned no JSON string.");
+    using JsonDocument document = JsonDocument.Parse(encoded);
+    return document.RootElement.Clone();
+  }
+
+  private static void ExecuteBrowserScript(
+    Microsoft.Web.WebView2.WinForms.WebView2 webView,
+    string script)
+  {
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(script);
+    PumpUntilCompleted(task, "issue #75 browser script");
+  }
+
+  private static void PumpFor(int milliseconds)
+  {
+    DateTime deadline = DateTime.UtcNow.AddMilliseconds(milliseconds);
+    while (DateTime.UtcNow < deadline)
+    {
+      Application.DoEvents();
+      Thread.Sleep(10);
+    }
+  }
+
+  private static void PumpUntilCompleted(
+    Task task,
+    string description,
+    int timeoutMilliseconds = 30000)
+  {
+    DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMilliseconds);
+    while (!task.IsCompleted && DateTime.UtcNow < deadline)
+    {
+      Application.DoEvents();
+      Thread.Sleep(10);
+    }
+    Require(task.IsCompleted, $"Timed out waiting for {description}.");
+    task.GetAwaiter().GetResult();
+  }
+
+  private sealed class BrowserFixture : IDisposable
+  {
+    private BrowserFixture(
+      Form host,
+      Microsoft.Web.WebView2.WinForms.WebView2 webView)
+    {
+      Host = host;
+      WebView = webView;
+    }
+
+    public Form Host { get; }
+    public Microsoft.Web.WebView2.WinForms.WebView2 WebView { get; }
+
+    public static BrowserFixture Create()
+    {
+      var host = new Form
+      {
+        Width = 800,
+        Height = 600,
+        ShowInTaskbar = false,
+        StartPosition = FormStartPosition.Manual,
+        Location = new Point(-30000, -30000)
+      };
+      var webView = new Microsoft.Web.WebView2.WinForms.WebView2
+      {
+        Dock = DockStyle.Fill
+      };
+      host.Controls.Add(webView);
+      host.Show();
+      Application.DoEvents();
+      PumpUntilCompleted(
+        webView.EnsureCoreWebView2Async(),
+        "issue #75 WebView initialization");
+
+      string shell = ShellHtml();
+      var navigated = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+      webView.NavigationCompleted += (_, eventArgs) =>
+      {
+        if (eventArgs.IsSuccess)
+        {
+          navigated.TrySetResult(true);
+        }
+        else
+        {
+          navigated.TrySetException(new InvalidOperationException(
+            $"WebView navigation failed: {eventArgs.WebErrorStatus}."));
+        }
+      };
+      webView.CoreWebView2.NavigateToString(shell);
+      PumpUntilCompleted(navigated.Task, "issue #75 transcript shell navigation");
+      return new BrowserFixture(host, webView);
+    }
+
+    public void Dispose()
+    {
+      WebView.Dispose();
+      Host.Dispose();
+    }
+  }
+
+  private static void Require(bool condition, string message)
+  {
+    if (!condition)
+    {
+      throw new InvalidOperationException(message);
+    }
+  }
+}

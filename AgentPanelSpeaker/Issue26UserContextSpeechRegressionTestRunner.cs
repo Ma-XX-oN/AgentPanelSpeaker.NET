@@ -244,10 +244,10 @@ private static void TestLiveMonitorToggle()
     int previewGeneration = GetField<int>(form, "_historyPreviewGeneration");
 
     Require(
-      !speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
+      !speech.TrySeekToTranscriptWord(context.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("User Context fragment has no Core word identity."), out _),
       "SpeakUserContext OFF left indexed User Context eligible for playback.");
     Require(
-      speech.TrySeekToTranscriptWord(user.NodeId, 0, out _),
+      speech.TrySeekToTranscriptWord(user.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("User prompt fragment has no Core word identity."), out _),
       "SpeakUserContext OFF made the actual User prompt ineligible.");
     speech.MoveToPausedLiveEnd();
 
@@ -271,7 +271,7 @@ private static void TestLiveMonitorToggle()
           (fragment.NodeId, fragment.Category, fragment.Text))),
       "Enabling SpeakUserContext changed already-indexed speech history.");
     Require(
-      speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
+      speech.TrySeekToTranscriptWord(context.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("User Context fragment has no Core word identity."), out _),
       "SpeakUserContext ON did not make retained User Context playback-eligible.");
     TranscriptPlaybackPosition? relocation = null;
     speech.PlaybackPositionChanged += position => relocation = position;
@@ -291,7 +291,7 @@ private static void TestLiveMonitorToggle()
       GetField<int>(form, "_historyPreviewGeneration") == previewGeneration,
       "Disabling SpeakUserContext rebuilt canonical history.");
     Require(
-      !speech.TrySeekToTranscriptWord(context.NodeId, 0, out _),
+      !speech.TrySeekToTranscriptWord(context.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("User Context fragment has no Core word identity."), out _),
       "SpeakUserContext OFF did not immediately suppress retained User Context.");
     TranscriptPlaybackPosition relocated = relocation ??
       throw new InvalidOperationException(

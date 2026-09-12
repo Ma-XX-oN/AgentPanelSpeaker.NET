@@ -231,6 +231,19 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "core-word-id-migration",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "core-word-id-migration",
+          () => RunWithWinFormsMessageLoop(
+            Issue75CoreWordIdMigrationRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -276,6 +289,8 @@ internal static class Program
       int findOrigin = RunIsolatedTestSuite("find-origin");
       int ctrlClickVoicePointer = RunIsolatedTestSuite(
         "ctrl-click-voice-pointer");
+      int coreWordIdMigration = RunIsolatedTestSuite(
+        "core-word-id-migration");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -297,7 +312,8 @@ internal static class Program
                              startupPerformance == 0 &&
                              redundancy == 0 &&
                              findOrigin == 0 &&
-                             ctrlClickVoicePointer == 0
+                             ctrlClickVoicePointer == 0 &&
+                             coreWordIdMigration == 0
         ? 0
         : 1;
       Console.WriteLine(

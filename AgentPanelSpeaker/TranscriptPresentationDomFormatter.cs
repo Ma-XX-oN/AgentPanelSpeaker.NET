@@ -17,8 +17,9 @@ internal static class TranscriptPresentationDomFormatter
   }
 
   /// <summary>
-  /// Projects one selected provider JSONL session through AIConversationCore and
-  /// returns Core-rendered HTML units without rebuilding semantic HTML in C#.
+  /// Projects one selected provider JSONL session through a retained Core
+  /// session and returns Core-rendered HTML units without rebuilding semantic
+  /// HTML in C#.
   /// </summary>
   public static TranscriptPresentationDomResult Format(
     string path,
@@ -35,33 +36,78 @@ internal static class TranscriptPresentationDomFormatter
       return new TranscriptPresentationDomResult(
         Array.Empty<TranscriptDomNode>(),
         string.Empty,
-        Array.Empty<CanonicalHtmlUnitProjection>());
+        Array.Empty<CanonicalHtmlUnitProjection>(),
+        null);
     }
 
-    AIConversationProjection projection = CoreClient.Project(
-      source,
-      jsonLines,
-      new AIConversationCoreProjectOptions(IncludeRolledBackTurns: true));
-    cancellationToken.ThrowIfCancellationRequested();
-
-    CanonicalHtmlUnitProjection[] units = projection.HtmlUnits ??
-      throw new InvalidOperationException(
-        "AIConversationCore projection omitted canonical HTML units.");
-    foreach (CanonicalHtmlUnitProjection unit in units)
+    AIConversationCoreRetainedSession? retained = null;
+    try
     {
-      if (!unit.Atomic ||
-          !string.Equals(unit.Kind, "turn", StringComparison.Ordinal))
-      {
-        throw new InvalidOperationException(
-          "AIConversationCore returned an unsupported HTML virtualization unit.");
-      }
-    }
+      retained = CoreClient.CreateRetainedSession(
+        source,
+        jsonLines,
+        new AIConversationCoreProjectOptions(IncludeRolledBackTurns: true));
+      cancellationToken.ThrowIfCancellationRequested();
+      AIConversationProjection projection = retained.Projection;
 
-    string html = string.Concat(units.Select(unit => unit.Html));
-    return new TranscriptPresentationDomResult(
-      Array.Empty<TranscriptDomNode>(),
-      html,
-      units);
+      CanonicalHtmlUnitProjection[] units = projection.HtmlUnits ??
+        throw new InvalidOperationException(
+          "AIConversationCore projection omitted canonical HTML units.");
+      foreach (CanonicalHtmlUnitProjection unit in units)
+      {
+        if (!unit.Atomic ||
+            !string.Equals(unit.Kind, "turn", StringComparison.Ordinal))
+        {
+          throw new InvalidOperationException(
+            "AIConversationCore returned an unsupported HTML virtualization unit.");
+        }
+      }
+
+      string html = string.Concat(units.Select(unit => unit.Html));
+      return new TranscriptPresentationDomResult(
+        Array.Empty<TranscriptDomNode>(),
+        html,
+        units,
+        retained.Id);
+    }
+    catch
+    {
+      if (retained is not null)
+      {
+        CoreClient.CloseRetainedSession(retained.Id);
+      }
+      throw;
+    }
+  }
+
+  /// <summary>
+  /// Resolves one transcript-global Core word in the retained display session.
+  /// </summary>
+  internal static AIConversationCoreWordLocation? LocateRetainedWord(
+    string sessionId,
+    long wordId)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+    if (wordId < 1)
+    {
+      throw new ArgumentOutOfRangeException(nameof(wordId));
+    }
+    return CoreClient.LocateRetainedWord(
+      sessionId,
+      wordId,
+      new AIConversationCoreProjectOptions(IncludeRolledBackTurns: true));
+  }
+
+  /// <summary>
+  /// Releases one retained display session when its rendered projection is no
+  /// longer the active transcript inventory.
+  /// </summary>
+  internal static void CloseRetainedSession(string? sessionId)
+  {
+    if (!string.IsNullOrWhiteSpace(sessionId))
+    {
+      CoreClient.CloseRetainedSession(sessionId);
+    }
   }
 
   private static IReadOnlyList<string> ReadJsonLines(
@@ -94,13 +140,15 @@ internal static class TranscriptPresentationDomFormatter
 }
 
 /// <summary>
-/// Completed Core HTML plus the legacy DOM-node slot retained only for API
-/// compatibility while callers migrate to Core-owned units.
+/// Completed Core HTML plus its retained Core session identity. The legacy
+/// DOM-node slot remains only for API compatibility while callers migrate to
+/// Core-owned units.
 /// </summary>
 internal sealed record TranscriptPresentationDomResult(
   IReadOnlyList<TranscriptDomNode> Nodes,
   string Html,
-  IReadOnlyList<CanonicalHtmlUnitProjection> Units);
+  IReadOnlyList<CanonicalHtmlUnitProjection> Units,
+  string? CoreSessionId = null);
 
 /// <summary>
 /// Legacy browser-DOM instruction shape retained for compatibility. Production

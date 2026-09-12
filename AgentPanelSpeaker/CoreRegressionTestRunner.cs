@@ -227,15 +227,15 @@ internal static class CoreRegressionTestRunner
       int nestedQuote = html.IndexOf("<blockquote class=\"user-context\">", StringComparison.Ordinal);
       int quoteEnd = html.IndexOf("</blockquote>", Math.Max(0, htmlEnd), StringComparison.Ordinal);
       int htmlPrompt = html.IndexOf(
-        "What time is it in Paris?",
+        ">What</span>",
         StringComparison.Ordinal);
       Require(nestedQuote >= 0 && htmlStart > nestedQuote, "HTML omitted context blockquote/details.");
       Require(html.Contains("<summary># Context from my IDE setup:</summary>", StringComparison.Ordinal), "HTML changed context summary.");
       Require(htmlEnd > htmlStart && quoteEnd > htmlEnd && htmlPrompt > quoteEnd, "HTML prompt is not after/outside context disclosure.");
       Require(!html.Contains("## My request for Codex:", StringComparison.Ordinal), "Request marker leaked into HTML.");
-      int htmlFile = html.IndexOf("Active file:", StringComparison.Ordinal);
-      int htmlSelection = html.IndexOf("Active selection of the file:", StringComparison.Ordinal);
-      int htmlTabs = html.IndexOf("Open tabs:", StringComparison.Ordinal);
+      int htmlFile = html.IndexOf(">file</span>", StringComparison.Ordinal);
+      int htmlSelection = html.IndexOf(">selection</span>", StringComparison.Ordinal);
+      int htmlTabs = html.IndexOf(">tabs</span>", StringComparison.Ordinal);
       Require(htmlFile >= 0 && htmlFile < htmlSelection && htmlSelection < htmlTabs, "HTML changed context order.");
 
       TranscriptPresentationDomResult production =
@@ -249,7 +249,7 @@ internal static class CoreRegressionTestRunner
         Math.Max(0, productionStart),
         StringComparison.Ordinal);
       int productionPrompt = productionHtml.IndexOf(
-        "What time is it in Paris?",
+        ">What</span>",
         StringComparison.Ordinal);
       Require(productionStart >= 0,
         "Production DOM formatter omitted Codex IDE context.");

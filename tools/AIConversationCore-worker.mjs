@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = '6c92799c1b14693001e8b913465f4a12b0b1e1ab';
+const CORE_COMMIT = '169814bf407ac3b5c9f3757b724df10aeddef5de';
 const sessions = new Map();
 
 /**
@@ -209,6 +209,20 @@ function execute(request) {
       core_commit: CORE_COMMIT,
       projection: withHtmlUnits(entry.session.project(options), options),
       diagnostics: entry.session.diagnostics
+    };
+  }
+
+  if (request?.operation === 'session_locate_word') {
+    const entry = requireSession(request.session_id);
+    const projection = entry.session.project(options);
+    return {
+      ok: true,
+      core_commit: CORE_COMMIT,
+      location: core.locateCanonicalWord(
+        projection.events,
+        request.word_id,
+        options
+      )
     };
   }
 

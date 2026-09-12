@@ -37,7 +37,9 @@ internal sealed record ExtractedNode(
   int? RevisionDepth = null,
   bool ProjectionVisible = true,
   bool RevisionHistoryControlled = false,
-  bool HistoricalRevision = false);
+  bool HistoricalRevision = false,
+  string? CanonicalBlockId = null,
+  IReadOnlyList<CanonicalSpeechWordProjection>? CanonicalWords = null);
 
 /// <summary>
 /// Describes one labelled option in a Codex input question.

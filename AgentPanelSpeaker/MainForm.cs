@@ -191,8 +191,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _themeNativeMessageTracerStarted;
   private int _monitorSession;
   private int _historyPreviewGeneration;
-  private long _pendingMonitorSeekNodeId;
-  private int _pendingMonitorSeekWordIndex = -1;
+  private long _pendingMonitorSeekWordId;
   private bool _resumeAfterMonitorHistoryLoaded;
   private bool _reusePausedHistoryOnMonitorStart;
   private bool _suppressMonitorTextUntilHistoryLoaded;
@@ -1941,12 +1940,10 @@ internal sealed class MainForm : Form, IMessageFilter
         snapshot.StartMode);
       RefreshTranscriptVoiceSelectability();
 
-      if (_pendingMonitorSeekNodeId > 0 &&
-          _pendingMonitorSeekWordIndex >= 0)
+      if (_pendingMonitorSeekWordId > 0)
       {
         if (_speech.TrySeekToTranscriptWord(
-              _pendingMonitorSeekNodeId,
-              _pendingMonitorSeekWordIndex,
+              _pendingMonitorSeekWordId,
               out string seekText))
         {
           AppendLog($"Restored Find speech position: {seekText}");
@@ -1955,8 +1952,7 @@ internal sealed class MainForm : Form, IMessageFilter
         {
           AppendLog("Unable to restore the Find speech position after monitoring started.");
         }
-        _pendingMonitorSeekNodeId = 0;
-        _pendingMonitorSeekWordIndex = -1;
+        _pendingMonitorSeekWordId = 0;
       }
 
       if (_resumeAfterMonitorHistoryLoaded)
@@ -2291,25 +2287,23 @@ internal sealed class MainForm : Form, IMessageFilter
     DiagnosticLog.Write("transcript.seek_requested", new
     {
       eventArgs.Source,
-      eventArgs.NodeId,
-      eventArgs.NodeWordIndex
+      eventArgs.WordId
     });
     if (_speech.TrySeekToTranscriptWord(
-          eventArgs.NodeId,
-          eventArgs.NodeWordIndex,
+          eventArgs.WordId,
           out string text))
     {
-      _pendingMonitorSeekNodeId = eventArgs.NodeId;
-      _pendingMonitorSeekWordIndex = eventArgs.NodeWordIndex;
+      _pendingMonitorSeekWordId = eventArgs.WordId;
       AppendLog(eventArgs.Source == "ctrl-click"
         ? $"Ctrl+click moved speech marker: {text}"
         : $"Find moved speech marker: {text}");
     }
     else
     {
-      AppendLog("Find match is not in voiced speech history.");
+      AppendLog(eventArgs.Source == "ctrl-click"
+        ? "Ctrl+click word is not currently seekable."
+        : "Find word is not currently seekable.");
     }
-    UpdateControlState();
   }
 
   /// <summary>

@@ -37,6 +37,15 @@ namespace AgentPanelSpeaker;
 /// <param name="HistoricalRevision">
 /// Whether Core classifies this fragment as historical revision content.
 /// </param>
+/// <summary>
+/// Maps one immutable Core transcript word into one app-owned speech fragment.
+/// </summary>
+internal sealed record SpeechFragmentWord(
+  long Id,
+  string Text,
+  int CharacterStart,
+  int CharacterLength);
+
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -53,7 +62,16 @@ internal sealed record SpeechFragment(
   int? RevisionDepth = null,
   bool ProjectionVisible = true,
   bool RevisionHistoryControlled = false,
-  bool HistoricalRevision = false);
+  bool HistoricalRevision = false,
+  IReadOnlyList<SpeechFragmentWord>? TranscriptWords = null)
+{
+  /// <summary>
+  /// Temporary migration view of the Core IDs carried by TranscriptWords.
+  /// </summary>
+  public IReadOnlyList<long>? WordIds => TranscriptWords?
+    .Select(static word => word.Id)
+    .ToArray();
+}
 
 /// <summary>
 /// Identifies how existing history should begin playback.

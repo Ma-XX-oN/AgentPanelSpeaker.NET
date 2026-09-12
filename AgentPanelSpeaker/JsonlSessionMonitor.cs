@@ -498,7 +498,19 @@ internal sealed class JsonlSessionMonitor : IDisposable
     List<SpeechFragment>? history = null,
     bool emitLive = true)
   {
-    IReadOnlyList<SpeechTextPart> parts = TextCleaner.ParseForSpeech(node.Text);
+    IReadOnlyList<SpeechTextPart> parts;
+    IReadOnlyList<IReadOnlyList<SpeechFragmentWord>?> partTranscriptWords;
+    if (node.CanonicalWords is { Count: > 0 } canonicalWords)
+    {
+      (parts, partTranscriptWords) = BuildCanonicalSpeechParts(canonicalWords);
+    }
+    else
+    {
+      parts = TextCleaner.ParseForSpeech(node.Text);
+      partTranscriptWords = Enumerable
+        .Repeat<IReadOnlyList<SpeechFragmentWord>?>(null, parts.Count)
+        .ToArray();
+    }
     if (parts.Count == 0)
     {
       DiagnosticLog.Write("jsonl.node_skipped", new
@@ -551,7 +563,30 @@ internal sealed class JsonlSessionMonitor : IDisposable
           ? ContentCategory.UserContext
           : node.Category;
       bool startsUserTurn = node.StartsUserTurn && partIndex == 0;
-      if (part.Kind == SpeechFragmentKind.Prose)
+      IReadOnlyList<SpeechFragmentWord>? canonicalPartWords =
+        partTranscriptWords[partIndex];
+      if (canonicalPartWords is not null)
+      {
+        fragments.Add(new SpeechFragment(
+          nodeId,
+          fragmentCategory,
+          part.Kind,
+          part.Text,
+          part.FenceType,
+          part.FenceBlockId,
+          part.FenceLineIndex,
+          part.FenceLineCount,
+          PauseAfter: part.PauseAfter,
+          NodeTimestampUtc: nodeTimestampUtc,
+          StartsUserTurn: startsUserTurn,
+          RevisionStatus: node.RevisionStatus,
+          RevisionDepth: node.RevisionDepth,
+          ProjectionVisible: node.ProjectionVisible,
+          RevisionHistoryControlled: node.RevisionHistoryControlled,
+          HistoricalRevision: node.HistoricalRevision,
+          TranscriptWords: canonicalPartWords));
+      }
+      else if (part.Kind == SpeechFragmentKind.Prose)
       {
         SpeechFragmentKind fragmentKind = part.FenceType.Length == 0
           ? SpeechFragmentKind.Prose
@@ -636,6 +671,216 @@ internal sealed class JsonlSessionMonitor : IDisposable
     {
       MessagesChanged?.Invoke(preview.ToArray());
     }
+  }
+
+  /// <summary>
+  /// Builds transcript-backed speech parts directly from the authoritative Core
+  /// word stream. Core separators preserve word adjacency; APS never retokenizes
+  /// these words to decide identity. Ordered-list ordinals such as `1.` remain
+  /// one canonical word and begin their own list-item part after a line break.
+  /// </summary>
+  private static (
+    IReadOnlyList<SpeechTextPart> Parts,
+    IReadOnlyList<IReadOnlyList<SpeechFragmentWord>?> TranscriptWords)
+      BuildCanonicalSpeechParts(
+        IReadOnlyList<CanonicalSpeechWordProjection> words)
+  {
+    var groups = new List<List<CanonicalSpeechWordProjection>>();
+    var current = new List<CanonicalSpeechWordProjection>();
+    string currentFence = string.Empty;
+
+    foreach (CanonicalSpeechWordProjection word in words)
+    {
+      string fence = FenceType(word);
+      bool fenceChanged = current.Count != 0 &&
+        !string.Equals(fence, currentFence, StringComparison.OrdinalIgnoreCase);
+      bool newFenceLine = current.Count != 0 &&
+        fence.Length != 0 &&
+        word.SeparatorBefore.Contains('\n');
+      bool newOrderedItem = current.Count != 0 &&
+        fence.Length == 0 &&
+        word.SeparatorBefore.Contains('\n') &&
+        IsOrderedListOrdinal(word.Text);
+      if (fenceChanged || newFenceLine || newOrderedItem)
+      {
+        groups.Add(current);
+        current = new List<CanonicalSpeechWordProjection>();
+      }
+      if (current.Count == 0)
+      {
+        currentFence = fence;
+      }
+      current.Add(word);
+    }
+    if (current.Count != 0)
+    {
+      groups.Add(current);
+    }
+
+    var parts = new List<SpeechTextPart>();
+    var transcriptWords = new List<IReadOnlyList<SpeechFragmentWord>?>();
+    int fenceLineIndex = 0;
+    int fenceLineCount = groups.Count(group => FenceType(group[0]).Length != 0);
+    foreach (List<CanonicalSpeechWordProjection> group in groups)
+    {
+      string fenceType = FenceType(group[0]);
+      if (fenceType.Length != 0)
+      {
+        (string line, SpeechFragmentWord[] mappedWords) =
+          BuildCanonicalFragment(group, preserveWhitespace: true);
+        if (line.Length != 0)
+        {
+          parts.Add(new SpeechTextPart(
+            SpeechFragmentKind.FencedCodeLine,
+            line,
+            fenceType,
+            FenceBlockId: 0,
+            FenceLineIndex: fenceLineIndex++,
+            FenceLineCount: fenceLineCount,
+            PauseAfter: true,
+            SpeechTextStyle.Main));
+          transcriptWords.Add(mappedWords);
+        }
+        continue;
+      }
+
+      AddCanonicalProseParts(group, parts, transcriptWords);
+    }
+    return (parts, transcriptWords);
+  }
+
+  /// <summary>
+  /// Splits one Core prose/list-item word run at canonical sentence punctuation.
+  /// Structural ordered-list ordinals contain their own dot and are therefore
+  /// not punctuation tokens here.
+  /// </summary>
+  private static void AddCanonicalProseParts(
+    IReadOnlyList<CanonicalSpeechWordProjection> words,
+    ICollection<SpeechTextPart> parts,
+    ICollection<IReadOnlyList<SpeechFragmentWord>?> transcriptWords)
+  {
+    int start = 0;
+    for (int index = 0; index < words.Count; ++index)
+    {
+      if (words[index].Text is not ("." or "?" or "!"))
+      {
+        continue;
+      }
+      int end = index + 1;
+      while (end < words.Count &&
+             words[end].SeparatorBefore.Length == 0 &&
+             words[end].Text is "\"" or "'" or ")" or "]" or "}")
+      {
+        ++end;
+      }
+      AddCanonicalProsePart(
+        words,
+        start,
+        end,
+        parts,
+        transcriptWords,
+        pauseAfter: false);
+      start = end;
+      index = end - 1;
+    }
+    if (start < words.Count)
+    {
+      AddCanonicalProsePart(
+        words,
+        start,
+        words.Count,
+        parts,
+        transcriptWords,
+        pauseAfter: true);
+    }
+    else if (parts.Count != 0 && parts.Last().PauseAfter is false)
+    {
+      SpeechTextPart last = parts.Last();
+      parts.Remove(last);
+      parts.Add(last with { PauseAfter = true });
+    }
+  }
+
+  private static void AddCanonicalProsePart(
+    IReadOnlyList<CanonicalSpeechWordProjection> words,
+    int start,
+    int end,
+    ICollection<SpeechTextPart> parts,
+    ICollection<IReadOnlyList<SpeechFragmentWord>?> transcriptWords,
+    bool pauseAfter)
+  {
+    CanonicalSpeechWordProjection[] slice = words
+      .Skip(start)
+      .Take(end - start)
+      .ToArray();
+    if (slice.Length == 0)
+    {
+      return;
+    }
+    (string text, SpeechFragmentWord[] mappedWords) =
+      BuildCanonicalFragment(slice, preserveWhitespace: false);
+    parts.Add(new SpeechTextPart(
+      SpeechFragmentKind.Prose,
+      text,
+      string.Empty,
+      FenceBlockId: -1,
+      FenceLineIndex: -1,
+      FenceLineCount: 0,
+      PauseAfter: pauseAfter,
+      SpeechTextStyle.Main));
+    transcriptWords.Add(mappedWords);
+  }
+
+  /// <summary>
+  /// Reconstructs one app-owned utterance from Core words while recording each
+  /// authoritative word's exact character range in that utterance.  A non-empty
+  /// Core separator either remains exact (code) or becomes one speech space
+  /// (prose); no tokenizer or visible-text search participates.
+  /// </summary>
+  private static (string Text, SpeechFragmentWord[] Words)
+    BuildCanonicalFragment(
+      IReadOnlyList<CanonicalSpeechWordProjection> words,
+      bool preserveWhitespace)
+  {
+    var text = new StringBuilder();
+    var mappedWords = new List<SpeechFragmentWord>(words.Count);
+    for (int index = 0; index < words.Count; ++index)
+    {
+      CanonicalSpeechWordProjection word = words[index];
+      if (index != 0 && word.SeparatorBefore.Length != 0)
+      {
+        text.Append(preserveWhitespace ? word.SeparatorBefore : " ");
+      }
+      int characterStart = text.Length;
+      text.Append(word.Text);
+      mappedWords.Add(new SpeechFragmentWord(
+        word.Id,
+        word.Text,
+        characterStart,
+        word.Text.Length));
+    }
+    return (text.ToString(), mappedWords.ToArray());
+  }
+
+  private static string FenceType(CanonicalSpeechWordProjection word)
+  {
+    if (!word.Groups.Contains("fenced_code", StringComparer.Ordinal))
+    {
+      return string.Empty;
+    }
+    const string prefix = "fence:";
+    string? group = word.Groups.FirstOrDefault(value =>
+      value.StartsWith(prefix, StringComparison.Ordinal));
+    return group is null ? "untyped" : group[prefix.Length..];
+  }
+
+  private static bool IsOrderedListOrdinal(string text)
+  {
+    if (text.Length < 2 || text[^1] is not ('.' or ')'))
+    {
+      return false;
+    }
+    return text[..^1].All(char.IsDigit);
   }
 
   /// <summary>

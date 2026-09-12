@@ -276,7 +276,7 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       JsonElement visible = WaitForRevisionProbe(view, historicalVisible: true);
       RequireRevisionState(visible, historicalVisible: true);
       Require(
-        speech.TrySeekToTranscriptWord(historical.NodeId, 0, out _),
+        speech.TrySeekToTranscriptWord(historical.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("Historical fragment has no Core word identity."), out _),
         "Historical speech was not eligible while Show rolled-back history was ON.");
 
       int monitorSession = ReadField<int>(form, "_monitorSession");
@@ -288,10 +288,10 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       JsonElement hidden = WaitForRevisionProbe(view, historicalVisible: false);
       RequireRevisionState(hidden, historicalVisible: false);
       Require(
-        !speech.TrySeekToTranscriptWord(historical.NodeId, 0, out _),
+        !speech.TrySeekToTranscriptWord(historical.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("Historical fragment has no Core word identity."), out _),
         "Real OFF control event left historical speech playback-eligible.");
       Require(
-        speech.TrySeekToTranscriptWord(edited.NodeId, 0, out _),
+        speech.TrySeekToTranscriptWord(edited.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("Edited fragment has no Core word identity."), out _),
         "Real OFF control event hid the active edited speech fragment.");
       RequireUnchangedSessionState(
         form,
@@ -316,7 +316,7 @@ internal static class Issue46IndependentRegressionOracleTestRunner
       JsonElement shownAgain = WaitForRevisionProbe(view, historicalVisible: true);
       RequireRevisionState(shownAgain, historicalVisible: true);
       Require(
-        speech.TrySeekToTranscriptWord(historical.NodeId, 0, out _),
+        speech.TrySeekToTranscriptWord(historical.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("Historical fragment has no Core word identity."), out _),
         "Real ON control event did not restore historical speech eligibility.");
       RequireUnchangedSessionState(
         form,
@@ -635,14 +635,13 @@ internal static class Issue46IndependentRegressionOracleTestRunner
     bool expectedContextEligible)
   {
     bool contextEligible = speech.TrySeekToTranscriptWord(
-      context.NodeId,
-      0,
+      context.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("User Context fragment has no Core word identity."),
       out _);
     Require(
       contextEligible == expectedContextEligible,
       $"User Context eligibility is {contextEligible}, expected {expectedContextEligible}.");
     Require(
-      speech.TrySeekToTranscriptWord(user.NodeId, 0, out _),
+      speech.TrySeekToTranscriptWord(user.WordIds?.FirstOrDefault() ?? throw new InvalidOperationException("User prompt fragment has no Core word identity."), out _),
       "Actual User prompt became ineligible while toggling User Context.");
   }
 
