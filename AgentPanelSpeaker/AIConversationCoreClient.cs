@@ -189,6 +189,34 @@ internal sealed class AIConversationCoreClient : IDisposable
   }
 
   /// <summary>
+  /// Resolves one canonical transcript-global word in an already-retained
+  /// session using Core's numeric identity lookup. Visible text is never a
+  /// lookup key and no consumer-side word-to-unit map participates.
+  /// </summary>
+  public AIConversationCoreWordLocation? LocateRetainedWord(
+    string sessionId,
+    long wordId,
+    AIConversationCoreProjectOptions? options = null)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+    if (wordId < 1)
+    {
+      throw new ArgumentOutOfRangeException(nameof(wordId));
+    }
+    AIConversationCoreProjectOptions effective = options ?? new();
+    var request = new CoreRequest(
+      "session_locate_word",
+      sessionId,
+      null,
+      null,
+      ToCoreOptions(effective),
+      null,
+      wordId);
+    CoreResponse response = SendRequest(request);
+    return response.Location;
+  }
+
+  /// <summary>
   /// Releases one worker-retained canonical session.
   /// </summary>
   public void CloseRetainedSession(string sessionId)
@@ -545,7 +573,8 @@ internal sealed class AIConversationCoreClient : IDisposable
     [property: JsonPropertyName("records")] JsonElement? Records,
     [property: JsonPropertyName("options")] CoreOptions? Options,
     [property: JsonPropertyName("supplementary_sources")]
-      IReadOnlyDictionary<string, object>? SupplementarySources);
+      IReadOnlyDictionary<string, object>? SupplementarySources,
+    [property: JsonPropertyName("word_id")] long? WordId = null);
 
   private sealed record CoreOptions(
     [property: JsonPropertyName("includeRolledBackTurns")]
@@ -560,8 +589,17 @@ internal sealed class AIConversationCoreClient : IDisposable
       AIConversationProjection? Projection,
     [property: JsonPropertyName("diagnostics")]
       AIConversationCoreSessionDiagnostics? Diagnostics,
+    [property: JsonPropertyName("location")]
+      AIConversationCoreWordLocation? Location,
     [property: JsonPropertyName("error")] string? Error);
 }
+
+/// <summary>
+/// Exact Core-owned canonical word and containing HTML unit.
+/// </summary>
+internal sealed record AIConversationCoreWordLocation(
+  [property: JsonPropertyName("word")] CanonicalSpeechWordProjection Word,
+  [property: JsonPropertyName("unit")] CanonicalHtmlUnitProjection Unit);
 
 /// <summary>
 /// Structured canonical projection returned by AIConversationCore.

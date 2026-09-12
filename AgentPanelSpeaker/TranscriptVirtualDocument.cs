@@ -36,6 +36,7 @@ internal sealed class TranscriptVirtualDocument
 
   private readonly TranscriptVirtualRecord[] _records;
   private readonly Dictionary<int, int> _recordIndexes;
+  private readonly Dictionary<string, int> _unitIndexes;
   private readonly double[] _heights;
   private int _heightGeneration = -1;
   private bool _showRolledBackHistory;
@@ -45,8 +46,15 @@ internal sealed class TranscriptVirtualDocument
     _records = records;
     _heights = records.Select(record => record.EstimatedHeight).ToArray();
     _recordIndexes = new Dictionary<int, int>();
+    _unitIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
     for (int index = 0; index < records.Length; ++index)
     {
+      string? unitId = records[index].UnitId;
+      if (!string.IsNullOrEmpty(unitId) && !_unitIndexes.TryAdd(unitId, index))
+      {
+        throw new InvalidOperationException(
+          $"Duplicate AIConversationCore HTML unit ID: {unitId}");
+      }
       foreach (TranscriptVirtualIdentity identity in records[index].Identities)
       {
         _recordIndexes[identity.RecordNumber] = index;
@@ -125,7 +133,8 @@ public static TranscriptVirtualDocument Build(
       identities,
       html.Contains(
         "data-revision-historical=\"true\"",
-        StringComparison.OrdinalIgnoreCase)));
+        StringComparison.OrdinalIgnoreCase),
+      UnitId: unit.Id));
   }
 
   DiagnosticLog.Write("transcript.virtual-core-units", new
@@ -226,6 +235,16 @@ public static TranscriptVirtualDocument Build(
   public bool TryGetIndex(int recordNumber, out int index)
   {
     return _recordIndexes.TryGetValue(recordNumber, out index);
+  }
+
+  /// <summary>
+  /// Resolves a Core-owned HTML unit identity to its virtual-document index.
+  /// Word-to-unit resolution remains exclusively inside AIConversationCore.
+  /// </summary>
+  public bool TryGetUnitIndex(string unitId, out int index)
+  {
+    ArgumentNullException.ThrowIfNull(unitId);
+    return _unitIndexes.TryGetValue(unitId, out index);
   }
 
   /// <summary>
@@ -885,7 +904,8 @@ internal sealed record TranscriptVirtualRecord(
   string Html,
   double EstimatedHeight,
   IReadOnlyList<TranscriptVirtualIdentity> Identities,
-  bool HistoricalRevision = false);
+  bool HistoricalRevision = false,
+  string? UnitId = null);
 
 internal sealed record TranscriptWindow(
   string Html,

@@ -212,6 +212,20 @@ function execute(request) {
     };
   }
 
+  if (request?.operation === 'session_locate_word') {
+    const entry = requireSession(request.session_id);
+    const projection = entry.session.project(options);
+    return {
+      ok: true,
+      core_commit: CORE_COMMIT,
+      location: core.locateCanonicalWord(
+        projection.events,
+        request.word_id,
+        options
+      )
+    };
+  }
+
   if (request?.operation === 'session_close') {
     sessions.delete(request.session_id);
     return {
