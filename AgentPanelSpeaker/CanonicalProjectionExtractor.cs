@@ -161,7 +161,7 @@ internal static class CanonicalProjectionExtractor
         : $"accepted {acceptedCount} canonical conversational node(s)";
 
     return new ExtractionResult(
-      nodes,
+      AttachCanonicalWords(nodes, projection),
       decision,
       $"canonical.{provider}",
       payloadSummary,
@@ -189,7 +189,13 @@ internal static class CanonicalProjectionExtractor
           GetString(block, "content"),
           GetString(block, "summary"))
         : GetString(block, "text");
-      AddNode(nodes, nodeKind, category, text, timestamp);
+      AddNode(
+        nodes,
+        nodeKind,
+        category,
+        text,
+        timestamp,
+        canonicalBlockId: GetString(block, "id"));
     }
   }
 
@@ -222,7 +228,8 @@ internal static class CanonicalProjectionExtractor
         category,
         GetString(block, "text"),
         timestamp,
-        startsUserTurn: first);
+        startsUserTurn: first,
+        canonicalBlockId: GetString(block, "id"));
       first = false;
     }
   }
@@ -251,7 +258,8 @@ internal static class CanonicalProjectionExtractor
         category,
         GetString(block, "text"),
         timestamp,
-        startsUserTurn && first);
+        startsUserTurn && first,
+        canonicalBlockId: GetString(block, "id"));
       first = false;
     }
   }
@@ -383,7 +391,8 @@ internal static class CanonicalProjectionExtractor
       "claude.subagent.result",
       ContentCategory.SubagentAssistant,
       output,
-      timestamp);
+      timestamp,
+      canonicalBlockId: GetString(block.Value, "id"));
 
     if (endUtc is not null && durationMilliseconds >= 0)
     {
@@ -619,7 +628,8 @@ internal static class CanonicalProjectionExtractor
     ContentCategory category,
     string text,
     string? timestamp,
-    bool startsUserTurn = false)
+    bool startsUserTurn = false,
+    string? canonicalBlockId = null)
   {
     if (!string.IsNullOrWhiteSpace(text))
     {
@@ -628,8 +638,57 @@ internal static class CanonicalProjectionExtractor
         category,
         text.Trim(),
         timestamp,
-        startsUserTurn));
+        startsUserTurn,
+        CanonicalBlockId: canonicalBlockId));
     }
+  }
+
+  /// <summary>
+  /// Attaches Core-owned word records to direct canonical-block speech nodes.
+  /// Provenance.block_id and block_word_index are authoritative. Visible text
+  /// is never searched or retokenized to recover transcript identity.
+  /// </summary>
+  private static IReadOnlyList<ExtractedNode> AttachCanonicalWords(
+    IReadOnlyList<ExtractedNode> nodes,
+    AIConversationProjection projection)
+  {
+    CanonicalSpeechWordProjection[] allWords = (projection.HtmlUnits ??
+      Array.Empty<CanonicalHtmlUnitProjection>())
+      .SelectMany(unit => unit.SpeechWords ??
+        Array.Empty<CanonicalSpeechWordProjection>())
+      .ToArray();
+
+    return nodes.Select(node =>
+    {
+      if (string.IsNullOrEmpty(node.CanonicalBlockId))
+      {
+        return node;
+      }
+
+      CanonicalSpeechWordProjection[] words = allWords
+        .Where(word => string.Equals(
+          word.Provenance?.BlockId,
+          node.CanonicalBlockId,
+          StringComparison.Ordinal))
+        .OrderBy(word => word.Provenance!.BlockWordIndex)
+        .ToArray();
+      if (words.Length == 0)
+      {
+        throw new InvalidDataException(
+          $"Core block {node.CanonicalBlockId} has speech text but no " +
+          "canonical word projection.");
+      }
+      for (int index = 0; index < words.Length; ++index)
+      {
+        if (words[index].Provenance?.BlockWordIndex != index)
+        {
+          throw new InvalidDataException(
+            $"Core block {node.CanonicalBlockId} has a non-contiguous " +
+            "canonical block_word_index sequence.");
+        }
+      }
+      return node with { CanonicalWords = words };
+    }).ToArray();
   }
 
   /// <summary>

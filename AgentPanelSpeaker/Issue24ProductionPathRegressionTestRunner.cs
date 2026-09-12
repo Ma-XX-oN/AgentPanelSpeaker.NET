@@ -176,7 +176,7 @@ Like this:
         includeRolledBackTurns: false,
         includeUserContext: true);
       SpeechFragment speechFragment = history.Fragments.First(fragment =>
-        string.Equals(fragment.Text, nestedFragment, StringComparison.Ordinal));
+        fragment.Text.Contains("Nested numbered item with a table inside it", StringComparison.Ordinal));
 
       IReadOnlyList<TranscriptNodeIdentity> identities =
         TranscriptNodeIdentityMap.Build(path, AgentSource.Codex);
