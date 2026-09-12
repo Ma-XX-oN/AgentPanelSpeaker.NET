@@ -4,12 +4,11 @@ using System.Text.RegularExpressions;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Identifies one contiguous node-global word range that is currently eligible
-/// for speech and direct transcript seeking.
+/// Identifies one contiguous Core word-ID range currently eligible for speech
+/// and direct transcript seeking.
 /// </summary>
 internal sealed record SeekableTranscriptWordRange(
-  long NodeId,
-  int StartNodeWordIndex,
+  long StartWordId,
   int WordCount);
 
 /// <summary>
@@ -1044,7 +1043,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Returns the node-global word ranges that are eligible for speech under
+  /// Returns contiguous Core word-ID ranges currently eligible for speech under
   /// the current profile, fence, and rolled-back-history policies.
   /// </summary>
   public IReadOnlyList<SeekableTranscriptWordRange>
@@ -1054,37 +1053,36 @@ internal sealed class SpeechService : IDisposable
     {
       ThrowIfDisposed();
       var ranges = new List<SeekableTranscriptWordRange>();
-      var nodeWordOffsets = new Dictionary<long, int>();
       foreach (SpeechFragment fragment in _history)
       {
-        int wordCount = SpeechTokenization.Matches(fragment.Text).Count;
-        int start = nodeWordOffsets.TryGetValue(fragment.NodeId, out int offset)
-          ? offset
-          : 0;
-        nodeWordOffsets[fragment.NodeId] = checked(start + wordCount);
-        if (wordCount == 0 ||
+        IReadOnlyList<SpeechFragmentWord>? words = fragment.TranscriptWords;
+        if (words is null || words.Count == 0 ||
             !TryGetEligibleProfileLocked(fragment, out _, out _))
         {
           continue;
         }
 
-        if (ranges.Count != 0)
+        foreach (SpeechFragmentWord word in words)
         {
-          SeekableTranscriptWordRange previous = ranges[^1];
-          if (previous.NodeId == fragment.NodeId &&
-              previous.StartNodeWordIndex + previous.WordCount == start)
+          if (word.Id < 1)
           {
-            ranges[^1] = previous with
-            {
-              WordCount = checked(previous.WordCount + wordCount)
-            };
-            continue;
+            throw new InvalidDataException(
+              "Core-backed speech history contains an invalid word ID.");
           }
+          if (ranges.Count != 0)
+          {
+            SeekableTranscriptWordRange previous = ranges[^1];
+            if (previous.StartWordId + previous.WordCount == word.Id)
+            {
+              ranges[^1] = previous with
+              {
+                WordCount = checked(previous.WordCount + 1)
+              };
+              continue;
+            }
+          }
+          ranges.Add(new SeekableTranscriptWordRange(word.Id, 1));
         }
-        ranges.Add(new SeekableTranscriptWordRange(
-          fragment.NodeId,
-          start,
-          wordCount));
       }
       return ranges.ToArray();
     }
@@ -1145,69 +1143,6 @@ internal sealed class SpeechService : IDisposable
         {
           RequestPauseRestoreAfterCancellationLocked(
             "seek-canonical-transcript-word");
-          _engine.Cancel();
-        }
-        text = fragment.Text;
-        return true;
-      }
-
-      text = string.Empty;
-      return false;
-    }
-  }
-
-  /// <summary>
-  /// Legacy node/ordinal seek retained only until issue #76 removes the old
-  /// browser mapping path. New transcript interaction must use Core word IDs.
-  /// </summary>
-  public bool TrySeekToTranscriptWord(
-    long nodeId,
-    int nodeWordIndex,
-    out string text)
-  {
-    lock (_sync)
-    {
-      ThrowIfDisposed();
-      if (nodeWordIndex < 0)
-      {
-        text = string.Empty;
-        return false;
-      }
-
-      int remaining = nodeWordIndex;
-      for (int index = 0; index < _history.Count; ++index)
-      {
-        SpeechFragment fragment = _history[index];
-        if (fragment.NodeId != nodeId)
-        {
-          continue;
-        }
-
-        MatchCollection matches = SpeechTokenization.Matches(fragment.Text);
-        if (remaining >= matches.Count)
-        {
-          remaining -= matches.Count;
-          continue;
-        }
-        if (!TryGetEligibleProfileLocked(fragment, out _, out _))
-        {
-          text = string.Empty;
-          return false;
-        }
-
-        bool hadActiveSpeech = _activeKind != ActiveSpeechKind.None;
-        _pendingUntracked = null;
-        ClearProcessingTimeAnnouncementLocked();
-        _pendingHistoryIndex = index;
-        _pendingHistoryWordIndex = remaining;
-        _nextHistoryIndex = index;
-        _lastFenceActivity = null;
-        SetPausedLocked(true);
-        SetPausedNavigationPositionLocked(index, remaining);
-        if (hadActiveSpeech)
-        {
-          RequestPauseRestoreAfterCancellationLocked(
-            "seek-transcript-word");
           _engine.Cancel();
         }
         text = fragment.Text;

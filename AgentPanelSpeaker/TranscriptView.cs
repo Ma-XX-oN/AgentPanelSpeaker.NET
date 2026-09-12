@@ -462,8 +462,8 @@ internal sealed class TranscriptView : UserControl
   }
 
   /// <summary>
-  /// Publishes the authoritative currently seekable node-global speech ranges
-  /// used by the Ctrl+click transcript affordance.
+  /// Publishes the authoritative currently seekable Core word-ID ranges used
+  /// by the Ctrl+click transcript affordance.
   /// </summary>
   public void SetSeekableVoiceRanges(
     IReadOnlyList<SeekableTranscriptWordRange> ranges)
@@ -1347,18 +1347,13 @@ internal sealed class TranscriptView : UserControl
       }
       if (type == "find-seek")
       {
-        long? nodeId = ReadOptionalInt64(root, "nodeId");
-        int? nodeWordIndex = ReadOptionalInt32(root, "nodeWordIndex");
-        if (nodeId is long validNodeId &&
-            validNodeId > 0 &&
-            nodeWordIndex is int validNodeWordIndex &&
-            validNodeWordIndex >= 0)
+        long? wordId = ReadOptionalInt64(root, "wordId");
+        if (wordId is long validWordId && validWordId > 0)
         {
           FindSeekRequested?.Invoke(
             this,
             new FindSeekRequestedEventArgs(
-              validNodeId,
-              validNodeWordIndex,
+              validWordId,
               ReadOptionalString(root, "source")));
           return;
         }
@@ -2555,12 +2550,7 @@ summary { cursor: pointer; color: var(--muted); font-weight: 600; }
   outline-offset: 1px;
   animation: marker-blink 1s steps(1, end) infinite;
 }
-body.voice-pointer-select-mode
-  .word.voice-selectable:not(.voice-excluded) {
-  outline: 1px solid var(--link);
-  outline-offset: 1px;
-  cursor: pointer;
-}
+/* Ctrl+click eligibility is installed centrally by refreshVoicePolicyCss(). */
 li.speech-list-item-active {
   background: var(--highlight);
   border-radius: 3px;
@@ -2723,7 +2713,10 @@ let findRegexEnabled = false;
 let findVoicedEnabled = true;
 let findCurrentWords = [];
 let findInputTimer = 0;
-let seekableVoiceRanges = [];
+let voicePolicyRanges = [];
+const voicePolicyStyle = document.createElement('style');
+voicePolicyStyle.id = 'voice-policy-style';
+document.head.append(voicePolicyStyle);
 const openDisclosureOverrides = new Set();
 let discardDisclosureStateOnNextReplacement = false;
 
@@ -3686,147 +3679,77 @@ function postFragmentRangeMiss(
   });
 }
 
-function markVoiceSelectableWords(
-  collection,
-  start,
-  end,
-  nodeId,
-  startNodeWordIndex,
-  speechTokenOffsets) {
-  let relativeLexicalIndex = 0;
-  for (let index = start; index <= end; ++index) {
-    const word = collection[index];
-    if (!word) continue;
-    const speechTokenOffset = speechTokenOffsets[relativeLexicalIndex++];
-    if (speechTokenOffset === undefined) continue;
-    word.classList.add('voice-selectable');
-    word.dataset.nodeId = String(nodeId);
-    word.dataset.nodeWordIndex = String(
-      startNodeWordIndex + speechTokenOffset);
+function normalizeVoicePolicyRanges(ranges) {
+  const normalized = (ranges || []).map(range => ({
+    startWordId:Number(range.StartWordId ?? range.startWordId ?? 0),
+    wordCount:Number(range.WordCount ?? range.wordCount ?? 0)
+  })).filter(range =>
+    Number.isSafeInteger(range.startWordId) && range.startWordId > 0 &&
+    Number.isSafeInteger(range.wordCount) && range.wordCount > 0)
+    .sort((left, right) => left.startWordId - right.startWordId);
+  const merged = [];
+  for (const range of normalized) {
+    const previous = merged.at(-1);
+    if (previous &&
+        previous.startWordId + previous.wordCount >= range.startWordId) {
+      const end = Math.max(
+        previous.startWordId + previous.wordCount,
+        range.startWordId + range.wordCount);
+      previous.wordCount = end - previous.startWordId;
+    } else {
+      merged.push({...range});
+    }
   }
+  return merged;
 }
 
-function markVoiceSelectableWordsByGlobalRange(
-  collection,
-  globalStart,
-  globalEnd,
-  nodeId,
-  startNodeWordIndex,
-  speechTokenOffsets) {
-  const selected = collection.filter(word => {
-    const index = Number(word.dataset.index ?? -1);
-    return index >= globalStart && index <= globalEnd;
-  });
-  if (!selected.length) return;
-  for (let index = 0; index < selected.length; ++index) {
-    const speechTokenOffset = speechTokenOffsets[index];
-    if (speechTokenOffset === undefined) continue;
-    const word = selected[index];
-    word.classList.add('voice-selectable');
-    word.dataset.nodeId = String(nodeId);
-    word.dataset.nodeWordIndex = String(
-      startNodeWordIndex + speechTokenOffset);
+function isVoiceWordEligible(element) {
+  const wordId = canonicalWordId(element);
+  if (wordId <= 0) return false;
+  let low = 0;
+  let high = voicePolicyRanges.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const range = voicePolicyRanges[middle];
+    if (wordId < range.startWordId) {
+      high = middle - 1;
+      continue;
+    }
+    const end = range.startWordId + range.wordCount;
+    if (wordId >= end) {
+      low = middle + 1;
+      continue;
+    }
+    return true;
   }
+  return false;
+}
+
+function refreshVoicePolicyCss() {
+  const selectors = [];
+  for (const owner of transcript.querySelectorAll('[id^="word-"]')) {
+    if (!isVoiceWordEligible(owner)) continue;
+    selectors.push('#' + CSS.escape(owner.id));
+  }
+  voicePolicyStyle.textContent = selectors.length === 0
+    ? ''
+    : 'body.voice-pointer-select-mode :is(' + selectors.join(',') + ') {' +
+      'outline:1px solid var(--link);outline-offset:1px;cursor:pointer;}';
+}
+
+function setVoicePolicy(ranges) {
+  voicePolicyRanges = normalizeVoicePolicyRanges(ranges);
+  refreshVoicePolicyCss();
 }
 
 function isSeekableVoiceWord(word) {
-  const nodeId = Number(word.dataset.nodeId || 0);
-  const nodeWordIndex = Number(word.dataset.nodeWordIndex ?? -1);
-  if (nodeId <= 0 || nodeWordIndex < 0) return false;
-  return seekableVoiceRanges.some(range =>
-    range.nodeId === nodeId &&
-    nodeWordIndex >= range.startNodeWordIndex &&
-    nodeWordIndex < range.startNodeWordIndex + range.wordCount);
+  return isVoiceWordEligible(word);
 }
 
-function applyVoiceEligibilityClasses() {
-  for (const word of transcript.querySelectorAll('.word.voice-selectable')) {
-    word.classList.toggle('voice-excluded', !isSeekableVoiceWord(word));
-  }
-}
-
-function setSeekableVoiceRanges(ranges) {
-  seekableVoiceRanges = (ranges || []).map(range => ({
-    nodeId:Number(range.NodeId ?? range.nodeId ?? 0),
-    startNodeWordIndex:Number(
-      range.StartNodeWordIndex ?? range.startNodeWordIndex ?? -1),
-    wordCount:Number(range.WordCount ?? range.wordCount ?? 0)
-  })).filter(range =>
-    range.nodeId > 0 && range.startNodeWordIndex >= 0 && range.wordCount > 0);
-  applyVoiceEligibilityClasses();
-}
-
-function lexicalWordsCanJoin(left, right) {
-  if (!left || !right) return false;
-  try {
-    const range = document.createRange();
-    range.setStartAfter(left);
-    range.setEndBefore(right);
-    return !/\s/u.test(range.toString());
-  } catch {
-    return false;
-  }
-}
-
-function findSpeechLexicalAlignment(collection, target, startAt) {
-  if (!collection.length || !target.length) return null;
-  const first = Math.max(0, Number(startAt) || 0);
-  for (let candidate = first; candidate < collection.length; ++candidate) {
-    let cursor = candidate;
-    const groups = [];
-    let matched = true;
-    for (const targetToken of target) {
-      const groupStart = cursor;
-      let combined = '';
-      let complete = false;
-      while (cursor < collection.length) {
-        if (cursor > groupStart &&
-            !lexicalWordsCanJoin(collection[cursor - 1], collection[cursor])) {
-          break;
-        }
-        const piece = collection[cursor].dataset.normalized || '';
-        if (!piece) break;
-        combined += piece;
-        if (!targetToken.startsWith(combined)) break;
-        const groupEnd = cursor;
-        ++cursor;
-        if (combined === targetToken) {
-          groups.push({start:groupStart, end:groupEnd});
-          complete = true;
-          break;
-        }
-      }
-      if (!complete) {
-        matched = false;
-        break;
-      }
-    }
-    if (matched) return groups;
-  }
-  return null;
-}
-
-function markAlignedVoiceSelectableWords(
-  collection,
-  groups,
-  nodeId,
-  startNodeWordIndex,
-  speechTokenOffsets) {
-  for (let targetIndex = 0; targetIndex < groups.length; ++targetIndex) {
-    const speechTokenOffset = speechTokenOffsets[targetIndex];
-    if (speechTokenOffset === undefined) continue;
-    const group = groups[targetIndex];
-    for (let index = group.start; index <= group.end; ++index) {
-      const word = collection[index];
-      if (!word) continue;
-      word.classList.add('voice-selectable');
-      word.dataset.nodeId = String(nodeId);
-      word.dataset.nodeWordIndex = String(
-        startNodeWordIndex + speechTokenOffset);
-    }
-  }
-}
-
+// Legacy node/text mapping still exists for playback until issue #76 removes it.
+// These hooks intentionally do not stamp eligibility identity onto word nodes.
+function markVoiceSelectableWords() {}
+function markVoiceSelectableWordsByGlobalRange() {}
 function assignNodeScopes(nodeMap) {
   ++mappingGeneration;
   knownNodeIds = new Set();
@@ -4005,7 +3928,7 @@ function assignNodeScopes(nodeMap) {
       }
     }
   }
-  applyVoiceEligibilityClasses();
+  refreshVoicePolicyCss();
 }
 
 function chooseNearestRange(matches, nodeId) {
@@ -4734,18 +4657,43 @@ function isVoicedFindMatch(match) {
     Number(match.nodeWordIndex ?? -1) >= 0;
 }
 
+function canonicalWordId(element) {
+  const owner = element?.closest?.('[id^="word-"]');
+  if (!owner || !/^word-\d+$/.test(owner.id)) return 0;
+  const wordId = Number(owner.id.slice('word-'.length));
+  return Number.isSafeInteger(wordId) && wordId > 0 ? wordId : 0;
+}
+
+function canonicalWordIdForFindMatch(match) {
+  const recordWords = displayWordsByRecord.get(
+    makeRecordKey(Number(match.recordNumber || 0)));
+  const startWordIndex = Number(match.startWordIndex ?? -1);
+  if (!recordWords || startWordIndex < 0 || startWordIndex >= recordWords.length) {
+    return 0;
+  }
+  return canonicalWordId(recordWords[startWordIndex]);
+}
+
 function postFindSeek(match, trigger) {
+  const wordId = canonicalWordIdForFindMatch(match);
+  if (wordId <= 0) {
+    reportFind('seek-ignored', {
+      trigger,
+      reason:'canonical-word-id-unavailable',
+      targetMatch:currentFindMatch
+    });
+    return;
+  }
   reportFind('seek-requested', {
     trigger,
     targetMatch: currentFindMatch,
     fileOrdinal: match.fileOrdinal,
-    nodeId:match.nodeId,
-    nodeWordIndex:match.nodeWordIndex
+    wordId
   });
   chrome.webview.postMessage({
     type:'find-seek',
-    nodeId:Number(match.nodeId),
-    nodeWordIndex:Number(match.nodeWordIndex)
+    source:'find',
+    wordId
   });
 }
 
@@ -5115,7 +5063,7 @@ chrome.webview.addEventListener('message', event => {
     return;
   }
   if (data.type === 'seekable-voice-ranges') {
-    setSeekableVoiceRanges(data.ranges ?? data.Ranges ?? []);
+    setVoicePolicy(data.ranges ?? data.Ranges ?? []);
     return;
   }
   if (data.type === 'voice-pointer-select-mode') {
@@ -5184,19 +5132,16 @@ transcript.addEventListener('click', event => {
   if (!event.ctrlKey || event.button !== 0 || !(event.target instanceof Element)) {
     return;
   }
-  const word = event.target.closest(
-    '.word.voice-selectable:not(.voice-excluded)');
-  if (!word || !transcript.contains(word)) return;
-  const nodeId = Number(word.dataset.nodeId || 0);
-  const nodeWordIndex = Number(word.dataset.nodeWordIndex ?? -1);
-  if (nodeId <= 0 || nodeWordIndex < 0) return;
+  const word = event.target.closest('[id^="word-"]');
+  if (!word || !transcript.contains(word) || !isVoiceWordEligible(word)) return;
+  const wordId = canonicalWordId(word);
+  if (wordId <= 0) return;
   event.preventDefault();
   event.stopPropagation();
   chrome.webview.postMessage({
     type:'find-seek',
     source:'ctrl-click',
-    nodeId,
-    nodeWordIndex
+    wordId
   });
 }, true);
 
