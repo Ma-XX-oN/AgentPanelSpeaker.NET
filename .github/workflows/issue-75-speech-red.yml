@@ -1,0 +1,88 @@
+name: Issue 75 canonical speech RED
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+    paths:
+      - '.github/workflows/issue-75-speech-red.yml'
+      - 'tools/issue75-speech-red.py'
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Apply permanent speech-side REDs
+        shell: pwsh
+        run: python tools/issue75-speech-red.py
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact speech-side RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = (& $exe --test core-word-id-migration 2>&1 | Out-String)
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -ne 1) { throw "Expected RED exit 1, got $exitCode" }
+          $passes = @(
+            'PASS  core-word-id/decimal-is-one-selectable-canonical-word',
+            'PASS  core-word-id/markup-split-keeps-one-canonical-word',
+            'PASS  core-word-id/duplicate-text-lookup-is-id-exact',
+            'PASS  core-word-id/off-window-lookup-materializes-core-unit'
+          )
+          foreach ($line in $passes) {
+            if (-not $output.Contains($line)) { throw "Missing established GREEN: $line" }
+          }
+          $failures = @(
+            'FAIL  core-word-id/ctrl-click-posts-exact-canonical-word-id',
+            'FAIL  core-word-id/speech-fragment-carries-canonical-word-ids',
+            'FAIL  core-word-id/speech-seek-uses-only-canonical-word-id',
+            'FAIL  core-word-id/decimal-seek-preserves-canonical-word-id',
+            'FAIL  core-word-id/playback-position-carries-canonical-word-id',
+            'FAIL  core-word-id/policy-is-centralized-without-per-word-eligibility-mutation'
+          )
+          foreach ($line in $failures) {
+            if (-not $output.Contains($line)) { throw "Missing intended RED: $line" }
+          }
+          if (-not $output.Contains('FAIL: 6/10 issue #75 regressions failed.')) {
+            throw 'Unexpected focused failure count.'
+          }
+          if (-not $output.Contains('TEST-SUITE-COMPLETE core-word-id-migration exit=1')) {
+            throw 'Focused suite completion marker is missing.'
+          }
+          exit 0
+
+      - name: Commit permanent REDs
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
+          git diff --cached --check
+          git commit -m 'test: prove canonical speech word-ID handoff (#75)'
+          git push origin HEAD:issue-75-core-word-id-migration
