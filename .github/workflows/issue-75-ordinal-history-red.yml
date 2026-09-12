@@ -45,16 +45,15 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          $captured = @()
+          $log = Join-Path $env:RUNNER_TEMP 'issue75-ordinal-red.log'
           $threw = $false
           try {
-            $captured = @(& tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration 2>&1)
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration *> $log
           }
           catch {
             $threw = $true
-            $captured += $_.Exception.Message
           }
-          $text = $captured -join "`n"
+          $text = Get-Content -Raw $log
           Write-Host $text
           if (-not $threw) { throw 'Expected guarded RED suite to fail.' }
           if (-not $text.Contains('FAIL  core-word-id/ordered-list-history-preserves-core-word-boundaries')) {
