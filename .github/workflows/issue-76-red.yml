@@ -1,0 +1,85 @@
+name: Issue 76 legacy mapping RED
+
+on:
+  push:
+    branches:
+      - issue-76-remove-legacy-word-mapping-debt
+    paths:
+      - '.github/workflows/issue-76-red.yml'
+      - 'tools/issue76-register-red.py'
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Register permanent issue 76 suite
+        shell: pwsh
+        run: python tools/issue76-register-red.py
+
+      - name: Install pinned Core dependencies
+        shell: pwsh
+        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+
+      - name: Build RED
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify exact issue 76 RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'issue76-red.log'
+          $threw = $false
+          try {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite legacy-word-mapping-debt *> $log
+          }
+          catch {
+            $threw = $true
+          }
+          $text = Get-Content -Raw $log
+          Write-Host $text
+          if (-not $threw) {
+            throw 'Issue #76 RED unexpectedly passed before legacy mapping removal.'
+          }
+          $expected = @(
+            'FAIL  legacy-word-mapping/lexical-speech-alignment-removed',
+            'FAIL  legacy-word-mapping/node-text-playback-fallback-removed',
+            'FAIL  legacy-word-mapping/per-word-eligibility-mutation-absent',
+            'PASS  legacy-word-mapping/find-search-index-retained',
+            'PASS  legacy-word-mapping/no-local-word-to-unit-map'
+          )
+          foreach ($line in $expected) {
+            if (-not $text.Contains($line)) {
+              throw "Expected issue #76 RED evidence was missing: $line"
+            }
+          }
+          if (-not $text.Contains('FAIL: 3/5 issue #76 regressions failed.')) {
+            throw 'Issue #76 RED did not fail exactly 3 of 5 regressions.'
+          }
+
+      - name: Commit permanent suite registration
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Program.cs
+          git diff --cached --check
+          git commit -m 'test: register legacy word-mapping debt suite (#76)'
+          git push origin HEAD:issue-76-remove-legacy-word-mapping-debt
