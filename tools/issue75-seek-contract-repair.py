@@ -152,17 +152,12 @@ if sys.argv[1] == "tests":
   /// <summary>
   /// Ctrl+click is transport-sensitive: when playback is already active it
   /// redirects playback to the clicked word without changing transport to
-  /// paused.
+  /// paused. The production MainForm router is exercised without constructing
+  /// a form or mutating the application message-filter lifetime.
   /// </summary>
   private static void TestActiveSeekPreservesPlayingState()
   {
-    using var form = new MainForm();
-    _ = form.Handle;
-    SpeechService speech =
-      (SpeechService)(typeof(MainForm).GetField(
-        "_speech",
-        BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(form) ??
-        throw new InvalidOperationException("MainForm speech service is missing."));
+    using var speech = new SpeechService();
     speech.SetPolicyProviders(
       _ => new SpeechProfileSettings("Test voice", 0, 0),
       _ => true,
@@ -200,18 +195,20 @@ if sys.argv[1] == "tests":
       speech,
       Enum.Parse(activeKindField.FieldType, "History"));
 
-    MethodInfo handler = typeof(MainForm).GetMethod(
-      "TranscriptFindSeekRequested",
-      BindingFlags.Instance | BindingFlags.NonPublic) ??
+    MethodInfo router = typeof(MainForm).GetMethod(
+      "TrySeekTranscriptWord",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
       throw new InvalidOperationException(
-        "MainForm Ctrl+click seek handler is missing.");
-    handler.Invoke(
-      form,
-      new object?[]
-      {
-        null,
-        new FindSeekRequestedEventArgs(9002, "ctrl-click")
-      });
+        "MainForm transcript seek router is missing.");
+    object?[] arguments =
+    {
+      speech,
+      new FindSeekRequestedEventArgs(9002, "ctrl-click"),
+      null
+    };
+    Require(router.Invoke(null, arguments) is true &&
+        string.Equals(arguments[2] as string, "alpha beta", StringComparison.Ordinal),
+      "Active Ctrl+click did not resolve the clicked word through MainForm.");
 
     Require(!speech.IsPaused,
       "Active Ctrl+click changed transport state to paused.");
@@ -449,12 +446,25 @@ replace_once(
       eventArgs.Source,
       eventArgs.WordId
     });
-    string text;
-    bool seeked = eventArgs.Source == "ctrl-click"
-      ? _speech.TrySeekToTranscriptWordPreservingActivePlayback(
+    if (TrySeekTranscriptWord(_speech, eventArgs, out string text))
+    {
+''')
+
+replace_once(
+  main,
+  '''  private void TranscriptFindSeekEndRequested(object? sender, EventArgs eventArgs)
+''',
+  '''  private static bool TrySeekTranscriptWord(
+    SpeechService speech,
+    FindSeekRequestedEventArgs eventArgs,
+    out string text)
+  {
+    return eventArgs.Source == "ctrl-click"
+      ? speech.TrySeekToTranscriptWordPreservingActivePlayback(
           eventArgs.WordId,
           out text)
-      : _speech.TrySeekToTranscriptWord(eventArgs.WordId, out text);
-    if (seeked)
-    {
+      : speech.TrySeekToTranscriptWord(eventArgs.WordId, out text);
+  }
+
+  private void TranscriptFindSeekEndRequested(object? sender, EventArgs eventArgs)
 ''')
