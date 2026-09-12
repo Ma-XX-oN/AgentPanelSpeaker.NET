@@ -36,6 +36,15 @@ jobs:
         shell: pwsh
         run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
 
+      - name: Install exact permanent RED set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git checkout d00e6903a5fdb80c7633883ebbd5ed9ed2ba580a -- AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
+          git checkout a37bc7c49e59f54438a555388e92285b44fff500 -- AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Permanent RED synchronization failed whitespace validation.' }
+
       - name: Apply production repairs
         shell: pwsh
         run: |
@@ -49,6 +58,8 @@ jobs:
           $changed = @(git diff --name-only)
           $expected = @(
             'AgentPanelSpeaker/InputDiagnosticTracker.cs',
+            'AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs',
+            'AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs',
             'AgentPanelSpeaker/JsonlSessionMonitor.cs',
             'AgentPanelSpeaker/MainForm.cs',
             'AgentPanelSpeaker/SpeechService.cs',
@@ -56,20 +67,20 @@ jobs:
             'README.md'
           )
           if (@(Compare-Object $changed $expected).Count -ne 0) {
-            throw "Unexpected production changed files: $($changed -join ', ')"
+            throw "Unexpected production/test changed files: $($changed -join ', ')"
           }
 
       - name: Build repaired application
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Run exact RED suites GREEN
+      - name: Run exact six RED suites GREEN
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           $suites = @(
-            'user-context-speech',
+            'independent-oracles',
             'core-word-id-migration',
             'real-session-fixes'
           )
@@ -86,6 +97,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           $suites = @(
+            'user-context-speech',
             'rolled-back-speech',
             'virtual-window',
             'word-materialization',
@@ -104,6 +116,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/InputDiagnosticTracker.cs
+          git add AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
+          git add AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
           git add AgentPanelSpeaker/JsonlSessionMonitor.cs
           git add AgentPanelSpeaker/MainForm.cs
           git add AgentPanelSpeaker/SpeechService.cs
