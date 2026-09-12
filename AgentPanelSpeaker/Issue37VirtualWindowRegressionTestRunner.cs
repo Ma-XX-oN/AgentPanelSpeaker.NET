@@ -741,6 +741,11 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         Stopwatch.GetTimestamp()));
       PumpMessages(150);
 
+      view.ApplySettings(
+        TranscriptSettings.Default with { FollowSpeech = false },
+        dark: false);
+      PumpMessages(500);
+
       Task shiftTask = InvokeTask(
         view,
         "RenderWindowForIndexAsync",
@@ -939,7 +944,18 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       // After it expires, a normal edge scroll must still drive virtualization.
       PumpMessages(2100);
       int shiftsBeforeEdgeScroll = windowShiftCount;
-      ExecuteVoidScript(webView, "window.scrollTo(0, 0);");
+      ExecuteVoidScript(
+        webView,
+        """
+(() => {
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: -160,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollTo(0, 0);
+})()
+""");
       PumpUntil(
         () => windowShiftCount > shiftsBeforeEdgeScroll,
         "unguarded edge scroll to request a virtual-window shift",
@@ -1008,7 +1024,17 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
 
       ExecuteVoidScript(
         webView,
-        "programmaticScrollUntil = 0; window.scrollTo(0, 0);");
+        """
+(() => {
+  programmaticScrollUntil = 0;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: -160,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollTo(0, 0);
+})()
+""");
       PumpUntil(
         () =>
           ReadField<int>(view, "_windowStartIndex") != initialStart ||
@@ -1206,7 +1232,17 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       int shiftsBeforeReverse = windowShiftReasons.Count;
       ExecuteVoidScript(
         webView,
-        "programmaticScrollUntil = 0; window.scrollBy(0, -80);");
+        """
+(() => {
+  programmaticScrollUntil = 0;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: -80,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollBy(0, -80);
+})()
+""");
       PumpMessages(300);
       string[] reverseReasons = windowShiftReasons
         .Skip(shiftsBeforeReverse)
@@ -1219,7 +1255,17 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       int shiftsBeforeDown = windowShiftReasons.Count;
       ExecuteVoidScript(
         webView,
-        "programmaticScrollUntil = 0; window.scrollBy(0, 160);");
+        """
+(() => {
+  programmaticScrollUntil = 0;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: 160,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollBy(0, 160);
+})()
+""");
       PumpUntil(
         () => windowShiftReasons.Count > shiftsBeforeDown,
         "downward scroll to request predictive virtual-window movement",
@@ -1263,7 +1309,17 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
       int shiftsBeforeUp = windowShiftReasons.Count;
       ExecuteVoidScript(
         webView,
-        "programmaticScrollUntil = 0; window.scrollBy(0, -80);");
+        """
+(() => {
+  programmaticScrollUntil = 0;
+  window.dispatchEvent(new WheelEvent('wheel', {
+    deltaY: -80,
+    bubbles: true,
+    cancelable: true
+  }));
+  window.scrollBy(0, -80);
+})()
+""");
       PumpUntil(
         () => windowShiftReasons.Count > shiftsBeforeUp,
         "upward scroll to request predictive virtual-window movement",
@@ -1316,7 +1372,7 @@ private static void TestCoreSingleAnchorUserContextUnitIsPreserved()
         "WebView2 core initialization for manual-follow regression");
 
       bool? notifiedFollowState = null;
-      view.FollowSpeechChanged += enabled => notifiedFollowState = enabled;
+      view.FollowSpeechChanged += (enabled, _) => notifiedFollowState = enabled;
       view.SelectSession(
         path,
         AgentSource.Codex,

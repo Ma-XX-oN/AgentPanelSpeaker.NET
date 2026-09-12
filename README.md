@@ -2152,3 +2152,27 @@ so the same artwork remains usable in dark, light, and system themes.
 - This version intentionally leaves all of the Cyotek colour editor fields
   visible so their usefulness can be evaluated before deciding whether to hide
   any of them.
+
+
+## Diagnostic input/command/state contract
+
+The structured JSONL diagnostic log is the authoritative correlation surface for
+real-machine acceptance. Every keyboard key-down/key-up and mouse button,
+double-click, or wheel message delivered to Agent Panel Speaker is recorded as
+`input.physical` at the Win32 message-filter boundary. A physical input keeps one
+`inputId` across its down/up pair; repeated routing observations are not recorded
+as separate physical presses. The log records key/button identity, modifiers,
+managed target identity/path, and playback/Follow state, but does not copy the
+contents of editable controls.
+
+Recognized application actions are recorded separately as `input.command` and
+carry the physical input ID when available. Follow transitions are recorded as
+`follow.changed` with explicit old/new values and a source/reason. Transcript
+settings, playback-marker posting/application, and virtual-window diagnostics
+also carry Follow/window information so a regression review can distinguish
+input receipt, command interpretation, state transition, materialization, and
+observable viewport outcome.
+
+Because exact key identities are intentionally recorded for diagnostics, log
+files can contain sensitive keystroke information and should be handled as
+private diagnostic artifacts.
