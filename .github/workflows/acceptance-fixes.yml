@@ -6,7 +6,7 @@ on:
       - acceptance-fixes-20260912
     paths:
       - '.github/workflows/acceptance-fixes.yml'
-      - '.tmp/apply-acceptance-fixes-v6.py'
+      - '.tmp/apply-acceptance-fixes-v7.py'
 
 permissions:
   contents: write
@@ -41,7 +41,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           git checkout d00e6903a5fdb80c7633883ebbd5ed9ed2ba580a -- AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs
-          git checkout a37bc7c49e59f54438a555388e92285b44fff500 -- AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs
+          git checkout 6b3b7d20ce3a96f32334b5c953ed6bce57511181 -- AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs AgentPanelSpeaker/Issue54RealSessionRegressionTestRunner.cs
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Permanent RED synchronization failed whitespace validation.' }
 
@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python .tmp/apply-acceptance-fixes-v6.py
+          python .tmp/apply-acceptance-fixes-v7.py
           if ($LASTEXITCODE -ne 0) { throw 'Production repair generator failed.' }
 
           git diff --check
