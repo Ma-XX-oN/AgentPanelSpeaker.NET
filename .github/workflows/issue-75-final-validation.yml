@@ -168,8 +168,16 @@ jobs:
       - name: Validate whitespace and patch integrity
         shell: pwsh
         run: |
+          Remove-Item -Recurse -Force dependencies/AIConversationCore/node_modules -ErrorAction SilentlyContinue
           git fetch origin main --depth=1
           git diff --check FETCH_HEAD HEAD
-          if ((git status --porcelain).Length -ne 0) { throw 'Validation left the working tree dirty.' }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($status.Count -ne 0) {
+            Write-Host 'Dirty superproject state:'
+            $status | ForEach-Object { Write-Host $_ }
+            Write-Host 'Dirty Core submodule state:'
+            git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=all
+            throw 'Validation left the working tree dirty.'
+          }
 
-# retrigger after verified stale-assertion cleanup
+# rerun after diagnosing npm ci node_modules as the only dirty-tree source
