@@ -1108,15 +1108,15 @@ internal sealed class SpeechService : IDisposable
       for (int index = 0; index < _history.Count; ++index)
       {
         SpeechFragment fragment = _history[index];
-        IReadOnlyList<long>? wordIds = fragment.WordIds;
-        if (wordIds is null)
+        IReadOnlyList<SpeechFragmentWord>? words = fragment.TranscriptWords;
+        if (words is null)
         {
           continue;
         }
         int localWordIndex = -1;
-        for (int candidate = 0; candidate < wordIds.Count; ++candidate)
+        for (int candidate = 0; candidate < words.Count; ++candidate)
         {
-          if (wordIds[candidate] == wordId)
+          if (words[candidate].Id == wordId)
           {
             localWordIndex = candidate;
             break;
@@ -1392,10 +1392,14 @@ internal sealed class SpeechService : IDisposable
   {
     lock (_sync)
     {
-      if (_disposed || _activeKind != ActiveSpeechKind.History)
+      if (_disposed ||
+          _activeKind != ActiveSpeechKind.History ||
+          _activeHistoryIndex < 0 ||
+          _activeHistoryIndex >= _history.Count)
       {
         return;
       }
+      SpeechFragment fragment = _history[_activeHistoryIndex];
       int absoluteCharacterPosition = checked(
         _activeCharacterBaseOffset + Math.Max(0, boundary.CharacterPosition));
       if (boundary.CharacterCount == 0 &&
@@ -1403,10 +1407,7 @@ internal sealed class SpeechService : IDisposable
       {
         DiagnosticLog.Write("speech.word_boundary_terminal_ignored", new
         {
-          nodeId = _activeHistoryIndex >= 0 &&
-            _activeHistoryIndex < _history.Count
-              ? _history[_activeHistoryIndex].NodeId
-              : -1,
+          fragment.NodeId,
           activeHistoryIndex = _activeHistoryIndex,
           activeFragmentText = _activeTranscriptText,
           boundary.WordIndex,
@@ -1421,27 +1422,49 @@ internal sealed class SpeechService : IDisposable
         return;
       }
 
-      int mappedWordIndex = GetTokenIndexForBoundary(
-        _activeTranscriptText,
+      int mappedWordIndex = GetFragmentWordIndexForBoundary(
+        fragment,
         absoluteCharacterPosition,
         boundary.CharacterCount,
         _activeWordBaseIndex + boundary.WordIndex);
+      if (mappedWordIndex < 0)
+      {
+        DiagnosticLog.Write("speech.canonical_word_boundary_miss", new
+        {
+          fragment.NodeId,
+          activeHistoryIndex = _activeHistoryIndex,
+          boundary.WordIndex,
+          boundary.CharacterPosition,
+          boundary.CharacterCount,
+          boundary.Text,
+          characterBaseOffset = _activeCharacterBaseOffset,
+          absoluteCharacterPosition
+        });
+        return;
+      }
+
       _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);
-      _activeCharacterPosition = Math.Max(
-        _activeCharacterPosition,
-        absoluteCharacterPosition);
-      _activeCharacterCount = Math.Max(0, boundary.CharacterCount);
-      _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
-      _activeWord = GetTokenAtIndex(
-        _activeTranscriptText,
+      _activeWord = GetFragmentWordText(
+        fragment,
         _activeWordIndex,
         boundary.Text);
+      if (fragment.TranscriptWords is { Count: > 0 } transcriptWords)
+      {
+        SpeechFragmentWord word = transcriptWords[_activeWordIndex];
+        _activeCharacterPosition = word.CharacterStart;
+        _activeCharacterCount = word.CharacterLength;
+      }
+      else
+      {
+        _activeCharacterPosition = Math.Max(
+          _activeCharacterPosition,
+          absoluteCharacterPosition);
+        _activeCharacterCount = Math.Max(0, boundary.CharacterCount);
+      }
+      _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
       DiagnosticLog.Write("speech.word_boundary", new
       {
-        nodeId = _activeHistoryIndex >= 0 &&
-          _activeHistoryIndex < _history.Count
-            ? _history[_activeHistoryIndex].NodeId
-            : -1,
+        fragment.NodeId,
         activeHistoryIndex = _activeHistoryIndex,
         activeFragmentText = _activeTranscriptText,
         boundary.WordIndex,
@@ -2072,7 +2095,7 @@ internal sealed class SpeechService : IDisposable
       bool pauseBefore = _pauseBeforeNextHistory;
       _pauseBeforeNextHistory = false;
       StartHistorySpeechLocked(
-        fragment.Text,
+        fragment,
         profile,
         fragment.PauseAfter,
         pendingWordIndex,
@@ -2104,36 +2127,39 @@ internal sealed class SpeechService : IDisposable
 
 
   /// <summary>
-  /// Starts one history fragment at a selected token while preserving the
-  /// full transcript text used by the marker and search model.
+  /// Starts one history fragment at a selected canonical/synthetic word while
+  /// preserving the full transcript text used by the marker and search model.
   /// </summary>
   private void StartHistorySpeechLocked(
-    string text,
+    SpeechFragment fragment,
     SpeechProfileSettings profile,
     bool pauseAfter,
     int wordIndex,
     bool pauseBefore = false)
   {
-    MatchCollection matches = SpeechTokenization.Matches(text);
-    int boundedWordIndex = matches.Count == 0
+    int wordCount = GetFragmentWordCount(fragment);
+    int boundedWordIndex = wordCount == 0
       ? 0
-      : Math.Clamp(wordIndex, 0, matches.Count - 1);
-    int characterStart = matches.Count == 0
-      ? 0
-      : matches[boundedWordIndex].Index;
-    string spokenText = text[characterStart..];
+      : Math.Clamp(wordIndex, 0, wordCount - 1);
+    int characterStart = GetFragmentWordCharacterPosition(
+      fragment,
+      boundedWordIndex);
+    string spokenText = fragment.Text[characterStart..];
 
-    _activeTranscriptText = text;
+    _activeTranscriptText = fragment.Text;
     _activeWordIndex = boundedWordIndex;
     _activeWordBaseIndex = boundedWordIndex;
     _activeCharacterBaseOffset = characterStart;
     _activeCharacterPosition = characterStart;
-    _activeCharacterCount = FirstWord(spokenText).Length;
-    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
-    _activeWord = GetTokenAtIndex(
-      text,
+    _activeWord = GetFragmentWordText(
+      fragment,
       boundedWordIndex,
       FirstWord(spokenText));
+    _activeCharacterCount = GetFragmentWordCharacterCount(
+      fragment,
+      boundedWordIndex,
+      _activeWord.Length);
+    _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
     _activeProfile = profile.Normalize();
     _activePauseAfter = pauseAfter;
     _pauseStartedUtc = null;
@@ -2234,21 +2260,29 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private void RestartCurrentWordLocked()
   {
-    if (_activeProfile is null || _activeTranscriptText.Length == 0)
+    if (_activeProfile is null ||
+        _activeTranscriptText.Length == 0 ||
+        _activeHistoryIndex < 0 ||
+        _activeHistoryIndex >= _history.Count)
     {
       _engine.Resume();
       return;
     }
-    int start = GetWordCharacterPosition(
-      _activeTranscriptText,
-      _activeWordIndex);
+    SpeechFragment fragment = _history[_activeHistoryIndex];
+    int start = GetFragmentWordCharacterPosition(fragment, _activeWordIndex);
     string remaining = _activeTranscriptText[start..];
     _activeWordBaseIndex = _activeWordIndex;
     _activeCharacterBaseOffset = start;
     _activeCharacterPosition = start;
-    _activeCharacterCount = FirstWord(remaining).Length;
+    _activeWord = GetFragmentWordText(
+      fragment,
+      _activeWordIndex,
+      FirstWord(remaining));
+    _activeCharacterCount = GetFragmentWordCharacterCount(
+      fragment,
+      _activeWordIndex,
+      _activeWord.Length);
     _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
-    _activeWord = FirstWord(remaining);
     SpeakConfiguredLocked(
       remaining,
       _activeProfile,
@@ -2288,13 +2322,109 @@ internal sealed class SpeechService : IDisposable
     {
       return null;
     }
-    IReadOnlyList<long>? wordIds = _history[_activeHistoryIndex].WordIds;
-    return wordIds is not null &&
-      _activeWordIndex >= 0 && _activeWordIndex < wordIds.Count
-        ? wordIds[_activeWordIndex]
+    IReadOnlyList<SpeechFragmentWord>? words =
+      _history[_activeHistoryIndex].TranscriptWords;
+    return words is not null &&
+      _activeWordIndex >= 0 && _activeWordIndex < words.Count
+        ? words[_activeWordIndex].Id
         : null;
   }
 
+
+  private static int GetFragmentWordCount(SpeechFragment fragment)
+  {
+    return fragment.TranscriptWords is { } transcriptWords
+      ? transcriptWords.Count
+      : SpeechTokenization.Matches(fragment.Text).Count;
+  }
+
+  private static int GetFragmentWordCharacterPosition(
+    SpeechFragment fragment,
+    int wordIndex)
+  {
+    if (fragment.TranscriptWords is { } transcriptWords)
+    {
+      if (transcriptWords.Count == 0)
+      {
+        return 0;
+      }
+      int bounded = Math.Clamp(wordIndex, 0, transcriptWords.Count - 1);
+      return transcriptWords[bounded].CharacterStart;
+    }
+    return GetWordCharacterPosition(fragment.Text, wordIndex);
+  }
+
+  private static int GetFragmentWordCharacterCount(
+    SpeechFragment fragment,
+    int wordIndex,
+    int syntheticFallback)
+  {
+    if (fragment.TranscriptWords is { } transcriptWords)
+    {
+      if (transcriptWords.Count == 0)
+      {
+        return 0;
+      }
+      int bounded = Math.Clamp(wordIndex, 0, transcriptWords.Count - 1);
+      return transcriptWords[bounded].CharacterLength;
+    }
+    return syntheticFallback;
+  }
+
+  private static string GetFragmentWordText(
+    SpeechFragment fragment,
+    int wordIndex,
+    string syntheticFallback)
+  {
+    if (fragment.TranscriptWords is { } transcriptWords)
+    {
+      if (transcriptWords.Count == 0)
+      {
+        return string.Empty;
+      }
+      int bounded = Math.Clamp(wordIndex, 0, transcriptWords.Count - 1);
+      return transcriptWords[bounded].Text;
+    }
+    return GetTokenAtIndex(fragment.Text, wordIndex, syntheticFallback);
+  }
+
+  private static int GetFragmentWordIndexForBoundary(
+    SpeechFragment fragment,
+    int characterPosition,
+    int characterCount,
+    int syntheticFallbackWordIndex)
+  {
+    if (fragment.TranscriptWords is { } transcriptWords)
+    {
+      if (transcriptWords.Count == 0)
+      {
+        return -1;
+      }
+      int boundedPosition = Math.Clamp(
+        characterPosition,
+        0,
+        fragment.Text.Length);
+      int boundaryEnd = Math.Clamp(
+        checked(boundedPosition + Math.Max(1, characterCount)),
+        boundedPosition,
+        fragment.Text.Length);
+      for (int index = 0; index < transcriptWords.Count; ++index)
+      {
+        SpeechFragmentWord word = transcriptWords[index];
+        int wordEnd = checked(word.CharacterStart + word.CharacterLength);
+        if (word.CharacterStart < boundaryEnd && wordEnd > boundedPosition)
+        {
+          return index;
+        }
+      }
+      return -1;
+    }
+    return GetTokenIndexForBoundary(
+      fragment.Text,
+      characterPosition,
+      characterCount,
+      syntheticFallbackWordIndex);
+  }
 
   private static int GetTokenIndexForBoundary(
     string text,
@@ -2661,23 +2791,26 @@ internal sealed class SpeechService : IDisposable
     int wordIndex = 0)
   {
     SpeechFragment fragment = _history[index];
-    MatchCollection matches = SpeechTokenization.Matches(fragment.Text);
-    int boundedWordIndex = matches.Count == 0
+    int wordCount = GetFragmentWordCount(fragment);
+    int boundedWordIndex = wordCount == 0
       ? 0
-      : Math.Clamp(wordIndex, 0, matches.Count - 1);
+      : Math.Clamp(wordIndex, 0, wordCount - 1);
     _activeHistoryIndex = index;
     _activeTranscriptText = fragment.Text;
     _activeWordIndex = boundedWordIndex;
     _activeWordBaseIndex = 0;
     _activeCharacterBaseOffset = 0;
-    _activeCharacterPosition = GetWordCharacterPosition(
-      fragment.Text,
+    _activeCharacterPosition = GetFragmentWordCharacterPosition(
+      fragment,
       boundedWordIndex);
-    _activeWord = GetTokenAtIndex(
-      fragment.Text,
+    _activeWord = GetFragmentWordText(
+      fragment,
       boundedWordIndex,
       FirstWord(fragment.Text));
-    _activeCharacterCount = _activeWord.Length;
+    _activeCharacterCount = GetFragmentWordCharacterCount(
+      fragment,
+      boundedWordIndex,
+      _activeWord.Length);
     _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
     ReportPlaybackPositionLocked(TranscriptPlaybackState.Paused);
     DiagnosticLog.Write("speech.paused_navigation", new

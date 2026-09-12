@@ -499,16 +499,16 @@ internal sealed class JsonlSessionMonitor : IDisposable
     bool emitLive = true)
   {
     IReadOnlyList<SpeechTextPart> parts;
-    IReadOnlyList<IReadOnlyList<long>?> partWordIds;
+    IReadOnlyList<IReadOnlyList<SpeechFragmentWord>?> partTranscriptWords;
     if (node.CanonicalWords is { Count: > 0 } canonicalWords)
     {
-      (parts, partWordIds) = BuildCanonicalSpeechParts(canonicalWords);
+      (parts, partTranscriptWords) = BuildCanonicalSpeechParts(canonicalWords);
     }
     else
     {
       parts = TextCleaner.ParseForSpeech(node.Text);
-      partWordIds = Enumerable
-        .Repeat<IReadOnlyList<long>?>(null, parts.Count)
+      partTranscriptWords = Enumerable
+        .Repeat<IReadOnlyList<SpeechFragmentWord>?>(null, parts.Count)
         .ToArray();
     }
     if (parts.Count == 0)
@@ -563,8 +563,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
           ? ContentCategory.UserContext
           : node.Category;
       bool startsUserTurn = node.StartsUserTurn && partIndex == 0;
-      IReadOnlyList<long>? canonicalPartWordIds = partWordIds[partIndex];
-      if (canonicalPartWordIds is not null)
+      IReadOnlyList<SpeechFragmentWord>? canonicalPartWords =
+        partTranscriptWords[partIndex];
+      if (canonicalPartWords is not null)
       {
         fragments.Add(new SpeechFragment(
           nodeId,
@@ -583,7 +584,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           ProjectionVisible: node.ProjectionVisible,
           RevisionHistoryControlled: node.RevisionHistoryControlled,
           HistoricalRevision: node.HistoricalRevision,
-          WordIds: canonicalPartWordIds));
+          TranscriptWords: canonicalPartWords));
       }
       else if (part.Kind == SpeechFragmentKind.Prose)
       {
@@ -680,8 +681,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   private static (
     IReadOnlyList<SpeechTextPart> Parts,
-    IReadOnlyList<IReadOnlyList<long>?> WordIds) BuildCanonicalSpeechParts(
-      IReadOnlyList<CanonicalSpeechWordProjection> words)
+    IReadOnlyList<IReadOnlyList<SpeechFragmentWord>?> TranscriptWords)
+      BuildCanonicalSpeechParts(
+        IReadOnlyList<CanonicalSpeechWordProjection> words)
   {
     var groups = new List<List<CanonicalSpeechWordProjection>>();
     var current = new List<CanonicalSpeechWordProjection>();
@@ -716,7 +718,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     var parts = new List<SpeechTextPart>();
-    var ids = new List<IReadOnlyList<long>?>();
+    var transcriptWords = new List<IReadOnlyList<SpeechFragmentWord>?>();
     int fenceLineIndex = 0;
     int fenceLineCount = groups.Count(group => FenceType(group[0]).Length != 0);
     foreach (List<CanonicalSpeechWordProjection> group in groups)
@@ -724,7 +726,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
       string fenceType = FenceType(group[0]);
       if (fenceType.Length != 0)
       {
-        string line = ReconstructCanonicalWords(group, preserveWhitespace: true);
+        (string line, SpeechFragmentWord[] mappedWords) =
+          BuildCanonicalFragment(group, preserveWhitespace: true);
         if (line.Length != 0)
         {
           parts.Add(new SpeechTextPart(
@@ -736,14 +739,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
             FenceLineCount: fenceLineCount,
             PauseAfter: true,
             SpeechTextStyle.Main));
-          ids.Add(group.Select(word => word.Id).ToArray());
+          transcriptWords.Add(mappedWords);
         }
         continue;
       }
 
-      AddCanonicalProseParts(group, parts, ids);
+      AddCanonicalProseParts(group, parts, transcriptWords);
     }
-    return (parts, ids);
+    return (parts, transcriptWords);
   }
 
   /// <summary>
@@ -754,7 +757,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
   private static void AddCanonicalProseParts(
     IReadOnlyList<CanonicalSpeechWordProjection> words,
     ICollection<SpeechTextPart> parts,
-    ICollection<IReadOnlyList<long>?> ids)
+    ICollection<IReadOnlyList<SpeechFragmentWord>?> transcriptWords)
   {
     int start = 0;
     for (int index = 0; index < words.Count; ++index)
@@ -770,7 +773,13 @@ internal sealed class JsonlSessionMonitor : IDisposable
       {
         ++end;
       }
-      AddCanonicalProsePart(words, start, end, parts, ids, pauseAfter: false);
+      AddCanonicalProsePart(
+        words,
+        start,
+        end,
+        parts,
+        transcriptWords,
+        pauseAfter: false);
       start = end;
       index = end - 1;
     }
@@ -781,7 +790,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
         start,
         words.Count,
         parts,
-        ids,
+        transcriptWords,
         pauseAfter: true);
     }
     else if (parts.Count != 0 && parts.Last().PauseAfter is false)
@@ -797,31 +806,44 @@ internal sealed class JsonlSessionMonitor : IDisposable
     int start,
     int end,
     ICollection<SpeechTextPart> parts,
-    ICollection<IReadOnlyList<long>?> ids,
+    ICollection<IReadOnlyList<SpeechFragmentWord>?> transcriptWords,
     bool pauseAfter)
   {
-    CanonicalSpeechWordProjection[] slice = words.Skip(start).Take(end - start).ToArray();
+    CanonicalSpeechWordProjection[] slice = words
+      .Skip(start)
+      .Take(end - start)
+      .ToArray();
     if (slice.Length == 0)
     {
       return;
     }
+    (string text, SpeechFragmentWord[] mappedWords) =
+      BuildCanonicalFragment(slice, preserveWhitespace: false);
     parts.Add(new SpeechTextPart(
       SpeechFragmentKind.Prose,
-      ReconstructCanonicalWords(slice, preserveWhitespace: false),
+      text,
       string.Empty,
       FenceBlockId: -1,
       FenceLineIndex: -1,
       FenceLineCount: 0,
       PauseAfter: pauseAfter,
       SpeechTextStyle.Main));
-    ids.Add(slice.Select(word => word.Id).ToArray());
+    transcriptWords.Add(mappedWords);
   }
 
-  private static string ReconstructCanonicalWords(
-    IReadOnlyList<CanonicalSpeechWordProjection> words,
-    bool preserveWhitespace)
+  /// <summary>
+  /// Reconstructs one app-owned utterance from Core words while recording each
+  /// authoritative word's exact character range in that utterance.  A non-empty
+  /// Core separator either remains exact (code) or becomes one speech space
+  /// (prose); no tokenizer or visible-text search participates.
+  /// </summary>
+  private static (string Text, SpeechFragmentWord[] Words)
+    BuildCanonicalFragment(
+      IReadOnlyList<CanonicalSpeechWordProjection> words,
+      bool preserveWhitespace)
   {
     var text = new StringBuilder();
+    var mappedWords = new List<SpeechFragmentWord>(words.Count);
     for (int index = 0; index < words.Count; ++index)
     {
       CanonicalSpeechWordProjection word = words[index];
@@ -829,9 +851,15 @@ internal sealed class JsonlSessionMonitor : IDisposable
       {
         text.Append(preserveWhitespace ? word.SeparatorBefore : " ");
       }
+      int characterStart = text.Length;
       text.Append(word.Text);
+      mappedWords.Add(new SpeechFragmentWord(
+        word.Id,
+        word.Text,
+        characterStart,
+        word.Text.Length));
     }
-    return text.ToString().Trim();
+    return (text.ToString(), mappedWords.ToArray());
   }
 
   private static string FenceType(CanonicalSpeechWordProjection word)

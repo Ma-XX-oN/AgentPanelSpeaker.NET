@@ -2,6 +2,7 @@ using System.Collections;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AgentPanelSpeaker;
 
@@ -368,7 +369,7 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
         "Category" => ContentCategory.Assistant,
         "Kind" => SpeechFragmentKind.Prose,
         "Text" => text,
-        "WordIds" => wordIds,
+        "TranscriptWords" => BuildTestTranscriptWords(text, wordIds),
         _ when parameter.HasDefaultValue => parameter.DefaultValue,
         _ => parameter.ParameterType.IsValueType
           ? Activator.CreateInstance(parameter.ParameterType)
@@ -376,6 +377,22 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
       };
     }
     return (SpeechFragment)constructor.Invoke(arguments);
+  }
+
+  private static IReadOnlyList<SpeechFragmentWord> BuildTestTranscriptWords(
+    string text,
+    IReadOnlyList<long> wordIds)
+  {
+    MatchCollection matches = SpeechTokenization.Matches(text);
+    Require(matches.Count == wordIds.Count,
+      "Synthetic test fixture word count does not match supplied IDs.");
+    return matches.Cast<Match>()
+      .Select((match, index) => new SpeechFragmentWord(
+        wordIds[index],
+        match.Value,
+        match.Index,
+        match.Length))
+      .ToArray();
   }
 
   /// <summary>
@@ -468,6 +485,19 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
       long[] actualIds = fragment.WordIds?.ToArray() ?? Array.Empty<long>();
       Require(actualIds.SequenceEqual(expectedIds),
         "Production ordered-list history did not carry Core ordinal/body IDs.");
+      IReadOnlyList<SpeechFragmentWord> mappedWords = fragment.TranscriptWords ??
+        throw new InvalidOperationException(
+          "Production ordered-list fragment omitted Core word ranges.");
+      Require(mappedWords.Count == 2,
+        $"Expected two ordered-list Core ranges, got {mappedWords.Count}.");
+      Require(mappedWords[0].Text == "1." &&
+          mappedWords[0].CharacterStart == 0 &&
+          mappedWords[0].CharacterLength == 2,
+        "Ordered-list ordinal is not one exact Core-backed speech range.");
+      Require(mappedWords[1].Text == "Item" &&
+          mappedWords[1].CharacterStart == 3 &&
+          mappedWords[1].CharacterLength == 4,
+        "Ordered-list body word range is not exact.");
 
       using var speech = new SpeechService();
       speech.SetPolicyProviders(
