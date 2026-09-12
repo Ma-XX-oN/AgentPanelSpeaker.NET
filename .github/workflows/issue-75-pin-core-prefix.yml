@@ -60,20 +60,30 @@ jobs:
               [Text.UTF8Encoding]::new($false))
           }
 
-      - name: Align canonical HTML parity assertion
+      - name: Align canonical HTML parity assertions
         shell: pwsh
         run: |
           $path = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker/CoreRegressionTestRunner.cs'
           $text = [IO.File]::ReadAllText($path)
-          $old = '"What time is it in Paris?",'
-          $new = '">What</span>",'
-          $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
-          if ($count -ne 2) {
-            throw "Expected two stale contiguous-prompt HTML assertions, found $count"
+          $replacements = @(
+            @('"What time is it in Paris?",', '">What</span>",', 2),
+            @('"Active file:",', '">file</span>",', 1),
+            @('"Active selection of the file:",', '">selection</span>",', 1),
+            @('"Open tabs:",', '">tabs</span>",', 1)
+          )
+          foreach ($replacement in $replacements) {
+            $old = [string]$replacement[0]
+            $new = [string]$replacement[1]
+            $expectedCount = [int]$replacement[2]
+            $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+            if ($count -ne $expectedCount) {
+              throw "Expected $expectedCount occurrence(s) of $old, found $count"
+            }
+            $text = $text.Replace($old, $new)
           }
           [IO.File]::WriteAllText(
             $path,
-            $text.Replace($old, $new),
+            $text,
             [Text.UTF8Encoding]::new($false))
 
       - name: Install pinned Core dependencies
