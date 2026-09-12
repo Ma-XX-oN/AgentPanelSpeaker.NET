@@ -1,4 +1,4 @@
-name: Issue 75 Core word-id interaction boundary
+name: Issue 75 centralized Core word policy
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
       - '.github/workflows/issue-75-production-wordids.yml'
       - 'tools/issue75-word-id-boundary.py'
       - 'tools/issue75-word-id-boundary-tests.py'
+      - 'tools/issue75-central-voice-policy.py'
+      - 'tools/issue75-central-voice-policy-tests.py'
 
 permissions:
   contents: write
@@ -30,11 +32,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Apply Core word-id interaction boundary
+      - name: Apply Core word-ID and centralized policy migration
         shell: pwsh
         run: |
           python tools/issue75-word-id-boundary.py
           python tools/issue75-word-id-boundary-tests.py
+          python tools/issue75-central-voice-policy.py
+          python tools/issue75-central-voice-policy-tests.py
 
       - name: Install pinned Core dependencies
         shell: pwsh
@@ -44,35 +48,11 @@ jobs:
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Verify issue 75 transition
+      - name: Verify issue 75 GREEN
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          $log = Join-Path $env:RUNNER_TEMP 'issue75-word-id-boundary.log'
-          $threw = $false
-          try {
-            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration *> $log
-          }
-          catch {
-            $threw = $true
-          }
-          $text = Get-Content -Raw $log
-          Write-Host $text
-          if (-not $threw) { throw 'Expected only the policy RED to remain.' }
-          $requiredGreen = @(
-            'PASS  core-word-id/ctrl-click-posts-exact-canonical-word-id',
-            'PASS  core-word-id/speech-seek-uses-only-canonical-word-id',
-            'PASS  core-word-id/ordered-list-history-preserves-core-word-boundaries'
-          )
-          foreach ($line in $requiredGreen) {
-            if (-not $text.Contains($line)) { throw "Required #75 transition did not turn GREEN: $line" }
-          }
-          if (-not $text.Contains('FAIL  core-word-id/policy-is-centralized-without-per-word-eligibility-mutation')) {
-            throw 'The expected policy-only RED was not present.'
-          }
-          if (-not $text.Contains('FAIL: 1/12 issue #75 regressions failed.')) {
-            throw 'Unexpected #75 focused failure count.'
-          }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration
 
       - name: Verify speech ordinal regression
         shell: pwsh
@@ -104,12 +84,12 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite ctrl-click-voice-pointer
 
-      - name: Commit verified Core word-id boundary
+      - name: Commit verified issue 75 interaction migration
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/FindSeekRequestedEventArgs.cs AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/SpeechService.cs AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue26UserContextSpeechRegressionTestRunner.cs AgentPanelSpeaker/Issue46IndependentRegressionOracleTestRunner.cs AgentPanelSpeaker/Issue73CtrlClickVoicePointerRegressionTestRunner.cs
           git diff --cached --check
-          git commit -m 'feat: use Core word IDs for transcript seeking (#75)'
+          git commit -m 'feat: centralize transcript seeking on Core word IDs (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
