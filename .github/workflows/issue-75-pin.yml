@@ -33,20 +33,35 @@ jobs:
         run: |
           $old = '6c92799c1b14693001e8b913465f4a12' + 'b0b1e1ab'
           $new = 'c97dc6f6a0d6e2bd6d21bc145da722645b19e002'
-          $files = @(git grep -l -- $old)
-          if ($LASTEXITCODE -ne 0 -or $files.Count -eq 0) {
-            throw 'No old Core hard-pin references were found.'
+          $expected = @(
+            '.github/workflows/core-integration-validation.yml',
+            'AgentPanelSpeaker/AIConversationCoreClient.cs',
+            'tools/AIConversationCore-runtime/CORE_COMMIT',
+            'tools/AIConversationCore-worker.mjs'
+          ) | Sort-Object
+          $files = @(git grep -l -- $old) | Sort-Object
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to discover old Core hard-pin references.'
+          }
+          if (($files -join "`n") -ne ($expected -join "`n")) {
+            throw "Unexpected old Core pin set:`n$($files -join "`n")"
           }
           Write-Host ('Updating Core pins in: ' + ($files -join ', '))
           foreach ($file in $files) {
             $text = [IO.File]::ReadAllText($file)
             $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
             if ($count -lt 1) { throw "Expected old Core pin in $file" }
-            [IO.File]::WriteAllText($file, $text.Replace($old, $new), [Text.UTF8Encoding]::new($false))
-          }
-          $remaining = @(git grep -l -- $old)
-          if ($LASTEXITCODE -eq 0 -and $remaining.Count -ne 0) {
-            throw ('Old Core pin remains in: ' + ($remaining -join ', '))
+            [IO.File]::WriteAllText(
+              $file,
+              $text.Replace($old, $new),
+              [Text.UTF8Encoding]::new($false))
+            $updated = [IO.File]::ReadAllText($file)
+            if ($updated.Contains($old)) {
+              throw "Old Core pin remains in $file"
+            }
+            if (-not $updated.Contains($new)) {
+              throw "New Core pin missing from $file"
+            }
           }
 
       - name: Install pinned Core dependencies
@@ -80,7 +95,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tools/AIConversationCore-worker.mjs AgentPanelSpeaker/AIConversationCoreClient.cs .github/workflows/core-integration-validation.yml
+          git add tools/AIConversationCore-worker.mjs AgentPanelSpeaker/AIConversationCoreClient.cs .github/workflows/core-integration-validation.yml tools/AIConversationCore-runtime/CORE_COMMIT
           git diff --cached --check
           git commit -m 'build: align Core hard pins with word separator contract (#75)'
           git push origin HEAD:issue-75-core-word-id-migration
