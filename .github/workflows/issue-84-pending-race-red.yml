@@ -1,0 +1,60 @@
+name: Temporary issue 84 pending-race RED
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+
+permissions:
+  contents: write
+
+jobs:
+  red:
+    if: "${{ github.event.head_commit.message == 'ci: launch issue 84 pending-race RED' }}"
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: issue-75-core-word-id-migration
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Add permanent pending-race regression
+        run: python .github/scripts/issue84-pending-race-red.py
+
+      - name: Validate test patch
+        shell: pwsh
+        run: git diff --check
+
+      - name: Build RED candidate
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove focused RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment 2>&1 | Out-String
+          $exit = $LASTEXITCODE
+          Write-Host $output
+          if ($exit -eq 0) {
+            throw 'Pending-vs-active repeated-J regression unexpectedly passed before production repair.'
+          }
+          if ($output -notmatch 'FAIL  rewind-current-fragment/pending-word-zero-overrides-stale-active-word') {
+            throw 'Focused suite failed, but not at the required pending-vs-active repeated-J regression.'
+          }
+
+      - name: Commit permanent RED regression
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- AgentPanelSpeaker/Issue84RewindCurrentFragmentRegressionTestRunner.cs
+          git diff --cached --check
+          git commit -m 'test: reproduce pending cursor rewind race'
+          git push origin HEAD:issue-75-core-word-id-migration
