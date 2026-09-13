@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   validate:
+    if: github.actor != 'github-actions[bot]'
     runs-on: windows-latest
     steps:
       - name: Check out exact branch head
@@ -146,13 +147,12 @@ jobs:
         run: |
           git restore AgentPanelSpeaker-test-results.txt
           git diff --check
-          Write-Host 'Changed paths before temporary cleanup:'
+          Write-Host 'Changed paths before commit:'
           git status --short
 
-      - name: Commit and push clean candidate
+      - name: Commit and push validated production candidate
         shell: pwsh
         run: |
-          git rm .github/workflows/issue-84-structural-rewind-repair.yml tools/issue84-structural-rewind-repair.py
           git restore AgentPanelSpeaker-test-results.txt
           git add -A
           git diff --cached --check
