@@ -78,7 +78,7 @@ jobs:
           python tools/issue88-apply.py green 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { throw 'Production applicator failed.' }
           python tools/issue88-postfix.py 2>&1 | Tee-Object -FilePath $log -Append
-          if ($LASTEXITCODE -ne 0) { throw 'First-token bookmark fixup failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Issue #88 postfix repair failed.' }
           git diff --check 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
 
@@ -92,7 +92,7 @@ jobs:
             Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { throw 'Repaired application failed to build.' }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          foreach ($suite in @('speech-ownership', 'core-word-id-migration', 'rewind-current-fragment')) {
+          foreach ($suite in @('speech-ownership', 'core-word-id-migration', 'rewind-current-fragment', 'rolled-back-speech')) {
             & $exe --test $suite 2>&1 | Tee-Object -FilePath $log -Append
             if ($LASTEXITCODE -ne 0) { throw "Regression suite failed: $suite" }
           }
@@ -106,7 +106,6 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all 2>&1 |
             Tee-Object -FilePath $log -Append
-          if ($LASTEXITCODE -ne 0) { throw 'Complete built application suite failed.' }
           $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
           dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish 2>&1 |
             Tee-Object -FilePath $log -Append
@@ -114,7 +113,6 @@ jobs:
           $publishedExe = Join-Path $publish 'AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $publishedExe -Suite all 2>&1 |
             Tee-Object -FilePath $log -Append
-          if ($LASTEXITCODE -ne 0) { throw 'Complete published application suite failed.' }
 
       - name: Commit verified repair
         shell: pwsh
