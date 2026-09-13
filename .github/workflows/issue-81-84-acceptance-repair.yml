@@ -1,0 +1,99 @@
+name: Issue 81 and 84 acceptance repair
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Add permanent regressions
+        shell: pwsh
+        run: python tools/issue81-84-repair.py regressions
+
+      - name: Prove issue 81 and 84 RED
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Regression-only build failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+
+          $settings = & $exe --test settings 2>&1 | Out-String
+          $settingsExit = $LASTEXITCODE
+          Write-Host $settings
+          if ($settingsExit -ne 1 -or
+              -not $settings.Contains('Windows/SSML inline spelling is not isolated from surrounding speech.')) {
+            throw "Issue #81 RED was not reproduced exactly (exit=$settingsExit)."
+          }
+
+          $rewind = & $exe --test rewind-current-fragment 2>&1 | Out-String
+          $rewindExit = $LASTEXITCODE
+          Write-Host $rewind
+          if ($rewindExit -ne 1 -or
+              -not $rewind.Contains('Paused rewind moved to the preceding fragment instead of the current fragment.') -or
+              -not $rewind.Contains('Active rewind moved to the preceding fragment instead of the current fragment.')) {
+            throw "Issue #84 RED was not reproduced exactly (exit=$rewindExit)."
+          }
+          Write-Host 'RED-PROVEN issue-81 inline spell isolation and issue-84 current-fragment rewind.'
+          exit 0
+
+      - name: Apply production repairs
+        shell: pwsh
+        run: python tools/issue81-84-repair.py production
+
+      - name: Prove focused GREEN
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Production build failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite settings
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite ctrl-click-voice-pointer
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+
+      - name: Commit and push clean candidate
+        shell: pwsh
+        run: |
+          Remove-Item tools/issue81-84-repair.py
+          Remove-Item .github/workflows/issue-81-84-acceptance-repair.yml
+          git add -A
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Patch integrity check failed.' }
+          git config user.name 'ChatGPT Codex Connector'
+          git config user.email '14957082+openai@users.noreply.github.com'
+          git commit -m 'fix: repair spell-out isolation and sentence rewind'
+          if ($LASTEXITCODE -ne 0) { throw 'Clean candidate commit failed.' }
+          $candidate = git rev-parse HEAD
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          if ($LASTEXITCODE -ne 0) { throw 'Clean candidate push failed.' }
+          Write-Host "CLEAN-CANDIDATE $candidate"
+
+      - name: Verify clean candidate focused suites
+        shell: pwsh
+        run: |
+          if (Test-Path tools/issue81-84-repair.py) { throw 'Temporary helper survived cleanup.' }
+          if (Test-Path .github/workflows/issue-81-84-acceptance-repair.yml) { throw 'Temporary workflow survived cleanup.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite settings
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment
+          git diff --check HEAD^ HEAD
