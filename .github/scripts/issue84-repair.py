@@ -116,6 +116,26 @@ patch(
   ],
 )
 
+# The old issue #35 fixture predates the canonical-word migration. Production
+# retained history is Core-backed, so exercising an active transition without
+# TranscriptWords accidentally tests the removed synthetic marker rather than
+# the real engine-boundary cursor. Make that fixture match production identity.
+patch(
+  "AgentPanelSpeaker/Issue35SpeechTransitionRegressionTestRunner.cs",
+  [
+    (
+      '        "HistoricalRevision" or "historicalRevision" => historical,\n        _ when parameter.HasDefaultValue => parameter.DefaultValue,',
+      '        "HistoricalRevision" or "historicalRevision" => historical,\n        "TranscriptWords" or "transcriptWords" => BuildTranscriptWords(nodeId, text),\n        _ when parameter.HasDefaultValue => parameter.DefaultValue,',
+      "issue35 canonical transcript-word fixture",
+    ),
+    (
+      """    return (SpeechFragment)constructor.Invoke(arguments);\n  }\n\n  private static SpeechService CreateSpeechService(int rate)""",
+      """    return (SpeechFragment)constructor.Invoke(arguments);\n  }\n\n  /// <summary>\n  /// Gives the transition fixture the same canonical-word shape as production\n  /// retained history. IDs are unique within this synthetic test transcript;\n  /// character offsets remain local to the containing SpeechFragment.\n  /// </summary>\n  private static IReadOnlyList<SpeechFragmentWord> BuildTranscriptWords(\n    long nodeId,\n    string text)\n  {\n    return SpeechTokenization.Matches(text)\n      .Cast<System.Text.RegularExpressions.Match>()\n      .Select((match, index) => new SpeechFragmentWord(\n        checked(nodeId * 1000 + index + 1),\n        match.Value,\n        match.Index,\n        match.Length))\n      .ToArray();\n  }\n\n  private static SpeechService CreateSpeechService(int rate)""",
+      "issue35 canonical transcript-word helper",
+    ),
+  ],
+)
+
 # Semantic preflight: this repair must not add WebView-side rewind state.
 transcript_view = Path("AgentPanelSpeaker/TranscriptView.cs").read_text(encoding="utf-8")
 for forbidden in (
