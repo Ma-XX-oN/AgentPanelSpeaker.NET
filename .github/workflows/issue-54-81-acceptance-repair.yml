@@ -1,0 +1,201 @@
+name: Issue 54 and 81 acceptance repair
+
+on:
+  pull_request:
+    branches:
+      - feature/aiconversationcore-integration
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-validate:
+    runs-on: windows-2025
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: issue-75-core-word-id-migration
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Validate helper and clean starting tree
+        shell: pwsh
+        run: |
+          python -m py_compile tools/issue54-81-acceptance-repair.py
+          if ($LASTEXITCODE -ne 0) { throw 'Repair helper does not compile.' }
+          Remove-Item -Recurse -Force tools/__pycache__ -ErrorAction SilentlyContinue
+          if (git status --porcelain) { throw 'Starting worktree is not clean.' }
+
+      - name: Add permanent regressions only
+        shell: pwsh
+        run: |
+          python tools/issue54-81-acceptance-repair.py tests
+          if ($LASTEXITCODE -ne 0) { throw 'Regression patch failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Regression patch integrity failed.' }
+
+      - name: Prove scroll and spell-out regressions RED
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Test-only RED build failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+
+          $coreOutput = & $exe --test core-word-id-migration 2>&1 | Out-String
+          $coreExit = $LASTEXITCODE
+          Write-Host $coreOutput
+          if ($coreExit -eq 0 -or
+              -not $coreOutput.Contains('Browser still calls the removed legacy lexical-alignment fallback.')) {
+            throw 'Fast-scroll stale lexical fallback regression did not prove RED.'
+          }
+
+          $settingsOutput = & $exe --test settings 2>&1 | Out-String
+          $settingsExit = $LASTEXITCODE
+          Write-Host $settingsOutput
+          if ($settingsExit -eq 0 -or
+              -not $settingsOutput.Contains('Windows/SSML spelling does not use explicit spell-out semantics.')) {
+            throw 'Windows.Media spell-out regression did not prove RED.'
+          }
+
+          Write-Host 'RED-PROVEN stale lexical fallback and Windows/SSML spell-out semantics.'
+          exit 0
+
+      - name: Reset and apply regressions plus production repairs
+        shell: pwsh
+        run: |
+          git reset --hard HEAD
+          python tools/issue54-81-acceptance-repair.py tests
+          if ($LASTEXITCODE -ne 0) { throw 'Regression patch failed after reset.' }
+          python tools/issue54-81-acceptance-repair.py production
+          if ($LASTEXITCODE -ne 0) { throw 'Production patch failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Production patch integrity failed.' }
+
+      - name: Prove focused regressions GREEN
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Production repair build failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite core-word-id-migration
+          if ($LASTEXITCODE -ne 0) { throw 'Core word-ID suite failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite settings
+          if ($LASTEXITCODE -ne 0) { throw 'Settings/spelling suite failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite virtual-window
+          if ($LASTEXITCODE -ne 0) { throw 'Virtual-window suite failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite real-session-fixes
+          if ($LASTEXITCODE -ne 0) { throw 'Real-session suite failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite ctrl-click-voice-pointer
+          if ($LASTEXITCODE -ne 0) { throw 'Ctrl+click suite failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite user-context-speech
+          if ($LASTEXITCODE -ne 0) { throw 'User Context speech suite failed.' }
+
+      - name: Commit and push clean candidate
+        shell: pwsh
+        run: |
+          git rm .github/workflows/issue-54-81-acceptance-repair.yml
+          git rm tools/issue54-81-acceptance-repair.py
+          git add AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/SpeechSapiXmlBuilder.cs AgentPanelSpeaker/RegressionTestRunner.cs AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate patch integrity failed.' }
+          git config user.name 'ChatGPT Codex Connector'
+          git config user.email '14957082+openai@users.noreply.github.com'
+          git commit -m 'fix: repair fast scroll and Windows spell-out'
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate commit failed.' }
+          $candidate = git rev-parse HEAD
+          Write-Host "CANDIDATE_SHA=$candidate"
+          if (git status --porcelain) { throw 'Candidate worktree is not clean.' }
+          git push origin HEAD:issue-75-core-word-id-migration
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate push failed.' }
+
+      - name: Verify pinned Core and Phase 2 baseline
+        shell: pwsh
+        run: |
+          $expected = '76042b398c2f50ff2b146f86e98e3d43881ba216'
+          $actual = git -C dependencies/AIConversationCore rev-parse HEAD
+          if ($actual.Trim() -ne $expected) { throw "Unexpected Core pin: $actual" }
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Core npm ci failed.' }
+          npm test --prefix dependencies/AIConversationCore
+          if ($LASTEXITCODE -ne 0) { throw 'Core regression suite failed.' }
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          if ($LASTEXITCODE -ne 0) { throw 'Phase 2 baseline failed.' }
+          Remove-Item -Recurse -Force dependencies/AIConversationCore/node_modules -ErrorAction SilentlyContinue
+
+      - name: Validate complete built application
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+          & tools/Invoke-TestSuite.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'Test runner self-test failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          if ($LASTEXITCODE -ne 0) { throw 'Complete built suite failed.' }
+
+      - name: Validate complete published application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          if ($LASTEXITCODE -ne 0) { throw 'Complete published suite failed.' }
+
+      - name: Validate bundled Core and canonical display
+        shell: pwsh
+        run: |
+          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
+          $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
+          $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
+          $response = '{"operation":"ping"}' | node $worker
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok -or $decoded.core_commit -ne '76042b398c2f50ff2b146f86e98e3d43881ba216') {
+            throw 'Bundled Core runtime/pin validation failed.'
+          }
+          dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'DisplayParity build failed.' }
+          $env:AI_CONVERSATION_CORE = Join-Path $env:GITHUB_WORKSPACE 'dependencies\AIConversationCore'
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "$env:AI_CONVERSATION_CORE" "$env:GITHUB_WORKSPACE\tools\AIConversationCore-worker.mjs"
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical display validation failed.' }
+
+      - name: Verify exact remote candidate and cleanup
+        shell: pwsh
+        run: |
+          $local = (git rev-parse HEAD).Trim()
+          $remote = (git ls-remote origin refs/heads/issue-75-core-word-id-migration | ForEach-Object { ($_ -split "`t")[0] }).Trim()
+          if ($local -ne $remote) { throw "Remote branch moved: local=$local remote=$remote" }
+          git diff --check 845d76e7b50e442ee4cb1f548183b6155408b2b4 HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Final patch integrity failed.' }
+          $changed = @(git diff --name-only 845d76e7b50e442ee4cb1f548183b6155408b2b4 HEAD)
+          $expected = @(
+            'AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs',
+            'AgentPanelSpeaker/RegressionTestRunner.cs',
+            'AgentPanelSpeaker/SpeechSapiXmlBuilder.cs',
+            'AgentPanelSpeaker/TranscriptView.cs'
+          )
+          if (@(Compare-Object ($changed | Sort-Object) ($expected | Sort-Object)).Count -ne 0) {
+            throw "Unexpected permanent diff: $($changed -join ', ')"
+          }
+          if ((Test-Path .github/workflows/issue-54-81-acceptance-repair.yml) -or
+              (Test-Path tools/issue54-81-acceptance-repair.py)) {
+            throw 'Temporary repair scaffolding survived in final candidate.'
+          }
+          if (git status --porcelain --ignore-submodules=none) {
+            throw 'Final worktree is not clean.'
+          }
+          Write-Host "FINAL_CANDIDATE_SHA=$local"
+          Write-Host 'VALIDATION-SUCCESS scroll and spell-out repair candidate is fully GREEN.'
