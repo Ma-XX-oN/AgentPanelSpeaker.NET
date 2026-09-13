@@ -649,6 +649,8 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
       "Browser still performs a transcript-wide per-word eligibility scan.");
     Require(!shell.Contains("markAlignedVoiceSelectableWords(", StringComparison.Ordinal),
       "Browser still calls the removed legacy aligned-word eligibility stamper.");
+    Require(!shell.Contains("findSpeechLexicalAlignment(", StringComparison.Ordinal),
+      "Browser still calls the removed legacy lexical-alignment fallback.");
     Require(!shell.Contains("dataset.nodeWordIndex", StringComparison.Ordinal),
       "Browser still reconstructs per-word speech ordinals in the DOM.");
     Require(shell.Contains("setVoicePolicy", StringComparison.Ordinal),

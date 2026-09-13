@@ -4161,37 +4161,6 @@ function assignNodeScopes(nodeMap) {
         continue;
       }
 
-      let lexicalAlignment = findSpeechLexicalAlignment(
-        recordLexicalWords,
-        lexicalTarget,
-        lexicalCursor);
-      if (!lexicalAlignment && lexicalCursor > 0) {
-        lexicalAlignment = findSpeechLexicalAlignment(
-          recordLexicalWords,
-          lexicalTarget,
-          0);
-      }
-      if (lexicalAlignment && lexicalAlignment.length) {
-        const firstGroup = lexicalAlignment[0];
-        const lastGroup = lexicalAlignment[lexicalAlignment.length - 1];
-        const firstWord = recordLexicalWords[firstGroup.start];
-        const lastWord = recordLexicalWords[lastGroup.end];
-        const tokenStart = Number(firstWord.dataset.index);
-        const tokenEnd = Number(lastWord.dataset.index);
-        markNodeRange(tokenStart, tokenEnd, nodeId);
-        rememberSegmentRange(
-          nodeId,
-          tokenStart,
-          tokenEnd,
-          displayTarget,
-          lexicalTarget);
-        lexicalCursor = lastGroup.end + 1;
-        displayCursor = Number(lastWord.dataset.recordIndex) + 1;
-        lexicalCursors.set(key, lexicalCursor);
-        displayCursors.set(key, displayCursor);
-        continue;
-      }
-
       const failureKey = nodeId + ':' + recordNumber + ':' + segment;
       if (!reportedMappingFailures.has(failureKey)) {
         reportedMappingFailures.add(failureKey);

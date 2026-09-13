@@ -440,6 +440,24 @@ internal static class RegressionTestRunner
     Require(set.OrderedWords.SequenceEqual(new[] { "IDE", "api", "GPU" }),
       "Spelled-word normalization changed.");
     Require(set.Contains("Api"), "Spelled-word lookup should be case-insensitive.");
+    SpeechMarkup markup = SpeechSapiXmlBuilder.Build(
+      "scripts/AI-transcript.py",
+      pitchSetting: 0,
+      new[] { "AI" },
+      PronunciationRuleSet.Parse(string.Empty));
+    Require(
+      markup.SsmlContent.Contains(
+        "<say-as interpret-as=\"spell-out\">AI</say-as>",
+        StringComparison.Ordinal),
+      "Windows/SSML spelling does not use explicit spell-out semantics.");
+    Require(
+      !markup.SsmlContent.Contains(
+        "interpret-as=\"characters\"",
+        StringComparison.Ordinal),
+      "Windows/SSML spelling still uses the ambiguous characters interpretation.");
+    Require(
+      string.Equals(markup.PlainText, "scripts/AI-transcript.py", StringComparison.Ordinal),
+      "Spell-out markup changed the source/display text identity.");
   }
 
   private static void TestHotkeys()
