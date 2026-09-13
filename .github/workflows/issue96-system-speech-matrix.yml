@@ -36,6 +36,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python tools/issue96-system-speech-matrix.py red
           if ($LASTEXITCODE -ne 0) { throw 'RED applicator failed.' }
+          python tools/issue96-system-speech-matrix-test-fix.py
+          if ($LASTEXITCODE -ne 0) { throw 'RED oracle correction failed.' }
           dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw 'RED build failed.' }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
@@ -69,6 +71,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python tools/issue96-system-speech-matrix.py green
           if ($LASTEXITCODE -ne 0) { throw 'GREEN applicator failed.' }
+          python tools/issue96-system-speech-matrix-test-fix.py
+          if ($LASTEXITCODE -ne 0) { throw 'GREEN oracle correction failed.' }
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'GREEN patch has whitespace errors.' }
 
@@ -98,6 +102,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -- AgentPanelSpeaker-test-results.txt
           Remove-Item tools/issue96-system-speech-matrix.py -Force
+          Remove-Item tools/issue96-system-speech-matrix-test-fix.py -Force
           Remove-Item .github/workflows/issue96-system-speech-matrix.yml -Force
           git add -A
           git diff --cached --check
@@ -118,7 +123,9 @@ jobs:
           if (@(Compare-Object ($changed | Sort-Object) ($expected | Sort-Object)).Count -ne 0) {
             throw "Unexpected clean candidate files: $($changed -join ', ')"
           }
-          if ((Test-Path tools/issue96-system-speech-matrix.py) -or (Test-Path .github/workflows/issue96-system-speech-matrix.yml)) {
+          if ((Test-Path tools/issue96-system-speech-matrix.py) -or
+              (Test-Path tools/issue96-system-speech-matrix-test-fix.py) -or
+              (Test-Path .github/workflows/issue96-system-speech-matrix.yml)) {
             throw 'Temporary issue #96 scaffolding survived in candidate.'
           }
           if (git status --porcelain) { throw 'Clean candidate worktree is dirty.' }
