@@ -144,6 +144,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly GlyphButton _hotkeysButton = new();
   private readonly GlyphButton _openLogButton = new();
   private readonly Button _pronunciationsButton = new();
+  private readonly Button _systemSpeechMatrixButton = new();
   private readonly GlyphButton _audioWakeButton = new();
   private readonly ComboBox _themeComboBox = new();
   private readonly Label _voiceHeaderLabel = new();
@@ -176,6 +177,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private bool _closing;
   private bool _playPauseTransitioning;
   private bool _voiceSettingPreviewActive;
+  private bool _systemSpeechMatrixActive;
   private bool _themeApplicationPending;
   private bool _themeTransitionQueued;
   private bool _themeTransitionActive;
@@ -331,6 +333,10 @@ internal sealed class MainForm : Form, IMessageFilter
       GlyphButtonDrawing.DiagnosticLog,
       "Main.DiagnosticLog");
     ConfigureButton(_pronunciationsButton, "Pronunciations...");
+    ConfigureButton(_systemSpeechMatrixButton, "SSML Matrix...");
+    _toolTip.SetToolTip(
+      _systemSpeechMatrixButton,
+      "Run the controlled System.Speech SSML provider diagnostic");
     ConfigureUtilityGlyphButton(
       _audioWakeButton,
       GlyphButtonDrawing.Bluetooth,
@@ -456,12 +462,13 @@ internal sealed class MainForm : Form, IMessageFilter
     options.Controls.AddRange(new Control[]
     {
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
-      _pronunciationsButton,
+      _pronunciationsButton, _systemSpeechMatrixButton,
       _speakExistingCheckBox, _keepDisplayOnCheckBox
     });
     SetTabOrder(
       _fenceTypesTextBox,
       _pronunciationsButton,
+      _systemSpeechMatrixButton,
       _speakExistingCheckBox,
       _keepDisplayOnCheckBox);
 
@@ -567,6 +574,7 @@ internal sealed class MainForm : Form, IMessageFilter
     MatchButtonHeight(_browseButton, sourceHeight);
     MatchNumericHeight(_pollNumeric, sourceHeight);
     MatchButtonHeight(_pronunciationsButton, _fenceTypesTextBox.PreferredHeight);
+    MatchButtonHeight(_systemSpeechMatrixButton, _fenceTypesTextBox.PreferredHeight);
   }
 
   /// <summary>
@@ -724,6 +732,7 @@ internal sealed class MainForm : Form, IMessageFilter
       SettingsSelectionMode.Reset);
     _openLogButton.Click += OpenLogButtonClicked;
     _pronunciationsButton.Click += PronunciationsButtonClicked;
+    _systemSpeechMatrixButton.Click += SystemSpeechMatrixButtonClicked;
     _audioWakeButton.Click += AudioWakeButtonClicked;
     _themeComboBox.SelectedIndexChanged += ThemeSelectionChanged;
     _themeComboBox.DropDownClosed += ThemeDropDownClosed;
@@ -1691,6 +1700,70 @@ internal sealed class MainForm : Form, IMessageFilter
     _settingsStore.Update(current with { Hotkeys = dialog.Settings });
     UpdateSettingsSaveState();
     AppendLog("Hotkeys updated.");
+  }
+
+  /// <summary>
+  /// Runs the isolated System.Speech SSML provider matrix.
+  /// </summary>
+  private async void SystemSpeechMatrixButtonClicked(
+    object? sender,
+    EventArgs eventArgs)
+  {
+    if (_systemSpeechMatrixActive || _monitor.IsRunning ||
+        _playPauseTransitioning || _speech.IsSpeaking)
+    {
+      return;
+    }
+
+    InstalledSpeechVoice[] voices = _installedVoices
+      .Where(voice => voice.Provider == SpeechVoiceProvider.SystemSpeech)
+      .ToArray();
+    if (voices.Length == 0)
+    {
+      MessageBox.Show(
+        this,
+        "No System.Speech voices are available for the SSML matrix.",
+        "SSML Matrix",
+        MessageBoxButtons.OK,
+        MessageBoxIcon.Information);
+      return;
+    }
+
+    using var dialog = new SystemSpeechMatrixDialog(voices);
+    if (dialog.ShowDialog(this) != DialogResult.OK)
+    {
+      return;
+    }
+
+    _systemSpeechMatrixActive = true;
+    UpdateControlState();
+    try
+    {
+      AppendLog(
+        $"System.Speech SSML matrix started: {dialog.Options.Voice.ProviderVoiceId}");
+      await SystemSpeechMatrixDiagnosticRunner.RunAsync(dialog.Options);
+      AppendLog("System.Speech SSML matrix completed. See diagnostic JSONL.");
+    }
+    catch (Exception exception)
+    {
+      DiagnosticLog.WriteException(
+        "speech.system_speech_matrix_ui_failed",
+        exception,
+        source: "SSML Matrix button",
+        isTerminating: false);
+      AppendLog($"System.Speech SSML matrix failed: {exception.Message}");
+      MessageBox.Show(
+        this,
+        exception.Message,
+        "SSML Matrix failed",
+        MessageBoxButtons.OK,
+        MessageBoxIcon.Error);
+    }
+    finally
+    {
+      _systemSpeechMatrixActive = false;
+      UpdateControlState();
+    }
   }
 
   /// <summary>
@@ -3525,6 +3598,13 @@ internal sealed class MainForm : Form, IMessageFilter
     _speakExistingCheckBox.Enabled = !configurationLocked;
     _playPauseButton.Enabled = !_playPauseTransitioning;
     _pronunciationsButton.Enabled = true;
+    _systemSpeechMatrixButton.Enabled =
+      !_systemSpeechMatrixActive &&
+      !_monitor.IsRunning &&
+      !_playPauseTransitioning &&
+      !_speech.IsSpeaking &&
+      _installedVoices.Any(voice =>
+        voice.Provider == SpeechVoiceProvider.SystemSpeech);
     UpdatePlayPauseButton(running);
     _processingTimeButton.Enabled =
       _speech.CanRequestProcessingTimeAnnouncement &&
