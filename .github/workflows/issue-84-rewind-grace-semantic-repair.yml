@@ -1,0 +1,88 @@
+name: Temporary issue 84 rewind grace semantic repair
+
+on:
+  push:
+    branches:
+      - issue-84-rewind-grace-semantic-fix
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: "${{ github.event.head_commit.message == 'ci: run issue 84 rewind grace semantic repair' }}"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-84-rewind-grace-semantic-fix
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Stage corrected regressions
+        run: python .github/scripts/issue84-rewind-grace-semantics.py test
+
+      - name: Build RED candidate
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove corrected semantics RED
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $output = & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -eq 0) {
+            throw 'Corrected issue #84 regressions unexpectedly passed before production repair.'
+          }
+          foreach ($expected in @(
+            'active-first-word-running-grace-moves-previous',
+            'active-later-word-running-grace-moves-previous',
+            'active-first-word-expired-grace-restarts-current',
+            'named-grace-period')) {
+            if ($output -notmatch [regex]::Escape("FAIL  rewind-current-fragment/$expected")) {
+              throw "Expected RED failure was not observed: $expected"
+            }
+          }
+          Write-Host 'ISSUE84-CORRECTED-SEMANTICS-RED-PROVEN'
+
+      - name: Commit permanent RED regressions
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/Issue84RewindCurrentFragmentRegressionTestRunner.cs
+          git commit -m 'test: correct issue 84 rewind reaction semantics'
+          git push origin HEAD:issue-84-rewind-grace-semantic-fix
+
+      - name: Apply production repair
+        run: python .github/scripts/issue84-rewind-grace-semantics.py production
+
+      - name: Validate patch
+        shell: pwsh
+        run: git diff --check
+
+      - name: Build repaired candidate
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Prove focused GREEN and full suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit production repair
+        shell: pwsh
+        run: |
+          git add AgentPanelSpeaker/SpeechService.cs
+          git commit -m 'fix: make rewind grace a real reaction timeout'
+          git push origin HEAD:issue-84-rewind-grace-semantic-fix
