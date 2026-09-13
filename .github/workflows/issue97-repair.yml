@@ -97,7 +97,8 @@ jobs:
             'core-word-id-migration',
             'rewind-current-fragment',
             'rolled-back-speech',
-            'system-speech-matrix'
+            'system-speech-matrix',
+            'settings'
           )) {
             & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
           }
@@ -154,7 +155,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Failed to remove temporary issue 97 infrastructure.' }
           git add `
             AgentPanelSpeaker/SpeechSapiXmlBuilder.cs `
-            AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs
+            AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs `
+            AgentPanelSpeaker/RegressionTestRunner.cs
 
           $status = @(git status --porcelain=v1 --untracked-files=all)
           $allowed = @(
@@ -181,6 +183,7 @@ jobs:
           $changed = @(git diff --name-only $env:BASE_SHA $candidate)
           $expectedChanged = @(
             'AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs',
+            'AgentPanelSpeaker/RegressionTestRunner.cs',
             'AgentPanelSpeaker/SpeechSapiXmlBuilder.cs'
           )
           if (($changed -join "`n") -cne ($expectedChanged -join "`n")) {
