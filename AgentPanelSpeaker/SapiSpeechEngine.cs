@@ -3,6 +3,8 @@ using System.Speech.AudioFormat;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Windows.Media.Core;
@@ -1168,6 +1170,26 @@ internal sealed class SapiSpeechEngine : IDisposable
     string ssml = BuildSsmlDocument(
       markup.SsmlContent,
       synthesizer.Voice.Culture.Name);
+    DiagnosticLog.Write("speech.system_speech_markup_ssml_content", new
+    {
+      provider = "System.Speech",
+      voice = providerVoiceId,
+      culture = synthesizer.Voice.Culture.Name,
+      characterLength = markup.SsmlContent.Length,
+      utf8ByteLength = Encoding.UTF8.GetByteCount(markup.SsmlContent),
+      sha256 = ComputeUtf8Sha256(markup.SsmlContent),
+      ssmlContent = markup.SsmlContent
+    });
+    DiagnosticLog.Write("speech.system_speech_ssml_document", new
+    {
+      provider = "System.Speech",
+      voice = providerVoiceId,
+      culture = synthesizer.Voice.Culture.Name,
+      characterLength = ssml.Length,
+      utf8ByteLength = Encoding.UTF8.GetByteCount(ssml),
+      sha256 = ComputeUtf8Sha256(ssml),
+      ssml
+    });
 
     EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
       (_, eventArgs) =>
@@ -1219,6 +1241,16 @@ internal sealed class SapiSpeechEngine : IDisposable
         AudioBitsPerSample.Sixteen,
         AudioChannel.Mono);
       synthesizer.SetOutputToAudioStream(stream, outputFormat);
+      DiagnosticLog.Write("speech.system_speech_ssml_submitted", new
+      {
+        provider = "System.Speech",
+        voice = providerVoiceId,
+        culture = synthesizer.Voice.Culture.Name,
+        characterLength = ssml.Length,
+        utf8ByteLength = Encoding.UTF8.GetByteCount(ssml),
+        sha256 = ComputeUtf8Sha256(ssml),
+        ssml
+      });
       synthesizer.SpeakSsml(ssml);
     }
     finally
@@ -1261,6 +1293,15 @@ internal sealed class SapiSpeechEngine : IDisposable
       trackingDegradation = null;
     }
     return wave;
+  }
+
+  /// <summary>
+  /// Returns a stable fingerprint for the exact UTF-8 diagnostic payload.
+  /// </summary>
+  private static string ComputeUtf8Sha256(string value)
+  {
+    byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+    return Convert.ToHexString(hash).ToLowerInvariant();
   }
 
   /// <summary>

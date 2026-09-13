@@ -14,6 +14,8 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
     {
       ("system-speech-provenance/spelling-scope-stops-before-hyphenated-tail",
         TestSpellingScopeStopsBeforeHyphenatedTail),
+      ("system-speech-provenance/provider-boundary-payload-logged",
+        TestProviderBoundaryPayloadLogged),
       ("system-speech-provenance/spell-out-many-events-one-word",
         TestSpellOutManyEventsOneWord),
       ("system-speech-provenance/provider-range-multiple-words",
@@ -78,6 +80,46 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
       StringComparison.Ordinal);
     Require(close >= 0 && tail > close,
       "The hyphenated transcript tail is not outside the explicit AI spelling element.");
+  }
+
+  private static void TestProviderBoundaryPayloadLogged()
+  {
+    string source = ReadSource("SapiSpeechEngine.cs");
+    int start = source.IndexOf(
+      "  private static PcmWaveData RenderSystemSpeech(",
+      StringComparison.Ordinal);
+    Require(start >= 0, "RenderSystemSpeech is missing.");
+    int end = source.IndexOf(
+      "  private static bool TryMapSystemSpeechProgress(",
+      start,
+      StringComparison.Ordinal);
+    Require(end > start, "Could not isolate RenderSystemSpeech diagnostics.");
+    string method = source[start..end];
+
+    Require(method.Contains(
+        "DiagnosticLog.Write(\"speech.system_speech_markup_ssml_content\"",
+        StringComparison.Ordinal),
+      "System.Speech does not log the exact markup SSML content.");
+    Require(method.Contains(
+        "DiagnosticLog.Write(\"speech.system_speech_ssml_document\"",
+        StringComparison.Ordinal),
+      "System.Speech does not log the fully wrapped SSML document.");
+    int submitted = method.IndexOf(
+      "DiagnosticLog.Write(\"speech.system_speech_ssml_submitted\"",
+      StringComparison.Ordinal);
+    int speak = method.IndexOf(
+      "synthesizer.SpeakSsml(ssml);",
+      StringComparison.Ordinal);
+    Require(submitted >= 0 && speak > submitted,
+      "The final System.Speech payload is not logged immediately before SpeakSsml.");
+    string boundary = method[submitted..speak];
+    Require(boundary.Contains("ssml", StringComparison.Ordinal) &&
+            boundary.Contains("ComputeUtf8Sha256(ssml)", StringComparison.Ordinal),
+      "The provider-boundary diagnostic does not include the exact SSML and its SHA-256.");
+    Require(source.Contains(
+        "SHA256.HashData(Encoding.UTF8.GetBytes(value))",
+        StringComparison.Ordinal),
+      "System.Speech payload fingerprint is not SHA-256 over UTF-8 bytes.");
   }
 
   private static void TestSpellOutManyEventsOneWord()
