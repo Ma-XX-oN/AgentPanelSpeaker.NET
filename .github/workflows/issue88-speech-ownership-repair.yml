@@ -75,6 +75,8 @@ jobs:
           Set-Content $phase 'apply production repair'
           python tools/issue88-apply.py green 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { throw 'Production applicator failed.' }
+          python tools/issue88-postfix.py 2>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { throw 'First-token bookmark fixup failed.' }
           git diff --check 2>&1 | Tee-Object -FilePath $log -Append
           if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
 
