@@ -880,9 +880,12 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       int anchor = GetNavigationAnchorLocked();
-      bool pastFirstWord =
-        (_pendingHistoryIndex == anchor && _pendingHistoryWordIndex > 0) ||
-        (_activeHistoryIndex == anchor && _activeWordIndex > 0);
+      // A queued navigation target is authoritative while the old engine
+      // utterance is being cancelled. Its active fragment-relative word offset
+      // can otherwise make a second immediate J act on stale pre-cancel state.
+      bool pastFirstWord = _pendingHistoryIndex is int pendingHistoryIndex
+        ? pendingHistoryIndex == anchor && _pendingHistoryWordIndex > 0
+        : _activeHistoryIndex == anchor && _activeWordIndex > 0;
       bool restartCurrent = anchor >= 0 && anchor < _history.Count &&
         (pastFirstWord ||
          IsRewindCurrentFragmentGraceActiveLocked(anchor));
