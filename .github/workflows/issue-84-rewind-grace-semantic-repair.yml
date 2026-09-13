@@ -36,6 +36,17 @@ jobs:
           [IO.File]::WriteAllText($script, $text.Replace($old, $new))
           python $script production
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $product = 'AgentPanelSpeaker/SpeechService.cs'
+          $source = Get-Content -Raw $product
+          $pattern = '(?m)^\s*_rewindGraceSuppressedHistoryIndex = null;\r?\n'
+          $remaining = [regex]::Matches($source, $pattern)
+          if ($remaining.Count -ne 2) {
+            throw "Expected two remaining obsolete suppression resets, found $($remaining.Count)."
+          }
+          [IO.File]::WriteAllText(
+            $product,
+            [regex]::Replace($source, $pattern, ''))
           git checkout -- $script
 
       - name: Validate patch
