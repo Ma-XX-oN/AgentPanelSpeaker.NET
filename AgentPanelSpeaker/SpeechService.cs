@@ -915,8 +915,8 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Returns whether playback is still inside the first-word rewind grace
-  /// window for the current active history fragment.
+  /// Returns whether playback is still inside the rewind reaction window for
+  /// the current active history fragment.
   /// </summary>
   private bool IsRewindCurrentFragmentGraceActiveLocked(int anchor)
   {
@@ -937,10 +937,10 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Prepares first-word rewind grace for a new history playback start.
+  /// Prepares the rewind reaction window for a new history playback start.
   /// The timer itself begins only when a real engine boundary reaches
-  /// fragment-relative word index zero. A PreviousSentence-selected target
-  /// consumes its one-shot suppression instead of re-arming grace.
+  /// fragment-relative word index zero. Every fragment started at word zero,
+  /// including a PreviousSentence destination, gets its own reaction window.
   /// </summary>
   private void PrepareRewindCurrentFragmentGraceLocked(int startWordIndex)
   {
@@ -951,7 +951,7 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Starts first-word rewind grace at an actual playback/resume point.
+  /// Starts the rewind reaction timer at the actual first-word boundary.
   /// </summary>
   private void StartRewindCurrentFragmentGraceLocked()
   {
