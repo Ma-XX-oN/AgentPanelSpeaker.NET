@@ -186,7 +186,36 @@ jobs:
         run: |
           git diff --check HEAD^ HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Final commit has whitespace errors.' }
-          if (git status --porcelain) { throw 'Verification dirtied the clean candidate.' }
+
+          $coreTrackedStatus = @(
+            git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=no
+          )
+          if ($coreTrackedStatus.Count -ne 0) {
+            Write-Host 'Pinned Core verification changed tracked files:'
+            $coreTrackedStatus | ForEach-Object { Write-Host $_ }
+            throw 'Pinned Core verification changed tracked files.'
+          }
+
+          $coreNodeModules = Join-Path $env:GITHUB_WORKSPACE 'dependencies\AIConversationCore\node_modules'
+          if (Test-Path $coreNodeModules) {
+            Remove-Item $coreNodeModules -Recurse -Force
+          }
+
+          $coreStatus = @(
+            git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=all
+          )
+          if ($coreStatus.Count -ne 0) {
+            Write-Host 'Pinned Core remains dirty after dependency cleanup:'
+            $coreStatus | ForEach-Object { Write-Host $_ }
+            throw 'Pinned Core remains dirty after dependency cleanup.'
+          }
+
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($status.Count -ne 0) {
+            Write-Host 'Verification dirtied the clean candidate:'
+            $status | ForEach-Object { Write-Host $_ }
+            throw 'Verification dirtied the clean candidate.'
+          }
 
       - name: Push verified clean candidate
         shell: pwsh
