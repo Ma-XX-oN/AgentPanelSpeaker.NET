@@ -65,4 +65,20 @@ replacement = (
 )
 
 source = source[:start] + replacement + source[end + len("  write(path, text)\n"):]
+
+nullable_call = "out SpeechWordBoundary? boundary))"
+nonnullable_call = "out SpeechWordBoundary boundary))"
+if source.count(nullable_call) != 1:
+  raise RuntimeError(
+    f"Expected one nullable mapper call, found {source.count(nullable_call)}")
+source = source.replace(nullable_call, nonnullable_call, 1)
+
+nullable_signature = "out SpeechWordBoundary? boundary)\n  {\n    boundary = null;"
+nonnullable_signature = "out SpeechWordBoundary boundary)\n  {\n    boundary = null!;"
+if source.count(nullable_signature) != 1:
+  raise RuntimeError(
+    "Expected one nullable mapper signature with null initialization, found " +
+    str(source.count(nullable_signature)))
+source = source.replace(nullable_signature, nonnullable_signature, 1)
+
 path.write_text(source, encoding="utf-8", newline="\n")
