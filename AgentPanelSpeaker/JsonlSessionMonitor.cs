@@ -212,6 +212,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     long nextNodeId = 1;
+    long nextFragmentId = 0;
     var recentFingerprintQueue = new Queue<string>();
     var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
     var preview = new Queue<string>();
@@ -221,6 +222,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
       session,
       speakExistingLatestTurn,
       ref nextNodeId,
+      ref nextFragmentId,
       recentFingerprintQueue,
       recentFingerprintSet,
       preview,
@@ -240,6 +242,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
       StringComparer.Ordinal);
     long nextNodeId = 1;
+    long nextFragmentId = 0;
     DateTime nextLatestRefreshUtc = DateTime.MinValue;
 
     try
@@ -263,6 +266,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
         nextNodeId = preindexedHistory.Fragments.Count == 0
           ? 1
           : preindexedHistory.Fragments.Max(fragment => fragment.NodeId) + 1;
+        nextFragmentId = preindexedHistory.Fragments.Count == 0
+          ? 0
+          : preindexedHistory.Fragments.Max(fragment => fragment.FragmentId) + 1;
         DiagnosticLog.Write("monitor.preindexed_history_reused", new
         {
           session.Path,
@@ -277,6 +283,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           session,
           settings.SpeakExistingLatestTurn,
           ref nextNodeId,
+          ref nextFragmentId,
           recentFingerprintQueue,
           recentFingerprintSet,
           preview,
@@ -314,10 +321,12 @@ internal sealed class JsonlSessionMonitor : IDisposable
             recentFingerprintSet.Clear();
             preview.Clear();
             pendingInputRequests.Clear();
+            nextFragmentId = 0;
             SpeechHistorySnapshot switchedHistory = LoadExistingHistory(
               session,
               speakExistingLatestTurn: false,
               ref nextNodeId,
+              ref nextFragmentId,
               recentFingerprintQueue,
               recentFingerprintSet,
               preview,
@@ -336,6 +345,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
             session,
             line,
             ref nextNodeId,
+            ref nextFragmentId,
             recentFingerprintQueue,
             recentFingerprintSet,
             preview,
@@ -400,6 +410,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     LocatedSession session,
     string line,
     ref long nextNodeId,
+    ref long nextFragmentId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
@@ -446,6 +457,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           session,
           node,
           ref nextNodeId,
+          ref nextFragmentId,
           recentFingerprintQueue,
           recentFingerprintSet,
           preview);
@@ -492,6 +504,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     LocatedSession session,
     ExtractedNode node,
     ref long nextNodeId,
+    ref long nextFragmentId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
@@ -638,6 +651,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
           HistoricalRevision: node.HistoricalRevision));
       }
     }
+    for (int fragmentIndex = 0; fragmentIndex < fragments.Count; ++fragmentIndex)
+    {
+      fragments[fragmentIndex] = fragments[fragmentIndex] with
+      {
+        FragmentId = nextFragmentId++
+      };
+    }
+
     DiagnosticLog.Write("jsonl.node_accepted", new
     {
       session.Source,
@@ -1013,6 +1034,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     LocatedSession session,
     bool speakExistingLatestTurn,
     ref long nextNodeId,
+    ref long nextFragmentId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
@@ -1032,6 +1054,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
         session,
         node,
         ref nextNodeId,
+        ref nextFragmentId,
         recentFingerprintQueue,
         recentFingerprintSet,
         preview,

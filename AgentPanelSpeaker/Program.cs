@@ -256,6 +256,18 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "speech-ownership",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "speech-ownership",
+          Issue88SpeechOwnershipRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -305,6 +317,8 @@ internal static class Program
         "core-word-id-migration");
       int rewindCurrentFragment = RunIsolatedTestSuite(
         "rewind-current-fragment");
+      int speechOwnership = RunIsolatedTestSuite(
+        "speech-ownership");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -328,7 +342,8 @@ internal static class Program
                              findOrigin == 0 &&
                              ctrlClickVoicePointer == 0 &&
                              coreWordIdMigration == 0 &&
-                             rewindCurrentFragment == 0
+                             rewindCurrentFragment == 0 &&
+                             speechOwnership == 0
         ? 0
         : 1;
       Console.WriteLine(

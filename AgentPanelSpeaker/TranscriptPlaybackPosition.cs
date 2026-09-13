@@ -15,7 +15,17 @@ internal sealed record TranscriptPlaybackPosition(
   int CharacterPosition,
   int CharacterCount,
   long BoundaryTimestamp,
-  long? WordId = null);
+  long? WordId = null,
+  long? FragmentId = null,
+  IReadOnlyList<long>? WordIds = null,
+  TranscriptPlaybackHighlightMode HighlightMode =
+    TranscriptPlaybackHighlightMode.Word);
+
+internal enum TranscriptPlaybackHighlightMode
+{
+  Word,
+  Fragment
+}
 
 internal enum TranscriptPlaybackState
 {

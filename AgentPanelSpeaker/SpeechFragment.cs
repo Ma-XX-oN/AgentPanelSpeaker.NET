@@ -72,7 +72,8 @@ internal sealed record SpeechFragment(
   bool ProjectionVisible = true,
   bool RevisionHistoryControlled = false,
   bool HistoricalRevision = false,
-  IReadOnlyList<SpeechFragmentWord>? TranscriptWords = null)
+  IReadOnlyList<SpeechFragmentWord>? TranscriptWords = null,
+  long FragmentId = -1)
 {
   /// <summary>
   /// Temporary migration view of the Core IDs carried by TranscriptWords.

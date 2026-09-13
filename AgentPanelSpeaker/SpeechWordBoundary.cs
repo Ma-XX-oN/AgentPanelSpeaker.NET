@@ -12,4 +12,5 @@ internal sealed record SpeechWordBoundary(
   int CharacterPosition,
   int CharacterCount,
   string Text,
-  bool Exact);
+  bool Exact,
+  int WordCount = 1);

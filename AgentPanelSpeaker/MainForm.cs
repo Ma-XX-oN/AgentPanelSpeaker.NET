@@ -1936,6 +1936,7 @@ internal sealed class MainForm : Form, IMessageFilter
         return;
       }
 
+      _transcriptView.SetSpeechFragments(snapshot.Fragments);
       _speech.LoadHistory(
         snapshot.Fragments,
         snapshot.Completions,
@@ -2089,6 +2090,7 @@ internal sealed class MainForm : Form, IMessageFilter
         });
         return;
       }
+      _transcriptView.AppendSpeechFragment(fragment);
       _speech.SpeakLive(fragment);
       RefreshTranscriptVoiceSelectability();
       AppendLog($"Queued {fragment.Category}: {fragment.Text}");
@@ -4320,6 +4322,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
       _selectedSessionHistory = snapshot;
       _selectedSessionHistoryPath = expectedPath;
+      _transcriptView.SetSpeechFragments(snapshot.Fragments);
       _speech.LoadHistory(
         snapshot.Fragments,
         snapshot.Completions,

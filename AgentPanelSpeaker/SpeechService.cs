@@ -65,6 +65,9 @@ internal sealed class SpeechService : IDisposable
   // Zero-based offset within the active SpeechFragment word collection.
   // This is NOT an AIConversationCore canonical WordId.
   private int _activeWordIndex;
+  private int _activeWordCount = 1;
+  private TranscriptPlaybackHighlightMode _activeHighlightMode =
+    TranscriptPlaybackHighlightMode.Word;
   // Fragment-relative offset represented by engine WordIndex zero when an
   // utterance starts in the middle of a retained SpeechFragment.
   private int _activeWordBaseIndex;
@@ -91,6 +94,7 @@ internal sealed class SpeechService : IDisposable
     _engine.Faulted += EngineFaulted;
     _engine.Notice += EngineNotice;
     _engine.WordBoundary += EngineWordBoundary;
+    _engine.WordTrackingUnavailable += EngineWordTrackingUnavailable;
   }
 
   /// <summary>
@@ -1472,6 +1476,7 @@ internal sealed class SpeechService : IDisposable
       _engine.Faulted -= EngineFaulted;
       _engine.Notice -= EngineNotice;
       _engine.WordBoundary -= EngineWordBoundary;
+      _engine.WordTrackingUnavailable -= EngineWordTrackingUnavailable;
       _engine.Cancel();
       _engine.Dispose();
     }
@@ -1538,6 +1543,11 @@ internal sealed class SpeechService : IDisposable
       // Both indexes here are fragment-relative offsets. The globally
       // unique Core WordId is resolved separately from TranscriptWords.
       _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);
+      _activeWordCount = Math.Clamp(
+        boundary.WordCount,
+        1,
+        Math.Max(1, GetFragmentWordCount(fragment) - _activeWordIndex));
+      _activeHighlightMode = TranscriptPlaybackHighlightMode.Word;
       if (_rewindCurrentFragmentGracePending)
       {
         if (_activeWordBaseIndex == 0 && _activeWordIndex == 0)
@@ -1584,6 +1594,43 @@ internal sealed class SpeechService : IDisposable
         mappedWordIndex = _activeWordIndex,
         mappedWord = _activeWord,
         timestamp = _activeBoundaryTimestamp
+      });
+      ReportPlaybackPositionLocked(
+        _isPaused
+          ? TranscriptPlaybackState.Paused
+          : TranscriptPlaybackState.Speaking);
+    }
+  }
+
+  /// <summary>
+  /// Degrades monitored playback to the complete canonical fragment when the
+  /// speech provider cannot prove finer word ownership.
+  /// </summary>
+  private void EngineWordTrackingUnavailable(
+    SpeechTrackingDegradation degradation)
+  {
+    lock (_sync)
+    {
+      if (_disposed ||
+          _activeKind != ActiveSpeechKind.History ||
+          _activeHistoryIndex < 0 ||
+          _activeHistoryIndex >= _history.Count)
+      {
+        return;
+      }
+      SpeechFragment fragment = _history[_activeHistoryIndex];
+      _activeHighlightMode = TranscriptPlaybackHighlightMode.Fragment;
+      _activeWordCount = 0;
+      _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+      DiagnosticLog.Write("speech.word_tracking_degraded", new
+      {
+        degradation.Backend,
+        degradation.VoiceName,
+        degradation.Reason,
+        fragment.FragmentId,
+        fragment.NodeId,
+        fragment.Text,
+        highlightMode = "fragment"
       });
       ReportPlaybackPositionLocked(
         _isPaused
@@ -2253,6 +2300,8 @@ internal sealed class SpeechService : IDisposable
 
     _activeTranscriptText = fragment.Text;
     _activeWordIndex = boundedWordIndex;
+    _activeWordCount = 1;
+    _activeHighlightMode = TranscriptPlaybackHighlightMode.Word;
     _activeWordBaseIndex = boundedWordIndex;
     _activeCharacterBaseOffset = characterStart;
     _activeCharacterPosition = characterStart;
@@ -2276,7 +2325,10 @@ internal sealed class SpeechService : IDisposable
         spokenText,
         profile,
         pauseAfter,
-        pauseBefore);
+        pauseBefore,
+        fragment,
+        boundedWordIndex,
+        characterStart);
     }
     catch
     {
@@ -2334,7 +2386,10 @@ internal sealed class SpeechService : IDisposable
     string text,
     SpeechProfileSettings profile,
     bool pauseAfter,
-    bool pauseBefore = false)
+    bool pauseBefore = false,
+    SpeechFragment? fragment = null,
+    int fragmentWordStart = 0,
+    int characterStart = 0)
   {
     SpeechProfileSettings normalized = profile.Normalize();
     IReadOnlyList<string> spelledWords = _spelledWordsProvider();
@@ -2347,6 +2402,20 @@ internal sealed class SpeechService : IDisposable
       pronunciations,
       pauseAfter,
       pauseBefore);
+    if (fragment?.TranscriptWords is { Count: > 0 } transcriptWords)
+    {
+      SpeechMarkupWord[] exactWords = transcriptWords
+        .Skip(Math.Clamp(fragmentWordStart, 0, transcriptWords.Count))
+        .Select((word, index) => new SpeechMarkupWord(
+          index,
+          word.Text,
+          word.CharacterStart - characterStart,
+          word.CharacterLength))
+        .Where(word => word.CharacterStart >= 0 &&
+          word.CharacterStart + word.CharacterLength <= text.Length)
+        .ToArray();
+      markup = markup with { Words = exactWords };
+    }
     DiagnosticLog.Write("speech.configure", new
     {
       normalized.VoiceName,
@@ -2392,7 +2461,11 @@ internal sealed class SpeechService : IDisposable
     SpeakConfiguredLocked(
       remaining,
       _activeProfile,
-      _activePauseAfter);
+      _activePauseAfter,
+      pauseBefore: false,
+      fragment,
+      _activeWordIndex,
+      start);
   }
 
   private void ReportPlaybackPositionLocked(TranscriptPlaybackState state)
@@ -2401,10 +2474,19 @@ internal sealed class SpeechService : IDisposable
     {
       return;
     }
-    long nodeId = _activeHistoryIndex >= 0 &&
+    SpeechFragment? fragment = _activeHistoryIndex >= 0 &&
       _activeHistoryIndex < _history.Count
-        ? _history[_activeHistoryIndex].NodeId
-        : -1;
+        ? _history[_activeHistoryIndex]
+        : null;
+    long nodeId = fragment?.NodeId ?? -1;
+    IReadOnlyList<long>? wordIds =
+      _activeHighlightMode == TranscriptPlaybackHighlightMode.Word
+        ? GetActiveWordIdsLocked()
+        : null;
+    long? wordId = wordIds is { Count: > 0 } ? wordIds[0] : null;
+    long? fragmentId = fragment is { FragmentId: >= 0 }
+      ? fragment.FragmentId
+      : null;
     PlaybackPositionChanged?.Invoke(new TranscriptPlaybackPosition(
       state,
       _activeTranscriptText,
@@ -2414,7 +2496,10 @@ internal sealed class SpeechService : IDisposable
       _activeCharacterPosition,
       _activeCharacterCount,
       _activeBoundaryTimestamp,
-      GetActiveWordIdLocked()));
+      wordId,
+      fragmentId,
+      wordIds,
+      _activeHighlightMode));
   }
 
   /// <summary>
@@ -2423,16 +2508,33 @@ internal sealed class SpeechService : IDisposable
   /// </summary>
   private long? GetActiveWordIdLocked()
   {
+    IReadOnlyList<long>? wordIds = GetActiveWordIdsLocked();
+    return wordIds is { Count: > 0 } ? wordIds[0] : null;
+  }
+
+  private IReadOnlyList<long>? GetActiveWordIdsLocked()
+  {
     if (_activeHistoryIndex < 0 || _activeHistoryIndex >= _history.Count)
     {
       return null;
     }
     IReadOnlyList<SpeechFragmentWord>? words =
       _history[_activeHistoryIndex].TranscriptWords;
-    return words is not null &&
-      _activeWordIndex >= 0 && _activeWordIndex < words.Count
-        ? words[_activeWordIndex].Id
-        : null;
+    if (words is null ||
+        _activeWordIndex < 0 ||
+        _activeWordIndex >= words.Count)
+    {
+      return null;
+    }
+    int count = Math.Clamp(
+      _activeWordCount,
+      1,
+      words.Count - _activeWordIndex);
+    return words
+      .Skip(_activeWordIndex)
+      .Take(count)
+      .Select(word => word.Id)
+      .ToArray();
   }
 
 
@@ -2904,6 +3006,8 @@ internal sealed class SpeechService : IDisposable
     _activeHistoryIndex = index;
     _activeTranscriptText = fragment.Text;
     _activeWordIndex = boundedWordIndex;
+    _activeWordCount = 1;
+    _activeHighlightMode = TranscriptPlaybackHighlightMode.Word;
     _activeWordBaseIndex = 0;
     _activeCharacterBaseOffset = 0;
     _activeCharacterPosition = GetFragmentWordCharacterPosition(
