@@ -77,6 +77,8 @@ jobs:
         run: |
           python tools/issue97-apply.py full
           if ($LASTEXITCODE -ne 0) { throw 'Issue 97 production applicator failed.' }
+          python tools/issue97-primary-regression-fix.py
+          if ($LASTEXITCODE -ne 0) { throw 'Issue 97 primary regression update failed.' }
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Issue 97 repair has whitespace errors.' }
 
@@ -150,18 +152,24 @@ jobs:
           git restore --source=HEAD -- AgentPanelSpeaker-test-results.txt
           if ($LASTEXITCODE -ne 0) { throw 'Failed to restore generated test-results artifact.' }
 
-          git rm .github/workflows/issue97-repair.yml tools/issue97-apply.py
+          git rm `
+            .github/workflows/issue97-repair.yml `
+            tools/issue97-apply.py `
+            tools/issue97-primary-regression-fix.py
           if ($LASTEXITCODE -ne 0) { throw 'Failed to remove temporary issue 97 infrastructure.' }
           git add `
-            AgentPanelSpeaker/SpeechSapiXmlBuilder.cs `
-            AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs
+            AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs `
+            AgentPanelSpeaker/RegressionTestRunner.cs `
+            AgentPanelSpeaker/SpeechSapiXmlBuilder.cs
 
           $status = @(git status --porcelain=v1 --untracked-files=all)
           $allowed = @(
             'D  .github/workflows/issue97-repair.yml',
             'M  AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs',
+            'M  AgentPanelSpeaker/RegressionTestRunner.cs',
             'M  AgentPanelSpeaker/SpeechSapiXmlBuilder.cs',
-            'D  tools/issue97-apply.py'
+            'D  tools/issue97-apply.py',
+            'D  tools/issue97-primary-regression-fix.py'
           ) | Sort-Object
           $actual = @($status | Sort-Object)
           if (($actual -join "`n") -cne ($allowed -join "`n")) {
@@ -181,6 +189,7 @@ jobs:
           $changed = @(git diff --name-only $env:BASE_SHA $candidate)
           $expectedChanged = @(
             'AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs',
+            'AgentPanelSpeaker/RegressionTestRunner.cs',
             'AgentPanelSpeaker/SpeechSapiXmlBuilder.cs'
           )
           if (($changed -join "`n") -cne ($expectedChanged -join "`n")) {
