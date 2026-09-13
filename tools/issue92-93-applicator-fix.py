@@ -81,4 +81,23 @@ if source.count(nullable_signature) != 1:
     str(source.count(nullable_signature)))
 source = source.replace(nullable_signature, nonnullable_signature, 1)
 
+green_tail = '''if sys.argv[1] == "red":
+  add_tests()
+else:
+  apply_green()
+'''
+restoring_tail = '''if sys.argv[1] == "red":
+  add_tests()
+else:
+  apply_green()
+  import subprocess
+  subprocess.run(
+    ["git", "checkout", "--", "tools/issue92-93-apply.py"],
+    check=True)
+'''
+if source.count(green_tail) != 1:
+  raise RuntimeError(
+    f"Expected one green applicator tail, found {source.count(green_tail)}")
+source = source.replace(green_tail, restoring_tail, 1)
+
 path.write_text(source, encoding="utf-8", newline="\n")
