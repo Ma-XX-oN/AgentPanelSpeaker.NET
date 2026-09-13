@@ -6,6 +6,8 @@ on:
       - issue-75-core-word-id-migration
     paths:
       - .github/workflows/issue88-speech-ownership-repair.yml
+      - tools/issue88-apply.py
+      - tools/issue88-postfix.py
 
 permissions:
   contents: write
