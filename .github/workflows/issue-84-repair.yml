@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   repair:
+    if: "${{ github.event.head_commit.message == 'ci: apply issue 84 repair v2' }}"
     runs-on: windows-latest
     steps:
       - name: Check out repair branch
@@ -46,7 +47,7 @@ jobs:
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
 
-      - name: Commit verified production repair
+      - name: Commit verified repair
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
@@ -55,10 +56,11 @@ jobs:
             AgentPanelSpeaker/SpeechService.cs `
             AgentPanelSpeaker/SpeechWordBoundary.cs `
             AgentPanelSpeaker/TranscriptPlaybackPosition.cs `
-            AgentPanelSpeaker/SpeechFragment.cs
+            AgentPanelSpeaker/SpeechFragment.cs `
+            AgentPanelSpeaker/Issue35SpeechTransitionRegressionTestRunner.cs
           git diff --cached --check
           if (git diff --cached --quiet) {
-            throw 'Issue #84 repair produced no production changes.'
+            throw 'Issue #84 repair produced no staged changes.'
           }
           git commit -m 'fix: make CSharp sole owner of rewind grace'
           git push origin HEAD:issue-75-core-word-id-migration
