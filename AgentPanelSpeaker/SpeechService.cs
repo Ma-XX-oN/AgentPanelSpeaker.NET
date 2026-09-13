@@ -864,8 +864,14 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       int anchor = GetNavigationAnchorLocked();
-      int candidate = FindPreviousEligibleLocked(
-        anchor >= _history.Count ? _history.Count - 1 : anchor - 1);
+      bool restartCurrent = anchor >= 0 && anchor < _history.Count &&
+        ((_pendingHistoryIndex == anchor && _pendingHistoryWordIndex > 0) ||
+         (_activeHistoryIndex == anchor && _activeWordIndex > 0));
+      int candidate = restartCurrent
+        ? anchor
+        : FindPreviousEligibleLocked(
+          anchor >= _history.Count ? _history.Count - 1 : anchor - 1);
+      LogNavigationLocked("rewind-sentence", anchor, candidate);
       return RestartCandidateLocked(candidate, out text);
     }
   }
@@ -2756,6 +2762,7 @@ internal sealed class SpeechService : IDisposable
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
     _pendingHistoryIndex = index;
+    _pendingHistoryWordIndex = 0;
     _nextHistoryIndex = index;
     _lastFenceActivity = null;
     if (preservePause)

@@ -1,29 +1,4 @@
-from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[1]
-REGRESSION = ROOT / "AgentPanelSpeaker" / "RegressionTestRunner.cs"
-PROGRAM = ROOT / "AgentPanelSpeaker" / "Program.cs"
-SPEECH = ROOT / "AgentPanelSpeaker" / "SpeechService.cs"
-BUILDER = ROOT / "AgentPanelSpeaker" / "SpeechSapiXmlBuilder.cs"
-ISSUE84 = ROOT / "AgentPanelSpeaker" / "Issue84RewindCurrentFragmentRegressionTestRunner.cs"
-
-
-def replace_once(path: Path, old: str, new: str) -> None:
-  text = path.read_text(encoding="utf-8")
-  if text.count(old) != 1:
-    raise RuntimeError(
-      f"Expected exactly one match in {path}: {old[:80]!r}; got {text.count(old)}")
-  path.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-
-def add_regressions() -> None:
-  replace_once(
-    REGRESSION,
-    '''    Require(\n      markup.SsmlContent.Contains(\n        "<say-as interpret-as=\\\"spell-out\\\">AI</say-as>",\n        StringComparison.Ordinal),\n      "Windows/SSML spelling does not use explicit spell-out semantics.");\n''',
-    '''    Require(\n      markup.SsmlContent.Contains(\n        "<break time=\\\"100ms\\\"/><say-as interpret-as=\\\"spell-out\\\">" +\n        "AI</say-as><break time=\\\"100ms\\\"/>",\n        StringComparison.Ordinal),\n      "Windows/SSML inline spelling is not isolated from surrounding speech.");\n''')
-
-  issue84 = r'''using System.Reflection;
+using System.Reflection;
 
 namespace AgentPanelSpeaker;
 
@@ -195,46 +170,3 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
     }
   }
 }
-'''
-  if ISSUE84.exists():
-    raise RuntimeError(f"{ISSUE84} already exists")
-  ISSUE84.write_text(issue84, encoding="utf-8")
-
-  dispatch_anchor = '''      if (args.Length == 2 &&\n          string.Equals(\n            args[1],\n            "core-word-id-migration",\n            StringComparison.OrdinalIgnoreCase))\n      {\n'''
-  dispatch = '''      if (args.Length == 2 &&\n          string.Equals(\n            args[1],\n            "rewind-current-fragment",\n            StringComparison.OrdinalIgnoreCase))\n      {\n        Environment.ExitCode = RunNamedSuite(\n          "rewind-current-fragment",\n          Issue84RewindCurrentFragmentRegressionTestRunner.Run);\n        return;\n      }\n\n'''
-  replace_once(PROGRAM, dispatch_anchor, dispatch + dispatch_anchor)
-
-  replace_once(
-    PROGRAM,
-    '''      int coreWordIdMigration = RunIsolatedTestSuite(\n        "core-word-id-migration");\n\n      Environment.ExitCode = primary == 0 &&\n''',
-    '''      int coreWordIdMigration = RunIsolatedTestSuite(\n        "core-word-id-migration");\n      int rewindCurrentFragment = RunIsolatedTestSuite(\n        "rewind-current-fragment");\n\n      Environment.ExitCode = primary == 0 &&\n''')
-  replace_once(
-    PROGRAM,
-    '''                             ctrlClickVoicePointer == 0 &&\n                             coreWordIdMigration == 0\n        ? 0\n''',
-    '''                             ctrlClickVoicePointer == 0 &&\n                             coreWordIdMigration == 0 &&\n                             rewindCurrentFragment == 0\n        ? 0\n''')
-
-
-def apply_production() -> None:
-  replace_once(
-    BUILDER,
-    '''      .Replace(\n        "<spell>",\n        "<say-as interpret-as=\\\"spell-out\\\">",\n        StringComparison.Ordinal)\n      .Replace("</spell>", "</say-as>", StringComparison.Ordinal);\n''',
-    '''      .Replace(\n        "<spell>",\n        "<break time=\\\"100ms\\\"/>" +\n          "<say-as interpret-as=\\\"spell-out\\\">",\n        StringComparison.Ordinal)\n      .Replace(\n        "</spell>",\n        "</say-as><break time=\\\"100ms\\\"/>",\n        StringComparison.Ordinal);\n''')
-
-  replace_once(
-    SPEECH,
-    '''  public bool TryRewindSentence(out string text)\n  {\n    lock (_sync)\n    {\n      int anchor = GetNavigationAnchorLocked();\n      int candidate = FindPreviousEligibleLocked(\n        anchor >= _history.Count ? _history.Count - 1 : anchor - 1);\n      return RestartCandidateLocked(candidate, out text);\n    }\n  }\n''',
-    '''  public bool TryRewindSentence(out string text)\n  {\n    lock (_sync)\n    {\n      int anchor = GetNavigationAnchorLocked();\n      bool restartCurrent = anchor >= 0 && anchor < _history.Count &&\n        ((_pendingHistoryIndex == anchor && _pendingHistoryWordIndex > 0) ||\n         (_activeHistoryIndex == anchor && _activeWordIndex > 0));\n      int candidate = restartCurrent\n        ? anchor\n        : FindPreviousEligibleLocked(\n          anchor >= _history.Count ? _history.Count - 1 : anchor - 1);\n      LogNavigationLocked("rewind-sentence", anchor, candidate);\n      return RestartCandidateLocked(candidate, out text);\n    }\n  }\n''')
-
-  replace_once(
-    SPEECH,
-    '''    _pendingUntracked = null;\n    ClearProcessingTimeAnnouncementLocked();\n    _pendingHistoryIndex = index;\n    _nextHistoryIndex = index;\n''',
-    '''    _pendingUntracked = null;\n    ClearProcessingTimeAnnouncementLocked();\n    _pendingHistoryIndex = index;\n    _pendingHistoryWordIndex = 0;\n    _nextHistoryIndex = index;\n''')
-
-
-if __name__ == "__main__":
-  if len(sys.argv) != 2 or sys.argv[1] not in {"regressions", "production"}:
-    raise SystemExit("usage: issue81-84-repair.py regressions|production")
-  if sys.argv[1] == "regressions":
-    add_regressions()
-  else:
-    apply_production()

@@ -447,9 +447,10 @@ internal static class RegressionTestRunner
       PronunciationRuleSet.Parse(string.Empty));
     Require(
       markup.SsmlContent.Contains(
-        "<say-as interpret-as=\"spell-out\">AI</say-as>",
+        "<break time=\"100ms\"/><say-as interpret-as=\"spell-out\">" +
+        "AI</say-as><break time=\"100ms\"/>",
         StringComparison.Ordinal),
-      "Windows/SSML spelling does not use explicit spell-out semantics.");
+      "Windows/SSML inline spelling is not isolated from surrounding speech.");
     Require(
       !markup.SsmlContent.Contains(
         "interpret-as=\"characters\"",

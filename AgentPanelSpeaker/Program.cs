@@ -233,6 +233,18 @@ internal static class Program
       if (args.Length == 2 &&
           string.Equals(
             args[1],
+            "rewind-current-fragment",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "rewind-current-fragment",
+          Issue84RewindCurrentFragmentRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
             "core-word-id-migration",
             StringComparison.OrdinalIgnoreCase))
       {
@@ -291,6 +303,8 @@ internal static class Program
         "ctrl-click-voice-pointer");
       int coreWordIdMigration = RunIsolatedTestSuite(
         "core-word-id-migration");
+      int rewindCurrentFragment = RunIsolatedTestSuite(
+        "rewind-current-fragment");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -313,7 +327,8 @@ internal static class Program
                              redundancy == 0 &&
                              findOrigin == 0 &&
                              ctrlClickVoicePointer == 0 &&
-                             coreWordIdMigration == 0
+                             coreWordIdMigration == 0 &&
+                             rewindCurrentFragment == 0
         ? 0
         : 1;
       Console.WriteLine(

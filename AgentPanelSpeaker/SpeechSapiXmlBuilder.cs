@@ -175,9 +175,13 @@ internal static partial class SpeechSapiXmlBuilder
         StringComparison.Ordinal)
       .Replace(
         "<spell>",
-        "<say-as interpret-as=\"spell-out\">",
+        "<break time=\"100ms\"/>" +
+          "<say-as interpret-as=\"spell-out\">",
         StringComparison.Ordinal)
-      .Replace("</spell>", "</say-as>", StringComparison.Ordinal);
+      .Replace(
+        "</spell>",
+        "</say-as><break time=\"100ms\"/>",
+        StringComparison.Ordinal);
   }
 
   /// <summary>
