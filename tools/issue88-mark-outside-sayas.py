@@ -49,6 +49,33 @@ def add_red() -> None:
     old,
     new)
 
+  old = '''    string service = ReadSource("SpeechService.cs");
+    Require(service.Contains("TranscriptPlaybackHighlightMode.Fragment", StringComparison.Ordinal),
+      "SpeechService does not explicitly degrade to fragment highlighting.");
+'''
+  new = '''    string service = ReadSource("SpeechService.cs");
+    Require(service.Contains("TranscriptPlaybackHighlightMode.Fragment", StringComparison.Ordinal),
+      "SpeechService does not explicitly degrade to fragment highlighting.");
+    int degradationStart = service.IndexOf(
+      "private void EngineWordTrackingUnavailable(",
+      StringComparison.Ordinal);
+    int completedStart = service.IndexOf(
+      "private void EngineCompleted()",
+      degradationStart,
+      StringComparison.Ordinal);
+    Require(degradationStart >= 0 && completedStart > degradationStart,
+      "SpeechService degradation handler could not be isolated.");
+    string degradationHandler = service[degradationStart..completedStart];
+    Require(degradationHandler.Contains("Activity?.Invoke(", StringComparison.Ordinal),
+      "Fragment-level speech degradation is not visible in Activity.");
+    Require(degradationHandler.Contains("degradation.Reason", StringComparison.Ordinal),
+      "Activity degradation warning does not include the actual reason.");
+'''
+  replace_once(
+    "AgentPanelSpeaker/Issue88SpeechOwnershipRegressionTestRunner.cs",
+    old,
+    new)
+
 
 def apply_green() -> None:
   old = '''        var replacement = new List<object>();
@@ -72,16 +99,16 @@ def apply_green() -> None:
   new = '''        var mark = new XElement(
           ns + "mark",
           new XAttribute("name", $"aps_{word.WordIndex}"));
-        XElement? parent = node.Parent;
-        bool markOutsideSayAs = local == 0 &&
-          parent is not null &&
-          string.Equals(
-            parent.Name.LocalName,
+        XElement? sayAs = node
+          .Ancestors()
+          .FirstOrDefault(element => string.Equals(
+            element.Name.LocalName,
             "say-as",
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.OrdinalIgnoreCase));
+        bool markOutsideSayAs = sayAs is not null;
         if (markOutsideSayAs)
         {
-          parent!.AddBeforeSelf(mark);
+          sayAs!.AddBeforeSelf(mark);
         }
 
         var replacement = new List<object>();
@@ -104,6 +131,36 @@ def apply_green() -> None:
         node.ReplaceWith(replacement);
 '''
   replace_once("AgentPanelSpeaker/SapiSpeechEngine.cs", old, new)
+
+  old = '''      DiagnosticLog.Write("speech.word_tracking_degraded", new
+      {
+        degradation.Backend,
+        degradation.VoiceName,
+        degradation.Reason,
+        fragment.FragmentId,
+        fragment.NodeId,
+        fragment.Text,
+        highlightMode = "fragment"
+      });
+      ReportPlaybackPositionLocked(
+'''
+  new = '''      DiagnosticLog.Write("speech.word_tracking_degraded", new
+      {
+        degradation.Backend,
+        degradation.VoiceName,
+        degradation.Reason,
+        fragment.FragmentId,
+        fragment.NodeId,
+        fragment.Text,
+        highlightMode = "fragment"
+      });
+      Activity?.Invoke(
+        "Speech word highlighting unavailable; highlighting the full " +
+        $"fragment. Backend: {degradation.Backend}; " +
+        $"voice: {degradation.VoiceName}; reason: {degradation.Reason}.");
+      ReportPlaybackPositionLocked(
+'''
+  replace_once("AgentPanelSpeaker/SpeechService.cs", old, new)
 
 
 def main() -> None:
