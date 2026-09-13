@@ -1632,6 +1632,10 @@ internal sealed class SpeechService : IDisposable
         fragment.Text,
         highlightMode = "fragment"
       });
+      Activity?.Invoke(
+        "Speech word highlighting unavailable; highlighting the full " +
+        $"fragment. Backend: {degradation.Backend}; " +
+        $"voice: {degradation.VoiceName}; reason: {degradation.Reason}.");
       ReportPlaybackPositionLocked(
         _isPaused
           ? TranscriptPlaybackState.Paused

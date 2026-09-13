@@ -1683,14 +1683,30 @@ internal sealed class SapiSpeechEngine : IDisposable
           spoken = string.Empty;
         }
 
+        var mark = new XElement(
+          ns + "mark",
+          new XAttribute("name", $"aps_{word.WordIndex}"));
+        XElement? sayAs = node
+          .Ancestors()
+          .FirstOrDefault(element => string.Equals(
+            element.Name.LocalName,
+            "say-as",
+            StringComparison.OrdinalIgnoreCase));
+        bool markOutsideSayAs = sayAs is not null;
+        if (markOutsideSayAs)
+        {
+          sayAs!.AddBeforeSelf(mark);
+        }
+
         var replacement = new List<object>();
         if (prefix.Length != 0)
         {
           replacement.Add(new XText(prefix));
         }
-        replacement.Add(new XElement(
-          ns + "mark",
-          new XAttribute("name", $"aps_{word.WordIndex}")));
+        if (!markOutsideSayAs)
+        {
+          replacement.Add(mark);
+        }
         if (spoken.Length != 0)
         {
           replacement.Add(new XText(spoken));

@@ -122,6 +122,20 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
     string service = ReadSource("SpeechService.cs");
     Require(service.Contains("TranscriptPlaybackHighlightMode.Fragment", StringComparison.Ordinal),
       "SpeechService does not explicitly degrade to fragment highlighting.");
+    int degradationStart = service.IndexOf(
+      "private void EngineWordTrackingUnavailable(",
+      StringComparison.Ordinal);
+    int completedStart = service.IndexOf(
+      "private void EngineCompleted()",
+      degradationStart,
+      StringComparison.Ordinal);
+    Require(degradationStart >= 0 && completedStart > degradationStart,
+      "SpeechService degradation handler could not be isolated.");
+    string degradationHandler = service[degradationStart..completedStart];
+    Require(degradationHandler.Contains("Activity?.Invoke(", StringComparison.Ordinal),
+      "Fragment-level speech degradation is not visible in Activity.");
+    Require(degradationHandler.Contains("degradation.Reason", StringComparison.Ordinal),
+      "Activity degradation warning does not include the actual reason.");
   }
 
   private static void TestSpellOutTokenCanSpanSsmlNodes()
@@ -143,6 +157,29 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
     string ssml = arguments[2] as string ?? string.Empty;
     Require(ssml.Contains("aps_", StringComparison.Ordinal),
       "Spanning spell-out token produced no canonical ownership bookmark.");
+
+    var document = System.Xml.Linq.XDocument.Parse(ssml);
+    System.Xml.Linq.XElement mark = document
+      .Descendants()
+      .Single(element =>
+        element.Name.LocalName == "mark" &&
+        string.Equals(
+          element.Attribute("name")?.Value,
+          "aps_0",
+          StringComparison.Ordinal));
+    System.Xml.Linq.XElement sayAs = document
+      .Descendants()
+      .Single(element => element.Name.LocalName == "say-as");
+    Require(mark.Parent == sayAs.Parent,
+      "Spell-out ownership mark is not outside the say-as element.");
+    System.Xml.Linq.XElement? nextElement = mark
+      .NodesAfterSelf()
+      .OfType<System.Xml.Linq.XElement>()
+      .FirstOrDefault();
+    Require(ReferenceEquals(nextElement, sayAs),
+      "Spell-out ownership mark is not immediately before say-as.");
+    Require(!sayAs.Descendants().Any(element => element.Name.LocalName == "mark"),
+      "Spell-out say-as still contains a nested ownership mark.");
   }
 
   private static void TestBrowserHasFragmentWrapperPath()
