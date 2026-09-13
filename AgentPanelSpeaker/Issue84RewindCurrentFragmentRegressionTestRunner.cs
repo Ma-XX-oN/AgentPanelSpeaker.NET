@@ -18,7 +18,11 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       ("rewind-current-fragment/paused-mid-fragment-restarts-current",
         TestPausedMidFragmentRestartsCurrent),
       ("rewind-current-fragment/active-mid-fragment-restarts-current",
-        TestActiveMidFragmentRestartsCurrent)
+        TestActiveMidFragmentRestartsCurrent),
+      ("rewind-current-fragment/paused-first-word-moves-previous",
+        TestPausedFirstWordMovesPrevious),
+      ("rewind-current-fragment/active-first-word-moves-previous",
+        TestActiveFirstWordMovesPrevious)
     };
 
     int failures = 0;
@@ -86,6 +90,46 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
     Require(ReadInt(speech, "_pendingHistoryIndex") == 1 &&
         ReadInt(speech, "_pendingHistoryWordIndex") == 0,
       "Active rewind did not queue word zero of the current fragment.");
+  }
+
+  private static void TestPausedFirstWordMovesPrevious()
+  {
+    using SpeechService speech = CreateSpeech();
+    Require(speech.TrySeekToTranscriptWord(2001, out _),
+      "Could not place the paused cursor on the first word of the current fragment.");
+
+    TranscriptPlaybackPosition? observed = null;
+    speech.PlaybackPositionChanged += position => observed = position;
+    Require(speech.TryRewindSentence(out string text),
+      "Paused first-word rewind reported no previous fragment.");
+    Require(text == "In practice For web research",
+      "Paused first-word rewind did not move to the previous fragment.");
+    Require(observed is not null &&
+        observed.State == TranscriptPlaybackState.Paused &&
+        observed.Word == "In",
+      "Paused first-word rewind did not move to word zero of the previous fragment.");
+    Require(ReadInt(speech, "_pendingHistoryIndex") == 0 &&
+        ReadInt(speech, "_pendingHistoryWordIndex") == 0,
+      "Paused first-word rewind did not retain the previous fragment at word zero.");
+  }
+
+  private static void TestActiveFirstWordMovesPrevious()
+  {
+    using SpeechService speech = CreateSpeech();
+    SetField(speech, "_pendingHistoryIndex", null);
+    SetField(speech, "_pendingHistoryWordIndex", 0);
+    SetField(speech, "_activeHistoryIndex", 1);
+    SetField(speech, "_activeWordIndex", 0);
+    SetField(speech, "_activeKind", ParseActiveKind(speech, "History"));
+    SetField(speech, "_isPaused", false);
+
+    Require(speech.TryRewindSentence(out string text),
+      "Active first-word rewind reported no previous fragment.");
+    Require(text == "In practice For web research",
+      "Active first-word rewind did not move to the previous fragment.");
+    Require(ReadInt(speech, "_pendingHistoryIndex") == 0 &&
+        ReadInt(speech, "_pendingHistoryWordIndex") == 0,
+      "Active first-word rewind did not queue the previous fragment at word zero.");
   }
 
   private static SpeechService CreateSpeech()
