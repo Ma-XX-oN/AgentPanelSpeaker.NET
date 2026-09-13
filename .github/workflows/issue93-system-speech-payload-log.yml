@@ -1,0 +1,202 @@
+name: Issue 93 System.Speech payload logging
+
+on:
+  push:
+    branches:
+      - issue-93-system-speech-payload-log
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out dependency branch and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: issue-93-system-speech-payload-log
+          submodules: recursive
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Establish provider-boundary logging RED
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/issue93-system-speech-payload-log.py red
+          if ($LASTEXITCODE -ne 0) { throw 'RED applicator failed.' }
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'RED build failed.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $failed = $false
+          try {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite system-speech-provenance
+          }
+          catch {
+            $failed = $true
+            Write-Host "Expected issue #93 diagnostic RED: $($_.Exception.Message)"
+          }
+          if (-not $failed) {
+            throw 'Issue #93 diagnostic RED unexpectedly passed.'
+          }
+          $report = Get-Content AgentPanelSpeaker-test-results.txt -Raw
+          if (-not $report.Contains('FAIL  system-speech-provenance/provider-boundary-payload-logged')) {
+            throw 'Issue #93 diagnostic RED did not fail at the provider-boundary payload regression.'
+          }
+          Write-Host 'RED-PROVEN provider-boundary payload is not currently logged.'
+
+      - name: Restore untouched production before GREEN
+        shell: pwsh
+        run: |
+          git checkout -- AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs
+          git checkout -- AgentPanelSpeaker-test-results.txt
+          if (git status --porcelain | Select-String 'AgentPanelSpeaker/') {
+            throw 'RED cleanup left application changes behind.'
+          }
+
+      - name: Apply payload diagnostic implementation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/issue93-system-speech-payload-log.py green
+          if ($LASTEXITCODE -ne 0) { throw 'GREEN applicator failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'GREEN patch has whitespace errors.' }
+
+      - name: Build and run focused GREEN suites
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic implementation failed to build.' }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          foreach ($suite in @(
+            'system-speech-provenance',
+            'speech-ownership',
+            'settings',
+            'preview-cursor')) {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
+          }
+
+      - name: Form clean integration candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'd31e5d26a62dd790b7bba8e959dee8630149f9a0'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -- AgentPanelSpeaker-test-results.txt
+          Remove-Item tools/issue93-system-speech-payload-log.py -Force
+          Remove-Item .github/workflows/issue93-system-speech-payload-log.yml -Force
+          git add -A
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate staged diff has whitespace errors.' }
+          $tree = (git write-tree).Trim()
+          $candidate = ('diagnostic: log exact System.Speech SSML payload' | git commit-tree $tree -p $base).Trim()
+          if (-not $candidate) { throw 'Could not create clean candidate commit.' }
+          git reset --hard $candidate
+          $parent = (git rev-parse HEAD^).Trim()
+          if ($parent -ne $base) { throw "Clean candidate parent mismatch: $parent" }
+          $changed = @(git diff --name-only $base HEAD)
+          $expected = @(
+            'AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs',
+            'AgentPanelSpeaker/SapiSpeechEngine.cs'
+          )
+          if (@(Compare-Object ($changed | Sort-Object) ($expected | Sort-Object)).Count -ne 0) {
+            throw "Unexpected clean candidate files: $($changed -join ', ')"
+          }
+          if ((Test-Path tools/issue93-system-speech-payload-log.py) -or
+              (Test-Path .github/workflows/issue93-system-speech-payload-log.yml)) {
+            throw 'Temporary diagnostic scaffolding survived in clean candidate.'
+          }
+          if (git status --porcelain) { throw 'Clean candidate worktree is dirty.' }
+          Write-Host "CANDIDATE_SHA=$candidate"
+
+      - name: Verify pinned Core and Phase 2 baseline
+        shell: pwsh
+        run: |
+          $expected = '134d5735b44b8d131d30d5b98a6e3a06320a113f'
+          $actual = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($actual -ne $expected) { throw "Unexpected Core pin: $actual" }
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Core npm ci failed.' }
+          npm test --prefix dependencies/AIConversationCore
+          if ($LASTEXITCODE -ne 0) { throw 'Core regression suite failed.' }
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          if ($LASTEXITCODE -ne 0) { throw 'Phase 2 baseline failed.' }
+
+      - name: Run complete built suite
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+          & tools/Invoke-TestSuite.ps1 -SelfTest
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Run complete published suite
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Verify bundled runtime and canonical display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Display validation harness failed to build.' }
+          $response = '{"operation":"ping"}' | node tools/AIConversationCore-worker.mjs
+          $decoded = $response | ConvertFrom-Json
+          if (-not $decoded.ok -or $decoded.core_commit -ne '134d5735b44b8d131d30d5b98a6e3a06320a113f') {
+            throw 'AIConversationCore worker pin validation failed.'
+          }
+          dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "$env:AI_CONVERSATION_CORE" "$env:GITHUB_WORKSPACE\tools\AIConversationCore-worker.mjs"
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical display validation failed.' }
+
+      - name: Verify clean candidate and integrate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'd31e5d26a62dd790b7bba8e959dee8630149f9a0'
+          git checkout -- AgentPanelSpeaker-test-results.txt
+          $coreTracked = @(git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=no)
+          if ($coreTracked.Count -ne 0) {
+            $coreTracked | ForEach-Object { Write-Host $_ }
+            throw 'Core verification changed tracked files.'
+          }
+          $coreNodeModules = Join-Path $env:GITHUB_WORKSPACE 'dependencies\AIConversationCore\node_modules'
+          if (Test-Path $coreNodeModules) { Remove-Item $coreNodeModules -Recurse -Force }
+          if (git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=all) {
+            throw 'Core remains dirty after dependency cleanup.'
+          }
+          git diff --check $base HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Final candidate has whitespace errors.' }
+          if (git status --porcelain=v1 --untracked-files=all) {
+            git status --porcelain=v1 --untracked-files=all
+            throw 'Final candidate worktree is dirty.'
+          }
+          $remote = (git ls-remote origin refs/heads/issue-75-core-word-id-migration | ForEach-Object { ($_ -split "`t")[0] }).Trim()
+          if ($remote -ne $base) {
+            throw "Integration branch moved while dependency work ran: expected=$base actual=$remote"
+          }
+          $candidate = (git rev-parse HEAD).Trim()
+          git push origin $candidate`:refs/heads/issue-75-core-word-id-migration
+          if ($LASTEXITCODE -ne 0) { throw 'Verified integration push failed.' }
+          Write-Host "INTEGRATED_HEAD=$candidate"
