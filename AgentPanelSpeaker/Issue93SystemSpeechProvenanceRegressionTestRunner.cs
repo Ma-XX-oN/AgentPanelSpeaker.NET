@@ -75,11 +75,11 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
       spellingStart,
       StringComparison.Ordinal);
     int tail = ssml.IndexOf(
-      "-transcript.py",
+      "<sub alias=\"transcript\">-transcript</sub>.py",
       spellingStart,
       StringComparison.Ordinal);
     Require(close >= 0 && tail > close,
-      "The hyphenated transcript tail is not outside the explicit AI spelling element.");
+      "The substituted hyphenated transcript tail is not outside the explicit AI spelling element.");
   }
 
   private static void TestProviderBoundaryPayloadLogged()
