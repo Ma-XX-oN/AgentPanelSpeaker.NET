@@ -12,6 +12,8 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
+      ("system-speech-provenance/spelling-scope-stops-before-hyphenated-tail",
+        TestSpellingScopeStopsBeforeHyphenatedTail),
       ("system-speech-provenance/spell-out-many-events-one-word",
         TestSpellOutManyEventsOneWord),
       ("system-speech-provenance/provider-range-multiple-words",
@@ -49,6 +51,33 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
       ? $"PASS: {tests.Length}/{tests.Length} issue #93 tests passed."
       : $"FAIL: {failures}/{tests.Length} issue #93 tests failed.");
     return failures == 0 ? 0 : 1;
+  }
+
+  private static void TestSpellingScopeStopsBeforeHyphenatedTail()
+  {
+    SpeechMarkup markup = BuildTrackedMarkup(
+      "scripts/AI-transcript.py",
+      new[] { "AI" });
+    string ssml = BuildSsmlDocument(markup);
+    const string spelling =
+      "<say-as interpret-as=\"characters\">AI</say-as>";
+    int spellingStart = ssml.IndexOf(spelling, StringComparison.Ordinal);
+    Require(spellingStart >= 0,
+      "Configured AI spelling does not use isolated characters semantics.");
+    Require(!ssml.Contains(
+        "interpret-as=\"spell-out\"",
+        StringComparison.Ordinal),
+      "System.Speech still uses spell-out semantics that can spill into the hyphenated tail.");
+    int close = ssml.IndexOf(
+      "</say-as>",
+      spellingStart,
+      StringComparison.Ordinal);
+    int tail = ssml.IndexOf(
+      "-transcript.py",
+      spellingStart,
+      StringComparison.Ordinal);
+    Require(close >= 0 && tail > close,
+      "The hyphenated transcript tail is not outside the explicit AI spelling element.");
   }
 
   private static void TestSpellOutManyEventsOneWord()

@@ -223,7 +223,7 @@ internal static partial class SpeechSapiXmlBuilder
 
         case SpecialMatchKind.Spelling:
           output.Append("<break time=\"100ms\"/>");
-          output.Append("<say-as interpret-as=\"spell-out\">");
+          output.Append("<say-as interpret-as=\"characters\">");
           AppendMappedIdentity(
             output,
             next.Match.Value,

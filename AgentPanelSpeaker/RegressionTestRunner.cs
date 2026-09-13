@@ -447,15 +447,15 @@ internal static class RegressionTestRunner
       PronunciationRuleSet.Parse(string.Empty));
     Require(
       markup.SsmlContent.Contains(
-        "<break time=\"100ms\"/><say-as interpret-as=\"spell-out\">" +
+        "<break time=\"100ms\"/><say-as interpret-as=\"characters\">" +
         "AI</say-as><break time=\"100ms\"/>",
         StringComparison.Ordinal),
-      "Windows/SSML inline spelling is not isolated from surrounding speech.");
+      "Windows/SSML inline spelling does not use isolated characters semantics.");
     Require(
       !markup.SsmlContent.Contains(
-        "interpret-as=\"characters\"",
+        "interpret-as=\"spell-out\"",
         StringComparison.Ordinal),
-      "Windows/SSML spelling still uses the ambiguous characters interpretation.");
+      "Windows/SSML spelling still uses spell-out semantics that can spill into a hyphenated tail.");
     Require(
       string.Equals(markup.PlainText, "scripts/AI-transcript.py", StringComparison.Ordinal),
       "Spell-out markup changed the source/display text identity.");
