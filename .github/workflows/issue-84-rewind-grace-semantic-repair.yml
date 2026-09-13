@@ -26,6 +26,18 @@ jobs:
       - name: Stage corrected regressions
         run: python .github/scripts/issue84-rewind-grace-semantics.py test
 
+      - name: Keep generated named-duration assertion compile-safe
+        shell: pwsh
+        run: |
+          $path = 'AgentPanelSpeaker/Issue84RewindCurrentFragmentRegressionTestRunner.cs'
+          $text = Get-Content -Raw $path
+          $old = 'period == TimeSpan.FromMilliseconds(milliseconds),'
+          $new = 'period == TimeSpan.FromMilliseconds(1000),'
+          if (($text.Split($old).Count - 1) -ne 1) {
+            throw 'Expected one generated named-duration assertion.'
+          }
+          [IO.File]::WriteAllText($path, $text.Replace($old, $new))
+
       - name: Build RED candidate
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
