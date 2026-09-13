@@ -81,6 +81,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          python tools/issue92-93-applicator-fix.py
+          if ($LASTEXITCODE -ne 0) { throw 'Applicator correction failed.' }
           python tools/issue92-93-apply.py green
           if ($LASTEXITCODE -ne 0) { throw 'GREEN applicator failed.' }
           git diff --check
@@ -113,6 +115,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/issue92-93-repair.yml
           git rm tools/issue92-93-apply.py
+          git rm tools/issue92-93-applicator-fix.py
           git add AgentPanelSpeaker
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { throw 'Candidate staged diff has whitespace errors.' }
