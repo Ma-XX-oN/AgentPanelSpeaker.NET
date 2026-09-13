@@ -3,7 +3,7 @@ name: Issue 97 System.Speech sub-alias repair
 on:
   push:
     branches:
-      - issue-97-system-speech-sub-alias
+      - issue-97-system-speech-sub-alias-clean
 
 permissions:
   contents: write
@@ -14,7 +14,7 @@ jobs:
     env:
       BASE_SHA: 8ecc02b05d453cc8be1dfd2563d624f66828625f
       INTEGRATION_BRANCH: issue-75-core-word-id-migration
-      DEPENDENCY_BRANCH: issue-97-system-speech-sub-alias
+      DEPENDENCY_BRANCH: issue-97-system-speech-sub-alias-clean
 
     steps:
       - name: Check out repository and submodules
