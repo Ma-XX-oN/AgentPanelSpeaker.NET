@@ -19,7 +19,7 @@ internal sealed class SpeechService : IDisposable
 {
   private const int MaximumHistoryEntries = 5000;
   private static readonly TimeSpan RewindCurrentFragmentGracePeriod =
-    TimeSpan.FromMilliseconds(500);
+    TimeSpan.FromSeconds(1);
 
   private readonly object _sync = new();
   private readonly SapiSpeechEngine _engine = new();
@@ -895,7 +895,7 @@ internal sealed class SpeechService : IDisposable
           anchor >= _history.Count ? _history.Count - 1 : anchor - 1);
       if (candidate >= 0)
       {
-        // PreviousSentence owns both the destination and its 500 ms policy.
+        // PreviousSentence owns both the destination and its 1-second policy.
         // Consuming grace here makes a second immediate J move backward, while
         // the one-shot target prevents this J-selected start from re-arming it.
         ClearRewindCurrentFragmentGraceLocked();

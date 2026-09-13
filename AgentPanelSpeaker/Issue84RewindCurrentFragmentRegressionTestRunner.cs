@@ -327,8 +327,8 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       throw new InvalidOperationException(
         "Named RewindCurrentFragmentGracePeriod field is missing.");
     Require(field.GetValue(null) is TimeSpan period &&
-        period == TimeSpan.FromMilliseconds(500),
-      "Named rewind grace period is not 500 ms.");
+        period == TimeSpan.FromSeconds(1),
+      "Named rewind grace period is not 1 second.");
   }
 
   /// <summary>
