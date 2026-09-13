@@ -229,7 +229,21 @@ internal static partial class SpeechSapiXmlBuilder
             next.Match.Value,
             next.Match.Index,
             provenance);
-          output.Append("</say-as><break time=\"100ms\"/>");
+          output.Append("</say-as>");
+          int spellingEnd = next.Match.Index + next.Match.Length;
+          int substitutedEnd = AppendSystemSpeechHyphenTailSubstitution(
+            output,
+            text,
+            spellingEnd,
+            spelledWordRegex,
+            pronunciations,
+            provenance);
+          if (substitutedEnd != spellingEnd)
+          {
+            position = substitutedEnd;
+            continue;
+          }
+          output.Append("<break time=\"100ms\"/>");
           break;
 
         case SpecialMatchKind.IsoDateTime:
@@ -276,6 +290,76 @@ internal static partial class SpeechSapiXmlBuilder
       output.Append(SsmlBlockPause);
     }
     return (output.ToString(), provenance);
+  }
+
+  /// <summary>
+  /// Applies the provider-proven workaround for System.Speech inheriting
+  /// spelling semantics across an immediately following hyphenated word.
+  /// The spoken alias and displayed source text both retain exact ownership of
+  /// the original hyphenated source span. Explicit speech transforms on the
+  /// tail retain precedence over this automatic provider workaround.
+  /// </summary>
+  private static int AppendSystemSpeechHyphenTailSubstitution(
+    StringBuilder output,
+    string text,
+    int sourceStart,
+    Regex? spelledWordRegex,
+    PronunciationRuleSet pronunciations,
+    ICollection<SpeechMarkupProvenanceSpan> provenance)
+  {
+    if (sourceStart < 0 ||
+        sourceStart + 1 >= text.Length ||
+        text[sourceStart] != '-' ||
+        !IsSystemSpeechAliasCharacter(text[sourceStart + 1]))
+    {
+      return sourceStart;
+    }
+
+    int sourceEnd = sourceStart + 2;
+    while (sourceEnd < text.Length &&
+           IsSystemSpeechAliasCharacter(text[sourceEnd]))
+    {
+      ++sourceEnd;
+    }
+
+    SpecialMatch? competingTransform = FindNextSpecialMatch(
+      text,
+      sourceStart + 1,
+      spelledWordRegex,
+      pronunciations);
+    if (competingTransform is not null &&
+        competingTransform.Match.Success &&
+        competingTransform.Match.Index < sourceEnd)
+    {
+      return sourceStart;
+    }
+
+    string alias = text[(sourceStart + 1)..sourceEnd];
+    output.Append("<sub alias=\"");
+    int aliasSsmlStart = output.Length;
+    AppendAttributeEscaped(output, alias);
+    int aliasSsmlLength = output.Length - aliasSsmlStart;
+    if (aliasSsmlLength != 0)
+    {
+      provenance.Add(new SpeechMarkupProvenanceSpan(
+        aliasSsmlStart,
+        aliasSsmlLength,
+        sourceStart,
+        sourceEnd - sourceStart));
+    }
+    output.Append("\">");
+    AppendMappedIdentity(
+      output,
+      text[sourceStart..sourceEnd],
+      sourceStart,
+      provenance);
+    output.Append("</sub>");
+    return sourceEnd;
+  }
+
+  private static bool IsSystemSpeechAliasCharacter(char value)
+  {
+    return char.IsLetterOrDigit(value) || value == '_';
   }
 
   /// <summary>

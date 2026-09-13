@@ -448,9 +448,9 @@ internal static class RegressionTestRunner
     Require(
       markup.SsmlContent.Contains(
         "<break time=\"100ms\"/><say-as interpret-as=\"characters\">" +
-        "AI</say-as><break time=\"100ms\"/>",
+        "AI</say-as><sub alias=\"transcript\">-transcript</sub>.py",
         StringComparison.Ordinal),
-      "Windows/SSML inline spelling does not use isolated characters semantics.");
+      "Windows/SSML spelling does not use the proven isolated-prefix sub-alias form.");
     Require(
       !markup.SsmlContent.Contains(
         "interpret-as=\"spell-out\"",

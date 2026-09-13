@@ -14,6 +14,8 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
     {
       ("system-speech-provenance/spelling-scope-stops-before-hyphenated-tail",
         TestSpellingScopeStopsBeforeHyphenatedTail),
+      ("system-speech-provenance/hyphenated-sub-alias-maps-source",
+        TestHyphenatedSubAliasMapsSource),
       ("system-speech-provenance/provider-boundary-payload-logged",
         TestProviderBoundaryPayloadLogged),
       ("system-speech-provenance/spell-out-many-events-one-word",
@@ -75,11 +77,105 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
       spellingStart,
       StringComparison.Ordinal);
     int tail = ssml.IndexOf(
-      "-transcript.py",
+      "<sub alias=\"transcript\">-transcript</sub>.py",
       spellingStart,
       StringComparison.Ordinal);
     Require(close >= 0 && tail > close,
       "The hyphenated transcript tail is not outside the explicit AI spelling element.");
+  }
+
+  private static void TestHyphenatedSubAliasMapsSource()
+  {
+    const string text = "scripts/AI-transcript.py";
+    SpeechMarkup markup = BuildTrackedMarkup(text, new[] { "AI" });
+    string ssml = BuildSsmlDocument(markup);
+    const string expected =
+      "<say-as interpret-as=\"characters\">AI</say-as>" +
+      "<sub alias=\"transcript\">-transcript</sub>.py";
+    int sequenceStart = ssml.IndexOf(expected, StringComparison.Ordinal);
+    Require(sequenceStart >= 0,
+      "System.Speech does not use the proven case-5 sub-alias form for AI-transcript.py.");
+
+    int contentAliasStart = markup.SsmlContent.IndexOf(
+      "alias=\"transcript\"",
+      StringComparison.Ordinal);
+    Require(contentAliasStart >= 0,
+      "System.Speech SSML content has no transcript alias.");
+    contentAliasStart += "alias=\"".Length;
+    int sourceStart = text.IndexOf("-transcript", StringComparison.Ordinal);
+    Require(sourceStart >= 0, "Test source has no -transcript span.");
+    SpeechMarkupProvenanceSpan? aliasProvenance = markup.SsmlProvenance?
+      .SingleOrDefault(span =>
+        span.SsmlCharacterStart == contentAliasStart &&
+        span.SsmlCharacterLength == "transcript".Length);
+    SpeechMarkupProvenanceSpan provenAlias = aliasProvenance ??
+      throw new InvalidOperationException(
+        "The sub alias value has no explicit provenance.");
+    Require(
+      provenAlias.SourceCharacterStart == sourceStart &&
+      provenAlias.SourceCharacterLength == "-transcript".Length,
+      "The sub alias provenance does not own the complete original -transcript span.");
+
+    int subStart = ssml.IndexOf("<sub alias=", StringComparison.Ordinal);
+    int aliasStart = subStart < 0
+      ? -1
+      : ssml.IndexOf("transcript", subStart, StringComparison.Ordinal);
+    Require(aliasStart >= 0, "Wrapped SSML has no transcript alias value.");
+    SpeechWordBoundary transcript = Map(
+      markup,
+      ssml,
+      aliasStart,
+      "transcript".Length,
+      "transcript",
+      TimeSpan.FromMilliseconds(200));
+    int expectedWord = markup.Words!
+      .Single(word => word.Text == "AI-transcript")
+      .WordIndex;
+    Require(
+      transcript.WordIndex == expectedWord && transcript.WordCount == 1,
+      "Provider progress over the sub alias did not map exactly to AI-transcript.");
+    Require(transcript.Exact,
+      "Provider-native sub-alias timing is not marked exact.");
+
+    int extensionStart = ssml.IndexOf(
+      ".py",
+      sequenceStart,
+      StringComparison.Ordinal);
+    Require(extensionStart >= 0, "Wrapped SSML has no .py extension.");
+    SpeechWordBoundary dot = Map(
+      markup,
+      ssml,
+      extensionStart,
+      1,
+      ".",
+      TimeSpan.FromMilliseconds(300));
+    SpeechWordBoundary py = Map(
+      markup,
+      ssml,
+      extensionStart + 1,
+      2,
+      "py",
+      TimeSpan.FromMilliseconds(350));
+    Require(
+      dot.WordIndex == markup.Words!.Single(word => word.Text == ".").WordIndex &&
+      py.WordIndex == markup.Words!.Single(word => word.Text == "py").WordIndex,
+      "The .py extension lost its separate canonical ownership.");
+
+    SpeechMarkup explicitTail = BuildTrackedMarkup(
+      "AI-IDE",
+      new[] { "AI", "IDE" });
+    Require(!explicitTail.SsmlContent.Contains(
+        "<sub alias=\"IDE\">",
+        StringComparison.Ordinal),
+      "The automatic hyphen-tail alias swallowed an explicitly configured spelling transform.");
+    int firstSayAs = explicitTail.SsmlContent.IndexOf(
+      "<say-as interpret-as=\"characters\">AI</say-as>",
+      StringComparison.Ordinal);
+    int secondSayAs = explicitTail.SsmlContent.IndexOf(
+      "<say-as interpret-as=\"characters\">IDE</say-as>",
+      StringComparison.Ordinal);
+    Require(firstSayAs >= 0 && secondSayAs > firstSayAs,
+      "Explicit spelling on the hyphenated tail did not retain precedence.");
   }
 
   private static void TestProviderBoundaryPayloadLogged()
@@ -161,27 +257,26 @@ internal static class Issue93SystemSpeechProvenanceRegressionTestRunner
   private static void TestProviderRangeCanOwnMultipleWords()
   {
     SpeechMarkup markup = BuildTrackedMarkup(
-      "scripts/AI-transcript.py.",
-      new[] { "AI" });
+      "alpha beta",
+      Array.Empty<string>());
     string ssml = BuildSsmlDocument(markup);
-    int start = ssml.IndexOf("-transcript.py", StringComparison.Ordinal);
-    Require(start >= 0, "Generated SSML has no transformed filename tail.");
+    int start = ssml.IndexOf("alpha beta", StringComparison.Ordinal);
+    Require(start >= 0, "Generated SSML has no alpha beta text.");
 
     SpeechWordBoundary boundary = Map(
       markup,
       ssml,
       start,
-      "-transcript.py".Length,
-      "-transcript.py",
+      "alpha beta".Length,
+      "alpha beta",
       TimeSpan.FromMilliseconds(200));
 
-    int first = markup.Words!
-      .Single(word => word.Text == "AI-transcript")
-      .WordIndex;
-    Require(boundary.WordIndex == first,
-      "Transformed filename tail did not start at AI-transcript.");
-    Require(boundary.WordCount == 3,
-      "One provider range did not retain its three canonical owners.");
+    Require(boundary.WordIndex == 0,
+      "Provider range across two words did not start at alpha.");
+    Require(boundary.WordCount == 2,
+      "One provider range did not retain both canonical word owners.");
+    Require(boundary.Exact,
+      "Provider-native multi-word timing is not marked exact.");
   }
 
   private static void TestOrdinaryEventRemainsExact()
