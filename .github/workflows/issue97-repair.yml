@@ -1,0 +1,203 @@
+name: Issue 97 System.Speech sub-alias repair
+
+on:
+  push:
+    branches:
+      - issue-97-system-speech-sub-alias
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: windows-latest
+    env:
+      BASE_SHA: 8ecc02b05d453cc8be1dfd2563d624f66828625f
+      INTEGRATION_BRANCH: issue-75-core-word-id-migration
+      DEPENDENCY_BRANCH: issue-97-system-speech-sub-alias
+
+    steps:
+      - name: Check out repository and submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Prove issue 97 RED
+        shell: pwsh
+        run: |
+          python tools/issue97-apply.py red
+          if ($LASTEXITCODE -ne 0) { throw 'Issue 97 RED applicator failed.' }
+
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'RED build failed.' }
+
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue97-red-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue97-red-stderr.log'
+          $process = Start-Process `
+            -FilePath $exe `
+            -ArgumentList @('--test', 'system-speech-provenance') `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+          $output = @(Get-Content -LiteralPath $stdout)
+          $errors = @(Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue)
+          $output | ForEach-Object { Write-Host $_ }
+          $errors | ForEach-Object { Write-Host $_ }
+
+          if (-not ($output | Where-Object {
+                $_ -like '*FAIL  system-speech-provenance/hyphenated-sub-alias-maps-source*'
+              })) {
+            throw 'Issue 97 RED did not fail the new hyphenated sub-alias regression.'
+          }
+          if (-not ($output | Where-Object {
+                $_.Trim() -ceq 'TEST-SUITE-COMPLETE system-speech-provenance exit=1'
+              })) {
+            throw 'Issue 97 RED did not complete as a failing focused suite.'
+          }
+          Write-Host 'PASS  issue97/formal-red-proven'
+
+          git restore --source=HEAD -- AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs
+          if ($LASTEXITCODE -ne 0) { throw 'Could not restore RED-only test edit.' }
+
+      - name: Apply production repair
+        shell: pwsh
+        run: |
+          python tools/issue97-apply.py full
+          if ($LASTEXITCODE -ne 0) { throw 'Issue 97 production applicator failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Issue 97 repair has whitespace errors.' }
+
+      - name: Build repaired application
+        shell: pwsh
+        run: |
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Repaired application build failed.' }
+
+      - name: Run focused GREEN suites
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          foreach ($suite in @(
+            'system-speech-provenance',
+            'speech-ownership',
+            'preview-cursor',
+            'core-word-id-migration',
+            'rewind-current-fragment',
+            'rolled-back-speech',
+            'system-speech-matrix'
+          )) {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
+          }
+
+      - name: Verify pinned AIConversationCore
+        shell: pwsh
+        run: |
+          $expected = '134d5735b44b8d131d30d5b98a6e3a06320a113f'
+          $actual = git -C dependencies/AIConversationCore rev-parse HEAD
+          if ($actual.Trim() -ne $expected) {
+            throw "Unexpected AIConversationCore submodule revision: $actual"
+          }
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Core npm ci failed.' }
+          npm test --prefix dependencies/AIConversationCore
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Core regression tests failed.' }
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          if ($LASTEXITCODE -ne 0) { throw 'Phase 2 baseline validation failed.' }
+
+      - name: Run complete built application suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and test deployed application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Form clean candidate and integrate
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          $coreTracked = @(git -C dependencies/AIConversationCore status --porcelain=v1 --untracked-files=no)
+          if ($coreTracked.Count -ne 0) {
+            $coreTracked | ForEach-Object { Write-Host $_ }
+            throw 'Pinned Core verification changed tracked files.'
+          }
+          $coreNodeModules = Join-Path $env:GITHUB_WORKSPACE 'dependencies\AIConversationCore\node_modules'
+          if (Test-Path $coreNodeModules) { Remove-Item $coreNodeModules -Recurse -Force }
+
+          git restore --source=HEAD -- AgentPanelSpeaker-test-results.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to restore generated test-results artifact.' }
+
+          git rm .github/workflows/issue97-repair.yml tools/issue97-apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to remove temporary issue 97 infrastructure.' }
+          git add `
+            AgentPanelSpeaker/SpeechSapiXmlBuilder.cs `
+            AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs
+
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          $allowed = @(
+            'D  .github/workflows/issue97-repair.yml',
+            'M  AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs',
+            'M  AgentPanelSpeaker/SpeechSapiXmlBuilder.cs',
+            'D  tools/issue97-apply.py'
+          ) | Sort-Object
+          $actual = @($status | Sort-Object)
+          if (($actual -join "`n") -cne ($allowed -join "`n")) {
+            Write-Host 'Unexpected candidate status:'
+            $status | ForEach-Object { Write-Host $_ }
+            throw 'Issue 97 candidate contains unexpected changes.'
+          }
+
+          $tree = (git write-tree).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'git write-tree failed.' }
+          $candidate = ('fix: isolate System.Speech hyphen tail spelling' | git commit-tree $tree -p $env:BASE_SHA).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($candidate)) {
+            throw 'git commit-tree failed.'
+          }
+          Write-Host "Clean candidate: $candidate"
+
+          $changed = @(git diff --name-only $env:BASE_SHA $candidate)
+          $expectedChanged = @(
+            'AgentPanelSpeaker/Issue93SystemSpeechProvenanceRegressionTestRunner.cs',
+            'AgentPanelSpeaker/SpeechSapiXmlBuilder.cs'
+          )
+          if (($changed -join "`n") -cne ($expectedChanged -join "`n")) {
+            Write-Host 'Unexpected clean candidate paths:'
+            $changed | ForEach-Object { Write-Host $_ }
+            throw 'Clean candidate path inventory is wrong.'
+          }
+          git diff --check $env:BASE_SHA $candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Clean candidate has whitespace errors.' }
+
+          git fetch origin $env:INTEGRATION_BRANCH --depth=1
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch integration branch.' }
+          $remoteIntegration = (git rev-parse FETCH_HEAD).Trim()
+          if ($remoteIntegration -cne $env:BASE_SHA) {
+            throw "Integration branch moved: expected $env:BASE_SHA, found $remoteIntegration"
+          }
+
+          git push origin "$candidate`:refs/heads/$env:INTEGRATION_BRANCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to integrate clean issue 97 candidate.' }
+          Write-Host "INTEGRATED_CANDIDATE=$candidate"
