@@ -39,9 +39,24 @@ jobs:
           dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw 'RED build failed.' }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test speech-ownership
-          if ($LASTEXITCODE -eq 0) {
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue88-red-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue88-red-stderr.log'
+          $process = Start-Process -FilePath $exe -ArgumentList @('--test', 'speech-ownership') -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $output = @(Get-Content $stdout)
+          $errors = @(Get-Content $stderr)
+          $output | ForEach-Object { Write-Host $_ }
+          $errors | ForEach-Object { Write-Error $_ -ErrorAction Continue }
+          if ($process.ExitCode -eq 0) {
             throw 'Issue #88 nesting/activity RED unexpectedly passed.'
+          }
+          if (-not ($output | Where-Object { $_ -match '^FAIL\s+speech-ownership/tracking-degradation-contract$' })) {
+            throw 'RED did not reproduce the missing Activity warning.'
+          }
+          if (-not ($output | Where-Object { $_ -match '^FAIL\s+speech-ownership/spell-out-token-can-span-ssml-nodes$' })) {
+            throw 'RED did not reproduce the nested say-as bookmark defect.'
+          }
+          if (-not ($output | Where-Object { $_ -ceq 'TEST-SUITE-COMPLETE speech-ownership exit=1' })) {
+            throw 'RED test suite did not complete cleanly.'
           }
 
       - name: Apply production correction
@@ -59,8 +74,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           foreach ($suite in @('speech-ownership', 'core-word-id-migration', 'rewind-current-fragment', 'rolled-back-speech')) {
-            & $exe --test $suite
-            if ($LASTEXITCODE -ne 0) { throw "Regression suite failed: $suite" }
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
           }
 
       - name: Run complete built and published suites
@@ -68,13 +82,11 @@ jobs:
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
-          if (-not $?) { throw 'Complete built suite failed.' }
           $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
           dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
           $publishedExe = Join-Path $publish 'AgentPanelSpeaker.exe'
           & tools/Invoke-TestSuite.ps1 -Executable $publishedExe -Suite all
-          if (-not $?) { throw 'Complete published suite failed.' }
 
       - name: Commit verified repair
         shell: pwsh
