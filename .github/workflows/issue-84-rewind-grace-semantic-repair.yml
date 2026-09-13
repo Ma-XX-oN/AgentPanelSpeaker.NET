@@ -19,68 +19,16 @@ jobs:
           fetch-depth: 0
 
       - name: Correct reaction-window comments
+        run: python .github/scripts/issue84-final-comments.py
+
+      - name: Validate comment-only patch
         shell: pwsh
         run: |
-          $path = 'AgentPanelSpeaker/SpeechService.cs'
-          $text = Get-Content -Raw $path
-
-          $replacements = @(
-            @{
-              Old = @'
-  /// <summary>
-  /// Returns whether playback is still inside the first-word rewind grace
-  /// window for the current active history fragment.
-  /// </summary>
-'@
-              New = @'
-  /// <summary>
-  /// Returns whether playback is still inside the rewind reaction window for
-  /// the current active history fragment.
-  /// </summary>
-'@
-            },
-            @{
-              Old = @'
-  /// <summary>
-  /// Prepares first-word rewind grace for a new history playback start.
-  /// The timer itself begins only when a real engine boundary reaches
-  /// fragment-relative word index zero. A PreviousSentence-selected target
-  /// consumes its one-shot suppression instead of re-arming grace.
-  /// </summary>
-'@
-              New = @'
-  /// <summary>
-  /// Prepares the rewind reaction window for a new history playback start.
-  /// The timer itself begins only when a real engine boundary reaches
-  /// fragment-relative word index zero. Every fragment started at word zero,
-  /// including a PreviousSentence destination, gets its own reaction window.
-  /// </summary>
-'@
-            },
-            @{
-              Old = @'
-  /// <summary>
-  /// Starts first-word rewind grace at an actual playback/resume point.
-  /// </summary>
-'@
-              New = @'
-  /// <summary>
-  /// Starts the rewind reaction timer at the actual first-word boundary.
-  /// </summary>
-'@
-            }
-          )
-
-          foreach ($replacement in $replacements) {
-            $count = ($text.Split($replacement.Old).Count - 1)
-            if ($count -ne 1) {
-              throw "Expected exactly one stale comment block, found $count."
-            }
-            $text = $text.Replace($replacement.Old, $replacement.New)
-          }
-
-          [IO.File]::WriteAllText($path, $text)
           git diff --check
+          $changed = git diff --name-only
+          if ($changed.Count -ne 1 -or $changed[0] -ne 'AgentPanelSpeaker/SpeechService.cs') {
+            throw "Unexpected files changed: $($changed -join ', ')"
+          }
 
       - name: Commit corrected comments
         shell: pwsh
