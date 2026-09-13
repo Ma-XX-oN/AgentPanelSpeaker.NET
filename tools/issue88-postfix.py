@@ -41,11 +41,9 @@ if text.count(old_seed) != 1:
   raise RuntimeError("Expected exactly one synthetic first-token boundary seed.")
 text = text.replace(old_seed, new_seed, 1)
 
-old_call = '''        string synthesisText = GetBookmarkedSynthesisText(
-          markup, words, wordIndex);
+old_call = '''        string synthesisText = GetBookmarkedSynthesisText(markup, words, wordIndex);
 '''
-new_call = '''        string synthesisText = GetOwnedBookmarkedSynthesisText(
-          markup, words, wordIndex);
+new_call = '''        string synthesisText = GetOwnedBookmarkedSynthesisText(markup, words, wordIndex);
 '''
 if text.count(old_call) != 1:
   raise RuntimeError("Expected exactly one provenance bookmark synthesis call.")
