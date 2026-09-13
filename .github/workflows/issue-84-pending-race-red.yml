@@ -1,4 +1,4 @@
-name: Temporary issue 84 pending-race RED
+name: Temporary issue 84 pending cursor repair
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  record-red:
-    if: "${{ github.event.head_commit.message == 'ci: record issue 84 pending-race RED' }}"
+  repair:
+    if: "${{ github.event.head_commit.message == 'ci: apply issue 84 pending cursor repair' }}"
     runs-on: windows-latest
     steps:
       - name: Check out branch
@@ -19,19 +19,43 @@ jobs:
           ref: issue-75-core-word-id-migration
           submodules: recursive
 
-      - name: Add proven permanent RED regression
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Apply pending cursor authority repair
         run: python .github/scripts/issue84-pending-race-red.py
 
-      - name: Validate test patch
+      - name: Validate patch whitespace
         shell: pwsh
         run: git diff --check
 
-      - name: Commit permanent RED regression
+      - name: Build repaired application
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run focused issue 84 GREEN
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment
+
+      - name: Run complete built regression suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Commit verified production repair
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- AgentPanelSpeaker/Issue84RewindCurrentFragmentRegressionTestRunner.cs
+          git add -- AgentPanelSpeaker/SpeechService.cs
           git diff --cached --check
-          git commit -m 'test: reproduce pending cursor rewind race'
+          if (git diff --cached --quiet) {
+            throw 'Issue #84 pending cursor repair produced no production change.'
+          }
+          git commit -m 'fix: prefer pending rewind cursor during cancellation'
           git push origin HEAD:issue-75-core-word-id-migration
