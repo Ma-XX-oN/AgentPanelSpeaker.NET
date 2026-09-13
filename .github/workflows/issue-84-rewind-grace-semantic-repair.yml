@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           git diff --check
-          $changed = git diff --name-only
+          $changed = @(git diff --name-only)
           if ($changed.Count -ne 1 -or $changed[0] -ne 'AgentPanelSpeaker/SpeechService.cs') {
             throw "Unexpected files changed: $($changed -join ', ')"
           }
