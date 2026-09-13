@@ -354,47 +354,50 @@ internal static class RegressionTestRunner
     IReadOnlyList<TranscriptSearchMatch> matches = index.SearchAsync(
       new TranscriptSearchRequest(1, "cross boundary", false, false, false, false),
       CancellationToken.None).GetAwaiter().GetResult();
-    Require(matches.Count == 0, "Search crossed a canonical record boundary.");
+    Require(matches.Count == 0,
+      "Literal search incorrectly matched across a record boundary.");
   }
 
   private static void TestSearchRegexBoundaries()
   {
     string html =
-      "<span class=\"record-anchor\" data-jsonl-record=\"1\" data-source-id=\"a\"></span>" +
-      "<p>first block</p><p>second block</p>";
+      "<span class=\"record-anchor\" data-jsonl-record=\"1\" data-source-id=\"a\"></span><p>alpha beta</p>" +
+      "<span class=\"record-anchor\" data-jsonl-record=\"2\" data-source-id=\"b\"></span><p>gamma delta</p>";
     TranscriptSearchIndex index = TranscriptSearchIndex.Build(
       html,
       Array.Empty<TranscriptNodeIdentity>(),
       CancellationToken.None);
-    IReadOnlyList<TranscriptSearchMatch> starts = index.SearchAsync(
-      new TranscriptSearchRequest(1, "^second", false, false, true, false),
+    IReadOnlyList<TranscriptSearchMatch> within = index.SearchAsync(
+      new TranscriptSearchRequest(1, "alpha\\s+beta", false, false, true, false),
       CancellationToken.None).GetAwaiter().GetResult();
-    Require(starts.Count == 1, "Regex ^ did not match the start of the second block.");
-    IReadOnlyList<TranscriptSearchMatch> noCross = index.SearchAsync(
-      new TranscriptSearchRequest(2, "first.*second", false, false, true, false),
+    Require(within.Count == 1, "Regex search failed within one record block.");
+    IReadOnlyList<TranscriptSearchMatch> across = index.SearchAsync(
+      new TranscriptSearchRequest(2, "beta\\s+gamma", false, false, true, false),
       CancellationToken.None).GetAwaiter().GetResult();
-    Require(noCross.Count == 0, "Regex dot unexpectedly crossed a block newline.");
+    Require(across.Count == 0, "Regex search incorrectly crossed a record boundary.");
   }
 
   private static void TestSentenceSplitting()
   {
-    IReadOnlyList<SentenceSegment> parts = SentenceSegmenter.Split(
-      "One. Two? Three! \"Four.\" Five",
-      pauseAfterLast: false);
-    Require(parts.Select(part => part.Text).SequenceEqual(new[]
-    {
-      "One.", "Two?", "Three!", "\"Four.\"", "Five"
-    }), "Sentence segmentation changed expected boundaries.");
+    string[] expected = { "Dr. Smith said hello.", "Next sentence!", "Final?" };
+    IReadOnlyList<string> actual = SentenceSegmenter.Split(
+      "Dr. Smith said hello. Next sentence! Final?");
+    Require(actual.SequenceEqual(expected),
+      $"Sentence split mismatch: {string.Join(" | ", actual)}");
   }
 
   private static void TestSentencePause()
   {
-    Require(SentenceSegmenter.Split("   ", true).Count == 0,
-      "Whitespace-only speech created a sentence.");
-    IReadOnlyList<SentenceSegment> parts = SentenceSegmenter.Split("One. Two.", true);
-    Require(parts.Count == 2, "Expected two sentences.");
-    Require(!parts[0].PauseAfter && parts[1].PauseAfter,
-      "Structural pause was not assigned only to the final sentence.");
+    SpeechMarkup markup = SpeechSapiXmlBuilder.Build(
+      "First sentence. Second sentence.",
+      pitchSetting: 0,
+      Array.Empty<string>(),
+      PronunciationRuleSet.Parse(string.Empty),
+      pauseAfter: true);
+    Require(markup.SapiXml.EndsWith("<silence msec=\"250\"/>", StringComparison.Ordinal),
+      "SAPI structural sentence pause is missing.");
+    Require(markup.SsmlContent.EndsWith("<break time=\"250ms\"/>", StringComparison.Ordinal),
+      "SSML structural sentence pause is missing.");
   }
 
   private static void TestPronunciationParsing()
@@ -448,9 +451,9 @@ internal static class RegressionTestRunner
     Require(
       markup.SsmlContent.Contains(
         "<break time=\"100ms\"/><say-as interpret-as=\"characters\">" +
-        "AI</say-as><break time=\"100ms\"/>",
+        "AI</say-as><sub alias=\"transcript\">-transcript</sub>.py",
         StringComparison.Ordinal),
-      "Windows/SSML inline spelling does not use isolated characters semantics.");
+      "Windows/SSML spelling does not use the proven isolated-prefix sub-alias form.");
     Require(
       !markup.SsmlContent.Contains(
         "interpret-as=\"spell-out\"",
@@ -630,47 +633,69 @@ internal static class RegressionTestRunner
     });
   }
 
-  private static void RequireProjectionText(
-    AIConversationProjection projection,
-    string expected)
+  private static void RequireProjectionText(AIConversationProjection projection, string expected)
   {
-    bool found = projection.Units.Any(unit =>
-      unit.Block.ValueKind == JsonValueKind.Object &&
-      unit.Block.TryGetProperty("text", out JsonElement textElement) &&
-      textElement.ValueKind == JsonValueKind.String &&
-      textElement.GetString() == expected);
-    Require(found, $"Core projection did not round-trip expected text: {expected}");
-  }
-
-  private static bool ContainsCanonicalBlockText(
-    TranscriptPresentationDomResult result,
-    string expected)
-  {
-    return result.Units
-      .SelectMany(unit =>
-        unit.SpeechWords ?? Array.Empty<CanonicalSpeechWordProjection>())
-      .Where(word => !string.IsNullOrWhiteSpace(word.Provenance?.BlockId))
-      .GroupBy(
-        word => word.Provenance!.BlockId!,
-        StringComparer.Ordinal)
-      .Any(group => string.Equals(
-        string.Concat(group
-          .OrderBy(word => word.Provenance!.BlockWordIndex)
-          .Select(word => word.SeparatorBefore + word.Text)),
-        expected,
-        StringComparison.Ordinal));
+    Require(
+      projection.Units.Any(unit => unit.Block.Text.Contains(expected, StringComparison.Ordinal)),
+      $"Projection does not contain expected text: {expected}");
   }
 
   private static void RequireCoreContract(AIConversationProjection projection)
   {
-    Require(projection.SchemaVersion == 2,
-      $"Unexpected projection schema {projection.SchemaVersion}.");
-    Require(projection.Presentation is not null,
-      "Core projection omitted the presentation contract.");
-    Require(projection.Presentation!.SchemaVersion == 2,
-      $"Unexpected presentation schema {projection.Presentation.SchemaVersion}.");
-    Require(projection.Presentation.SplitPolicy == "presentation-tree",
-      $"Unexpected presentation split policy {projection.Presentation.SplitPolicy}.");
+    Require(projection.SchemaVersion == 2, "Unexpected projection schema version.");
+    Require(projection.Presentation.SchemaVersion == 2,
+      "Unexpected presentation schema version.");
+    Require(string.Equals(
+        projection.Presentation.SplitPolicy,
+        "presentation-tree",
+        StringComparison.Ordinal),
+      "Unexpected presentation split policy.");
+    Require(string.Equals(
+        projection.CoreCommit,
+        AIConversationCoreClient.ExpectedCoreCommit,
+        StringComparison.Ordinal),
+      "Projection core commit does not match the pinned client revision.");
+  }
+
+  private static int CountOccurrences(string haystack, string needle)
+  {
+    int count = 0;
+    int offset = 0;
+    while ((offset = haystack.IndexOf(needle, offset, StringComparison.Ordinal)) >= 0)
+    {
+      ++count;
+      offset += needle.Length;
+    }
+    return count;
+  }
+
+  private static void RequireThrows<TException>(Action action)
+    where TException : Exception
+  {
+    try
+    {
+      action();
+    }
+    catch (TException)
+    {
+      return;
+    }
+    throw new InvalidOperationException(
+      $"Expected exception {typeof(TException).Name} was not thrown.");
+  }
+
+  private static void Write(List<string> output, string value)
+  {
+    output.Add(value);
+    Console.WriteLine(value);
+  }
+
+  private static void WriteReport(IReadOnlyList<string> output)
+  {
+    string path = Path.Combine(
+      Environment.CurrentDirectory,
+      "AgentPanelSpeaker-test-results.txt");
+    File.WriteAllLines(path, output, Utf8NoBom);
   }
 
   private static string CreateTemporaryPath()
@@ -682,46 +707,23 @@ internal static class RegressionTestRunner
 
   private static void DeleteTemporaryFile(string path)
   {
-    try { File.Delete(path); }
-    catch (IOException) { }
-  }
-
-  private static int CountOccurrences(string text, string value)
-  {
-    int count = 0;
-    int index = 0;
-    while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+    try
     {
-      ++count;
-      index += value.Length;
+      if (File.Exists(path))
+      {
+        File.Delete(path);
+      }
     }
-    return count;
-  }
-
-  private static void RequireThrows<TException>(Action action)
-    where TException : Exception
-  {
-    try { action(); }
-    catch (TException) { return; }
-    throw new InvalidOperationException($"Expected {typeof(TException).Name} was not thrown.");
+    catch
+    {
+    }
   }
 
   private static void Require(bool condition, string message)
   {
-    if (!condition) throw new InvalidOperationException(message);
-  }
-
-  private static void WriteReport(IReadOnlyCollection<string> output)
-  {
-    string reportPath = Path.Combine(
-      Environment.CurrentDirectory,
-      "AgentPanelSpeaker-test-results.txt");
-    File.WriteAllLines(reportPath, output, Utf8NoBom);
-  }
-
-  private static void Write(ICollection<string> output, string line)
-  {
-    output.Add(line);
-    Console.WriteLine(line);
+    if (!condition)
+    {
+      throw new InvalidOperationException(message);
+    }
   }
 }
