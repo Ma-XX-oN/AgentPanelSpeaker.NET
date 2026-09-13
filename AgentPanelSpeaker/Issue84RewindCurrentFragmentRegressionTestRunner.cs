@@ -27,16 +27,16 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
         TestActiveMidFragmentRestartsCurrent),
       ("rewind-current-fragment/pending-word-zero-overrides-stale-active-word",
         TestPendingWordZeroOverridesStaleActiveWord),
-      ("rewind-current-fragment/active-first-word-pending-grace-restarts-current",
-        TestActiveFirstWordPendingGraceRestartsCurrent),
-      ("rewind-current-fragment/active-first-word-running-grace-restarts-current",
-        TestActiveFirstWordRunningGraceRestartsCurrent),
-      ("rewind-current-fragment/active-first-word-grace-is-consumed-by-rewind",
-        TestActiveFirstWordGraceIsConsumedByRewind),
-      ("rewind-current-fragment/rewind-restart-does-not-rearm-grace",
-        TestRewindRestartDoesNotRearmGrace),
-      ("rewind-current-fragment/active-first-word-expired-grace-moves-previous",
-        TestActiveFirstWordExpiredGraceMovesPrevious),
+      ("rewind-current-fragment/active-first-word-pending-grace-moves-previous",
+        TestActiveFirstWordPendingGraceMovesPrevious),
+      ("rewind-current-fragment/active-first-word-running-grace-moves-previous",
+        TestActiveFirstWordRunningGraceMovesPrevious),
+      ("rewind-current-fragment/active-later-word-running-grace-moves-previous",
+        TestActiveLaterWordRunningGraceMovesPrevious),
+      ("rewind-current-fragment/rewind-destination-arms-new-grace",
+        TestRewindDestinationArmsNewGrace),
+      ("rewind-current-fragment/active-first-word-expired-grace-restarts-current",
+        TestActiveFirstWordExpiredGraceRestartsCurrent),
       ("rewind-current-fragment/paused-first-word-moves-previous",
         TestPausedFirstWordMovesPrevious),
       ("rewind-current-fragment/later-word-start-does-not-arm-grace",
@@ -179,7 +179,7 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       "Pending word zero did not override the stale active mid-fragment word.");
   }
 
-  private static void TestActiveFirstWordPendingGraceRestartsCurrent()
+  private static void TestActiveFirstWordPendingGraceMovesPrevious()
   {
     using SpeechService speech = CreateSpeech();
     SetActivePosition(speech, CurrentFragmentIndex, 0);
@@ -190,12 +190,12 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       null);
 
     Require(speech.TryRewindSentence(out string text),
-      "First-word pending-grace rewind reported no destination.");
-    Require(text == "For local code files",
-      "First-word rewind inside the pre-boundary grace state did not restart the current fragment.");
+      "Pre-boundary rewind reported no destination.");
+    Require(text == "For web research",
+      "A fragment that had not yet reached its first real word boundary did not move to the previous fragment.");
   }
 
-  private static void TestActiveFirstWordRunningGraceRestartsCurrent()
+  private static void TestActiveFirstWordRunningGraceMovesPrevious()
   {
     using SpeechService speech = CreateSpeech();
     SetActivePosition(speech, CurrentFragmentIndex, 0);
@@ -207,39 +207,35 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
 
     Require(speech.TryRewindSentence(out string text),
       "First-word running-grace rewind reported no destination.");
-    Require(text == "For local code files",
-      "First-word rewind inside the running grace period did not restart the current fragment.");
+    Require(text == "For web research",
+      "J inside the first-word reaction window did not move to the previous fragment.");
   }
 
   /// <summary>
   /// The first J inside grace may restart the current fragment, but that J
   /// consumes the grace. A second immediate J must therefore move backward.
   /// </summary>
-  private static void TestActiveFirstWordGraceIsConsumedByRewind()
+  private static void TestActiveLaterWordRunningGraceMovesPrevious()
   {
     using SpeechService speech = CreateSpeech();
-    SetActivePosition(speech, CurrentFragmentIndex, 0);
+    SetActivePosition(speech, CurrentFragmentIndex, 2);
     SetFieldIfPresent(speech, "_rewindCurrentFragmentGracePending", false);
     SetFieldIfPresent(
       speech,
       "_rewindCurrentFragmentGraceStartedTimestamp",
       Stopwatch.GetTimestamp());
 
-    Require(speech.TryRewindSentence(out string firstText),
-      "First rewind inside grace reported no destination.");
-    Require(firstText == "For local code files",
-      "First rewind inside grace did not restart the current fragment.");
-    Require(speech.TryRewindSentence(out string secondText),
-      "Second rewind after consuming grace reported no destination.");
-    Require(secondText == "For web research",
-      "The first rewind did not consume grace; a second J remained trapped on the current fragment.");
+    Require(speech.TryRewindSentence(out string text),
+      "Later-word rewind inside grace reported no destination.");
+    Require(text == "For web research",
+      "The reaction timeout stopped mattering as soon as playback advanced beyond word zero.");
   }
 
   /// <summary>
   /// Starting audio because J selected a destination must not arm another
   /// first-word grace window for that same J-selected destination.
   /// </summary>
-  private static void TestRewindRestartDoesNotRearmGrace()
+  private static void TestRewindDestinationArmsNewGrace()
   {
     using SpeechService speech = CreateSpeech();
     SetActivePosition(speech, CurrentFragmentIndex, 0);
@@ -251,18 +247,18 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
 
     Require(speech.TryRewindSentence(out string text),
       "Rewind inside grace reported no destination.");
-    Require(text == "For local code files",
-      "Rewind inside grace did not restart the current fragment.");
-    InvokePlaybackStartPreparation(speech, CurrentFragmentIndex, 0);
-    Require(!ReadBool(speech, "_rewindCurrentFragmentGracePending"),
-      "A J-triggered restart re-armed first-word grace.");
+    Require(text == "For web research",
+      "Rewind inside grace did not select the previous fragment.");
+    InvokePlaybackStartPreparation(speech, CurrentFragmentIndex - 1, 0);
+    Require(ReadBool(speech, "_rewindCurrentFragmentGracePending"),
+      "A newly selected previous fragment did not prepare its own reaction window.");
     Require(ReadNullableLong(
         speech,
         "_rewindCurrentFragmentGraceStartedTimestamp") is null,
-      "A J-triggered restart retained a rewind-grace timestamp.");
+      "A newly selected fragment started its timer before a real word boundary.");
   }
 
-  private static void TestActiveFirstWordExpiredGraceMovesPrevious()
+  private static void TestActiveFirstWordExpiredGraceRestartsCurrent()
   {
     using SpeechService speech = CreateSpeech();
     SetActivePosition(speech, CurrentFragmentIndex, 0);
@@ -270,12 +266,12 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
     SetFieldIfPresent(
       speech,
       "_rewindCurrentFragmentGraceStartedTimestamp",
-      Stopwatch.GetTimestamp() - Stopwatch.Frequency);
+      Stopwatch.GetTimestamp() - 2 * Stopwatch.Frequency);
 
     Require(speech.TryRewindSentence(out string text),
-      "Expired-grace rewind reported no previous fragment.");
-    Require(text == "For web research",
-      "Expired first-word grace did not move to the immediately preceding structural fragment.");
+      "Expired-grace rewind reported no destination.");
+    Require(text == "For local code files",
+      "J after the reaction timeout did not restart the current fragment.");
   }
 
   private static void TestPausedFirstWordMovesPrevious()
@@ -321,14 +317,23 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
 
   private static void TestNamedGracePeriod()
   {
-    FieldInfo field = typeof(SpeechService).GetField(
+    FieldInfo millisecondsField = typeof(SpeechService).GetField(
+      "RewindCurrentFragmentGraceMilliseconds",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "Named RewindCurrentFragmentGraceMilliseconds constant is missing.");
+    Require(millisecondsField.GetRawConstantValue() is int milliseconds &&
+        milliseconds == 1000,
+      "Named rewind grace duration is not the grep-friendly 1000 ms constant.");
+
+    FieldInfo periodField = typeof(SpeechService).GetField(
       "RewindCurrentFragmentGracePeriod",
       BindingFlags.Static | BindingFlags.NonPublic) ??
       throw new InvalidOperationException(
         "Named RewindCurrentFragmentGracePeriod field is missing.");
-    Require(field.GetValue(null) is TimeSpan period &&
-        period == TimeSpan.FromSeconds(1),
-      "Named rewind grace period is not 1 second.");
+    Require(periodField.GetValue(null) is TimeSpan period &&
+        period == TimeSpan.FromMilliseconds(1000),
+      "RewindCurrentFragmentGracePeriod is not derived from the millisecond constant.");
   }
 
   /// <summary>
