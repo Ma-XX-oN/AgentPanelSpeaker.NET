@@ -1,0 +1,167 @@
+name: Temporary issue 84 repair
+
+on:
+  push:
+    branches:
+      - issue-75-core-word-id-migration
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: >-
+      github.event.head_commit.message == 'ci: stage issue 84 red regression' ||
+      github.event.head_commit.message == 'ci: apply issue 84 ownership repair'
+    runs-on: windows-latest
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: issue-75-core-word-id-migration
+          submodules: recursive
+
+      - name: Stage permanent RED regressions
+        if: github.event.head_commit.message == 'ci: stage issue 84 red regression'
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/Issue84RewindCurrentFragmentRegressionTestRunner.cs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new):
+            global text
+            count = text.count(old)
+            if count != 1:
+              raise RuntimeError(f'Expected one test sentinel, found {count}: {old[:100]!r}')
+            text = text.replace(old, new, 1)
+
+          replace_once(
+            '''      ("rewind-current-fragment/active-first-word-running-grace-restarts-current",\n        TestActiveFirstWordRunningGraceRestartsCurrent),\n      ("rewind-current-fragment/active-first-word-expired-grace-moves-previous",\n        TestActiveFirstWordExpiredGraceMovesPrevious),''',
+            '''      ("rewind-current-fragment/active-first-word-running-grace-restarts-current",\n        TestActiveFirstWordRunningGraceRestartsCurrent),\n      ("rewind-current-fragment/active-first-word-grace-is-consumed-by-rewind",\n        TestActiveFirstWordGraceIsConsumedByRewind),\n      ("rewind-current-fragment/rewind-restart-does-not-rearm-grace",\n        TestRewindRestartDoesNotRearmGrace),\n      ("rewind-current-fragment/active-first-word-expired-grace-moves-previous",\n        TestActiveFirstWordExpiredGraceMovesPrevious),''')
+
+          replace_once(
+            '''      ("rewind-current-fragment/named-grace-period",\n        TestNamedGracePeriod)''',
+            '''      ("rewind-current-fragment/named-grace-period",\n        TestNamedGracePeriod),\n      ("rewind-current-fragment/history-start-has-no-synthetic-speaking-position",\n        TestHistoryStartHasNoSyntheticSpeakingPosition)''')
+
+          replace_once(
+            '''  private static void TestActiveFirstWordExpiredGraceMovesPrevious()\n  {''',
+            '''  private static void TestActiveFirstWordGraceIsConsumedByRewind()\n  {\n    using SpeechService speech = CreateSpeech();\n    SetActivePosition(speech, CurrentFragmentIndex, 0);\n    SetFieldIfPresent(speech, "_rewindCurrentFragmentGracePending", false);\n    SetFieldIfPresent(\n      speech,\n      "_rewindCurrentFragmentGraceStartedTimestamp",\n      Stopwatch.GetTimestamp());\n\n    Require(speech.TryRewindSentence(out string firstText),\n      "First rewind inside grace reported no destination.");\n    Require(firstText == "For local code files",\n      "First rewind inside grace did not restart the current fragment.");\n    Require(speech.TryRewindSentence(out string secondText),\n      "Second rewind after consuming grace reported no destination.");\n    Require(secondText == "For web research",\n      "The first rewind did not consume grace; a second J remained trapped on the current fragment.");\n  }\n\n  private static void TestRewindRestartDoesNotRearmGrace()\n  {\n    using SpeechService speech = CreateSpeech();\n    SetActivePosition(speech, CurrentFragmentIndex, 0);\n    SetFieldIfPresent(speech, "_rewindCurrentFragmentGracePending", false);\n    SetFieldIfPresent(\n      speech,\n      "_rewindCurrentFragmentGraceStartedTimestamp",\n      Stopwatch.GetTimestamp());\n\n    Require(speech.TryRewindSentence(out string text),\n      "Rewind inside grace reported no destination.");\n    Require(text == "For local code files",\n      "Rewind inside grace did not restart the current fragment.");\n    InvokePlaybackStartPreparation(speech, CurrentFragmentIndex, 0);\n    Require(!ReadBool(speech, "_rewindCurrentFragmentGracePending"),\n      "A J-triggered restart re-armed first-word grace.");\n    Require(ReadNullableLong(\n        speech,\n        "_rewindCurrentFragmentGraceStartedTimestamp") is null,\n      "A J-triggered restart retained a rewind-grace timestamp.");\n  }\n\n  private static void TestActiveFirstWordExpiredGraceMovesPrevious()\n  {''')
+
+          replace_once(
+            '''    InvokePlaybackStartPreparation(speech, 1);''',
+            '''    InvokePlaybackStartPreparation(speech, CurrentFragmentIndex, 1);''')
+
+          replace_once(
+            '''  private static CanonicalSpeechWordProjection Word(\n    long id,''',
+            '''  private static void TestHistoryStartHasNoSyntheticSpeakingPosition()\n  {\n    MethodInfo report = GetPrivateMethod(\n      typeof(SpeechService),\n      "ReportPlaybackPositionLocked");\n    foreach (string methodName in new[]\n    {\n      "StartHistorySpeechLocked",\n      "RestartCurrentWordLocked"\n    })\n    {\n      MethodInfo method = GetPrivateMethod(typeof(SpeechService), methodName);\n      Require(!CallsDirectly(method, report),\n        $"{methodName} still publishes a synthetic pre-boundary playback position.");\n    }\n  }\n\n  private static bool CallsDirectly(MethodInfo caller, MethodInfo callee)\n  {\n    byte[] il = caller.GetMethodBody()?.GetILAsByteArray() ??\n      throw new InvalidOperationException(\n        $"Could not inspect IL for {caller.Name}.");\n    int targetToken = callee.MetadataToken;\n    for (int index = 0; index + sizeof(int) < il.Length; ++index)\n    {\n      // 0x28 is the IL 'call' opcode used for a direct private-method call.\n      if (il[index] == 0x28 &&\n          BitConverter.ToInt32(il, index + 1) == targetToken)\n      {\n        return true;\n      }\n    }\n    return false;\n  }\n\n  private static MethodInfo GetPrivateMethod(Type type, string name)\n  {\n    return type.GetMethod(\n      name,\n      BindingFlags.Instance | BindingFlags.NonPublic) ??\n      throw new InvalidOperationException(\n        $"{type.Name}.{name} is missing.");\n  }\n\n  private static CanonicalSpeechWordProjection Word(\n    long id,''')
+
+          replace_once(
+            '''  private static void InvokePlaybackStartPreparation(\n    SpeechService speech,\n    int wordIndex)\n  {\n    MethodInfo method = speech.GetType().GetMethod(\n      "PrepareRewindCurrentFragmentGraceLocked",\n      BindingFlags.Instance | BindingFlags.NonPublic) ??\n      throw new InvalidOperationException(\n        "Playback-start rewind-grace preparation method is missing.");\n    method.Invoke(speech, new object[] { wordIndex });\n  }''',
+            '''  private static void InvokePlaybackStartPreparation(\n    SpeechService speech,\n    int historyIndex,\n    int wordIndex)\n  {\n    MethodInfo method = speech.GetType().GetMethod(\n      "PrepareRewindCurrentFragmentGraceLocked",\n      BindingFlags.Instance | BindingFlags.NonPublic) ??\n      throw new InvalidOperationException(\n        "Playback-start rewind-grace preparation method is missing.");\n    ParameterInfo[] parameters = method.GetParameters();\n    object[] arguments = parameters.Length switch\n    {\n      1 => new object[] { wordIndex },\n      2 => new object[] { historyIndex, wordIndex },\n      _ => throw new InvalidOperationException(\n        "Unexpected playback-start rewind-grace preparation signature.")\n    };\n    method.Invoke(speech, arguments);\n  }''')
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Apply C# ownership repair
+        if: github.event.head_commit.message == 'ci: apply issue 84 ownership repair'
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def patch(path_name, replacements):
+            path = Path(path_name)
+            text = path.read_text(encoding='utf-8')
+            for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                raise RuntimeError(
+                  f'Expected one production sentinel in {path_name}, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+            path.write_text(text, encoding='utf-8')
+
+          patch('AgentPanelSpeaker/SpeechService.cs', [
+            (
+              '''  private int? _pendingHistoryIndex;\n  private int _pendingHistoryWordIndex;''',
+              '''  private int? _pendingHistoryIndex;\n  // Zero-based offset within the pending SpeechFragment word collection.\n  // This is NOT an AIConversationCore canonical WordId.\n  private int _pendingHistoryWordIndex;'''
+            ),
+            (
+              '''  private string _activeTranscriptText = string.Empty;\n  private int _activeWordIndex;\n  private int _activeWordBaseIndex;''',
+              '''  private string _activeTranscriptText = string.Empty;\n  // Zero-based offset within the active SpeechFragment word collection.\n  // This is NOT an AIConversationCore canonical WordId.\n  private int _activeWordIndex;\n  // Fragment-relative offset represented by engine WordIndex zero when an\n  // utterance starts in the middle of a retained SpeechFragment.\n  private int _activeWordBaseIndex;'''
+            ),
+            (
+              '''  private bool _rewindCurrentFragmentGracePending;\n  private long? _rewindCurrentFragmentGraceStartedTimestamp;''',
+              '''  private bool _rewindCurrentFragmentGracePending;\n  private long? _rewindCurrentFragmentGraceStartedTimestamp;\n  // PreviousSentence owns this one-shot suppression. A J-selected history\n  // target must not arm a fresh first-word grace window when its audio starts,\n  // otherwise repeated J presses can remain trapped on the same fragment.\n  private int? _rewindGraceSuppressedHistoryIndex;'''
+            ),
+            (
+              '''      _pendingHistoryIndex = null;\n      _pendingHistoryWordIndex = 0;\n      _pendingUntracked = null;\n      ClearProcessingTimeAnnouncementLocked();\n      _pauseBeforeNextHistory = false;\n      _activeHistoryIndex = -1;\n      _nextHistoryIndex = 0;''',
+              '''      _pendingHistoryIndex = null;\n      _pendingHistoryWordIndex = 0;\n      _rewindGraceSuppressedHistoryIndex = null;\n      _pendingUntracked = null;\n      ClearProcessingTimeAnnouncementLocked();\n      _pauseBeforeNextHistory = false;\n      _activeHistoryIndex = -1;\n      _nextHistoryIndex = 0;'''
+            ),
+            (
+              '''      _pendingHistoryIndex = null;\n      _pendingHistoryWordIndex = 0;\n      _pendingUntracked = null;\n      ClearProcessingTimeAnnouncementLocked();\n      _pauseBeforeNextHistory = false;\n      _activeHistoryIndex = -1;\n      _lastFenceActivity = null;\n      _history.Clear();''',
+              '''      _pendingHistoryIndex = null;\n      _pendingHistoryWordIndex = 0;\n      _rewindGraceSuppressedHistoryIndex = null;\n      _pendingUntracked = null;\n      ClearProcessingTimeAnnouncementLocked();\n      _pauseBeforeNextHistory = false;\n      _activeHistoryIndex = -1;\n      _lastFenceActivity = null;\n      _history.Clear();'''
+            ),
+            (
+              '''      int candidate = restartCurrent\n        ? anchor\n        : FindPreviousEligibleLocked(\n          anchor >= _history.Count ? _history.Count - 1 : anchor - 1);\n      LogNavigationLocked("rewind-sentence", anchor, candidate);\n      return RestartCandidateLocked(candidate, out text);''',
+              '''      int candidate = restartCurrent\n        ? anchor\n        : FindPreviousEligibleLocked(\n          anchor >= _history.Count ? _history.Count - 1 : anchor - 1);\n      if (candidate >= 0)\n      {\n        // PreviousSentence is the sole owner of this navigation decision.\n        // Consume any current grace now and suppress a new grace window when\n        // the J-selected destination actually starts speaking.\n        ClearRewindCurrentFragmentGraceLocked();\n        _rewindGraceSuppressedHistoryIndex = candidate;\n      }\n      LogNavigationLocked("rewind-sentence", anchor, candidate);\n      return RestartCandidateLocked(candidate, out text);'''
+            ),
+            (
+              '''  /// <summary>\n  /// Prepares first-word rewind grace for a new history playback start.\n  /// The timer itself begins only when reading reaches word zero.\n  /// </summary>\n  private void PrepareRewindCurrentFragmentGraceLocked(int startWordIndex)\n  {\n    _rewindCurrentFragmentGracePending = startWordIndex == 0;\n    _rewindCurrentFragmentGraceStartedTimestamp = null;\n  }''',
+              '''  /// <summary>\n  /// Prepares first-word rewind grace for a new history playback start.\n  /// The timer itself begins only when a real engine boundary reaches\n  /// fragment-relative word index zero. A PreviousSentence-selected start\n  /// consumes its one-shot suppression instead of re-arming grace.\n  /// </summary>\n  private void PrepareRewindCurrentFragmentGraceLocked(\n    int historyIndex,\n    int startWordIndex)\n  {\n    bool suppress = _rewindGraceSuppressedHistoryIndex is int suppressed &&\n      suppressed == historyIndex;\n    // Suppression applies only to the next history start. If another command\n    // redirected playback first, it must not leak into a later fragment.\n    _rewindGraceSuppressedHistoryIndex = null;\n    _rewindCurrentFragmentGracePending = startWordIndex == 0 && !suppress;\n    _rewindCurrentFragmentGraceStartedTimestamp = null;\n  }'''
+            ),
+            (
+              '''      _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);\n      if (_rewindCurrentFragmentGracePending)''',
+              '''      // mappedWordIndex and _activeWordIndex are fragment-relative offsets.\n      // The canonical Core WordId is resolved separately from TranscriptWords.\n      _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);\n      if (_rewindCurrentFragmentGracePending)'''
+            ),
+            (
+              '''    PrepareRewindCurrentFragmentGraceLocked(boundedWordIndex);\n    SetActiveKindLocked(ActiveSpeechKind.History);\n    ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);''',
+              '''    PrepareRewindCurrentFragmentGraceLocked(\n      _activeHistoryIndex,\n      boundedWordIndex);\n    SetActiveKindLocked(ActiveSpeechKind.History);'''
+            ),
+            (
+              '''    PrepareRewindCurrentFragmentGraceLocked(_activeWordIndex);\n    SpeakConfiguredLocked(\n      remaining,\n      _activeProfile,\n      _activePauseAfter);\n    ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);''',
+              '''    PrepareRewindCurrentFragmentGraceLocked(\n      _activeHistoryIndex,\n      _activeWordIndex);\n    SpeakConfiguredLocked(\n      remaining,\n      _activeProfile,\n      _activePauseAfter);'''
+            ),
+            (
+              '''    _pauseBeforeNextHistory = false;\n    _pendingHistoryIndex = null;\n    _pendingHistoryWordIndex = 0;\n    _pendingUntracked = null;\n    ClearProcessingTimeAnnouncementLocked();\n    _nextHistoryIndex = _history.Count;''',
+              '''    _pauseBeforeNextHistory = false;\n    _pendingHistoryIndex = null;\n    _pendingHistoryWordIndex = 0;\n    _rewindGraceSuppressedHistoryIndex = null;\n    _pendingUntracked = null;\n    ClearProcessingTimeAnnouncementLocked();\n    _nextHistoryIndex = _history.Count;'''
+            ),
+            (
+              '''    _pauseBeforeNextHistory = false;\n    _pendingHistoryIndex = null;\n    _pendingHistoryWordIndex = 0;\n    _pendingUntracked = null;\n    ClearProcessingTimeAnnouncementLocked();\n    _nextHistoryIndex = _history.Count;\n    _lastFenceActivity = null;\n    SetPausedLocked(false);''',
+              '''    _pauseBeforeNextHistory = false;\n    _pendingHistoryIndex = null;\n    _pendingHistoryWordIndex = 0;\n    _rewindGraceSuppressedHistoryIndex = null;\n    _pendingUntracked = null;\n    ClearProcessingTimeAnnouncementLocked();\n    _nextHistoryIndex = _history.Count;\n    _lastFenceActivity = null;\n    SetPausedLocked(false);'''
+            )
+          ])
+
+          patch('AgentPanelSpeaker/SpeechWordBoundary.cs', [
+            (
+              '''/// <summary>\n/// Identifies one spoken word and its start position in the playback buffer.\n/// </summary>\ninternal sealed record SpeechWordBoundary(''',
+              '''/// <summary>\n/// Identifies one spoken token and its start position in the playback buffer.\n/// <c>WordIndex</c> is zero-based within the current engine utterance;\n/// SpeechService translates it into a SpeechFragment-relative offset. It is\n/// never an AIConversationCore canonical WordId.\n/// </summary>\ninternal sealed record SpeechWordBoundary('''
+            )
+          ])
+
+          patch('AgentPanelSpeaker/TranscriptPlaybackPosition.cs', [
+            (
+              '''/// <summary>\n/// Describes the transcript marker corresponding to monitored playback.\n/// </summary>\ninternal sealed record TranscriptPlaybackPosition(''',
+              '''/// <summary>\n/// Describes the transcript marker corresponding to monitored playback.\n/// <c>WordIndex</c> is the zero-based offset inside the active SpeechFragment.\n/// <c>WordId</c> is the globally unique AIConversationCore canonical word\n/// identity and does not reset at fragment boundaries.\n/// </summary>\ninternal sealed record TranscriptPlaybackPosition('''
+            )
+          ])
+
+      - name: Commit staged repair
+        shell: pwsh
+        run: |
+          $message = '${{ github.event.head_commit.message }}'
+          if ($message -eq 'ci: stage issue 84 red regression') {
+            $commit = 'test: expose issue 84 rewind ownership regressions'
+          } elseif ($message -eq 'ci: apply issue 84 ownership repair') {
+            $commit = 'fix: make C# sole owner of rewind grace'
+          } else {
+            throw "Unexpected repair trigger: $message"
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker
+          if (git diff --cached --quiet) {
+            throw 'Repair produced no staged changes.'
+          }
+          git diff --cached --check
+          git commit -m $commit
+          git push origin HEAD:issue-75-core-word-id-migration
