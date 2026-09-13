@@ -29,6 +29,10 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
         TestActiveFirstWordPendingGraceRestartsCurrent),
       ("rewind-current-fragment/active-first-word-running-grace-restarts-current",
         TestActiveFirstWordRunningGraceRestartsCurrent),
+      ("rewind-current-fragment/active-first-word-grace-is-consumed-by-rewind",
+        TestActiveFirstWordGraceIsConsumedByRewind),
+      ("rewind-current-fragment/rewind-restart-does-not-rearm-grace",
+        TestRewindRestartDoesNotRearmGrace),
       ("rewind-current-fragment/active-first-word-expired-grace-moves-previous",
         TestActiveFirstWordExpiredGraceMovesPrevious),
       ("rewind-current-fragment/paused-first-word-moves-previous",
@@ -36,7 +40,9 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       ("rewind-current-fragment/later-word-start-does-not-arm-grace",
         TestLaterWordStartDoesNotArmGrace),
       ("rewind-current-fragment/named-grace-period",
-        TestNamedGracePeriod)
+        TestNamedGracePeriod),
+      ("rewind-current-fragment/history-start-has-no-synthetic-speaking-position",
+        TestHistoryStartHasNoSyntheticSpeakingPosition)
     };
 
     int failures = 0;
@@ -179,6 +185,57 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       "First-word rewind inside the running grace period did not restart the current fragment.");
   }
 
+  /// <summary>
+  /// The first J inside grace may restart the current fragment, but that J
+  /// consumes the grace. A second immediate J must therefore move backward.
+  /// </summary>
+  private static void TestActiveFirstWordGraceIsConsumedByRewind()
+  {
+    using SpeechService speech = CreateSpeech();
+    SetActivePosition(speech, CurrentFragmentIndex, 0);
+    SetFieldIfPresent(speech, "_rewindCurrentFragmentGracePending", false);
+    SetFieldIfPresent(
+      speech,
+      "_rewindCurrentFragmentGraceStartedTimestamp",
+      Stopwatch.GetTimestamp());
+
+    Require(speech.TryRewindSentence(out string firstText),
+      "First rewind inside grace reported no destination.");
+    Require(firstText == "For local code files",
+      "First rewind inside grace did not restart the current fragment.");
+    Require(speech.TryRewindSentence(out string secondText),
+      "Second rewind after consuming grace reported no destination.");
+    Require(secondText == "For web research",
+      "The first rewind did not consume grace; a second J remained trapped on the current fragment.");
+  }
+
+  /// <summary>
+  /// Starting audio because J selected a destination must not arm another
+  /// first-word grace window for that same J-selected destination.
+  /// </summary>
+  private static void TestRewindRestartDoesNotRearmGrace()
+  {
+    using SpeechService speech = CreateSpeech();
+    SetActivePosition(speech, CurrentFragmentIndex, 0);
+    SetFieldIfPresent(speech, "_rewindCurrentFragmentGracePending", false);
+    SetFieldIfPresent(
+      speech,
+      "_rewindCurrentFragmentGraceStartedTimestamp",
+      Stopwatch.GetTimestamp());
+
+    Require(speech.TryRewindSentence(out string text),
+      "Rewind inside grace reported no destination.");
+    Require(text == "For local code files",
+      "Rewind inside grace did not restart the current fragment.");
+    InvokePlaybackStartPreparation(speech, CurrentFragmentIndex, 0);
+    Require(!ReadBool(speech, "_rewindCurrentFragmentGracePending"),
+      "A J-triggered restart re-armed first-word grace.");
+    Require(ReadNullableLong(
+        speech,
+        "_rewindCurrentFragmentGraceStartedTimestamp") is null,
+      "A J-triggered restart retained a rewind-grace timestamp.");
+  }
+
   private static void TestActiveFirstWordExpiredGraceMovesPrevious()
   {
     using SpeechService speech = CreateSpeech();
@@ -226,7 +283,7 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       speech,
       "_rewindCurrentFragmentGraceStartedTimestamp",
       Stopwatch.GetTimestamp());
-    InvokePlaybackStartPreparation(speech, 1);
+    InvokePlaybackStartPreparation(speech, CurrentFragmentIndex, 1);
 
     Require(ReadBool(speech, "_rewindCurrentFragmentGracePending") is false,
       "Playback starting after word zero incorrectly armed the rewind grace window.");
@@ -246,6 +303,58 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
     Require(field.GetValue(null) is TimeSpan period &&
         period == TimeSpan.FromMilliseconds(500),
       "Named rewind grace period is not 500 ms.");
+  }
+
+  /// <summary>
+  /// A history start must not impersonate the real voice cursor. The rendered
+  /// speaking position is published by EngineWordBoundary after audio reaches
+  /// a boundary, not speculatively before the engine speaks.
+  /// </summary>
+  private static void TestHistoryStartHasNoSyntheticSpeakingPosition()
+  {
+    MethodInfo report = GetPrivateMethod(
+      typeof(SpeechService),
+      "ReportPlaybackPositionLocked");
+    foreach (string methodName in new[]
+    {
+      "StartHistorySpeechLocked",
+      "RestartCurrentWordLocked"
+    })
+    {
+      MethodInfo method = GetPrivateMethod(typeof(SpeechService), methodName);
+      Require(!CallsDirectly(method, report),
+        $"{methodName} still publishes a synthetic pre-boundary playback position.");
+    }
+  }
+
+  /// <summary>
+  /// Detects a direct private-method call by its IL metadata token.
+  /// </summary>
+  private static bool CallsDirectly(MethodInfo caller, MethodInfo callee)
+  {
+    byte[] il = caller.GetMethodBody()?.GetILAsByteArray() ??
+      throw new InvalidOperationException(
+        $"Could not inspect IL for {caller.Name}.");
+    int targetToken = callee.MetadataToken;
+    for (int index = 0; index + sizeof(int) < il.Length; ++index)
+    {
+      // 0x28 is the IL 'call' opcode used for a direct private-method call.
+      if (il[index] == 0x28 &&
+          BitConverter.ToInt32(il, index + 1) == targetToken)
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static MethodInfo GetPrivateMethod(Type type, string name)
+  {
+    return type.GetMethod(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        $"{type.Name}.{name} is missing.");
   }
 
   private static CanonicalSpeechWordProjection Word(
@@ -340,6 +449,7 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
 
   private static void InvokePlaybackStartPreparation(
     SpeechService speech,
+    int historyIndex,
     int wordIndex)
   {
     MethodInfo method = speech.GetType().GetMethod(
@@ -347,7 +457,15 @@ internal static class Issue84RewindCurrentFragmentRegressionTestRunner
       BindingFlags.Instance | BindingFlags.NonPublic) ??
       throw new InvalidOperationException(
         "Playback-start rewind-grace preparation method is missing.");
-    method.Invoke(speech, new object[] { wordIndex });
+    ParameterInfo[] parameters = method.GetParameters();
+    object[] arguments = parameters.Length switch
+    {
+      1 => new object[] { wordIndex },
+      2 => new object[] { historyIndex, wordIndex },
+      _ => throw new InvalidOperationException(
+        "Unexpected playback-start rewind-grace preparation signature.")
+    };
+    method.Invoke(speech, arguments);
   }
 
   private static object ParseActiveKind(SpeechService speech, string value)
