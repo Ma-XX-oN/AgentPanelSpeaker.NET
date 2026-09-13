@@ -41,4 +41,28 @@ if text.count(old_seed) != 1:
   raise RuntimeError("Expected exactly one synthetic first-token boundary seed.")
 text = text.replace(old_seed, new_seed, 1)
 
+old_call = '''        string synthesisText = GetBookmarkedSynthesisText(
+          markup, words, wordIndex);
+'''
+new_call = '''        string synthesisText = GetOwnedBookmarkedSynthesisText(
+          markup, words, wordIndex);
+'''
+if text.count(old_call) != 1:
+  raise RuntimeError("Expected exactly one provenance bookmark synthesis call.")
+text = text.replace(old_call, new_call, 1)
+
+old_signature = '''  private static string GetBookmarkedSynthesisText(
+    SpeechMarkup markup,
+    IReadOnlyList<SpeechMarkupWord> words,
+    int index)
+'''
+new_signature = '''  private static string GetOwnedBookmarkedSynthesisText(
+    SpeechMarkup markup,
+    IReadOnlyList<SpeechMarkupWord> words,
+    int index)
+'''
+if text.count(old_signature) != 1:
+  raise RuntimeError("Expected exactly one provenance bookmark synthesis helper.")
+text = text.replace(old_signature, new_signature, 1)
+
 PATH.write_text(text, encoding="utf-8")
