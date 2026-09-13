@@ -25,7 +25,9 @@ internal sealed record CanonicalSpeechWordProjection(
   [property: JsonPropertyName("separator_before")] string SeparatorBefore,
   [property: JsonPropertyName("groups")] string[] Groups,
   [property: JsonPropertyName("provenance")]
-    CanonicalSpeechWordProvenanceProjection? Provenance);
+    CanonicalSpeechWordProvenanceProjection? Provenance,
+  [property: JsonPropertyName("navigation_boundary_before")]
+    bool NavigationBoundaryBefore = false);
 
 /// <summary>
 /// Core-owned semantic provenance for one canonical transcript word.

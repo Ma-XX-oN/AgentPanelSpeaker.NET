@@ -697,11 +697,10 @@ internal sealed class JsonlSessionMonitor : IDisposable
       bool newFenceLine = current.Count != 0 &&
         fence.Length != 0 &&
         word.SeparatorBefore.Contains('\n');
-      bool newOrderedItem = current.Count != 0 &&
+      bool newNavigationUnit = current.Count != 0 &&
         fence.Length == 0 &&
-        word.SeparatorBefore.Contains('\n') &&
-        IsOrderedListOrdinal(word.Text);
-      if (fenceChanged || newFenceLine || newOrderedItem)
+        word.NavigationBoundaryBefore;
+      if (fenceChanged || newFenceLine || newNavigationUnit)
       {
         groups.Add(current);
         current = new List<CanonicalSpeechWordProjection>();
@@ -879,14 +878,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
     return group is null ? "untyped" : group[prefix.Length..];
   }
 
-  private static bool IsOrderedListOrdinal(string text)
-  {
-    if (text.Length < 2 || text[^1] is not ('.' or ')'))
-    {
-      return false;
-    }
-    return text[..^1].All(char.IsDigit);
-  }
 
   /// <summary>
   /// Retains one request_user_input call until its matching output arrives.

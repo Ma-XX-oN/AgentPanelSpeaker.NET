@@ -4,7 +4,7 @@
 
 Provider-specific conversation normalization is no longer implemented in AgentPanelSpeaker.  `JsonlRecordExtractor` is retained only as a lightweight Claude/Codex file-format detector for manual session selection; it does not classify conversational content.  Stable record identity is taken from canonical provenance, and the old `JsonlRecordIdentity` parser has been removed.
 
-The runtime uses one persistent Node bridge (`tools/AIConversationCore-worker.mjs`) pinned to AIConversationCore commit `a6fd322aece692cd0c90bc89f11228b3a4e83520`.  AgentPanelSpeaker-specific responsibilities remain in C#: session discovery/tailing, speech policy and SAPI playback, WebView2 presentation, search/navigation, highlighting, and UI behaviour.
+The runtime uses one persistent Node bridge (`tools/AIConversationCore-worker.mjs`) pinned to AIConversationCore commit `134d5735b44b8d131d30d5b98a6e3a06320a113f`.  AgentPanelSpeaker-specific responsibilities remain in C#: session discovery/tailing, speech policy and SAPI playback, WebView2 presentation, search/navigation, highlighting, and UI behaviour.
 
 The pre-migration v212 parser was retained only long enough to establish and pass migration parity gates.  After those gates passed, the legacy semantic parser/parity harness was removed so future provider semantics have one owner: AIConversationCore.
 

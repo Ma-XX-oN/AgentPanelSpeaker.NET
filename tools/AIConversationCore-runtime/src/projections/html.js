@@ -77,10 +77,13 @@ function annotateOrderedListOrdinals(html) {
  * @returns {string} HTML generated from the canonical Markdown content.
  */
 function renderMarkdown(markdown) {
+  const renderer = new marked.Renderer();
+  renderer.html = ({ text }) => htmlEscape(text);
   const html = String(marked.parse(String(markdown ?? ''), {
     async: false,
     breaks: false,
-    gfm: true
+    gfm: true,
+    renderer
   }));
   return annotateOrderedListOrdinals(html);
 }
@@ -105,7 +108,25 @@ function blockMarkdown(block) {
     const code = block.code ?? block.text ?? '';
     return `\`\`\`${language}\n${code}\n\`\`\``;
   }
+  if (block.type === 'subagent') {
+    return block.output ?? block.text ?? block.description ?? '';
+  }
   return block.text ?? '';
+}
+
+/**
+ * Renders one canonical content block as its isolated HTML leaf.
+ *
+ * This helper shares the exact block-to-Markdown and Markdown-to-HTML
+ * implementation used by the complete renderer.  Interactive word
+ * provenance uses it only to verify block ownership inside Core.
+ *
+ * @param {Object<string, *>} block - Canonical content block.
+ * @returns {string} Canonical HTML represented by the block.
+ */
+export function renderCanonicalBlockHtml(block) {
+  const markdown = blockMarkdown(block);
+  return markdown ? renderMarkdown(markdown) : '';
 }
 
 /**
@@ -334,20 +355,41 @@ function renderTurn(turn, emittedSourceIndexes) {
 }
 
 /**
+ * Renders ordered complete-turn HTML units from normalized canonical events.
+ *
+ * Each returned unit is a legal virtualization boundary owned by Core.  Its
+ * HTML is already fully rendered canonical output, so downstream consumers may
+ * materialize or concatenate whole units without rediscovering presentation
+ * semantics from tags, classes, or source-anchor counts.
+ *
+ * @param {Array<Object<string, *>>} events - Ordered normalized canonical events.
+ * @returns {Array<Object<string, *>>} Ordered indivisible canonical HTML units.
+ */
+export function renderCanonicalHtmlUnits(events) {
+  if (!Array.isArray(events)) throw new TypeError('Canonical events must be an array.');
+  const presentation = buildCanonicalPresentation(events);
+  const emittedSourceIndexes = new Set();
+  return (presentation.turns ?? []).map(turn => ({
+    id: turn?.id ?? '',
+    kind: 'turn',
+    atomic: true,
+    source: (turn?.source ?? []).map(source => ({ ...source })),
+    html: renderTurn(turn, emittedSourceIndexes)
+  }));
+}
+
+/**
  * Renders complete canonical HTML directly from normalized canonical events.
  *
  * All semantic structure and Markdown-to-HTML conversion are owned by
- * AIConversationCore. Downstream consumers integrate this completed HTML rather
- * than interpreting presentation nodes or provider-specific markers.
+ * AIConversationCore. The complete output is exactly the concatenation of the
+ * same Core-owned complete-turn units exposed to interactive consumers.
  *
  * @param {Array<Object<string, *>>} events - Ordered normalized canonical events.
  * @returns {string} Complete canonical HTML transcript.
  */
 export function renderCanonicalHtml(events) {
-  if (!Array.isArray(events)) throw new TypeError('Canonical events must be an array.');
-  const presentation = buildCanonicalPresentation(events);
-  const emittedSourceIndexes = new Set();
-  return (presentation.turns ?? [])
-    .map(turn => renderTurn(turn, emittedSourceIndexes))
+  return renderCanonicalHtmlUnits(events)
+    .map(unit => unit.html)
     .join('');
 }

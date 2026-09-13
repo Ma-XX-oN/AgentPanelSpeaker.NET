@@ -134,7 +134,10 @@ function userChildren(event) {
     children.push(contentNode(event, 'attachments', attachments));
   }
   if (contexts.length) {
-    children.push(contentNode(event, 'user_context', contexts));
+    children.push({
+      ...contentNode(event, 'user_context', contexts),
+      atomic: true
+    });
   }
   if (body.length || (!attachments.length && !contexts.length)) {
     children.push(contentNode(event, 'markdown', body));

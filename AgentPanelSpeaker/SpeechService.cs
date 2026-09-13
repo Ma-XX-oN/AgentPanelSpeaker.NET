@@ -18,6 +18,8 @@ internal sealed record SeekableTranscriptWordRange(
 internal sealed class SpeechService : IDisposable
 {
   private const int MaximumHistoryEntries = 5000;
+  private static readonly TimeSpan RewindCurrentFragmentGracePeriod =
+    TimeSpan.FromMilliseconds(500);
 
   private readonly object _sync = new();
   private readonly SapiSpeechEngine _engine = new();
@@ -61,6 +63,8 @@ internal sealed class SpeechService : IDisposable
   private int _activeCharacterPosition;
   private int _activeCharacterCount;
   private long _activeBoundaryTimestamp;
+  private bool _rewindCurrentFragmentGracePending;
+  private long? _rewindCurrentFragmentGraceStartedTimestamp;
   private string _activeWord = string.Empty;
   private DateTimeOffset? _pauseStartedUtc;
   private SpeechProfileSettings? _activeProfile;
@@ -864,9 +868,12 @@ internal sealed class SpeechService : IDisposable
     lock (_sync)
     {
       int anchor = GetNavigationAnchorLocked();
+      bool pastFirstWord =
+        (_pendingHistoryIndex == anchor && _pendingHistoryWordIndex > 0) ||
+        (_activeHistoryIndex == anchor && _activeWordIndex > 0);
       bool restartCurrent = anchor >= 0 && anchor < _history.Count &&
-        ((_pendingHistoryIndex == anchor && _pendingHistoryWordIndex > 0) ||
-         (_activeHistoryIndex == anchor && _activeWordIndex > 0));
+        (pastFirstWord ||
+         IsRewindCurrentFragmentGraceActiveLocked(anchor));
       int candidate = restartCurrent
         ? anchor
         : FindPreviousEligibleLocked(
@@ -874,6 +881,55 @@ internal sealed class SpeechService : IDisposable
       LogNavigationLocked("rewind-sentence", anchor, candidate);
       return RestartCandidateLocked(candidate, out text);
     }
+  }
+
+  /// <summary>
+  /// Returns whether playback is still inside the first-word rewind grace
+  /// window for the current active history fragment.
+  /// </summary>
+  private bool IsRewindCurrentFragmentGraceActiveLocked(int anchor)
+  {
+    if (_activeKind != ActiveSpeechKind.History ||
+        _isPaused ||
+        _activeHistoryIndex != anchor ||
+        _activeWordIndex != 0)
+    {
+      return false;
+    }
+    if (_rewindCurrentFragmentGracePending)
+    {
+      return true;
+    }
+    return _rewindCurrentFragmentGraceStartedTimestamp is long started &&
+      Stopwatch.GetElapsedTime(started) < RewindCurrentFragmentGracePeriod;
+  }
+
+  /// <summary>
+  /// Prepares first-word rewind grace for a new history playback start.
+  /// The timer itself begins only when reading reaches word zero.
+  /// </summary>
+  private void PrepareRewindCurrentFragmentGraceLocked(int startWordIndex)
+  {
+    _rewindCurrentFragmentGracePending = startWordIndex == 0;
+    _rewindCurrentFragmentGraceStartedTimestamp = null;
+  }
+
+  /// <summary>
+  /// Starts first-word rewind grace at an actual playback/resume point.
+  /// </summary>
+  private void StartRewindCurrentFragmentGraceLocked()
+  {
+    _rewindCurrentFragmentGracePending = false;
+    _rewindCurrentFragmentGraceStartedTimestamp = Stopwatch.GetTimestamp();
+  }
+
+  /// <summary>
+  /// Clears first-word rewind grace when it cannot apply.
+  /// </summary>
+  private void ClearRewindCurrentFragmentGraceLocked()
+  {
+    _rewindCurrentFragmentGracePending = false;
+    _rewindCurrentFragmentGraceStartedTimestamp = null;
   }
 
   /// <summary>
@@ -1328,6 +1384,15 @@ internal sealed class SpeechService : IDisposable
         else if (hasActiveUtterance)
         {
           _engine.Resume();
+          if (_activeKind == ActiveSpeechKind.History &&
+              _activeWordIndex == 0)
+          {
+            StartRewindCurrentFragmentGraceLocked();
+          }
+          else
+          {
+            ClearRewindCurrentFragmentGraceLocked();
+          }
           ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
         }
         else
@@ -1344,6 +1409,7 @@ internal sealed class SpeechService : IDisposable
 
       if (_activeKind != ActiveSpeechKind.None)
       {
+        ClearRewindCurrentFragmentGraceLocked();
         _engine.Pause();
         _pauseStartedUtc = DateTimeOffset.UtcNow;
         SetPausedLocked(true);
@@ -1440,6 +1506,17 @@ internal sealed class SpeechService : IDisposable
       }
 
       _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);
+      if (_rewindCurrentFragmentGracePending)
+      {
+        if (_activeWordBaseIndex == 0 && _activeWordIndex == 0)
+        {
+          StartRewindCurrentFragmentGraceLocked();
+        }
+        else
+        {
+          ClearRewindCurrentFragmentGraceLocked();
+        }
+      }
       _activeWord = GetFragmentWordText(
         fragment,
         _activeWordIndex,
@@ -2159,6 +2236,7 @@ internal sealed class SpeechService : IDisposable
     _activeProfile = profile.Normalize();
     _activePauseAfter = pauseAfter;
     _pauseStartedUtc = null;
+    PrepareRewindCurrentFragmentGraceLocked(boundedWordIndex);
     SetActiveKindLocked(ActiveSpeechKind.History);
     ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
     try
@@ -2279,6 +2357,7 @@ internal sealed class SpeechService : IDisposable
       _activeWordIndex,
       _activeWord.Length);
     _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+    PrepareRewindCurrentFragmentGraceLocked(_activeWordIndex);
     SpeakConfiguredLocked(
       remaining,
       _activeProfile,
@@ -2809,6 +2888,7 @@ internal sealed class SpeechService : IDisposable
       boundedWordIndex,
       _activeWord.Length);
     _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
+    ClearRewindCurrentFragmentGraceLocked();
     ReportPlaybackPositionLocked(TranscriptPlaybackState.Paused);
     DiagnosticLog.Write("speech.paused_navigation", new
     {

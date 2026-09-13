@@ -11,10 +11,16 @@ export {
   renderTurnHeader
 } from './projections/turn-header.js';
 
-export { renderCanonicalMarkdown } from './projections/markdown-revisions.js';
-export { renderCanonicalHtml } from './projections/html.js';
+export { renderCanonicalMarkdown } from './projections/markdown-visibility.js';
+export {
+  locateCanonicalWord,
+  projectCanonicalWords,
+  renderCanonicalHtml,
+  renderCanonicalHtmlUnits
+} from './projections/html-visibility.js';
 export { buildCanonicalPresentation } from './projections/presentation-revisions.js';
-export { projectCanonicalConversation } from './projections/structured.js';
+export { projectCanonicalConversation } from './projections/structured-visibility.js';
+export { createCanonicalConversationSession } from './session/canonical-session.js';
 export { loadConversationSources } from './sources/conversation.js';
 
 export { deriveTurns } from './derive/turns.js';
@@ -24,6 +30,6 @@ export {
   adaptCodexRecords,
   adaptCodexToolEvents,
   resolveCodexSessionMetadata
-} from './adapters/codex.js';
+} from './adapters/codex-retained.js';
 export { adaptInteractiveSessionRecords } from './adapters/interactive.js';
 export { adaptSpeechSessionRecords } from './adapters/speech-session-normalized.js';

@@ -1,4 +1,4 @@
-import { adaptCodexRecords } from './codex.js';
+import { adaptCodexRecords } from './codex-retained.js';
 import { adaptInteractiveSessionRecords as adaptLegacyInteractiveSessionRecords } from './session.js';
 
 /**
@@ -204,9 +204,9 @@ function adaptCodexInteractiveSession(records, options) {
 /**
  * Adapts a complete provider session for interactive consumers.
  *
- * Claude continues through the established adapter. Codex uses the canonical
- * Codex adapter directly so recorded IDE context is never removed and revision
- * options remain shared across all consumers.
+ * Claude continues through the established adapter. Codex uses the retained
+ * canonical Codex adapter so recorded IDE context is never removed and the
+ * complete revision inventory survives for projection-time visibility changes.
  *
  * @param {string} provider - Canonical provider identifier (`claude` or `codex`).
  * @param {Array<Object<string, *>>} records - Ordered provider/source records.

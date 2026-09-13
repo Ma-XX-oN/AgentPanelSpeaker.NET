@@ -5,8 +5,8 @@ import { adaptClaudeRecords } from '../adapters/claude-normalized.js';
 import {
   adaptCodexRecords,
   resolveCodexSessionMetadata
-} from '../adapters/codex.js';
-import { projectCanonicalConversation } from '../projections/structured.js';
+} from '../adapters/codex-retained.js';
+import { projectCanonicalConversation } from '../projections/structured-visibility.js';
 
 /**
  * Parses one JSONL text source into ordered records.
@@ -68,9 +68,13 @@ function sourceRecords(source, label) {
 /**
  * Adapts one provider's records into canonical events.
  *
+ * Codex normalization always retains complete revision history. Projection
+ * options are applied after normalization and therefore do not alter this event
+ * inventory.
+ *
  * @param {string} provider - Canonical provider identifier.
  * @param {Array<Object<string, *>>} records - Ordered provider records.
- * @param {Object<string, *>} options - Provider normalization options.
+ * @param {Object<string, *>} options - Reserved provider normalization options.
  * @returns {Array<Object<string, *>>} Ordered canonical events.
  */
 function adapt(provider, records, options) {
@@ -119,7 +123,7 @@ function codexUserFallbackTitle(records) {
  * @param {string} input.provider - Canonical provider identifier.
  * @param {string|Object<string, *>} input.primarySource - Primary provider source.
  * @param {Object<string, *>} [input.supplementarySources={}] - Optional supplementary sources.
- * @param {Object<string, *>} [input.options={}] - Provider normalization options.
+ * @param {Object<string, *>} [input.options={}] - Projection options.
  * @returns {Object<string, *>} Loaded records, canonical events, metadata, and projection.
  */
 export function loadConversationSources({
@@ -158,6 +162,6 @@ export function loadConversationSources({
     records,
     events,
     session_metadata: sessionMetadata,
-    projection: projectCanonicalConversation(events)
+    projection: projectCanonicalConversation(events, options)
   };
 }
