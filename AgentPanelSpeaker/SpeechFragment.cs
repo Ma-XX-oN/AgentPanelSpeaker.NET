@@ -40,6 +40,15 @@ namespace AgentPanelSpeaker;
 /// <summary>
 /// Maps one immutable Core transcript word into one app-owned speech fragment.
 /// </summary>
+/// <param name="Id">
+/// Globally unique AIConversationCore canonical WordId. It does not reset at
+/// speech-fragment boundaries.
+/// </param>
+/// <param name="Text">Canonical word text carried into speech.</param>
+/// <param name="CharacterStart">
+/// Zero-based character offset inside this SpeechFragment's text.
+/// </param>
+/// <param name="CharacterLength">Character length inside the fragment.</param>
 internal sealed record SpeechFragmentWord(
   long Id,
   string Text,

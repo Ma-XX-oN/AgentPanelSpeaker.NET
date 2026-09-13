@@ -293,11 +293,31 @@ internal static class Issue35SpeechTransitionRegressionTestRunner
         "ProjectionVisible" or "projectionVisible" => !historical,
         "RevisionHistoryControlled" or "revisionHistoryControlled" => true,
         "HistoricalRevision" or "historicalRevision" => historical,
+        "TranscriptWords" or "transcriptWords" => BuildTranscriptWords(nodeId, text),
         _ when parameter.HasDefaultValue => parameter.DefaultValue,
         _ => throw new InvalidOperationException(
           $"Unexpected SpeechFragment constructor parameter {parameter.Name}.")
       }).ToArray();
     return (SpeechFragment)constructor.Invoke(arguments);
+  }
+
+  /// <summary>
+  /// Gives the transition fixture the same canonical-word shape as production
+  /// retained history. IDs are unique within this synthetic test transcript;
+  /// character offsets remain local to the containing SpeechFragment.
+  /// </summary>
+  private static IReadOnlyList<SpeechFragmentWord> BuildTranscriptWords(
+    long nodeId,
+    string text)
+  {
+    return SpeechTokenization.Matches(text)
+      .Cast<System.Text.RegularExpressions.Match>()
+      .Select((match, index) => new SpeechFragmentWord(
+        checked(nodeId * 1000 + index + 1),
+        match.Value,
+        match.Index,
+        match.Length))
+      .ToArray();
   }
 
   private static SpeechService CreateSpeechService(int rate)

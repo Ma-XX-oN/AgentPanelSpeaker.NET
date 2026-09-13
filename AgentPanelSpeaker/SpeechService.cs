@@ -43,6 +43,8 @@ internal sealed class SpeechService : IDisposable
   private int _activeHistoryIndex = -1;
   private int _nextHistoryIndex;
   private int? _pendingHistoryIndex;
+  // Zero-based offset within the pending SpeechFragment word collection.
+  // This is NOT an AIConversationCore canonical WordId.
   private int _pendingHistoryWordIndex;
   private UntrackedSpeech? _pendingUntracked;
   private ProcessingTimeAnnouncement? _pendingProcessingTime;
@@ -57,7 +59,11 @@ internal sealed class SpeechService : IDisposable
   private bool _reportedSpeaking;
   private bool _isPaused;
   private string _activeTranscriptText = string.Empty;
+  // Zero-based offset within the active SpeechFragment word collection.
+  // This is NOT an AIConversationCore canonical WordId.
   private int _activeWordIndex;
+  // Fragment-relative offset represented by engine WordIndex zero when an
+  // utterance starts in the middle of a retained SpeechFragment.
   private int _activeWordBaseIndex;
   private int _activeCharacterBaseOffset;
   private int _activeCharacterPosition;
@@ -65,6 +71,10 @@ internal sealed class SpeechService : IDisposable
   private long _activeBoundaryTimestamp;
   private bool _rewindCurrentFragmentGracePending;
   private long? _rewindCurrentFragmentGraceStartedTimestamp;
+  // PreviousSentence is the only owner of this one-shot suppression. A
+  // J-selected history target must not arm a fresh first-word grace window
+  // when its audio starts, or repeated J presses can remain on one fragment.
+  private int? _rewindGraceSuppressedHistoryIndex;
   private string _activeWord = string.Empty;
   private DateTimeOffset? _pauseStartedUtc;
   private SpeechProfileSettings? _activeProfile;
@@ -440,6 +450,7 @@ internal sealed class SpeechService : IDisposable
       _backgroundWork.Clear();
       _pendingHistoryIndex = null;
       _pendingHistoryWordIndex = 0;
+      _rewindGraceSuppressedHistoryIndex = null;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
       _pauseBeforeNextHistory = false;
@@ -475,6 +486,7 @@ internal sealed class SpeechService : IDisposable
         startMode.ToString());
       _pendingHistoryIndex = null;
       _pendingHistoryWordIndex = 0;
+      _rewindGraceSuppressedHistoryIndex = null;
       _pendingUntracked = null;
       ClearProcessingTimeAnnouncementLocked();
       _pauseBeforeNextHistory = false;
@@ -878,6 +890,14 @@ internal sealed class SpeechService : IDisposable
         ? anchor
         : FindPreviousEligibleLocked(
           anchor >= _history.Count ? _history.Count - 1 : anchor - 1);
+      if (candidate >= 0)
+      {
+        // PreviousSentence owns both the destination and its 500 ms policy.
+        // Consuming grace here makes a second immediate J move backward, while
+        // the one-shot target prevents this J-selected start from re-arming it.
+        ClearRewindCurrentFragmentGraceLocked();
+        _rewindGraceSuppressedHistoryIndex = candidate;
+      }
       LogNavigationLocked("rewind-sentence", anchor, candidate);
       return RestartCandidateLocked(candidate, out text);
     }
@@ -906,11 +926,20 @@ internal sealed class SpeechService : IDisposable
 
   /// <summary>
   /// Prepares first-word rewind grace for a new history playback start.
-  /// The timer itself begins only when reading reaches word zero.
+  /// The timer itself begins only when a real engine boundary reaches
+  /// fragment-relative word index zero. A PreviousSentence-selected target
+  /// consumes its one-shot suppression instead of re-arming grace.
   /// </summary>
-  private void PrepareRewindCurrentFragmentGraceLocked(int startWordIndex)
+  private void PrepareRewindCurrentFragmentGraceLocked(
+    int historyIndex,
+    int startWordIndex)
   {
-    _rewindCurrentFragmentGracePending = startWordIndex == 0;
+    bool suppress = _rewindGraceSuppressedHistoryIndex is int suppressed &&
+      suppressed == historyIndex;
+    // Suppression belongs to exactly one attempted history start. If another
+    // command redirected playback first, it must not leak into a later start.
+    _rewindGraceSuppressedHistoryIndex = null;
+    _rewindCurrentFragmentGracePending = startWordIndex == 0 && !suppress;
     _rewindCurrentFragmentGraceStartedTimestamp = null;
   }
 
@@ -1505,6 +1534,8 @@ internal sealed class SpeechService : IDisposable
         return;
       }
 
+      // Both indexes here are fragment-relative offsets. The globally
+      // unique Core WordId is resolved separately from TranscriptWords.
       _activeWordIndex = Math.Max(_activeWordIndex, mappedWordIndex);
       if (_rewindCurrentFragmentGracePending)
       {
@@ -2236,9 +2267,10 @@ internal sealed class SpeechService : IDisposable
     _activeProfile = profile.Normalize();
     _activePauseAfter = pauseAfter;
     _pauseStartedUtc = null;
-    PrepareRewindCurrentFragmentGraceLocked(boundedWordIndex);
+    PrepareRewindCurrentFragmentGraceLocked(
+      _activeHistoryIndex,
+      boundedWordIndex);
     SetActiveKindLocked(ActiveSpeechKind.History);
-    ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
     try
     {
       SpeakConfiguredLocked(
@@ -2357,12 +2389,13 @@ internal sealed class SpeechService : IDisposable
       _activeWordIndex,
       _activeWord.Length);
     _activeBoundaryTimestamp = Stopwatch.GetTimestamp();
-    PrepareRewindCurrentFragmentGraceLocked(_activeWordIndex);
+    PrepareRewindCurrentFragmentGraceLocked(
+      _activeHistoryIndex,
+      _activeWordIndex);
     SpeakConfiguredLocked(
       remaining,
       _activeProfile,
       _activePauseAfter);
-    ReportPlaybackPositionLocked(TranscriptPlaybackState.Speaking);
   }
 
   private void ReportPlaybackPositionLocked(TranscriptPlaybackState state)
@@ -2771,6 +2804,7 @@ internal sealed class SpeechService : IDisposable
     _pauseBeforeNextHistory = false;
     _pendingHistoryIndex = null;
     _pendingHistoryWordIndex = 0;
+    _rewindGraceSuppressedHistoryIndex = null;
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
     _nextHistoryIndex = _history.Count;
@@ -2820,6 +2854,7 @@ internal sealed class SpeechService : IDisposable
     _pauseBeforeNextHistory = false;
     _pendingHistoryIndex = null;
     _pendingHistoryWordIndex = 0;
+    _rewindGraceSuppressedHistoryIndex = null;
     _pendingUntracked = null;
     ClearProcessingTimeAnnouncementLocked();
     _nextHistoryIndex = _history.Count;

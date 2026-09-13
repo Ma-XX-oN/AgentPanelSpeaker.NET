@@ -2,6 +2,9 @@ namespace AgentPanelSpeaker;
 
 /// <summary>
 /// Describes the transcript marker corresponding to monitored playback.
+/// <c>WordIndex</c> is the zero-based offset inside the active SpeechFragment.
+/// <c>WordId</c> is the globally unique AIConversationCore canonical word
+/// identity and does not reset at fragment boundaries.
 /// </summary>
 internal sealed record TranscriptPlaybackPosition(
   TranscriptPlaybackState State,
