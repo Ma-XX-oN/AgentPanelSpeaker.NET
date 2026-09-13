@@ -74,7 +74,20 @@ jobs:
 
       - name: Apply AgentPanelSpeaker production repair and repin
         shell: pwsh
-        run: python tools/issue84-structural-rewind-repair.py production
+        run: |
+          $workflow = Join-Path $env:GITHUB_WORKSPACE '.github\workflows\core-integration-validation.yml'
+          $oldCore = '76042b398c2f50ff2b146f86e98e3d43881ba216'
+          $newCore = '134d5735b44b8d131d30d5b98a6e3a06320a113f'
+          $text = [System.IO.File]::ReadAllText($workflow)
+          $count = ([regex]::Matches($text, [regex]::Escape($newCore))).Count
+          if ($count -lt 3) {
+            throw "Expected at least three pre-pinned Core references, found $count."
+          }
+          [System.IO.File]::WriteAllText(
+            $workflow,
+            $text.Replace($newCore, $oldCore),
+            [System.Text.UTF8Encoding]::new($false))
+          python tools/issue84-structural-rewind-repair.py production
 
       - name: Install pinned Core dependencies
         shell: pwsh
