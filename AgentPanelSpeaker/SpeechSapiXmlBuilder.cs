@@ -39,11 +39,24 @@ internal static partial class SpeechSapiXmlBuilder
     {
       sapiContent += SapiBlockPause;
     }
-    string ssmlContent = ConvertContentToSsml(sapiContent);
+    (
+      string ssmlContent,
+      IReadOnlyList<SpeechMarkupProvenanceSpan> ssmlProvenance) =
+        BuildSsmlContent(
+          text,
+          spelledWords,
+          pronunciations,
+          pauseAfter,
+          pauseBefore);
+    (
+      string wrappedSsml,
+      IReadOnlyList<SpeechMarkupProvenanceSpan> wrappedProvenance) =
+        WrapSsmlPitch(ssmlContent, pitchSetting, ssmlProvenance);
     return new SpeechMarkup(
       text,
       WrapSapiPitch(sapiContent, pitchSetting),
-      WrapSsmlPitch(ssmlContent, pitchSetting));
+      wrappedSsml,
+      SsmlProvenance: wrappedProvenance);
   }
 
   /// <summary>
@@ -78,38 +91,11 @@ internal static partial class SpeechSapiXmlBuilder
     int position = 0;
     while (position < text.Length)
     {
-      Match dateTimeMatch = IsoDateTimeRegex().Match(text, position);
-      Match dateMatch = IsoDateRegex().Match(text, position);
-      Match numericDateMatch = NumericDateRegex().Match(text, position);
-      Match timeMatch = TimeRegex().Match(text, position);
-      Match? spelledMatch = spelledWordRegex?.Match(text, position);
-      PronunciationMatch? pronunciationMatch = pronunciations.FindNext(
+      SpecialMatch? next = FindNextSpecialMatch(
         text,
-        position);
-
-      SpecialMatch? next = Earliest(
-        pronunciationMatch is null
-          ? null
-          : new SpecialMatch(
-            pronunciationMatch.Match,
-            SpecialMatchKind.Pronunciation,
-            pronunciationMatch.Rule),
-        spelledMatch is null
-          ? null
-          : new SpecialMatch(
-            spelledMatch,
-            SpecialMatchKind.Spelling,
-            null),
-        new SpecialMatch(
-          dateTimeMatch,
-          SpecialMatchKind.IsoDateTime,
-          null),
-        new SpecialMatch(dateMatch, SpecialMatchKind.IsoDate, null),
-        new SpecialMatch(
-          numericDateMatch,
-          SpecialMatchKind.NumericDate,
-          null),
-        new SpecialMatch(timeMatch, SpecialMatchKind.Time, null));
+        position,
+        spelledWordRegex,
+        pronunciations);
 
       if (next is null || !next.Match.Success)
       {
@@ -164,24 +150,227 @@ internal static partial class SpeechSapiXmlBuilder
   }
 
   /// <summary>
-  /// Converts native SAPI spelling elements into SSML spelling elements.
+  /// Builds standards-based SSML while retaining exact source provenance for
+  /// every emitted text range. XML-only syntax and inserted pauses have no
+  /// canonical source owner.
   /// </summary>
-  private static string ConvertContentToSsml(string sapiContent)
+  private static (
+    string Content,
+    IReadOnlyList<SpeechMarkupProvenanceSpan> Provenance) BuildSsmlContent(
+      string text,
+      IReadOnlyList<string> spelledWords,
+      PronunciationRuleSet pronunciations,
+      bool pauseAfter,
+      bool pauseBefore)
   {
-    return sapiContent
-      .Replace(
-        SapiBlockPause,
-        SsmlBlockPause,
-        StringComparison.Ordinal)
-      .Replace(
-        "<spell>",
-        "<break time=\"100ms\"/>" +
-          "<say-as interpret-as=\"spell-out\">",
-        StringComparison.Ordinal)
-      .Replace(
-        "</spell>",
-        "</say-as><break time=\"100ms\"/>",
-        StringComparison.Ordinal);
+    Regex? spelledWordRegex = CreateSpelledWordRegex(spelledWords);
+    var output = new StringBuilder();
+    var provenance = new List<SpeechMarkupProvenanceSpan>();
+    if (pauseBefore)
+    {
+      output.Append(SsmlBlockPause);
+    }
+
+    int position = 0;
+    while (position < text.Length)
+    {
+      SpecialMatch? next = FindNextSpecialMatch(
+        text,
+        position,
+        spelledWordRegex,
+        pronunciations);
+      if (next is null || !next.Match.Success)
+      {
+        AppendMappedIdentity(
+          output,
+          text[position..],
+          position,
+          provenance);
+        break;
+      }
+
+      AppendMappedIdentity(
+        output,
+        text[position..next.Match.Index],
+        position,
+        provenance);
+      switch (next.Kind)
+      {
+        case SpecialMatchKind.Pronunciation:
+          PronunciationRule pronunciation = next.Pronunciation!;
+          if (pronunciation.Kind == PronunciationRuleKind.Ipa)
+          {
+            output.Append("<phoneme alphabet=\"ipa\" ph=\"");
+            AppendAttributeEscaped(output, pronunciation.Value);
+            output.Append("\">");
+            AppendMappedIdentity(
+              output,
+              next.Match.Value,
+              next.Match.Index,
+              provenance);
+            output.Append("</phoneme>");
+          }
+          else
+          {
+            AppendMappedReplacement(
+              output,
+              pronunciation.Value,
+              next.Match.Index,
+              next.Match.Length,
+              provenance);
+          }
+          break;
+
+        case SpecialMatchKind.Spelling:
+          output.Append("<break time=\"100ms\"/>");
+          output.Append("<say-as interpret-as=\"spell-out\">");
+          AppendMappedIdentity(
+            output,
+            next.Match.Value,
+            next.Match.Index,
+            provenance);
+          output.Append("</say-as><break time=\"100ms\"/>");
+          break;
+
+        case SpecialMatchKind.IsoDateTime:
+          AppendMappedReplacement(
+            output,
+            FormatIsoDateTime(next.Match.Value),
+            next.Match.Index,
+            next.Match.Length,
+            provenance);
+          break;
+
+        case SpecialMatchKind.IsoDate:
+          AppendMappedReplacement(
+            output,
+            FormatIsoDate(next.Match.Value),
+            next.Match.Index,
+            next.Match.Length,
+            provenance);
+          break;
+
+        case SpecialMatchKind.NumericDate:
+          AppendMappedReplacement(
+            output,
+            FormatNumericDate(next.Match.Value),
+            next.Match.Index,
+            next.Match.Length,
+            provenance);
+          break;
+
+        case SpecialMatchKind.Time:
+          AppendMappedReplacement(
+            output,
+            FormatTime(next.Match.Value),
+            next.Match.Index,
+            next.Match.Length,
+            provenance);
+          break;
+      }
+      position = next.Match.Index + next.Match.Length;
+    }
+
+    if (pauseAfter)
+    {
+      output.Append(SsmlBlockPause);
+    }
+    return (output.ToString(), provenance);
+  }
+
+  /// <summary>
+  /// Finds the next speech transformation once so native and SSML rendering
+  /// share identical source segmentation.
+  /// </summary>
+  private static SpecialMatch? FindNextSpecialMatch(
+    string text,
+    int position,
+    Regex? spelledWordRegex,
+    PronunciationRuleSet pronunciations)
+  {
+    Match dateTimeMatch = IsoDateTimeRegex().Match(text, position);
+    Match dateMatch = IsoDateRegex().Match(text, position);
+    Match numericDateMatch = NumericDateRegex().Match(text, position);
+    Match timeMatch = TimeRegex().Match(text, position);
+    Match? spelledMatch = spelledWordRegex?.Match(text, position);
+    PronunciationMatch? pronunciationMatch = pronunciations.FindNext(
+      text,
+      position);
+
+    return Earliest(
+      pronunciationMatch is null
+        ? null
+        : new SpecialMatch(
+          pronunciationMatch.Match,
+          SpecialMatchKind.Pronunciation,
+          pronunciationMatch.Rule),
+      spelledMatch is null
+        ? null
+        : new SpecialMatch(
+          spelledMatch,
+          SpecialMatchKind.Spelling,
+          null),
+      new SpecialMatch(
+        dateTimeMatch,
+        SpecialMatchKind.IsoDateTime,
+        null),
+      new SpecialMatch(dateMatch, SpecialMatchKind.IsoDate, null),
+      new SpecialMatch(
+        numericDateMatch,
+        SpecialMatchKind.NumericDate,
+        null),
+      new SpecialMatch(timeMatch, SpecialMatchKind.Time, null));
+  }
+
+  /// <summary>
+  /// Appends identity text one source UTF-16 code unit at a time so XML
+  /// escaping cannot destroy the synthesis-to-source coordinate relation.
+  /// </summary>
+  private static void AppendMappedIdentity(
+    StringBuilder output,
+    string text,
+    int sourceStart,
+    ICollection<SpeechMarkupProvenanceSpan> provenance)
+  {
+    for (int index = 0; index < text.Length; ++index)
+    {
+      string escaped = SecurityElement.Escape(text[index].ToString()) ??
+        string.Empty;
+      int ssmlStart = output.Length;
+      output.Append(escaped);
+      if (escaped.Length != 0)
+      {
+        provenance.Add(new SpeechMarkupProvenanceSpan(
+          ssmlStart,
+          escaped.Length,
+          sourceStart + index,
+          1));
+      }
+    }
+  }
+
+  /// <summary>
+  /// Appends transformed speech text whose complete emitted range is owned by
+  /// the complete original source range.
+  /// </summary>
+  private static void AppendMappedReplacement(
+    StringBuilder output,
+    string text,
+    int sourceStart,
+    int sourceLength,
+    ICollection<SpeechMarkupProvenanceSpan> provenance)
+  {
+    string escaped = SecurityElement.Escape(text) ?? string.Empty;
+    int ssmlStart = output.Length;
+    output.Append(escaped);
+    if (escaped.Length != 0 && sourceLength > 0)
+    {
+      provenance.Add(new SpeechMarkupProvenanceSpan(
+        ssmlStart,
+        escaped.Length,
+        sourceStart,
+        sourceLength));
+    }
   }
 
   /// <summary>
@@ -252,12 +441,32 @@ internal static partial class SpeechSapiXmlBuilder
   /// </summary>
   private static string WrapSsmlPitch(string content, int pitchSetting)
   {
+    return WrapSsmlPitch(
+      content,
+      pitchSetting,
+      Array.Empty<SpeechMarkupProvenanceSpan>()).Content;
+  }
+
+  private static (
+    string Content,
+    IReadOnlyList<SpeechMarkupProvenanceSpan> Provenance) WrapSsmlPitch(
+      string content,
+      int pitchSetting,
+      IReadOnlyList<SpeechMarkupProvenanceSpan> provenance)
+  {
     int pitchPercent = Math.Clamp(pitchSetting, -10, 10) *
       SsmlPitchPercentPerStep;
     string pitch = pitchPercent > 0
       ? $"+{pitchPercent}%"
       : $"{pitchPercent}%";
-    return $"<prosody pitch=\"{pitch}\">{content}</prosody>";
+    string prefix = $"<prosody pitch=\"{pitch}\">";
+    SpeechMarkupProvenanceSpan[] shifted = provenance
+      .Select(span => span with
+      {
+        SsmlCharacterStart = checked(span.SsmlCharacterStart + prefix.Length)
+      })
+      .ToArray();
+    return ($"{prefix}{content}</prosody>", shifted);
   }
 
   /// <summary>

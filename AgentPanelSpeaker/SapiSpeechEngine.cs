@@ -1160,33 +1160,26 @@ internal sealed class SapiSpeechEngine : IDisposable
   {
     using var stream = new MemoryStream();
     var collected = new List<SpeechWordBoundary>();
-    MatchCollection sourceTokens = SpeechTokenization.Matches(markup.PlainText);
-    int? synthesisCharacterOffset = null;
-    int previousTokenIndex = -1;
     bool mappingFailed = false;
+
+    synthesizer.SelectVoice(providerVoiceId);
+    synthesizer.Rate = profile.Rate;
+    synthesizer.Volume = profile.Volume;
+    string ssml = BuildSsmlDocument(
+      markup.SsmlContent,
+      synthesizer.Voice.Culture.Name);
+
     EventHandler<System.Speech.Synthesis.SpeakProgressEventArgs> handler =
       (_, eventArgs) =>
       {
-        int firstSourceTokenStart = sourceTokens.Count == 0
-          ? 0
-          : sourceTokens[0].Index;
-        synthesisCharacterOffset ??=
-          eventArgs.CharacterPosition - firstSourceTokenStart;
-        int offsetSourcePosition = Math.Clamp(
-          eventArgs.CharacterPosition - synthesisCharacterOffset.Value,
-          0,
-          markup.PlainText.Length);
-        int offsetSourceCount = Math.Clamp(
-          eventArgs.CharacterCount,
-          0,
-          markup.PlainText.Length - offsetSourcePosition);
-        int tokenIndex = FindSequentialTokenIndex(
-          sourceTokens,
-          previousTokenIndex,
-          eventArgs.Text,
-          offsetSourcePosition,
-          offsetSourceCount);
-        if (tokenIndex < 0)
+        if (!TryMapSystemSpeechProgress(
+              markup,
+              ssml,
+              eventArgs.CharacterPosition,
+              eventArgs.CharacterCount,
+              eventArgs.Text,
+              eventArgs.AudioPosition,
+              out SpeechWordBoundary boundary))
         {
           mappingFailed = true;
           DiagnosticLog.Write("sapi.speak_progress_unmapped", new
@@ -1201,8 +1194,6 @@ internal sealed class SapiSpeechEngine : IDisposable
           return;
         }
 
-        previousTokenIndex = tokenIndex;
-        Match sourceToken = sourceTokens[tokenIndex];
         DiagnosticLog.Write("sapi.speak_progress", new
         {
           provider = "System.Speech",
@@ -1212,26 +1203,14 @@ internal sealed class SapiSpeechEngine : IDisposable
           eventArgs.CharacterPosition,
           eventArgs.CharacterCount,
           eventArgs.AudioPosition,
-          synthesisCharacterOffset,
-          sourcePosition = sourceToken.Index,
-          sourceCount = sourceToken.Length,
-          tokenIndex,
-          sourceToken = sourceToken.Value
+          sourcePosition = boundary.CharacterPosition,
+          sourceCount = boundary.CharacterCount,
+          wordIndex = boundary.WordIndex,
+          wordCount = boundary.WordCount
         });
-        collected.Add(new SpeechWordBoundary(
-          eventArgs.AudioPosition,
-          tokenIndex,
-          sourceToken.Index,
-          sourceToken.Length,
-          eventArgs.Text,
-          Exact: true));
+        collected.Add(boundary);
       };
-    synthesizer.SelectVoice(providerVoiceId);
-    synthesizer.Rate = profile.Rate;
-    synthesizer.Volume = profile.Volume;
-    string ssml = BuildSsmlDocument(
-      markup.SsmlContent,
-      synthesizer.Voice.Culture.Name);
+
     synthesizer.SpeakProgress += handler;
     try
     {
@@ -1247,18 +1226,15 @@ internal sealed class SapiSpeechEngine : IDisposable
       synthesizer.SpeakProgress -= handler;
       synthesizer.SetOutputToNull();
     }
+
     PcmWaveData wave = PcmWaveData.FromPcmSamples(
       channels: 1,
       sampleRate: SystemSpeechSampleRate,
       bitsPerSample: 16,
       samples: stream.ToArray());
 
-    int expectedTokenCount = sourceTokens.Count;
-    int mappedTokenCount = collected
-      .Select(boundary => boundary.WordIndex)
-      .Distinct()
-      .Count();
-    if (expectedTokenCount == 0)
+    int expectedWordCount = GetSystemSpeechWords(markup).Count;
+    if (expectedWordCount == 0)
     {
       boundaries = Array.Empty<SpeechWordBoundary>();
       trackingDegradation = null;
@@ -1271,15 +1247,13 @@ internal sealed class SapiSpeechEngine : IDisposable
         providerVoiceId,
         "system_speech_returned_no_progress_events");
     }
-    else if (mappingFailed || mappedTokenCount != expectedTokenCount)
+    else if (mappingFailed)
     {
       boundaries = Array.Empty<SpeechWordBoundary>();
       trackingDegradation = new SpeechTrackingDegradation(
         "SystemSpeech",
         providerVoiceId,
-        mappingFailed
-          ? "system_speech_word_mapping_failed"
-          : "system_speech_incomplete_word_mapping");
+        "system_speech_word_mapping_failed");
     }
     else
     {
@@ -1289,66 +1263,120 @@ internal sealed class SapiSpeechEngine : IDisposable
     return wave;
   }
 
-
   /// <summary>
-  /// Maps a System.Speech source range to the intersecting display token.
+  /// Translates one provider-native System.Speech progress range through the
+  /// exact SSML provenance created with the speech markup.
   /// </summary>
-  private static int FindSequentialTokenIndex(
-    MatchCollection tokens,
-    int previousTokenIndex,
+  private static bool TryMapSystemSpeechProgress(
+    SpeechMarkup markup,
+    string ssml,
+    int characterPosition,
+    int characterCount,
     string spokenText,
-    int fallbackPosition,
-    int fallbackCount)
+    TimeSpan audioPosition,
+    out SpeechWordBoundary boundary)
   {
-    string spoken = spokenText.Trim();
-    int start = Math.Clamp(previousTokenIndex + 1, 0, tokens.Count);
-    if (spoken.Length != 0)
+    boundary = null!;
+    if (markup.SsmlProvenance is not { Count: > 0 } provenance)
     {
-      for (int index = start; index < tokens.Count; ++index)
+      return false;
+    }
+
+    int contentStart = ssml.IndexOf(
+      markup.SsmlContent,
+      StringComparison.Ordinal);
+    if (contentStart < 0)
+    {
+      return false;
+    }
+
+    int eventStart = characterPosition - contentStart;
+    int eventLength = Math.Max(1, characterCount);
+    int eventEnd;
+    try
+    {
+      eventEnd = checked(eventStart + eventLength);
+    }
+    catch (OverflowException)
+    {
+      return false;
+    }
+    if (eventEnd <= 0 || eventStart >= markup.SsmlContent.Length)
+    {
+      return false;
+    }
+
+    SpeechMarkupProvenanceSpan[] owners = provenance
+      .Where(span =>
+        span.SsmlCharacterStart < eventEnd &&
+        span.SsmlCharacterStart + span.SsmlCharacterLength > eventStart)
+      .ToArray();
+    if (owners.Length == 0)
+    {
+      return false;
+    }
+
+    IReadOnlyList<SpeechMarkupWord> words = GetSystemSpeechWords(markup);
+    SpeechMarkupWord[] ownedWords = words
+      .Where(word => owners.Any(owner =>
       {
-        if (string.Equals(
-              tokens[index].Value,
-              spoken,
-              StringComparison.OrdinalIgnoreCase))
-        {
-          return index;
-        }
+        int ownerEnd = owner.SourceCharacterStart + owner.SourceCharacterLength;
+        int wordEnd = word.CharacterStart + word.CharacterLength;
+        return owner.SourceCharacterStart < wordEnd &&
+          ownerEnd > word.CharacterStart;
+      }))
+      .GroupBy(word => word.WordIndex)
+      .Select(group => group.First())
+      .OrderBy(word => word.WordIndex)
+      .ToArray();
+    if (ownedWords.Length == 0)
+    {
+      return false;
+    }
+
+    for (int index = 1; index < ownedWords.Length; ++index)
+    {
+      if (ownedWords[index].WordIndex != ownedWords[index - 1].WordIndex + 1)
+      {
+        return false;
       }
     }
 
-    int fallback = FindTokenIndexForSourceRange(
-      tokens,
-      fallbackPosition,
-      fallbackCount);
-    return fallback > previousTokenIndex ? fallback : -1;
+    SpeechMarkupWord first = ownedWords[0];
+    SpeechMarkupWord last = ownedWords[^1];
+    int sourceEnd = checked(last.CharacterStart + last.CharacterLength);
+    boundary = new SpeechWordBoundary(
+      audioPosition,
+      first.WordIndex,
+      first.CharacterStart,
+      sourceEnd - first.CharacterStart,
+      spokenText,
+      Exact: true,
+      WordCount: last.WordIndex - first.WordIndex + 1);
+    return true;
   }
 
   /// <summary>
-  /// Maps a System.Speech source range to the intersecting display token.
+  /// Returns exact attached fragment words, or a plain-text token inventory for
+  /// untracked preview speech that has no canonical transcript attachment.
   /// </summary>
-  private static int FindTokenIndexForSourceRange(
-    MatchCollection tokens,
-    int characterPosition,
-    int characterCount)
+  private static IReadOnlyList<SpeechMarkupWord> GetSystemSpeechWords(
+    SpeechMarkup markup)
   {
-    if (tokens.Count == 0)
+    if (markup.Words is { Count: > 0 } exactWords)
     {
-      return 0;
+      return exactWords;
     }
 
-    int rangeEnd = checked(
-      characterPosition + Math.Max(1, characterCount));
-    for (int index = 0; index < tokens.Count; ++index)
-    {
-      Match token = tokens[index];
-      int tokenEnd = token.Index + token.Length;
-      if (token.Index < rangeEnd && tokenEnd > characterPosition)
-      {
-        return index;
-      }
-    }
-
-    return -1;
+    MatchCollection matches = SpeechTokenization.Matches(markup.PlainText);
+    return matches
+      .Cast<Match>()
+      .Select((match, index) => new SpeechMarkupWord(
+        index,
+        match.Value,
+        match.Index,
+        match.Length))
+      .ToArray();
   }
 
   /// <summary>

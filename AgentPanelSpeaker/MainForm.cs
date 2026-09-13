@@ -1312,7 +1312,7 @@ internal sealed class MainForm : Form, IMessageFilter
 
     Interlocked.Increment(ref _monitorSession);
     _monitor.Stop(trigger);
-    _speech.CancelAll();
+    _speech.CancelAndMoveToLiveEnd();
     _speech.BeginLiveSession();
     RefreshTranscriptVoiceSelectability();
     AppendLog("Paused monitoring stopped for session reconfiguration.");
@@ -1511,7 +1511,10 @@ internal sealed class MainForm : Form, IMessageFilter
       string message = context
         ? row.ContextPreviewMessage
         : row.MainPreviewMessage;
-      _speech.SpeakUntracked(message, profile);
+      _speech.PreviewText(
+        message,
+        profile,
+        _settingsStore.GetAudioWakeSettings());
     }
     catch (Exception exception) when (
       exception is ArgumentException or InvalidOperationException)
@@ -1557,17 +1560,17 @@ internal sealed class MainForm : Form, IMessageFilter
       return;
     }
 
-    if (_voiceSettingPreviewActive)
-    {
-      StopVoicePreviewTimers();
-      _voiceSettingPreviewActive = false;
-      _speech.CancelAll();
-    }
-
     _playPauseTransitioning = true;
     UpdateControlState();
     try
     {
+      if (_voiceSettingPreviewActive)
+      {
+        StopVoicePreviewTimers();
+        _voiceSettingPreviewActive = false;
+        await _speech.CancelPreviewPreservingPositionAsync();
+      }
+
       await StartMonitoringAsync();
     }
     finally

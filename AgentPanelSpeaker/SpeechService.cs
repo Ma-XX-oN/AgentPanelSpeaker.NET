@@ -58,6 +58,7 @@ internal sealed class SpeechService : IDisposable
   private Action? _pendingPreviewStart;
   private bool _previewActive;
   private bool _previewReturnToPause;
+  private TaskCompletionSource<bool>? _previewCancellationCompletion;
   private FenceActivityKey? _lastFenceActivity;
   private bool _reportedSpeaking;
   private bool _isPaused;
@@ -1324,14 +1325,62 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
-  /// Cancels speech and returns playback to the live end.
+  /// Cancels speech and explicitly abandons navigation at the live end.
   /// </summary>
-  public void CancelAll()
+  public void CancelAndMoveToLiveEnd()
   {
     lock (_sync)
     {
       ThrowIfDisposed();
       MoveToLiveEndLocked();
+    }
+  }
+
+  /// <summary>
+  /// Cancels only preview audio and preserves the exact paused transcript
+  /// cursor. The returned task completes after the engine cancellation callback
+  /// has restored the paused state.
+  /// </summary>
+  public Task CancelPreviewPreservingPositionAsync()
+  {
+    lock (_sync)
+    {
+      ThrowIfDisposed();
+      if (!_previewActive && _pendingPreviewStart is null)
+      {
+        return Task.CompletedTask;
+      }
+      if (_previewCancellationCompletion is not null)
+      {
+        return _previewCancellationCompletion.Task;
+      }
+
+      if (_activeKind == ActiveSpeechKind.History &&
+          _activeHistoryIndex >= 0)
+      {
+        _pendingHistoryIndex = _activeHistoryIndex;
+        _pendingHistoryWordIndex = Math.Max(0, _activeWordIndex);
+        _nextHistoryIndex = _activeHistoryIndex;
+      }
+
+      _pendingPreviewStart = null;
+      _previewReturnToPause = true;
+      RequestPauseRestoreAfterCancellationLocked(
+        "preview-cancel-preserve-cursor");
+      _previewCancellationCompletion =
+        new TaskCompletionSource<bool>(
+          TaskCreationOptions.RunContinuationsAsynchronously);
+      DiagnosticLog.Write("speech.preview_cancel_preserve_cursor", new
+      {
+        activeKind = _activeKind.ToString(),
+        activeHistoryIndex = _activeHistoryIndex,
+        pendingHistoryIndex = _pendingHistoryIndex,
+        pendingHistoryWordIndex = _pendingHistoryWordIndex,
+        nextHistoryIndex = _nextHistoryIndex,
+        isPaused = _isPaused
+      });
+      _engine.Cancel();
+      return _previewCancellationCompletion.Task;
     }
   }
 
@@ -1654,6 +1703,11 @@ internal sealed class SpeechService : IDisposable
       {
         return;
       }
+
+      TaskCompletionSource<bool>? previewCancellation =
+        _previewCancellationCompletion;
+      _previewCancellationCompletion = null;
+      previewCancellation?.TrySetResult(true);
 
       ActiveSpeechKind completedKind = _activeKind;
       bool wasPaused = _isPaused;

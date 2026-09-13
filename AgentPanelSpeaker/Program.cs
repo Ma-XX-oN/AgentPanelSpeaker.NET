@@ -268,6 +268,30 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "preview-cursor",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "preview-cursor",
+          Issue92PreviewCursorRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "system-speech-provenance",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "system-speech-provenance",
+          Issue93SystemSpeechProvenanceRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -319,6 +343,10 @@ internal static class Program
         "rewind-current-fragment");
       int speechOwnership = RunIsolatedTestSuite(
         "speech-ownership");
+      int previewCursor = RunIsolatedTestSuite(
+        "preview-cursor");
+      int systemSpeechProvenance = RunIsolatedTestSuite(
+        "system-speech-provenance");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -343,7 +371,9 @@ internal static class Program
                              ctrlClickVoicePointer == 0 &&
                              coreWordIdMigration == 0 &&
                              rewindCurrentFragment == 0 &&
-                             speechOwnership == 0
+                             speechOwnership == 0 &&
+                             previewCursor == 0 &&
+                             systemSpeechProvenance == 0
         ? 0
         : 1;
       Console.WriteLine(
