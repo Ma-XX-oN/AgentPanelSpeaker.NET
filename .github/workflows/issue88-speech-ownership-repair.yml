@@ -9,10 +9,15 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   repair:
     runs-on: windows-latest
+    env:
+      ISSUE88_LOG: ${{ runner.temp }}\issue88-repair.log
+      ISSUE88_PHASE: ${{ runner.temp }}\issue88-phase.txt
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out working branch
@@ -34,75 +39,130 @@ jobs:
 
       - name: Install pinned Core dependencies
         shell: pwsh
-        run: npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+        run: |
+          Set-Content $env:ISSUE88_PHASE 'install pinned Core dependencies'
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Core dependency install failed.' }
 
       - name: Establish permanent RED
         shell: pwsh
         run: |
-          python tools/issue88-apply.py red
+          Set-Content $env:ISSUE88_PHASE 'establish permanent RED'
+          python tools/issue88-apply.py red 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Failed to wire the issue #88 RED.' }
-          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'RED build failed; regression must compile before production repair.' }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test speech-ownership
+          & $exe --test speech-ownership 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -eq 0) {
             throw 'Issue #88 regression unexpectedly passed before the production repair.'
           }
-          Write-Host 'Expected RED reproduced.'
+          gh issue comment 88 --body "Permanent #88 regression reproduced RED on pre-repair production at $env:GITHUB_SHA."
 
       - name: Apply production repair
         shell: pwsh
         run: |
-          python tools/issue88-apply.py green
+          Set-Content $env:ISSUE88_PHASE 'apply production repair'
+          python tools/issue88-apply.py green 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Issue #88 production applicator failed.' }
-          git diff --check
+          git diff --check 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Whitespace validation failed after repair.' }
 
       - name: Build repaired application
         shell: pwsh
         run: |
-          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+          Set-Content $env:ISSUE88_PHASE 'build repaired application'
+          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Repaired application failed to build.' }
 
       - name: Run focused speech ownership regression
         shell: pwsh
         run: |
+          Set-Content $env:ISSUE88_PHASE 'run focused speech ownership regression'
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test speech-ownership
+          & $exe --test speech-ownership 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Issue #88 focused regression failed.' }
 
       - name: Run adjacent regressions
         shell: pwsh
         run: |
+          Set-Content $env:ISSUE88_PHASE 'run adjacent regressions'
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & $exe --test core-word-id-migration
+          & $exe --test core-word-id-migration 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Issue #75 Core WordId regression failed.' }
-          & $exe --test rewind-current-fragment
+          & $exe --test rewind-current-fragment 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Issue #84 rewind regression failed.' }
 
       - name: Run complete built application suite
         shell: pwsh
         run: |
+          Set-Content $env:ISSUE88_PHASE 'run complete built application suite'
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Complete built application suite failed.' }
 
       - name: Publish and run complete deployed suite
         shell: pwsh
         run: |
+          Set-Content $env:ISSUE88_PHASE 'publish and run complete deployed suite'
           $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
-          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
           $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Complete published application suite failed.' }
 
       - name: Commit verified repair
         shell: pwsh
         run: |
+          Set-Content $env:ISSUE88_PHASE 'commit verified repair'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker
           if (git diff --cached --quiet) {
             throw 'Repair produced no production/test changes to commit.'
           }
-          git commit -m 'fix: preserve exact speech ownership'
-          git push origin HEAD:issue-75-core-word-id-migration
+          git commit -m 'fix: preserve exact speech ownership' 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Verified repair commit failed.' }
+          git push origin HEAD:issue-75-core-word-id-migration 2>&1 |
+            Tee-Object -FilePath $env:ISSUE88_LOG -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Verified repair push failed.' }
+          $head = git rev-parse HEAD
+          gh issue comment 88 --body "Automated #88 repair GREEN through focused, adjacent, full built, and full published suites. Verified repair commit: $head"
+
+      - name: Report failed phase to issue 88
+        if: failure()
+        shell: pwsh
+        run: |
+          $phase = if (Test-Path $env:ISSUE88_PHASE) {
+            Get-Content $env:ISSUE88_PHASE -Raw
+          } else {
+            'unknown phase'
+          }
+          $tail = if (Test-Path $env:ISSUE88_LOG) {
+            (Get-Content $env:ISSUE88_LOG -Tail 120) -join "`n"
+          } else {
+            'No repair log was produced.'
+          }
+          $body = @"
+          #88 automated repair failed during: $phase
+
+          ```text
+          $tail
+          ```
+          "@
+          gh issue comment 88 --body $body
