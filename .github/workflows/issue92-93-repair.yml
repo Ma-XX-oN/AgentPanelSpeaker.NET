@@ -41,17 +41,31 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'RED test build failed.' }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
 
-          & $exe --test preview-cursor
-          $previewExit = $LASTEXITCODE
-          & $exe --test system-speech-provenance
-          $provenanceExit = $LASTEXITCODE
-          if ($previewExit -eq 0) {
+          $previewFailed = $false
+          try {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite preview-cursor
+          }
+          catch {
+            $previewFailed = $true
+            Write-Host "Expected issue #92 RED: $($_.Exception.Message)"
+          }
+
+          $provenanceFailed = $false
+          try {
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite system-speech-provenance
+          }
+          catch {
+            $provenanceFailed = $true
+            Write-Host "Expected issue #93 RED: $($_.Exception.Message)"
+          }
+
+          if (-not $previewFailed) {
             throw 'Issue #92 RED unexpectedly passed on old production code.'
           }
-          if ($provenanceExit -eq 0) {
+          if (-not $provenanceFailed) {
             throw 'Issue #93 RED unexpectedly passed on old production code.'
           }
-          Write-Host "RED proven: preview-cursor=$previewExit system-speech-provenance=$provenanceExit"
+          Write-Host 'RED proven for both #92 and #93.'
 
       - name: Restore untouched production before GREEN
         shell: pwsh
@@ -89,8 +103,7 @@ jobs:
             'core-word-id-migration',
             'rewind-current-fragment',
             'rolled-back-speech')) {
-            & $exe --test $suite
-            if ($LASTEXITCODE -ne 0) { throw "Regression suite failed: $suite" }
+            & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite $suite
           }
 
       - name: Commit clean production candidate
