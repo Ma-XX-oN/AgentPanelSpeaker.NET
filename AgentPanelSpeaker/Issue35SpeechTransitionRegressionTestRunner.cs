@@ -145,15 +145,7 @@ internal static class Issue35SpeechTransitionRegressionTestRunner
 
     SetShowHistory(speech, false);
     Require(SpinWait.SpinUntil(
-        () =>
-        {
-          lock (positions)
-          {
-            return positions.Skip(before).Any(position =>
-              position.State == TranscriptPlaybackState.Speaking &&
-              position.NodeId == 32);
-          }
-        },
+        () => speech.IsSpeaking && ActiveNodeId(speech) == 32,
         CompletionTimeout),
       "Active hidden source did not resume at visible node 32.");
 
@@ -338,6 +330,33 @@ internal static class Issue35SpeechTransitionRegressionTestRunner
       }
     };
     return positions;
+  }
+
+  /// <summary>
+  /// Returns the source node owned by the active history fragment. This tests
+  /// playback ownership directly: a newly started fragment must not fabricate
+  /// a PlaybackPositionChanged cursor before the speech engine reports a real
+  /// word boundary.
+  /// </summary>
+  private static long ActiveNodeId(SpeechService speech)
+  {
+    FieldInfo activeIndexField = typeof(SpeechService).GetField(
+      "_activeHistoryIndex",
+      BindingFlags.Instance | BindingFlags.NonPublic)
+      ?? throw new InvalidOperationException(
+        "SpeechService has no active history index field.");
+    FieldInfo historyField = typeof(SpeechService).GetField(
+      "_history",
+      BindingFlags.Instance | BindingFlags.NonPublic)
+      ?? throw new InvalidOperationException(
+        "SpeechService has no history field.");
+    int activeIndex = (int)(activeIndexField.GetValue(speech) ?? -1);
+    var history = historyField.GetValue(speech) as IReadOnlyList<SpeechFragment>
+      ?? throw new InvalidOperationException(
+        "SpeechService history is unavailable to the regression fixture.");
+    return activeIndex >= 0 && activeIndex < history.Count
+      ? history[activeIndex].NodeId
+      : -1;
   }
 
   private static TranscriptPlaybackPosition LastPosition(
