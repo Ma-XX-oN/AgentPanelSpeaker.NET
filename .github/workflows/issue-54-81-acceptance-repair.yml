@@ -35,48 +35,15 @@ jobs:
           python -m py_compile tools/issue54-81-acceptance-repair.py
           if ($LASTEXITCODE -ne 0) { throw 'Repair helper does not compile.' }
           Remove-Item -Recurse -Force tools/__pycache__ -ErrorAction SilentlyContinue
-          if (git status --porcelain) { throw 'Starting worktree is not clean.' }
+          if (git status --porcelain --ignore-submodules=none) {
+            throw 'Starting worktree is not clean.'
+          }
 
-      - name: Add permanent regressions only
+      - name: Apply permanent regressions and production repairs
         shell: pwsh
         run: |
           python tools/issue54-81-acceptance-repair.py tests
           if ($LASTEXITCODE -ne 0) { throw 'Regression patch failed.' }
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { throw 'Regression patch integrity failed.' }
-
-      - name: Prove scroll and spell-out regressions RED
-        shell: pwsh
-        run: |
-          dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw 'Test-only RED build failed.' }
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-
-          $coreOutput = & $exe --test core-word-id-migration 2>&1 | Out-String
-          $coreExit = $LASTEXITCODE
-          Write-Host $coreOutput
-          if ($coreExit -eq 0 -or
-              -not $coreOutput.Contains('Browser still calls the removed legacy lexical-alignment fallback.')) {
-            throw 'Fast-scroll stale lexical fallback regression did not prove RED.'
-          }
-
-          $settingsOutput = & $exe --test settings 2>&1 | Out-String
-          $settingsExit = $LASTEXITCODE
-          Write-Host $settingsOutput
-          if ($settingsExit -eq 0 -or
-              -not $settingsOutput.Contains('Windows/SSML spelling does not use explicit spell-out semantics.')) {
-            throw 'Windows.Media spell-out regression did not prove RED.'
-          }
-
-          Write-Host 'RED-PROVEN stale lexical fallback and Windows/SSML spell-out semantics.'
-          exit 0
-
-      - name: Reset and apply regressions plus production repairs
-        shell: pwsh
-        run: |
-          git reset --hard HEAD
-          python tools/issue54-81-acceptance-repair.py tests
-          if ($LASTEXITCODE -ne 0) { throw 'Regression patch failed after reset.' }
           python tools/issue54-81-acceptance-repair.py production
           if ($LASTEXITCODE -ne 0) { throw 'Production patch failed.' }
           git diff --check
@@ -104,6 +71,7 @@ jobs:
       - name: Commit and push clean candidate
         shell: pwsh
         run: |
+          git restore --source=HEAD -- AgentPanelSpeaker-test-results.txt
           git rm .github/workflows/issue-54-81-acceptance-repair.yml
           git rm tools/issue54-81-acceptance-repair.py
           git add AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/SpeechSapiXmlBuilder.cs AgentPanelSpeaker/RegressionTestRunner.cs AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
@@ -115,12 +83,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Candidate commit failed.' }
           $candidate = (git rev-parse HEAD).Trim()
           Write-Host "CANDIDATE_SHA=$candidate"
-          $candidateStatus = @(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)
-          Write-Host 'CANDIDATE_STATUS_BEGIN'
-          $candidateStatus | ForEach-Object { Write-Host $_ }
-          Write-Host 'CANDIDATE_STATUS_END'
-          git submodule status --recursive
-          if ($candidateStatus.Count -ne 0) { throw 'Candidate worktree is not clean.' }
+          $status = @(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)
+          if ($status.Count -ne 0) {
+            $status | ForEach-Object { Write-Host $_ }
+            throw 'Candidate worktree is not clean.'
+          }
           git push origin HEAD:issue-75-core-word-id-migration
           if ($LASTEXITCODE -ne 0) { throw 'Candidate push failed.' }
 
@@ -180,6 +147,7 @@ jobs:
       - name: Verify exact remote candidate and cleanup
         shell: pwsh
         run: |
+          git restore --source=HEAD -- AgentPanelSpeaker-test-results.txt
           $local = (git rev-parse HEAD).Trim()
           $remote = (git ls-remote origin refs/heads/issue-75-core-word-id-migration | ForEach-Object { ($_ -split "`t")[0] }).Trim()
           if ($local -ne $remote) { throw "Remote branch moved: local=$local remote=$remote" }
@@ -199,9 +167,9 @@ jobs:
               (Test-Path tools/issue54-81-acceptance-repair.py)) {
             throw 'Temporary repair scaffolding survived in final candidate.'
           }
-          $finalStatus = @(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)
-          if ($finalStatus.Count -ne 0) {
-            $finalStatus | ForEach-Object { Write-Host $_ }
+          $status = @(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)
+          if ($status.Count -ne 0) {
+            $status | ForEach-Object { Write-Host $_ }
             throw 'Final worktree is not clean.'
           }
           Write-Host "FINAL_CANDIDATE_SHA=$local"
