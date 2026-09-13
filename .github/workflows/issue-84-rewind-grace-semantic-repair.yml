@@ -9,66 +9,84 @@ permissions:
   contents: write
 
 jobs:
-  repair:
-    if: "${{ github.event.head_commit.message == 'ci: run issue 84 rewind grace semantic repair' }}"
+  finalize-comments:
+    if: "${{ github.event.head_commit.message == 'ci: finalize issue 84 rewind comments' }}"
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: issue-84-rewind-grace-semantic-fix
           fetch-depth: 0
-          submodules: recursive
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Apply production repair after proven RED
+      - name: Correct reaction-window comments
         shell: pwsh
         run: |
-          $script = '.github/scripts/issue84-rewind-grace-semantics.py'
-          $text = Get-Content -Raw $script
-          $old = 'if reset_count != 4:'
-          $new = 'if reset_count != 2:'
-          if (($text.Split($old).Count - 1) -ne 1) {
-            throw 'Expected one obsolete-suppression reset-count guard.'
+          $path = 'AgentPanelSpeaker/SpeechService.cs'
+          $text = Get-Content -Raw $path
+
+          $replacements = @(
+            @{
+              Old = @'
+  /// <summary>
+  /// Returns whether playback is still inside the first-word rewind grace
+  /// window for the current active history fragment.
+  /// </summary>
+'@
+              New = @'
+  /// <summary>
+  /// Returns whether playback is still inside the rewind reaction window for
+  /// the current active history fragment.
+  /// </summary>
+'@
+            },
+            @{
+              Old = @'
+  /// <summary>
+  /// Prepares first-word rewind grace for a new history playback start.
+  /// The timer itself begins only when a real engine boundary reaches
+  /// fragment-relative word index zero. A PreviousSentence-selected target
+  /// consumes its one-shot suppression instead of re-arming grace.
+  /// </summary>
+'@
+              New = @'
+  /// <summary>
+  /// Prepares the rewind reaction window for a new history playback start.
+  /// The timer itself begins only when a real engine boundary reaches
+  /// fragment-relative word index zero. Every fragment started at word zero,
+  /// including a PreviousSentence destination, gets its own reaction window.
+  /// </summary>
+'@
+            },
+            @{
+              Old = @'
+  /// <summary>
+  /// Starts first-word rewind grace at an actual playback/resume point.
+  /// </summary>
+'@
+              New = @'
+  /// <summary>
+  /// Starts the rewind reaction timer at the actual first-word boundary.
+  /// </summary>
+'@
+            }
+          )
+
+          foreach ($replacement in $replacements) {
+            $count = ($text.Split($replacement.Old).Count - 1)
+            if ($count -ne 1) {
+              throw "Expected exactly one stale comment block, found $count."
+            }
+            $text = $text.Replace($replacement.Old, $replacement.New)
           }
-          [IO.File]::WriteAllText($script, $text.Replace($old, $new))
-          python $script production
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $product = 'AgentPanelSpeaker/SpeechService.cs'
-          $source = Get-Content -Raw $product
-          $pattern = '(?m)^\s*_rewindGraceSuppressedHistoryIndex = null;\r?\n'
-          $remaining = [regex]::Matches($source, $pattern)
-          if ($remaining.Count -ne 2) {
-            throw "Expected two remaining obsolete suppression resets, found $($remaining.Count)."
-          }
-          [IO.File]::WriteAllText(
-            $product,
-            [regex]::Replace($source, $pattern, ''))
-          git checkout -- $script
+          [IO.File]::WriteAllText($path, $text)
+          git diff --check
 
-      - name: Validate patch
-        shell: pwsh
-        run: git diff --check
-
-      - name: Build repaired candidate
-        shell: pwsh
-        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
-
-      - name: Prove focused GREEN and full suite
-        shell: pwsh
-        run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite rewind-current-fragment
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
-
-      - name: Commit production repair
+      - name: Commit corrected comments
         shell: pwsh
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add AgentPanelSpeaker/SpeechService.cs
-          git commit -m 'fix: make rewind grace a real reaction timeout'
+          git commit -m 'docs: clarify rewind reaction timing'
           git push origin HEAD:issue-84-rewind-grace-semantic-fix
