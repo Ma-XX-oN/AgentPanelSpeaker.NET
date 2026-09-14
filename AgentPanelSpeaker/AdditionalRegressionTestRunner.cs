@@ -21,6 +21,7 @@ internal static class AdditionalRegressionTestRunner
       ("session/detect-codex", TestDetectCodex),
       ("session/requested-provider-mismatch", TestProviderMismatch),
       ("bridge/wrong-core-commit", TestWrongCoreCommit),
+      ("bridge/missing-core-version", TestMissingCoreVersion),
       ("bridge/malformed-worker-response", TestMalformedWorkerResponse),
       ("bridge/missing-presentation-contract", TestMissingPresentationContract),
       ("search/invalid-regex", TestInvalidRegex),
@@ -139,7 +140,11 @@ internal static class AdditionalRegressionTestRunner
       const rl = readline.createInterface({ input: process.stdin });
       for await (const line of rl) {
         JSON.parse(line);
-        console.log(JSON.stringify({ ok: true, core_commit: 'wrong-commit' }));
+        console.log(JSON.stringify({
+          ok: true,
+          core_commit: 'wrong-commit',
+          core_version: 'test-core-version'
+        }));
       }
       """);
     try
@@ -155,6 +160,43 @@ internal static class AdditionalRegressionTestRunner
     }
   }
 
+  private static void TestMissingCoreVersion()
+  {
+    string worker = TemporaryWorker($$"""
+      import readline from 'node:readline';
+      const rl = readline.createInterface({ input: process.stdin });
+      for await (const line of rl) {
+        JSON.parse(line);
+        console.log(JSON.stringify({
+          ok: true,
+          core_commit: '{{AIConversationCoreClient.ExpectedCoreCommit}}'
+        }));
+      }
+      """);
+    try
+    {
+      using var client = new AIConversationCoreClient(worker);
+      try
+      {
+        _ = client.Project(
+          AgentSource.Claude,
+          new[] { ClaudeUserRecord("missing-core-version", "hello") });
+        throw new InvalidOperationException(
+          "Missing Core semantic version was accepted.");
+      }
+      catch (InvalidOperationException exception) when (string.Equals(
+        exception.Message,
+        "AIConversationCore response omitted its semantic version.",
+        StringComparison.Ordinal))
+      {
+      }
+    }
+    finally
+    {
+      Delete(worker);
+    }
+  }
+
   private static void TestMalformedWorkerResponse()
   {
     string worker = TemporaryWorker($$"""
@@ -163,7 +205,11 @@ internal static class AdditionalRegressionTestRunner
       for await (const line of rl) {
         const request = JSON.parse(line);
         if (request.operation === 'ping') {
-          console.log(JSON.stringify({ ok: true, core_commit: '{{AIConversationCoreClient.ExpectedCoreCommit}}' }));
+          console.log(JSON.stringify({
+            ok: true,
+            core_commit: '{{AIConversationCoreClient.ExpectedCoreCommit}}',
+            core_version: 'test-core-version'
+          }));
         } else {
           console.log('not-json');
         }
@@ -190,11 +236,16 @@ internal static class AdditionalRegressionTestRunner
       for await (const line of rl) {
         const request = JSON.parse(line);
         if (request.operation === 'ping') {
-          console.log(JSON.stringify({ ok: true, core_commit: '{{AIConversationCoreClient.ExpectedCoreCommit}}' }));
+          console.log(JSON.stringify({
+            ok: true,
+            core_commit: '{{AIConversationCoreClient.ExpectedCoreCommit}}',
+            core_version: 'test-core-version'
+          }));
         } else {
           console.log(JSON.stringify({
             ok: true,
             core_commit: '{{AIConversationCoreClient.ExpectedCoreCommit}}',
+            core_version: 'test-core-version',
             projection: {
               schema_version: 2,
               events: [],
