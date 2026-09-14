@@ -763,8 +763,13 @@ internal static class RegressionTestRunner
 
   private static void WriteReport(IReadOnlyCollection<string> output)
   {
+    string? runnerTemp = Environment.GetEnvironmentVariable("RUNNER_TEMP");
+    string reportDirectory =
+      !string.IsNullOrWhiteSpace(runnerTemp) && Directory.Exists(runnerTemp)
+        ? runnerTemp
+        : Environment.CurrentDirectory;
     string reportPath = Path.Combine(
-      Environment.CurrentDirectory,
+      reportDirectory,
       "AgentPanelSpeaker-test-results.txt");
     File.WriteAllLines(reportPath, output, Utf8NoBom);
   }
