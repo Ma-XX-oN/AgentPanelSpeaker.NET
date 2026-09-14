@@ -966,7 +966,36 @@ END=2026-09-07T14:50:57.4483323-04:00
 ELAPSED=0:09.967
 ```
 """;
-    string record = JsonSerializer.Serialize(new
+    const string userMessage = """
+# Context from my IDE setup:
+
+## Active file: c:\Users\adria\Downloads\Download Conversation - 10. Conversation Status Summary (1).md
+
+## Active selection of the file:
+## User [2026-08-31 22:18:02]: <!-- turn_id=8318a33f-1c9b-467e-8eb2-6b4f5ad508c8 -->
+
+## Open tabs:
+- Download Conversation - 10. Conversation Status Summary (1).md: c:\Users\adria\Downloads\Download Conversation - 10. Conversation Status Summary (1).md
+- chatgpt-direct.jsonl: scripts/fixtures/chatgpt-direct.jsonl
+- AI-transcript-arch.md: scripts/AI-transcript-arch.md
+- Logger - Branch · Maximal HD Set Wave.md: c:\Users\adria\Downloads\Logger - Branch · Maximal HD Set Wave.md
+- chatgpt-conversation-api-20260825-010932.md: c:\Users\adria\Downloads\chatgpt-conversation-api-20260825-010932.md
+
+## My request for Codex:
+I mean that the table be in the numbered list and in a nested numbered list.
+""";
+    string userRecord = JsonSerializer.Serialize(new
+    {
+      timestamp = "2026-09-07T18:50:35.814Z",
+      type = "event_msg",
+      payload = new
+      {
+        type = "user_message",
+        client_id = "0d6652ad-a435-416a-a6ce-38979537b12f",
+        message = userMessage
+      }
+    });
+    string assistantRecord = JsonSerializer.Serialize(new
     {
       timestamp = "2026-09-07T18:51:12.316Z",
       type = "event_msg",
@@ -981,7 +1010,7 @@ ELAPSED=0:09.967
     using var client = new AIConversationCoreClient();
     AIConversationProjection projection = client.Project(
       AgentSource.Codex,
-      new[] { record });
+      new[] { userRecord, assistantRecord });
     CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
       .Single(item => item.Html.Contains(
         "Nested item after the table",
