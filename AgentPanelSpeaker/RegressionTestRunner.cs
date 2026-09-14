@@ -103,6 +103,7 @@ internal static class RegressionTestRunner
       new TestCase("packaging", "bundled-core-runtime-present", TestBundledRuntime),
       new TestCase("regression", "no-em-dash-mojibake", TestNoMojibake),
       new TestCase("regression", "no-stdin-bom", TestNoBridgeBom),
+      new TestCase("regression", "ci-report-routing", TestReportRouting),
       new TestCase("regression", "reasoning-disclosure-ownership", TestReasoningDisclosureOwnership)
     };
   }
@@ -673,6 +674,55 @@ internal static class RegressionTestRunner
       $"Unexpected presentation split policy {projection.Presentation.SplitPolicy}.");
   }
 
+
+  private static void TestReportRouting()
+  {
+    string? originalRunnerTemp = Environment.GetEnvironmentVariable("RUNNER_TEMP");
+    string originalCurrentDirectory = Environment.CurrentDirectory;
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-report-routing-{Guid.NewGuid():N}");
+    string currentDirectory = Path.Combine(root, "current");
+    string runnerTemp = Path.Combine(root, "runner-temp");
+    const string reportName = "AgentPanelSpeaker-test-results.txt";
+    Directory.CreateDirectory(currentDirectory);
+    Directory.CreateDirectory(runnerTemp);
+
+    try
+    {
+      Environment.CurrentDirectory = currentDirectory;
+      Environment.SetEnvironmentVariable("RUNNER_TEMP", runnerTemp);
+      WriteReport(new[] { "ci-report" });
+      string ciReport = Path.Combine(runnerTemp, reportName);
+      string localReport = Path.Combine(currentDirectory, reportName);
+      Require(File.Exists(ciReport),
+        "CI regression report was not written into RUNNER_TEMP.");
+      Require(!File.Exists(localReport),
+        "CI regression report was written into the current directory.");
+
+      Environment.SetEnvironmentVariable("RUNNER_TEMP", null);
+      WriteReport(new[] { "local-report" });
+      Require(File.Exists(localReport),
+        "Local regression report was not written into the current directory.");
+
+      File.Delete(localReport);
+      Environment.SetEnvironmentVariable(
+        "RUNNER_TEMP",
+        Path.Combine(root, "missing-runner-temp"));
+      WriteReport(new[] { "missing-runner-temp" });
+      Require(File.Exists(localReport),
+        "Missing RUNNER_TEMP directory did not fall back to the current directory.");
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable("RUNNER_TEMP", originalRunnerTemp);
+      Environment.CurrentDirectory = originalCurrentDirectory;
+      try { Directory.Delete(root, recursive: true); }
+      catch (IOException) { }
+      catch (UnauthorizedAccessException) { }
+    }
+  }
+
   private static string CreateTemporaryPath()
   {
     return Path.Combine(
@@ -713,8 +763,13 @@ internal static class RegressionTestRunner
 
   private static void WriteReport(IReadOnlyCollection<string> output)
   {
+    string? runnerTemp = Environment.GetEnvironmentVariable("RUNNER_TEMP");
+    string reportDirectory =
+      !string.IsNullOrWhiteSpace(runnerTemp) && Directory.Exists(runnerTemp)
+        ? runnerTemp
+        : Environment.CurrentDirectory;
     string reportPath = Path.Combine(
-      Environment.CurrentDirectory,
+      reportDirectory,
       "AgentPanelSpeaker-test-results.txt");
     File.WriteAllLines(reportPath, output, Utf8NoBom);
   }
