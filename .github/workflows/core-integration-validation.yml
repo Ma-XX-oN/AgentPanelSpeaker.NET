@@ -32,7 +32,7 @@ jobs:
       - name: Verify AIConversationCore submodule pin
         shell: pwsh
         run: |
-          $expected = '134d5735b44b8d131d30d5b98a6e3a06320a113f'
+          $expected = '74a96db899acacf2be7eec42a1175b733b6e7cfb'
           $actual = git -C dependencies/AIConversationCore rev-parse HEAD
           if ($actual.Trim() -ne $expected) {
             throw "Unexpected AIConversationCore submodule revision: $actual"
@@ -94,14 +94,18 @@ jobs:
           if (-not (Test-Path $worker)) { throw "Built worker missing: $worker" }
           if (-not (Test-Path $marker)) { throw "Bundled core marker missing: $marker" }
           if (-not (Test-Path $package)) { throw "Bundled core package metadata missing: $package" }
+          $corePackage = Get-Content -LiteralPath $package -Raw | ConvertFrom-Json
           $probe = 'Bundled runtime check — café 東京 😀'
           $record = @{ type = 'user'; uuid = 'bundled-ci'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = $probe }) } }
           $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
           $response = $request | node $worker
           $decoded = $response | ConvertFrom-Json
           if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
-          if ($decoded.core_commit -ne '134d5735b44b8d131d30d5b98a6e3a06320a113f') {
+          if ($decoded.core_commit -ne '74a96db899acacf2be7eec42a1175b733b6e7cfb') {
             throw "Unexpected bundled core commit: $($decoded.core_commit)"
+          }
+          if ($decoded.core_version -ne $corePackage.version) {
+            throw "Unexpected bundled core version: $($decoded.core_version); package=$($corePackage.version)"
           }
           if ($decoded.projection.units[0].block.text -ne $probe) {
             throw 'Bundled projection corrupted Unicode text.'
@@ -122,13 +126,19 @@ jobs:
         env:
           AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
         run: |
+          $package = Join-Path $env:GITHUB_WORKSPACE 'dependencies\AIConversationCore\package.json'
+          $corePackage = Get-Content -LiteralPath $package -Raw | ConvertFrom-Json
           $request = '{"operation":"ping"}'
           $response = $request | node tools/AIConversationCore-worker.mjs
           $decoded = $response | ConvertFrom-Json
-          if (-not $decoded.ok) { throw "Worker ping failed: $($decoded.error)"
+          if (-not $decoded.ok) {
+            throw "Worker ping failed: $($decoded.error)"
           }
-          if ($decoded.core_commit -ne '134d5735b44b8d131d30d5b98a6e3a06320a113f') {
+          if ($decoded.core_commit -ne '74a96db899acacf2be7eec42a1175b733b6e7cfb') {
             throw "Unexpected core commit: $($decoded.core_commit)"
+          }
+          if ($decoded.core_version -ne $corePackage.version) {
+            throw "Unexpected core version: $($decoded.core_version); package=$($corePackage.version)"
           }
 
       - name: Verify structured Claude projection
