@@ -1,4 +1,4 @@
-name: Temporary issue 94 native timing RED
+name: Temporary issue 94 native timing GREEN
 
 on:
   push:
@@ -7,21 +7,96 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  red:
+  green:
     runs-on: windows-latest
     steps:
       - name: Check out branch and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Apply native System.Speech timing correction
+        shell: pwsh
+        run: |
+          $script = @'
+          from pathlib import Path
+
+          path = Path("AgentPanelSpeaker/SapiSpeechEngine.cs")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+            global text
+            count = text.count(old)
+            if count == 0 and new in text:
+              return False
+            if count != 1:
+              raise RuntimeError(f"{label}: expected exactly one old block, found {count}")
+            text = text.replace(old, new, 1)
+            return True
+
+          changed = False
+          changed |= replace_once(
+            "using System.Speech.AudioFormat;\n",
+            "",
+            "obsolete System.Speech audio-format using")
+          changed |= replace_once(
+            "  private const int SystemSpeechSampleRate = 16000;\n",
+            "  private const int SystemSpeechTimingSampleRate = 16000;\n",
+            "System.Speech timing clock constant")
+          changed |= replace_once(
+            "      var outputFormat = new SpeechAudioFormatInfo(\n"
+            "        SystemSpeechSampleRate,\n"
+            "        AudioBitsPerSample.Sixteen,\n"
+            "        AudioChannel.Mono);\n"
+            "      synthesizer.SetOutputToAudioStream(stream, outputFormat);\n",
+            "      synthesizer.SetOutputToWaveStream(stream);\n",
+            "forced 16 kHz synthesis")
+          changed |= replace_once(
+            "    PcmWaveData wave = PcmWaveData.FromPcmSamples(\n"
+            "      channels: 1,\n"
+            "      sampleRate: SystemSpeechSampleRate,\n"
+            "      bitsPerSample: 16,\n"
+            "      samples: stream.ToArray());\n\n",
+            "    PcmWaveData wave = PcmWaveData.Parse(stream.ToArray());\n"
+            "    double timingScale = SystemSpeechTimingSampleRate /\n"
+            "      (double)wave.SampleRate;\n"
+            "    if (timingScale != 1.0)\n"
+            "    {\n"
+            "      collected = collected\n"
+            "        .Select(boundary => boundary with\n"
+            "        {\n"
+            "          AudioPosition = TimeSpan.FromTicks(checked((long)Math.Round(\n"
+            "            boundary.AudioPosition.Ticks * timingScale)))\n"
+            "        })\n"
+            "        .ToList();\n"
+            "    }\n"
+            "    DiagnosticLog.Write(\"speech.system_speech_timing_normalized\", new\n"
+            "    {\n"
+            "      provider = \"System.Speech\",\n"
+            "      voice = providerVoiceId,\n"
+            "      providerTimingSampleRate = SystemSpeechTimingSampleRate,\n"
+            "      pcmSampleRate = wave.SampleRate,\n"
+            "      timingScale,\n"
+            "      boundaryCount = collected.Count\n"
+            "    });\n\n",
+            "native WAVE parsing and timing normalization")
+
+          if changed:
+            path.write_text(text, encoding="utf-8")
+          '@
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'apply-issue94.py'
+          Set-Content -LiteralPath $scriptPath -Value $script -Encoding utf8
+          python $scriptPath
+          if ($LASTEXITCODE -ne 0) { throw 'Could not apply issue #94 production correction.' }
 
       - name: Add temporary issue 94 suite entry point
         shell: pwsh
@@ -31,6 +106,7 @@ jobs:
           foreach ($line in [System.IO.File]::ReadAllLines($path)) {
             $lines.Add($line)
           }
+          if ($lines.Contains('            "system-speech-native-timing",')) { exit 0 }
           $match = '          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))'
           $index = $lines.IndexOf($match)
           if ($index -lt 1 -or $lines[$index - 1] -ne '      if (args.Length == 2 &&') {
@@ -53,38 +129,51 @@ jobs:
           $lines.InsertRange($index - 1, $block)
           [System.IO.File]::WriteAllLines($path, $lines)
 
-      - name: Build issue 94 RED
+      - name: Build issue 94 GREEN
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Require native timing RED
+      - name: Run exact issue 94 GREEN
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          $stdout = Join-Path $env:RUNNER_TEMP 'issue94-native-red-out.txt'
-          $stderr = Join-Path $env:RUNNER_TEMP 'issue94-native-red-err.txt'
-          $process = Start-Process `
-            -FilePath $exe `
-            -ArgumentList @('--test', 'system-speech-native-timing') `
-            -Wait `
-            -PassThru `
-            -RedirectStandardOutput $stdout `
-            -RedirectStandardError $stderr
-          $output = Get-Content -LiteralPath $stdout -Raw
-          Write-Host $output
-          if (Test-Path -LiteralPath $stderr) {
-            $errors = Get-Content -LiteralPath $stderr -Raw
-            if ($errors) { Write-Host $errors }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite system-speech-native-timing
+
+      - name: Run System.Speech provenance regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite system-speech-provenance
+
+      - name: Verify production patch shape
+        shell: pwsh
+        run: |
+          $source = Get-Content -LiteralPath 'AgentPanelSpeaker/SapiSpeechEngine.cs' -Raw
+          foreach ($required in @(
+            'SystemSpeechTimingSampleRate = 16000',
+            'synthesizer.SetOutputToWaveStream(stream);',
+            'PcmWaveData wave = PcmWaveData.Parse(stream.ToArray());',
+            'SystemSpeechTimingSampleRate /',
+            'speech.system_speech_timing_normalized'
+          )) {
+            if (-not $source.Contains($required)) { throw "Missing production invariant: $required" }
           }
-          if ($process.ExitCode -ne 1) {
-            throw "Expected issue #94 RED exit 1; got $($process.ExitCode)."
+          foreach ($forbidden in @(
+            'SystemSpeechSampleRate = 16000',
+            'SetOutputToAudioStream(stream, outputFormat)',
+            'SpeechAudioFormatInfo('
+          )) {
+            if ($source.Contains($forbidden)) { throw "Obsolete forced-format code remains: $forbidden" }
           }
-          if (-not $output.Contains('FAIL  system-speech-native-timing/native-output-and-normalized-timing')) {
-            throw 'Issue #94 RED did not fail the intended native-output/timing regression.'
-          }
-          if (-not $output.Contains('Production System.Speech is not using the provider-default PCM rate')) {
-            throw 'Issue #94 RED failed for an unexpected reason.'
-          }
-          if (-not $output.Contains('TEST-SUITE-COMPLETE system-speech-native-timing exit=1')) {
-            throw 'Issue #94 RED completion marker is missing.'
+
+      - name: Commit production correction
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git restore AgentPanelSpeaker/Program.cs
+          git add AgentPanelSpeaker/SapiSpeechEngine.cs
+          if (-not (git diff --cached --quiet)) {
+            git commit -m "fix: normalize native System.Speech timing"
+            git push origin HEAD:issue-94-system-speech-sample-rate
           }
