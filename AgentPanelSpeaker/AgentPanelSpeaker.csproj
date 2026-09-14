@@ -42,15 +42,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="System.Speech" Version="10.0.0-rc.1.25451.107" />
-    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.26100.3916" />
+    <Content Include="Assets\UtilityIcons\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Utilities\**\*.cs" />
-    <EmbeddedResource Remove="Utilities\**\*" />
-    <None Remove="Utilities\**\*" />
+    <PackageReference Include="System.Speech" Version="10.0.9" />
+    <PackageReference Include="Markdig" Version="1.3.2" />
+    <PackageReference Include="Cyotek.Windows.Forms.ColorPicker" Version="2.0.0-beta.7" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
   </ItemGroup>
+
+  <Target Name="RemoveUnusedWebView2WpfReference"
+          BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)"
+                 Condition="'%(Reference.Filename)%(Reference.Extension)' == 'Microsoft.Web.WebView2.Wpf.dll'" />
+    </ItemGroup>
+  </Target>
+
 </Project>
