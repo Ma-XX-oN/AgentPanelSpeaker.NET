@@ -24,132 +24,74 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Correct permanent RED test syntax
+      - name: Use the real Codex interaction shape
         shell: python
         run: |
           from pathlib import Path
 
           path = Path('AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs')
           source = path.read_text(encoding='utf-8')
+          method = source.index(') BuildIssue106ListFixture()')
+          start = source.index('    string record = JsonSerializer.Serialize(new', method)
+          end_marker = '      new[] { record });\n'
+          end = source.index(end_marker, start) + len(end_marker)
+          replacement = r'''    const string userMessage = """
+          # Context from my IDE setup:
 
-          first_method = source.index(
-            '  private static void TestSpeechFragmentListRangeIsStructurallyLegal()')
-          first_start = source.index(
-            '    ExecuteBrowserScript(\n      fixture.WebView,\n      $"""\n',
-            first_method)
-          first_end = source.index(
-            '    Require(\n      string.Equals(\n        result.GetProperty("firstOwner")',
-            first_start)
-          first_replacement = '''    string installScript = """
-          (() => {
-            replaceTranscript(__HTML__, false, []);
-            window.__issue106IllegalSurroundCalls = 0;
-            const originalSurroundContents = Range.prototype.surroundContents;
-            Range.prototype.surroundContents = function(wrapper) {
-              try {
-                return originalSurroundContents.call(this, wrapper);
-              } catch (error) {
-                window.__issue106IllegalSurroundCalls += 1;
-                throw error;
-              }
-            };
-            try {
-              setSpeechFragments([
-                {fragmentId:10601, wordIds:__FIRST__},
-                {fragmentId:10602, wordIds:__SECOND__}
-              ]);
-            } finally {
-              Range.prototype.surroundContents = originalSurroundContents;
-            }
-          })()
-          """
-            .Replace("__HTML__", html, StringComparison.Ordinal)
-            .Replace("__FIRST__", first, StringComparison.Ordinal)
-            .Replace("__SECOND__", second, StringComparison.Ordinal);
-              ExecuteBrowserScript(fixture.WebView, installScript);
+          ## Active file: c:\Users\adria\Downloads\Download Conversation - 10. Conversation Status Summary (1).md
 
-              string ownerProbe = """
-          (() => JSON.stringify({
-            illegalCalls:Number(window.__issue106IllegalSurroundCalls || 0),
-            firstOwner:document.getElementById('word-' + __FIRST_ID__)?.tagName || '',
-            firstBodyOwner:document.getElementById('word-' + __FIRST_BODY_ID__)?.tagName || ''
-          }))()
-          """
-            .Replace(
-              "__FIRST_ID__",
-              firstIds[0].ToString(CultureInfo.InvariantCulture),
-              StringComparison.Ordinal)
-            .Replace(
-              "__FIRST_BODY_ID__",
-              firstIds[1].ToString(CultureInfo.InvariantCulture),
-              StringComparison.Ordinal);
-              JsonElement result = ExecuteBrowserJsonProbe(
-                fixture.WebView,
-                ownerProbe);
+          ## Active selection of the file:
+          ## User [2026-08-31 22:18:02]: <!-- turn_id=8318a33f-1c9b-467e-8eb2-6b4f5ad508c8 -->
+
+          ## Open tabs:
+          - Download Conversation - 10. Conversation Status Summary (1).md: c:\Users\adria\Downloads\Download Conversation - 10. Conversation Status Summary (1).md
+          - chatgpt-direct.jsonl: scripts/fixtures/chatgpt-direct.jsonl
+          - AI-transcript-arch.md: scripts/AI-transcript-arch.md
+          - Logger - Branch · Maximal HD Set Wave.md: c:\Users\adria\Downloads\Logger - Branch · Maximal HD Set Wave.md
+          - chatgpt-conversation-api-20260825-010932.md: c:\Users\adria\Downloads\chatgpt-conversation-api-20260825-010932.md
+
+          ## My request for Codex:
+          I mean that the table be in the numbered list and in a nested numbered list.
+          """;
+              string userRecord = JsonSerializer.Serialize(new
+              {
+                timestamp = "2026-09-07T18:50:35.814Z",
+                type = "event_msg",
+                payload = new
+                {
+                  type = "user_message",
+                  client_id = "0d6652ad-a435-416a-a6ce-38979537b12f",
+                  message = userMessage
+                }
+              });
+              string assistantRecord = JsonSerializer.Serialize(new
+              {
+                timestamp = "2026-09-07T18:51:12.316Z",
+                type = "event_msg",
+                payload = new
+                {
+                  type = "agent_message",
+                  message = markdown,
+                  phase = "final_answer",
+                  memory_citation = (string?)null
+                }
+              });
+              using var client = new AIConversationCoreClient();
+              AIConversationProjection projection = client.Project(
+                AgentSource.Codex,
+                new[] { userRecord, assistantRecord });
           '''
-          source = source[:first_start] + first_replacement + source[first_end:]
-
-          second_method = source.index(
-            '  private static void TestSpeechFragmentListPreservesCanonicalDom()')
-          second_start = source.index(
-            '    ExecuteBrowserScript(\n      fixture.WebView,\n      $"""\n',
-            second_method)
-          second_end = source.index(
-            '    string before = result.GetProperty("before").GetRawText();',
-            second_start)
-          second_replacement = '''    string structureScript = """
-          (() => {
-            replaceTranscript(__HTML__, false, []);
-            window.__issue106Structure = () => JSON.stringify({
-              olCount:transcript.querySelectorAll('ol').length,
-              liCount:transcript.querySelectorAll('li').length,
-              emptyLiCount:[...transcript.querySelectorAll('li')]
-                .filter(item => item.textContent.trim().length === 0).length,
-              olChildTags:[...transcript.querySelectorAll('ol')]
-                .map(list => [...list.children].map(child => child.tagName)),
-              liIds:[...transcript.querySelectorAll('li')].map(item => item.id),
-              liParentTags:[...transcript.querySelectorAll('li')]
-                .map(item => item.parentElement?.tagName || ''),
-              tableCount:transcript.querySelectorAll('table').length,
-              tableOwnerIds:[...transcript.querySelectorAll('table')]
-                .map(table => table.closest('li')?.id || ''),
-              delCount:transcript.querySelectorAll('del').length,
-              delText:[...transcript.querySelectorAll('del')]
-                .map(item => item.textContent)
-            });
-            window.__issue106Before = window.__issue106Structure();
-            setSpeechFragments([
-              {fragmentId:10601, wordIds:__FIRST__},
-              {fragmentId:10602, wordIds:__SECOND__}
-            ]);
-            window.__issue106After = window.__issue106Structure();
-          })()
-          """
-            .Replace("__HTML__", html, StringComparison.Ordinal)
-            .Replace("__FIRST__", first, StringComparison.Ordinal)
-            .Replace("__SECOND__", second, StringComparison.Ordinal);
-              ExecuteBrowserScript(fixture.WebView, structureScript);
-
-              JsonElement result = ExecuteBrowserJsonProbe(
-                fixture.WebView,
-                """
-          (() => JSON.stringify({
-            before:JSON.parse(window.__issue106Before),
-            after:JSON.parse(window.__issue106After)
-          }))()
-          """);
-          '''
-          source = source[:second_start] + second_replacement + source[second_end:]
+          source = source[:start] + replacement + source[end:]
           path.write_text(source, encoding='utf-8')
 
-      - name: Commit corrected permanent RED tests
+      - name: Commit production-shaped RED fixture
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
           git diff --cached --check
-          git commit -m "test: correct issue 106 RED harness syntax"
+          git commit -m "test: use production Codex interaction for issue 106"
           git push origin HEAD:issue-106-fragment-list-structure
 
       - name: Build RED candidate
