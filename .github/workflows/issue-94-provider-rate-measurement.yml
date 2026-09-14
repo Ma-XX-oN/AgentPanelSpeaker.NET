@@ -26,35 +26,32 @@ jobs:
       - name: Add temporary issue 94 suite entry point
         shell: pwsh
         run: |
-          $script = @'
-          from pathlib import Path
-
-          path = Path("AgentPanelSpeaker/Program.cs")
-          text = path.read_text(encoding="utf-8")
-          marker = '''      if (args.Length == 2 &&
-          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
-'''
-          if text.count(marker) != 1:
-            raise RuntimeError("Could not locate redundancy suite insertion point exactly once.")
-          block = '''      if (args.Length == 2 &&
-          string.Equals(
-            args[1],
-            "system-speech-rate-timing",
-            StringComparison.OrdinalIgnoreCase))
-      {
-        Environment.ExitCode = RunNamedSuite(
-          "system-speech-rate-timing",
-          Issue94SystemSpeechSampleRateRegressionTestRunner.Run);
-        return;
-      }
-
-'''
-          path.write_text(text.replace(marker, block + marker, 1), encoding="utf-8")
-          '@
-          $scriptPath = Join-Path $env:RUNNER_TEMP 'wire-issue94.py'
-          Set-Content -LiteralPath $scriptPath -Value $script -Encoding utf8
-          python $scriptPath
-          if ($LASTEXITCODE -ne 0) { throw 'Could not wire the temporary issue #94 suite.' }
+          $path = 'AgentPanelSpeaker/Program.cs'
+          $lines = [System.Collections.Generic.List[string]]::new()
+          foreach ($line in [System.IO.File]::ReadAllLines($path)) {
+            $lines.Add($line)
+          }
+          $match = '          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))'
+          $index = $lines.IndexOf($match)
+          if ($index -lt 1 -or $lines[$index - 1] -ne '      if (args.Length == 2 &&') {
+            throw 'Could not locate redundancy suite insertion point.'
+          }
+          $block = [string[]]@(
+            '      if (args.Length == 2 &&',
+            '          string.Equals(',
+            '            args[1],',
+            '            "system-speech-rate-timing",',
+            '            StringComparison.OrdinalIgnoreCase))',
+            '      {',
+            '        Environment.ExitCode = RunNamedSuite(',
+            '          "system-speech-rate-timing",',
+            '          Issue94SystemSpeechSampleRateRegressionTestRunner.Run);',
+            '        return;',
+            '      }',
+            ''
+          )
+          $lines.InsertRange($index - 1, $block)
+          [System.IO.File]::WriteAllLines($path, $lines)
 
       - name: Build issue 94 measurement
         shell: pwsh
