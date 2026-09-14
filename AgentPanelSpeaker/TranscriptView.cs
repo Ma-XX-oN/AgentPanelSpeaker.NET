@@ -3028,7 +3028,7 @@ let currentBoundaryWordIndex = -1;
 let currentSpeechListItem = null;
 let currentCanonicalPlaybackWordId = 0;
 let currentCanonicalPlaybackElements = [];
-let currentFragmentPlaybackElement = null;
+let currentFragmentPlaybackElements = [];
 let speechFragments = [];
 let requestedPlaybackWordId = 0;
 let fadeMs = 250;
@@ -4588,6 +4588,7 @@ function resetPlaybackProjectionState() {
   currentFragmentEnd = -1;
   currentBoundaryWordIndex = -1;
   currentSpeechListItem = null;
+  currentFragmentPlaybackElements = [];
   liveEndMarker.style.display = 'none';
 }
 
@@ -4607,6 +4608,44 @@ function fragmentBlockOwner(element) {
   return element?.closest(
     'p,li,pre,blockquote,h1,h2,h3,h4,h5,h6,td,th,dt,dd') ||
     element?.parentElement || null;
+}
+
+function fragmentRangeHasPartialNonTextNode(range) {
+  const startAncestors = new Set();
+  const endAncestors = new Set();
+  for (let node = range.startContainer; node; node = node.parentNode) {
+    startAncestors.add(node);
+  }
+  for (let node = range.endContainer; node; node = node.parentNode) {
+    endAncestors.add(node);
+  }
+  for (const node of startAncestors) {
+    if (node.nodeType !== Node.TEXT_NODE && !endAncestors.has(node)) {
+      return true;
+    }
+  }
+  for (const node of endAncestors) {
+    if (node.nodeType !== Node.TEXT_NODE && !startAncestors.has(node)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function fragmentPlaybackTargets(fragment) {
+  const wrapper = document.getElementById('frag-' + fragment.fragmentId);
+  if (wrapper) return [wrapper];
+  const owners = fragment.wordIds.map(wordId =>
+    document.getElementById('word-' + wordId));
+  if (owners.some(owner => !owner)) return [];
+  const firstBlock = fragmentBlockOwner(owners[0]);
+  const lastBlock = fragmentBlockOwner(owners[owners.length - 1]);
+  if (firstBlock && firstBlock === lastBlock &&
+      (owners[0] === firstBlock ||
+       owners[owners.length - 1] === firstBlock)) {
+    return [firstBlock];
+  }
+  return canonicalPlaybackElements(fragment.wordIds);
 }
 
 function wrapSpeechFragments() {
@@ -4629,37 +4668,50 @@ function wrapSpeechFragments() {
     const range = document.createRange();
     range.setStartBefore(first);
     range.setEndAfter(last);
+    if (fragmentRangeHasPartialNonTextNode(range)) {
+      chrome.webview.postMessage({
+        type:'fragment-wrap-skipped',
+        fragmentId:fragment.fragmentId,
+        reason:'partial-non-text-node'
+      });
+      continue;
+    }
     const wrapper = document.createElement('span');
     wrapper.id = id;
     wrapper.className = 'speech-fragment';
     try {
       range.surroundContents(wrapper);
-    } catch (_) {
-      const contents = range.extractContents();
-      wrapper.append(contents);
-      range.insertNode(wrapper);
+    } catch (error) {
+      chrome.webview.postMessage({
+        type:'fragment-wrap-failed',
+        fragmentId:fragment.fragmentId,
+        reason:'surround-rejected-after-preflight',
+        error:String(error)
+      });
     }
   }
 }
 
 function retireFragmentPlayback(useFade) {
-  if (!currentFragmentPlaybackElement) return;
-  const element = currentFragmentPlaybackElement;
-  currentFragmentPlaybackElement = null;
-  element.classList.remove('active', 'paused');
-  cancelFade(element);
-  if (useFade && fadeMs > 0) {
-    const highlight = getComputedStyle(document.documentElement)
-      .getPropertyValue('--highlight').trim();
-    const animation = element.animate(
-      [
-        {backgroundColor: highlight},
-        {backgroundColor: 'transparent'}
-      ],
-      {duration: fadeMs, easing: 'linear'});
-    fadingAnimations.set(element, animation);
-    animation.onfinish = () => fadingAnimations.delete(element);
-    animation.oncancel = () => fadingAnimations.delete(element);
+  if (!currentFragmentPlaybackElements.length) return;
+  const elements = currentFragmentPlaybackElements;
+  currentFragmentPlaybackElements = [];
+  const highlight = getComputedStyle(document.documentElement)
+    .getPropertyValue('--highlight').trim();
+  for (const element of elements) {
+    element.classList.remove('active', 'paused');
+    cancelFade(element);
+    if (useFade && fadeMs > 0) {
+      const animation = element.animate(
+        [
+          {backgroundColor: highlight},
+          {backgroundColor: 'transparent'}
+        ],
+        {duration: fadeMs, easing: 'linear'});
+      fadingAnimations.set(element, animation);
+      animation.onfinish = () => fadingAnimations.delete(element);
+      animation.oncancel = () => fadingAnimations.delete(element);
+    }
   }
 }
 
@@ -4669,22 +4721,28 @@ function setFragmentPlayback(state, fragmentId) {
   retireFragmentPlayback(true);
   wrapSpeechFragments();
   const id = Number(fragmentId);
-  const element = Number.isSafeInteger(id) && id >= 0
-    ? document.getElementById('frag-' + id)
+  const descriptor = Number.isSafeInteger(id) && id >= 0
+    ? speechFragments.find(item => item.fragmentId === id)
     : null;
-  if (!element) {
-    const descriptor = speechFragments.find(item => item.fragmentId === id);
+  const elements = descriptor
+    ? fragmentPlaybackTargets(descriptor)
+    : [];
+  if (!elements.length) {
     if (descriptor?.wordIds?.length) {
       requestCanonicalPlaybackWindow(descriptor.wordIds[0]);
     }
     return;
   }
-  currentFragmentPlaybackElement = element;
-  cancelFade(element);
-  element.classList.add(state === 'paused' ? 'paused' : 'active');
-  if (followSpeech) openAncestors(element);
-  reveal(element);
-  maybePrefetchVoiceCursor(element);
+  currentFragmentPlaybackElements = elements;
+  const className = state === 'paused' ? 'paused' : 'active';
+  for (const element of elements) {
+    cancelFade(element);
+    element.classList.add(className);
+  }
+  const target = elements[0];
+  if (followSpeech) openAncestors(target);
+  reveal(target);
+  maybePrefetchVoiceCursor(target);
 }
 
 function canonicalPlaybackElements(wordIds) {
@@ -5725,11 +5783,11 @@ chrome.webview.addEventListener('message', event => {
     requestedPlaybackWordId,
     windowStartIndex,
     windowEndIndex,
-    markerVisible: currentFragmentPlaybackElement
-      ? (() => {
-          const rect = currentFragmentPlaybackElement.getBoundingClientRect();
+    markerVisible: currentFragmentPlaybackElements.length > 0
+      ? currentFragmentPlaybackElements.some(element => {
+          const rect = element.getBoundingClientRect();
           return rect.bottom > 0 && rect.top < window.innerHeight;
-        })()
+        })
       : currentCanonicalPlaybackElements.length > 0
       ? currentCanonicalPlaybackElements.some(element => {
           const rect = element.getBoundingClientRect();
