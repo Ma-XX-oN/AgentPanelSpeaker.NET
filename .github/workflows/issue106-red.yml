@@ -24,74 +24,34 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Use the real Codex interaction shape
+      - name: Correct target-unit selection
         shell: python
         run: |
           from pathlib import Path
 
           path = Path('AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs')
           source = path.read_text(encoding='utf-8')
-          method = source.index(') BuildIssue106ListFixture()')
-          start = source.index('    string record = JsonSerializer.Serialize(new', method)
-          end_marker = '      new[] { record });\n'
-          end = source.index(end_marker, start) + len(end_marker)
-          replacement = r'''    const string userMessage = """
-          # Context from my IDE setup:
-
-          ## Active file: c:\Users\adria\Downloads\Download Conversation - 10. Conversation Status Summary (1).md
-
-          ## Active selection of the file:
-          ## User [2026-08-31 22:18:02]: <!-- turn_id=8318a33f-1c9b-467e-8eb2-6b4f5ad508c8 -->
-
-          ## Open tabs:
-          - Download Conversation - 10. Conversation Status Summary (1).md: c:\Users\adria\Downloads\Download Conversation - 10. Conversation Status Summary (1).md
-          - chatgpt-direct.jsonl: scripts/fixtures/chatgpt-direct.jsonl
-          - AI-transcript-arch.md: scripts/AI-transcript-arch.md
-          - Logger - Branch · Maximal HD Set Wave.md: c:\Users\adria\Downloads\Logger - Branch · Maximal HD Set Wave.md
-          - chatgpt-conversation-api-20260825-010932.md: c:\Users\adria\Downloads\chatgpt-conversation-api-20260825-010932.md
-
-          ## My request for Codex:
-          I mean that the table be in the numbered list and in a nested numbered list.
-          """;
-              string userRecord = JsonSerializer.Serialize(new
-              {
-                timestamp = "2026-09-07T18:50:35.814Z",
-                type = "event_msg",
-                payload = new
-                {
-                  type = "user_message",
-                  client_id = "0d6652ad-a435-416a-a6ce-38979537b12f",
-                  message = userMessage
-                }
-              });
-              string assistantRecord = JsonSerializer.Serialize(new
-              {
-                timestamp = "2026-09-07T18:51:12.316Z",
-                type = "event_msg",
-                payload = new
-                {
-                  type = "agent_message",
-                  message = markdown,
-                  phase = "final_answer",
-                  memory_citation = (string?)null
-                }
-              });
-              using var client = new AIConversationCoreClient();
-              AIConversationProjection projection = client.Project(
-                AgentSource.Codex,
-                new[] { userRecord, assistantRecord });
+          old = '''    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
+              .Single(item => item.Html.Contains(
+                "Nested item after the table",
+                StringComparison.Ordinal));
           '''
-          source = source[:start] + replacement + source[end:]
-          path.write_text(source, encoding='utf-8')
+          new = '''    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
+              .Single(item => ReadSpeechWords(item).Any(word =>
+                string.Equals(word.Text, "strikethrough", StringComparison.Ordinal)));
+          '''
+          if source.count(old) != 1:
+            raise SystemExit('Could not isolate issue #106 target-unit selector.')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
 
-      - name: Commit production-shaped RED fixture
+      - name: Commit corrected target-unit selection
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs
           git diff --cached --check
-          git commit -m "test: use production Codex interaction for issue 106"
+          git commit -m "test: select issue 106 unit by Core word identity"
           git push origin HEAD:issue-106-fragment-list-structure
 
       - name: Build RED candidate
