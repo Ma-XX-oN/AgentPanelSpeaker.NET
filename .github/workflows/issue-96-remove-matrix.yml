@@ -125,12 +125,29 @@ jobs:
             AgentPanelSpeaker/SystemSpeechMatrixDiagnosticRunner.cs `
             AgentPanelSpeaker/SystemSpeechMatrixDialog.cs
 
-          $remaining = git grep -n -E 'systemSpeechMatrix|SystemSpeechMatrix|SSML Matrix|system-speech-matrix' -- AgentPanelSpeaker
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host $remaining
-            throw 'SSML matrix implementation/wiring remains after removal.'
-          }
-          if ($LASTEXITCODE -ne 1) { throw 'git grep failed.' }
+          $verify = @'
+          from pathlib import Path
+          import re
+
+          pattern = re.compile(r"systemSpeechMatrix|SystemSpeechMatrix|SSML Matrix|system-speech-matrix")
+          hits = []
+          for path in Path("AgentPanelSpeaker").rglob("*"):
+            if not path.is_file():
+              continue
+            try:
+              text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+              continue
+            for index, line in enumerate(text.splitlines(), 1):
+              if pattern.search(line):
+                hits.append(f"{path}:{index}:{line}")
+          if hits:
+            raise RuntimeError("SSML matrix implementation/wiring remains:\n" + "\n".join(hits))
+          '@
+          $verifyPath = Join-Path $env:RUNNER_TEMP 'verify-issue96-removed.py'
+          Set-Content -LiteralPath $verifyPath -Value $verify -Encoding utf8
+          python $verifyPath
+          if ($LASTEXITCODE -ne 0) { throw 'Issue #96 removal verification failed.' }
 
       - name: Build after removal
         shell: pwsh
