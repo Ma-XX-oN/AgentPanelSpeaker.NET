@@ -50,7 +50,7 @@ jobs:
           if (-not $source.Contains('"ci-report-routing", TestReportRouting')) {
             throw 'Permanent issue 95 RED regression is missing.'
           }
-          if ($source.Contains('Environment.GetEnvironmentVariable("RUNNER_TEMP")')) {
+          if ($source.Contains('string reportDirectory =')) {
             throw 'Production repair is already present before the GREEN phase.'
           }
 
