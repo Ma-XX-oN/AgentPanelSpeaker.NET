@@ -292,6 +292,18 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "system-speech-native-timing",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "system-speech-native-timing",
+          Issue94NativeSystemSpeechTimingRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -347,6 +359,8 @@ internal static class Program
         "preview-cursor");
       int systemSpeechProvenance = RunIsolatedTestSuite(
         "system-speech-provenance");
+      int systemSpeechNativeTiming = RunIsolatedTestSuite(
+        "system-speech-native-timing");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -373,7 +387,8 @@ internal static class Program
                              rewindCurrentFragment == 0 &&
                              speechOwnership == 0 &&
                              previewCursor == 0 &&
-                             systemSpeechProvenance == 0
+                             systemSpeechProvenance == 0 &&
+                             systemSpeechNativeTiming == 0
         ? 0
         : 1;
       Console.WriteLine(
