@@ -22,19 +22,110 @@ jobs:
       - name: Remove issue 96 diagnostic feature
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          $parent = '27255ba289f88272c78582340df57733c7c232cd^'
-          $commit = '27255ba289f88272c78582340df57733c7c232cd'
-          $patch = Join-Path $env:RUNNER_TEMP 'issue96-ui.patch'
-          git diff $parent $commit -- AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/Program.cs | Out-File -FilePath $patch -Encoding utf8
-          git apply -R --3way $patch
-          if ($LASTEXITCODE -ne 0) { throw 'Could not reverse the issue #96 MainForm/Program patch cleanly.' }
+          $script = @'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+            count = text.count(old)
+            if count != 1:
+              raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+            return text.replace(old, new, 1)
+
+          main_path = Path("AgentPanelSpeaker/MainForm.cs")
+          main = main_path.read_text(encoding="utf-8")
+          main = replace_once(main,
+            "  private readonly Button _systemSpeechMatrixButton = new();\n",
+            "",
+            "matrix button field")
+          main = replace_once(main,
+            "  private bool _systemSpeechMatrixActive;\n",
+            "",
+            "matrix active field")
+          main = replace_once(main,
+            "    ConfigureButton(_systemSpeechMatrixButton, \"SSML Matrix...\");\n"
+            "    _toolTip.SetToolTip(\n"
+            "      _systemSpeechMatrixButton,\n"
+            "      \"Run the controlled System.Speech SSML provider diagnostic\");\n",
+            "",
+            "matrix button configuration")
+          main = replace_once(main,
+            "      _pronunciationsButton, _systemSpeechMatrixButton,\n",
+            "      _pronunciationsButton,\n",
+            "matrix options layout")
+          main = replace_once(main,
+            "      _systemSpeechMatrixButton,\n",
+            "",
+            "matrix tab order")
+          main = replace_once(main,
+            "    MatchButtonHeight(_systemSpeechMatrixButton, _fenceTypesTextBox.PreferredHeight);\n",
+            "",
+            "matrix height normalization")
+          main = replace_once(main,
+            "    _systemSpeechMatrixButton.Click += SystemSpeechMatrixButtonClicked;\n",
+            "",
+            "matrix click wiring")
+          method_pattern = re.compile(
+            r"\n  /// <summary>\n"
+            r"  /// Runs the isolated System\.Speech SSML provider matrix\.\n"
+            r"  /// </summary>\n"
+            r"  private async void SystemSpeechMatrixButtonClicked\([\s\S]*?"
+            r"\n  }\n\n(?=  /// <summary>\n"
+            r"  /// Opens the spelling and pronunciation-rule editor\.)")
+          main, count = method_pattern.subn("\n", main, count=1)
+          if count != 1:
+            raise RuntimeError(f"matrix click handler: expected one match, found {count}")
+          main = replace_once(main,
+            "    _systemSpeechMatrixButton.Enabled =\n"
+            "      !_systemSpeechMatrixActive &&\n"
+            "      !_monitor.IsRunning &&\n"
+            "      !_playPauseTransitioning &&\n"
+            "      !_speech.IsSpeaking &&\n"
+            "      _installedVoices.Any(voice =>\n"
+            "        voice.Provider == SpeechVoiceProvider.SystemSpeech);\n",
+            "",
+            "matrix enabled state")
+          main_path.write_text(main, encoding="utf-8")
+
+          program_path = Path("AgentPanelSpeaker/Program.cs")
+          program = program_path.read_text(encoding="utf-8")
+          program = replace_once(program,
+            "      if (args.Length == 2 &&\n"
+            "          string.Equals(\n"
+            "            args[1],\n"
+            "            \"system-speech-matrix\",\n"
+            "            StringComparison.OrdinalIgnoreCase))\n"
+            "      {\n"
+            "        Environment.ExitCode = RunNamedSuite(\n"
+            "          \"system-speech-matrix\",\n"
+            "          Issue96SystemSpeechMatrixRegressionTestRunner.Run);\n"
+            "        return;\n"
+            "      }\n\n",
+            "",
+            "matrix CLI suite")
+          program = replace_once(program,
+            "      int systemSpeechMatrix = RunIsolatedTestSuite(\n"
+            "        \"system-speech-matrix\");\n",
+            "",
+            "matrix all-suite child")
+          program = replace_once(program,
+            "                             systemSpeechProvenance == 0 &&\n"
+            "                             systemSpeechMatrix == 0\n",
+            "                             systemSpeechProvenance == 0\n",
+            "matrix all-suite result")
+          program_path.write_text(program, encoding="utf-8")
+          '@
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'remove-issue96.py'
+          Set-Content -LiteralPath $scriptPath -Value $script -Encoding utf8
+          python $scriptPath
+          if ($LASTEXITCODE -ne 0) { throw 'Targeted issue #96 source removal failed.' }
+
           git rm -f --ignore-unmatch `
             AgentPanelSpeaker/Issue96SystemSpeechMatrixRegressionTestRunner.cs `
             AgentPanelSpeaker/SystemSpeechMatrixDiagnosticRunner.cs `
             AgentPanelSpeaker/SystemSpeechMatrixDialog.cs
-          $remaining = git grep -n -E 'systemSpeechMatrix|SystemSpeechMatrix|SSML Matrix|system-speech-matrix' -- AgentPanelSpeaker ':!AgentPanelSpeaker/Issue94SystemSpeechSampleRateRegressionTestRunner.cs'
+
+          $remaining = git grep -n -E 'systemSpeechMatrix|SystemSpeechMatrix|SSML Matrix|system-speech-matrix' -- AgentPanelSpeaker
           if ($LASTEXITCODE -eq 0) {
             Write-Host $remaining
             throw 'SSML matrix implementation/wiring remains after removal.'
@@ -55,6 +146,8 @@ jobs:
       - name: Commit removal
         shell: pwsh
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if (-not (git status --porcelain)) { throw 'Issue #96 removal produced no changes.' }
           git commit -m "cleanup: remove SSML matrix diagnostic"
