@@ -9,12 +9,11 @@ internal static class Issue96SystemSpeechMatrixRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("system-speech-matrix/button-is-wired", TestButtonIsWired),
+      ("system-speech-matrix/production-ui-absent", TestProductionUiAbsent),
       ("system-speech-matrix/system-speech-only", TestSystemSpeechOnly),
       ("system-speech-matrix/fixed-five-case-inventory", TestFixedFiveCaseInventory),
       ("system-speech-matrix/provider-boundary-events", TestProviderBoundaryEvents),
-      ("system-speech-matrix/matches-production-audio-format", TestMatchesProductionAudioFormat),
-      ("system-speech-matrix/no-playback-navigation", TestNoPlaybackNavigation)
+      ("system-speech-matrix/matches-production-audio-format", TestMatchesProductionAudioFormat)
     };
 
     int failures = 0;
@@ -44,28 +43,27 @@ internal static class Issue96SystemSpeechMatrixRegressionTestRunner
     return failures == 0 && issue94 == 0 ? 0 : 1;
   }
 
-  private static void TestButtonIsWired()
+  private static void TestProductionUiAbsent()
   {
     string main = ReadSource("MainForm.cs");
-    Require(main.Contains("_systemSpeechMatrixButton", StringComparison.Ordinal),
-      "MainForm has no System.Speech matrix button.");
-    Require(main.Contains("ConfigureButton(_systemSpeechMatrixButton, \"SSML Matrix...\")",
-        StringComparison.Ordinal),
-      "The diagnostic button is not visibly identified as SSML Matrix.");
-    Require(main.Contains(
-        "_systemSpeechMatrixButton.Click += SystemSpeechMatrixButtonClicked;",
-        StringComparison.Ordinal),
-      "The matrix button has no click action.");
+    foreach (string forbidden in new[]
+    {
+      "_systemSpeechMatrixButton",
+      "_systemSpeechMatrixActive",
+      "SystemSpeechMatrixButtonClicked",
+      "SystemSpeechMatrixDialog",
+      "SystemSpeechMatrixDiagnosticRunner.RunAsync",
+      "SSML Matrix..."
+    })
+    {
+      Require(!main.Contains(forbidden, StringComparison.Ordinal),
+        $"Production MainForm still exposes the SSML matrix through {forbidden}.");
+    }
   }
 
   private static void TestSystemSpeechOnly()
   {
-    string main = ReadSource("MainForm.cs");
     string runner = ReadOptionalSource("SystemSpeechMatrixDiagnosticRunner.cs");
-    Require(main.Contains(
-        "voice.Provider == SpeechVoiceProvider.SystemSpeech",
-        StringComparison.Ordinal),
-      "MainForm does not restrict the matrix chooser to System.Speech voices.");
     Require(runner.Contains(
         "options.Voice.Provider != SpeechVoiceProvider.SystemSpeech",
         StringComparison.Ordinal),
@@ -141,37 +139,6 @@ internal static class Issue96SystemSpeechMatrixRegressionTestRunner
     Require(source.Contains("ConvertToMono16(OutputSampleRate)", StringComparison.Ordinal) &&
             source.Contains("OutputSampleRate = 48000", StringComparison.Ordinal),
       "Matrix playback does not use the production 48 kHz conversion.");
-  }
-
-  private static void TestNoPlaybackNavigation()
-  {
-    string main = ReadSource("MainForm.cs");
-    int start = main.IndexOf(
-      "private async void SystemSpeechMatrixButtonClicked(",
-      StringComparison.Ordinal);
-    Require(start >= 0, "Matrix click handler is missing.");
-    int end = main.IndexOf(
-      "  private void PronunciationsButtonClicked(",
-      start,
-      StringComparison.Ordinal);
-    Require(end > start, "Could not isolate the matrix click handler.");
-    string method = main[start..end];
-    foreach (string forbidden in new[]
-    {
-      "CancelAndMoveToLiveEnd",
-      "CancelPreviewPreservingPositionAsync",
-      "BeginLiveSession",
-      "LoadHistory(",
-      "SeekTo",
-      "RestartHistory"
-    })
-    {
-      Require(!method.Contains(forbidden, StringComparison.Ordinal),
-        $"Matrix action mutates playback/navigation through {forbidden}.");
-    }
-    Require(method.Contains("SystemSpeechMatrixDiagnosticRunner.RunAsync",
-        StringComparison.Ordinal),
-      "Matrix action is not isolated in the standalone provider diagnostic runner.");
   }
 
   private static string ReadOptionalSource(string fileName)
