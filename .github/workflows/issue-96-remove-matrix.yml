@@ -1,0 +1,61 @@
+name: Temporary issue 96 remove SSML matrix
+
+on:
+  push:
+    branches:
+      - issue-94-system-speech-sample-rate
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Remove issue 96 diagnostic feature
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $parent = '27255ba289f88272c78582340df57733c7c232cd^'
+          $commit = '27255ba289f88272c78582340df57733c7c232cd'
+          $patch = Join-Path $env:RUNNER_TEMP 'issue96-ui.patch'
+          git diff $parent $commit -- AgentPanelSpeaker/MainForm.cs AgentPanelSpeaker/Program.cs | Out-File -FilePath $patch -Encoding utf8
+          git apply -R --3way $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Could not reverse the issue #96 MainForm/Program patch cleanly.' }
+          git rm -f --ignore-unmatch `
+            AgentPanelSpeaker/Issue96SystemSpeechMatrixRegressionTestRunner.cs `
+            AgentPanelSpeaker/SystemSpeechMatrixDiagnosticRunner.cs `
+            AgentPanelSpeaker/SystemSpeechMatrixDialog.cs
+          $remaining = git grep -n -E 'systemSpeechMatrix|SystemSpeechMatrix|SSML Matrix|system-speech-matrix' -- AgentPanelSpeaker ':!AgentPanelSpeaker/Issue94SystemSpeechSampleRateRegressionTestRunner.cs'
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host $remaining
+            throw 'SSML matrix implementation/wiring remains after removal.'
+          }
+          if ($LASTEXITCODE -ne 1) { throw 'git grep failed.' }
+
+      - name: Build after removal
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Run System.Speech provenance regression
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & $exe --test system-speech-provenance
+          if ($LASTEXITCODE -ne 0) { throw 'System.Speech provenance regression failed.' }
+
+      - name: Commit removal
+        shell: pwsh
+        run: |
+          git add -A
+          if (-not (git status --porcelain)) { throw 'Issue #96 removal produced no changes.' }
+          git commit -m "cleanup: remove SSML matrix diagnostic"
+          git push origin HEAD:issue-94-system-speech-sample-rate
