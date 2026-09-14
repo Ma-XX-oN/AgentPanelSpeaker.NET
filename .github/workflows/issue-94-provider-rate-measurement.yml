@@ -1,4 +1,4 @@
-name: Temporary issue 94 provider rate measurement
+name: Temporary issue 94 native timing RED
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  measure:
+  red:
     runs-on: windows-latest
     steps:
       - name: Check out branch and submodules
@@ -40,12 +40,12 @@ jobs:
             '      if (args.Length == 2 &&',
             '          string.Equals(',
             '            args[1],',
-            '            "system-speech-rate-timing",',
+            '            "system-speech-native-timing",',
             '            StringComparison.OrdinalIgnoreCase))',
             '      {',
             '        Environment.ExitCode = RunNamedSuite(',
-            '          "system-speech-rate-timing",',
-            '          Issue94SystemSpeechSampleRateRegressionTestRunner.Run);',
+            '          "system-speech-native-timing",',
+            '          Issue94NativeSystemSpeechTimingRegressionTestRunner.Run);',
             '        return;',
             '      }',
             ''
@@ -53,12 +53,38 @@ jobs:
           $lines.InsertRange($index - 1, $block)
           [System.IO.File]::WriteAllLines($path, $lines)
 
-      - name: Build issue 94 measurement
+      - name: Build issue 94 RED
         shell: pwsh
         run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
 
-      - name: Measure provider rate semantics
+      - name: Require native timing RED
         shell: pwsh
         run: |
           $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
-          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite system-speech-rate-timing
+          $stdout = Join-Path $env:RUNNER_TEMP 'issue94-native-red-out.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'issue94-native-red-err.txt'
+          $process = Start-Process `
+            -FilePath $exe `
+            -ArgumentList @('--test', 'system-speech-native-timing') `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+          $output = Get-Content -LiteralPath $stdout -Raw
+          Write-Host $output
+          if (Test-Path -LiteralPath $stderr) {
+            $errors = Get-Content -LiteralPath $stderr -Raw
+            if ($errors) { Write-Host $errors }
+          }
+          if ($process.ExitCode -ne 1) {
+            throw "Expected issue #94 RED exit 1; got $($process.ExitCode)."
+          }
+          if (-not $output.Contains('FAIL  system-speech-native-timing/native-output-and-normalized-timing')) {
+            throw 'Issue #94 RED did not fail the intended native-output/timing regression.'
+          }
+          if (-not $output.Contains('Production System.Speech is not using the provider-default PCM rate')) {
+            throw 'Issue #94 RED failed for an unexpected reason.'
+          }
+          if (-not $output.Contains('TEST-SUITE-COMPLETE system-speech-native-timing exit=1')) {
+            throw 'Issue #94 RED completion marker is missing.'
+          }
