@@ -31,18 +31,19 @@ jobs:
 
           path = Path('AgentPanelSpeaker/Issue75CoreWordIdMigrationRegressionTestRunner.cs')
           source = path.read_text(encoding='utf-8')
-          old = '''    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
-              .Single(item => item.Html.Contains(
-                "Nested item after the table",
-                StringComparison.Ordinal));
-          '''
-          new = '''    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
+          method = source.index(') BuildIssue106ListFixture()')
+          start = source.index(
+            '    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)',
+            method)
+          end = source.index(
+            '    WordProbe[] words = ReadSpeechWords(unit);',
+            start)
+          replacement = '''    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
               .Single(item => ReadSpeechWords(item).Any(word =>
                 string.Equals(word.Text, "strikethrough", StringComparison.Ordinal)));
           '''
-          if source.count(old) != 1:
-            raise SystemExit('Could not isolate issue #106 target-unit selector.')
-          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          source = source[:start] + replacement + source[end:]
+          path.write_text(source, encoding='utf-8')
 
       - name: Commit corrected target-unit selection
         shell: pwsh
