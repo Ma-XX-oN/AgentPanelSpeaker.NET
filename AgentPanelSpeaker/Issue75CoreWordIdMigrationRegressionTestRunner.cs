@@ -813,41 +813,52 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
     string html = JsonSerializer.Serialize(unit.Html);
     string first = JsonSerializer.Serialize(firstIds);
     string second = JsonSerializer.Serialize(secondIds);
-    ExecuteBrowserScript(
-      fixture.WebView,
-      $"""
-(() => {{
-  replaceTranscript({html}, false, []);
+    string installScript = """
+(() => {
+  replaceTranscript(__HTML__, false, []);
   window.__issue106IllegalSurroundCalls = 0;
   const originalSurroundContents = Range.prototype.surroundContents;
-  Range.prototype.surroundContents = function(wrapper) {{
-    try {{
+  Range.prototype.surroundContents = function(wrapper) {
+    try {
       return originalSurroundContents.call(this, wrapper);
-    }} catch (error) {{
+    } catch (error) {
       window.__issue106IllegalSurroundCalls += 1;
       throw error;
-    }}
-  }};
-  try {{
+    }
+  };
+  try {
     setSpeechFragments([
-      {{fragmentId:10601, wordIds:{first}}},
-      {{fragmentId:10602, wordIds:{second}}}
+      {fragmentId:10601, wordIds:__FIRST__},
+      {fragmentId:10602, wordIds:__SECOND__}
     ]);
-  }} finally {{
+  } finally {
     Range.prototype.surroundContents = originalSurroundContents;
-  }}
-}})()
-""");
+  }
+})()
+"""
+  .Replace("__HTML__", html, StringComparison.Ordinal)
+  .Replace("__FIRST__", first, StringComparison.Ordinal)
+  .Replace("__SECOND__", second, StringComparison.Ordinal);
+    ExecuteBrowserScript(fixture.WebView, installScript);
 
+    string ownerProbe = """
+(() => JSON.stringify({
+  illegalCalls:Number(window.__issue106IllegalSurroundCalls || 0),
+  firstOwner:document.getElementById('word-' + __FIRST_ID__)?.tagName || '',
+  firstBodyOwner:document.getElementById('word-' + __FIRST_BODY_ID__)?.tagName || ''
+}))()
+"""
+  .Replace(
+    "__FIRST_ID__",
+    firstIds[0].ToString(CultureInfo.InvariantCulture),
+    StringComparison.Ordinal)
+  .Replace(
+    "__FIRST_BODY_ID__",
+    firstIds[1].ToString(CultureInfo.InvariantCulture),
+    StringComparison.Ordinal);
     JsonElement result = ExecuteBrowserJsonProbe(
       fixture.WebView,
-      $"""
-(() => JSON.stringify({{
-  illegalCalls:Number(window.__issue106IllegalSurroundCalls || 0),
-  firstOwner:document.getElementById('word-' + {firstIds[0]})?.tagName || '',
-  firstBodyOwner:document.getElementById('word-' + {firstIds[1]})?.tagName || ''
-}}))()
-""");
+      ownerProbe);
     Require(
       string.Equals(
         result.GetProperty("firstOwner").GetString(),
@@ -877,12 +888,10 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
     string html = JsonSerializer.Serialize(unit.Html);
     string first = JsonSerializer.Serialize(firstIds);
     string second = JsonSerializer.Serialize(secondIds);
-    ExecuteBrowserScript(
-      fixture.WebView,
-      $"""
-(() => {{
-  replaceTranscript({html}, false, []);
-  window.__issue106Structure = () => JSON.stringify({{
+    string structureScript = """
+(() => {
+  replaceTranscript(__HTML__, false, []);
+  window.__issue106Structure = () => JSON.stringify({
     olCount:transcript.querySelectorAll('ol').length,
     liCount:transcript.querySelectorAll('li').length,
     emptyLiCount:[...transcript.querySelectorAll('li')]
@@ -898,15 +907,19 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
     delCount:transcript.querySelectorAll('del').length,
     delText:[...transcript.querySelectorAll('del')]
       .map(item => item.textContent)
-  }});
+  });
   window.__issue106Before = window.__issue106Structure();
   setSpeechFragments([
-    {{fragmentId:10601, wordIds:{first}}},
-    {{fragmentId:10602, wordIds:{second}}}
+    {fragmentId:10601, wordIds:__FIRST__},
+    {fragmentId:10602, wordIds:__SECOND__}
   ]);
   window.__issue106After = window.__issue106Structure();
-}})()
-""");
+})()
+"""
+  .Replace("__HTML__", html, StringComparison.Ordinal)
+  .Replace("__FIRST__", first, StringComparison.Ordinal)
+  .Replace("__SECOND__", second, StringComparison.Ordinal);
+    ExecuteBrowserScript(fixture.WebView, structureScript);
 
     JsonElement result = ExecuteBrowserJsonProbe(
       fixture.WebView,
