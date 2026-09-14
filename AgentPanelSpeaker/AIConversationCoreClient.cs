@@ -49,7 +49,7 @@ internal sealed record AIConversationCoreSessionDiagnostics(
 internal sealed class AIConversationCoreClient : IDisposable
 {
   internal const string ExpectedCoreCommit =
-    "134d5735b44b8d131d30d5b98a6e3a06320a113f";
+    "74a96db899acacf2be7eec42a1175b733b6e7cfb";
   private const int ExpectedPresentationSchemaVersion = 2;
   private const string ExpectedSplitPolicy =
     "presentation-tree";
@@ -333,6 +333,24 @@ internal sealed class AIConversationCoreClient : IDisposable
     }
   }
 
+  private static void ValidateCoreIdentity(CoreResponse response)
+  {
+    if (!string.Equals(
+          response.CoreCommit,
+          ExpectedCoreCommit,
+          StringComparison.Ordinal))
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore response commit mismatch: expected " +
+        $"{ExpectedCoreCommit}, received {response.CoreCommit}.");
+    }
+    if (string.IsNullOrWhiteSpace(response.CoreVersion))
+    {
+      throw new InvalidOperationException(
+        "AIConversationCore response omitted its semantic version.");
+    }
+  }
+
   private CoreResponse SendRequest(CoreRequest request)
   {
     lock (_sync)
@@ -370,15 +388,7 @@ internal sealed class AIConversationCoreClient : IDisposable
         throw new InvalidOperationException(
           $"AIConversationCore request failed: {response.Error}");
       }
-      if (!string.Equals(
-            response.CoreCommit,
-            ExpectedCoreCommit,
-            StringComparison.Ordinal))
-      {
-        throw new InvalidOperationException(
-          "AIConversationCore response commit mismatch: expected " +
-          $"{ExpectedCoreCommit}, received {response.CoreCommit}.");
-      }
+      ValidateCoreIdentity(response);
       return response;
     }
   }
@@ -452,21 +462,19 @@ internal sealed class AIConversationCoreClient : IDisposable
         null,
         null);
       CoreResponse response = SendRequestWithoutStartup(ping);
-      if (!response.Ok ||
-          !string.Equals(
-            response.CoreCommit,
-            ExpectedCoreCommit,
-            StringComparison.Ordinal))
+      if (!response.Ok)
       {
         throw new InvalidOperationException(
           response.Error ??
-          "AIConversationCore worker failed version verification.");
+          "AIConversationCore worker failed identity verification.");
       }
+      ValidateCoreIdentity(response);
 
       DiagnosticLog.Write("core.worker_started", new
       {
         workerPath = _workerPath,
         coreCommit = response.CoreCommit,
+        coreVersion = response.CoreVersion,
         processId = process.Id
       });
     }
@@ -585,6 +593,7 @@ internal sealed class AIConversationCoreClient : IDisposable
   private sealed record CoreResponse(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("core_commit")] string? CoreCommit,
+    [property: JsonPropertyName("core_version")] string? CoreVersion,
     [property: JsonPropertyName("projection")]
       AIConversationProjection? Projection,
     [property: JsonPropertyName("diagnostics")]
