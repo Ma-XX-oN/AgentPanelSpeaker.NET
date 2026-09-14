@@ -9,6 +9,7 @@ $projectPath = Join-Path $repoRoot 'AgentPanelSpeaker\AgentPanelSpeaker.csproj'
 $identityPath = Join-Path $repoRoot 'AgentPanelSpeaker\ApplicationIdentity.cs'
 $mainFormPath = Join-Path $repoRoot 'AgentPanelSpeaker\MainForm.cs'
 $diagnosticPath = Join-Path $repoRoot 'AgentPanelSpeaker\DiagnosticLog.cs'
+$developmentVersionPath = Join-Path $repoRoot 'DEVELOPMENT-VERSION'
 
 if (-not (Test-Path $Executable)) {
   throw "Built application missing: $Executable"
@@ -24,6 +25,22 @@ if ([string]::IsNullOrWhiteSpace($version)) {
 }
 if ($version -notmatch '^\d+\.\d+\.\d+(?:-issue\.\d+\.\d+)?$') {
   throw "Invalid AgentPanelSpeaker version shape: $version"
+}
+
+if (Test-Path $developmentVersionPath) {
+  $expectedDevelopmentVersion = (
+    Get-Content -LiteralPath $developmentVersionPath -Raw
+  ).Trim()
+  if ($expectedDevelopmentVersion -notmatch '^\d+\.\d+\.\d+-issue\.\d+\.\d+$') {
+    throw (
+      'DEVELOPMENT-VERSION must contain exactly one issue-development ' +
+      "version; got: $expectedDevelopmentVersion")
+  }
+  if ($version -ne $expectedDevelopmentVersion) {
+    throw (
+      'Active development version mismatch: ' +
+      "guard=$expectedDevelopmentVersion project=$version")
+  }
 }
 
 $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
