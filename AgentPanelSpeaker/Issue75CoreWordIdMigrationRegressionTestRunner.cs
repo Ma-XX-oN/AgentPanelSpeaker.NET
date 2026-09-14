@@ -1012,9 +1012,8 @@ I mean that the table be in the numbered list and in a nested numbered list.
       AgentSource.Codex,
       new[] { userRecord, assistantRecord });
     CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
-      .Single(item => item.Html.Contains(
-        "Nested item after the table",
-        StringComparison.Ordinal));
+    .Single(item => ReadSpeechWords(item).Any(word =>
+      string.Equals(word.Text, "strikethrough", StringComparison.Ordinal)));
     WordProbe[] words = ReadSpeechWords(unit);
     long[] firstIds = FindIssue106WordSequence(
       words,
