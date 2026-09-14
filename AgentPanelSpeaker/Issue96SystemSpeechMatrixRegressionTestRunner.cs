@@ -39,7 +39,9 @@ internal static class Issue96SystemSpeechMatrixRegressionTestRunner
     Console.WriteLine(failures == 0
       ? $"PASS: {tests.Length}/{tests.Length} issue #96 tests passed."
       : $"FAIL: {failures}/{tests.Length} issue #96 tests failed.");
-    return failures == 0 ? 0 : 1;
+
+    int issue94 = Issue94SystemSpeechSampleRateRegressionTestRunner.Run();
+    return failures == 0 && issue94 == 0 ? 0 : 1;
   }
 
   private static void TestButtonIsWired()
