@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Speech.AudioFormat;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -26,7 +25,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private const int SpFileModeCreateForWrite = 3;
   private const int DefaultWorkerPollMilliseconds = 10;
   private const int OutputSampleRate = 48000;
-  private const int SystemSpeechSampleRate = 16000;
+  private const int SystemSpeechTimingSampleRate = 16000;
 
   private readonly BlockingCollection<EngineCommand> _commands = new();
   private readonly ManualResetEventSlim _initialized = new();
@@ -1236,11 +1235,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     synthesizer.SpeakProgress += handler;
     try
     {
-      var outputFormat = new SpeechAudioFormatInfo(
-        SystemSpeechSampleRate,
-        AudioBitsPerSample.Sixteen,
-        AudioChannel.Mono);
-      synthesizer.SetOutputToAudioStream(stream, outputFormat);
+      synthesizer.SetOutputToWaveStream(stream);
       DiagnosticLog.Write("speech.system_speech_ssml_submitted", new
       {
         provider = "System.Speech",
@@ -1259,11 +1254,28 @@ internal sealed class SapiSpeechEngine : IDisposable
       synthesizer.SetOutputToNull();
     }
 
-    PcmWaveData wave = PcmWaveData.FromPcmSamples(
-      channels: 1,
-      sampleRate: SystemSpeechSampleRate,
-      bitsPerSample: 16,
-      samples: stream.ToArray());
+    PcmWaveData wave = PcmWaveData.Parse(stream.ToArray());
+    double timingScale = SystemSpeechTimingSampleRate /
+      (double)wave.SampleRate;
+    if (timingScale != 1.0)
+    {
+      collected = collected
+        .Select(boundary => boundary with
+        {
+          AudioPosition = TimeSpan.FromTicks(checked((long)Math.Round(
+            boundary.AudioPosition.Ticks * timingScale)))
+        })
+        .ToList();
+    }
+    DiagnosticLog.Write("speech.system_speech_timing_normalized", new
+    {
+      provider = "System.Speech",
+      voice = providerVoiceId,
+      providerTimingSampleRate = SystemSpeechTimingSampleRate,
+      pcmSampleRate = wave.SampleRate,
+      timingScale,
+      boundaryCount = collected.Count
+    });
 
     int expectedWordCount = GetSystemSpeechWords(markup).Count;
     if (expectedWordCount == 0)
