@@ -68,15 +68,35 @@ while omitting a comma or terminal period as a separate event.  The transcript
 must preserve the punctuation visually, but the speech cursor advances only on
 boundaries actually reported by the provider.
 
-## `app.start.version`
+## Application and Core version identity
 
-As of the #97 accepted build, `app.start.Data.version` is not trustworthy as the
-current product version.  `DiagnosticLog` still hard-codes `"27"`, while the
-current application title is `Agent Panel Speaker v212`.  Repository history
-shows the field previously changed from `"26"` to `"27"`, confirming that it
-was intended to track the application version and later became stale.
+`AgentPanelSpeaker/AgentPanelSpeaker.csproj` is the single writable source of the
+Agent Panel Speaker semantic version.  Development versions use
+`x.y.z-issue.<issue>.<iteration>` and release versions use `x.y.z`.
 
-Issue #99 tracks replacing the duplicated literals with one authoritative
-application-version source.  Until that issue is resolved, use the executable
-/build identity and repository commit for exact build identification rather than
-`app.start.Data.version`.
+`ApplicationIdentity.Version` reads the generated assembly informational-version
+metadata.  The main-window title is composed from `ApplicationIdentity.WindowTitle`,
+and `app.start.Data.version` is written from `ApplicationIdentity.Version`.
+Neither consumer carries its own version literal.
+
+The build/publish regression gate verifies that the project version, executable
+`ProductVersion`, window-title source, and diagnostic version source remain in
+sync.  A drift back to independent UI or diagnostic literals is therefore a test
+failure.
+
+AIConversationCore has two distinct identities and both are preserved:
+
+- the exact pinned Core commit identifies the source revision Agent Panel Speaker
+  requires;
+- the Core semantic version is obtained from the loaded Core's public
+  `getVersion()` API and is returned by the persistent worker as `core_version`.
+
+The worker reports both `core_commit` and `core_version`.  Agent Panel Speaker
+verifies the exact commit pin and records both values in `core.worker_started`.
+The integration workflow verifies `core_version` against the pinned/bundled
+Core's own `package.json`; Agent Panel Speaker does not maintain a duplicate Core
+semantic-version literal.
+
+Semantic version and exact commit identity answer different questions.  Use the
+application semantic version for product/release identity and the repository/Core
+commit identities when exact source provenance is required.
