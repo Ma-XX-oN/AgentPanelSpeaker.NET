@@ -1,14 +1,17 @@
 using System.Reflection;
 using System.Speech.Synthesis;
+using VoiceInformation = Windows.Media.SpeechSynthesis.VoiceInformation;
+using WinRtSpeechSynthesizer = Windows.Media.SpeechSynthesis.SpeechSynthesizer;
 
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Permanent regressions for issue #94 System.Speech source-format timing.
+/// Permanent regressions and measurements for issue #94 cross-provider rate timing.
 /// </summary>
 internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
 {
-  private const string VoiceName = "Microsoft Zira Desktop";
+  private const string SystemSpeechVoiceName = "Microsoft Zira Desktop";
+  private const string WindowsMediaVoiceName = "Microsoft Zira";
   private const string TestText =
     "1. Nested numbered item with a table inside it";
   private const int TestRate = 6;
@@ -34,19 +37,19 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
     {
       ("system-speech-sample-rate/provider-default-format-is-measured",
         TestProviderDefaultFormatIsMeasured),
-      ("system-speech-sample-rate/production-matches-provider-default-format",
-        TestProductionMatchesProviderDefaultFormat),
-      ("system-speech-sample-rate/production-preserves-provider-default-duration",
-        TestProductionPreservesProviderDefaultDuration),
+      ("system-speech-sample-rate/explicit-16k-preserves-default-duration",
+        TestExplicit16kPreservesProviderDefaultDuration),
       ("system-speech-sample-rate/provider-default-resample-preserves-duration",
         TestProviderDefaultResamplePreservesDuration),
       ("system-speech-sample-rate/provider-progress-fits-native-pcm-timeline",
-        TestProviderProgressFitsNativePcmTimeline)
+        TestProviderProgressFitsNativePcmTimeline),
+      ("system-speech-sample-rate/provider-rate-semantics-are-measured",
+        TestProviderRateSemanticsAreMeasured)
     };
 
     int failures = 0;
     Console.WriteLine();
-    Console.WriteLine($"Issue #94 System.Speech sample-rate suite: {tests.Length} tests");
+    Console.WriteLine($"Issue #94 provider timing suite: {tests.Length} tests");
     foreach ((string name, Action body) in tests)
     {
       try
@@ -72,7 +75,7 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
 
   private static void TestProviderDefaultFormatIsMeasured()
   {
-    NativeReference reference = SynthesizeProviderDefault();
+    NativeReference reference = SynthesizeProviderDefault(TestRate);
     Console.WriteLine(
       "      provider-default: " +
       $"{reference.Wave.SampleRate} Hz, " +
@@ -89,31 +92,10 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
       "Provider-default synthesis produced no SpeakProgress events.");
   }
 
-  private static void TestProductionMatchesProviderDefaultFormat()
+  private static void TestExplicit16kPreservesProviderDefaultDuration()
   {
-    NativeReference reference = SynthesizeProviderDefault();
-    PcmWaveData production = SynthesizeThroughProduction();
-    Console.WriteLine(
-      "      production: " +
-      $"{production.SampleRate} Hz, " +
-      $"{production.BitsPerSample}-bit, " +
-      $"{production.Channels} channel(s), " +
-      $"{production.Samples.Length} PCM bytes, " +
-      $"{production.Duration.TotalMilliseconds:F3} ms");
-    Require(production.SampleRate == reference.Wave.SampleRate,
-      "Production System.Speech requested a source sample rate different " +
-      $"from Zira Desktop's provider-default rate: production=" +
-      $"{production.SampleRate} Hz, default={reference.Wave.SampleRate} Hz.");
-    Require(production.BitsPerSample == reference.Wave.BitsPerSample &&
-            production.Channels == reference.Wave.Channels,
-      "Production System.Speech source PCM format differs from the " +
-      "provider-default WAVE format.");
-  }
-
-  private static void TestProductionPreservesProviderDefaultDuration()
-  {
-    NativeReference reference = SynthesizeProviderDefault();
-    PcmWaveData production = SynthesizeThroughProduction();
+    NativeReference reference = SynthesizeProviderDefault(TestRate);
+    PcmWaveData production = SynthesizeSystemSpeechThroughProduction(TestRate);
     double referenceMilliseconds = reference.Wave.Duration.TotalMilliseconds;
     double productionMilliseconds = production.Duration.TotalMilliseconds;
     Require(referenceMilliseconds > 0 && productionMilliseconds > 0,
@@ -123,20 +105,20 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
       productionMilliseconds - referenceMilliseconds) /
       referenceMilliseconds;
     Console.WriteLine(
-      "      duration: " +
-      $"default={referenceMilliseconds:F3} ms, " +
-      $"production={productionMilliseconds:F3} ms, " +
+      "      source-format: " +
+      $"default={reference.Wave.SampleRate} Hz/{referenceMilliseconds:F3} ms, " +
+      $"production={production.SampleRate} Hz/{productionMilliseconds:F3} ms, " +
       $"default/production={ratio:F6}, " +
       $"difference={relativeDifference:P2}");
     Require(relativeDifference <= DurationToleranceRatio,
-      "Production System.Speech changes Zira Desktop's natural duration by " +
-      $"{relativeDifference:P2}; source-format selection must stay within " +
-      $"{DurationToleranceRatio:P0} of provider-default duration.");
+      "Explicit System.Speech output format changes Zira Desktop's natural " +
+      $"duration by {relativeDifference:P2}; expected no more than " +
+      $"{DurationToleranceRatio:P0}.");
   }
 
   private static void TestProviderDefaultResamplePreservesDuration()
   {
-    NativeReference reference = SynthesizeProviderDefault();
+    NativeReference reference = SynthesizeProviderDefault(TestRate);
     PcmWaveData converted = reference.Wave.ConvertToMono16(PlaybackSampleRate);
     double difference = Math.Abs(
       converted.Duration.TotalMilliseconds -
@@ -153,7 +135,7 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
 
   private static void TestProviderProgressFitsNativePcmTimeline()
   {
-    NativeReference reference = SynthesizeProviderDefault();
+    NativeReference reference = SynthesizeProviderDefault(TestRate);
     ProgressSample first = reference.Progress[0];
     ProgressSample last = reference.Progress[^1];
     Console.WriteLine(
@@ -167,10 +149,47 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
       "Provider-default SpeakProgress extends beyond the native PCM duration.");
   }
 
-  private static NativeReference SynthesizeProviderDefault()
+  private static void TestProviderRateSemanticsAreMeasured()
+  {
+    PcmWaveData systemRateZero = SynthesizeSystemSpeechThroughProduction(0);
+    PcmWaveData systemRateSix = SynthesizeSystemSpeechThroughProduction(TestRate);
+    PcmWaveData mediaRateZero = SynthesizeWindowsMediaThroughProduction(0);
+    PcmWaveData mediaRateSix = SynthesizeWindowsMediaThroughProduction(TestRate);
+
+    double systemScale = DivideDurations(systemRateZero, systemRateSix);
+    double mediaScale = DivideDurations(mediaRateZero, mediaRateSix);
+    double rateZeroRatio = DivideDurations(systemRateZero, mediaRateZero);
+    double rateSixRatio = DivideDurations(systemRateSix, mediaRateSix);
+    Console.WriteLine(
+      "      provider-rates: " +
+      $"SystemSpeech r0={systemRateZero.Duration.TotalMilliseconds:F3} ms, " +
+      $"r6={systemRateSix.Duration.TotalMilliseconds:F3} ms, " +
+      $"speedup={systemScale:F6}; " +
+      $"WindowsMedia r0={mediaRateZero.Duration.TotalMilliseconds:F3} ms, " +
+      $"r6={mediaRateSix.Duration.TotalMilliseconds:F3} ms, " +
+      $"speedup={mediaScale:F6}; " +
+      $"system/media duration r0={rateZeroRatio:F6}, " +
+      $"r6={rateSixRatio:F6}");
+
+    Require(systemRateZero.Duration > TimeSpan.Zero &&
+            systemRateSix.Duration > TimeSpan.Zero &&
+            mediaRateZero.Duration > TimeSpan.Zero &&
+            mediaRateSix.Duration > TimeSpan.Zero,
+      "One provider returned a zero-duration rate comparison waveform.");
+  }
+
+  private static double DivideDurations(PcmWaveData numerator, PcmWaveData denominator)
+  {
+    double denominatorMilliseconds = denominator.Duration.TotalMilliseconds;
+    Require(denominatorMilliseconds > 0,
+      "Cannot compare against a zero-duration waveform.");
+    return numerator.Duration.TotalMilliseconds / denominatorMilliseconds;
+  }
+
+  private static NativeReference SynthesizeProviderDefault(int rate)
   {
     SpeechMarkup markup = BuildMarkup();
-    using var synthesizer = CreateSynthesizer();
+    using var synthesizer = CreateSystemSpeechSynthesizer(rate);
     string ssml = BuildSsmlDocument(
       markup.SsmlContent,
       synthesizer.Voice.Culture.Name);
@@ -201,14 +220,14 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
       ssml);
   }
 
-  private static PcmWaveData SynthesizeThroughProduction()
+  private static PcmWaveData SynthesizeSystemSpeechThroughProduction(int rate)
   {
     SpeechMarkup markup = BuildMarkup();
-    var profile = new SpeechProfileSettings(VoiceName, TestRate, 0)
+    var profile = new SpeechProfileSettings(SystemSpeechVoiceName, rate, 0)
     {
       Volume = TestVolume
     };
-    using var synthesizer = CreateSynthesizer();
+    using var synthesizer = CreateSystemSpeechSynthesizer(rate);
     MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
       "RenderSystemSpeech",
       BindingFlags.Static | BindingFlags.NonPublic) ??
@@ -217,16 +236,58 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
     {
       markup,
       profile,
-      VoiceName,
+      SystemSpeechVoiceName,
       synthesizer,
       null,
       null
     };
+    return InvokeWaveMethod(method, arguments, "System.Speech");
+  }
+
+  private static PcmWaveData SynthesizeWindowsMediaThroughProduction(int rate)
+  {
+    VoiceInformation voice = WinRtSpeechSynthesizer.AllVoices
+      .FirstOrDefault(candidate => string.Equals(
+        candidate.DisplayName,
+        WindowsMediaVoiceName,
+        StringComparison.OrdinalIgnoreCase)) ??
+      throw new InvalidOperationException(
+        $"Required Windows.Media voice '{WindowsMediaVoiceName}' is not installed. " +
+        "Available: " + string.Join(", ",
+          WinRtSpeechSynthesizer.AllVoices.Select(voice => voice.DisplayName)));
+    SpeechMarkup markup = BuildMarkup();
+    var profile = new SpeechProfileSettings(WindowsMediaVoiceName, rate, 0)
+    {
+      Volume = TestVolume
+    };
+    using var synthesizer = new WinRtSpeechSynthesizer();
+    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
+      "RenderWindowsMediaSpeech",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("RenderWindowsMediaSpeech is missing.");
+    object?[] arguments =
+    {
+      markup,
+      profile,
+      voice.Id,
+      synthesizer,
+      WindowsMediaBookmarkMode.Fallback,
+      null,
+      null
+    };
+    return InvokeWaveMethod(method, arguments, "Windows.Media");
+  }
+
+  private static PcmWaveData InvokeWaveMethod(
+    MethodInfo method,
+    object?[] arguments,
+    string provider)
+  {
     try
     {
       return method.Invoke(null, arguments) as PcmWaveData ??
         throw new InvalidOperationException(
-          "Production System.Speech synthesis returned no waveform.");
+          $"Production {provider} synthesis returned no waveform.");
     }
     catch (TargetInvocationException exception) when (
       exception.InnerException is not null)
@@ -244,22 +305,24 @@ internal static class Issue94SystemSpeechSampleRateRegressionTestRunner
       PronunciationRuleSet.Parse(string.Empty));
   }
 
-  private static SpeechSynthesizer CreateSynthesizer()
+  private static SpeechSynthesizer CreateSystemSpeechSynthesizer(int rate)
   {
     var synthesizer = new SpeechSynthesizer();
     string[] installed = synthesizer.GetInstalledVoices()
       .Where(voice => voice.Enabled)
       .Select(voice => voice.VoiceInfo.Name)
       .ToArray();
-    if (!installed.Contains(VoiceName, StringComparer.OrdinalIgnoreCase))
+    if (!installed.Contains(
+          SystemSpeechVoiceName,
+          StringComparer.OrdinalIgnoreCase))
     {
       synthesizer.Dispose();
       throw new InvalidOperationException(
-        $"Required test voice '{VoiceName}' is not installed. Available: " +
-        string.Join(", ", installed));
+        $"Required test voice '{SystemSpeechVoiceName}' is not installed. " +
+        "Available: " + string.Join(", ", installed));
     }
-    synthesizer.SelectVoice(VoiceName);
-    synthesizer.Rate = TestRate;
+    synthesizer.SelectVoice(SystemSpeechVoiceName);
+    synthesizer.Rate = rate;
     synthesizer.Volume = TestVolume;
     return synthesizer;
   }
