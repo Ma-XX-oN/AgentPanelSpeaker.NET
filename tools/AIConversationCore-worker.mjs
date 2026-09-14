@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-const CORE_COMMIT = '134d5735b44b8d131d30d5b98a6e3a06320a113f';
+const CORE_COMMIT = '74a96db899acacf2be7eec42a1175b733b6e7cfb';
 const sessions = new Map();
 
 /**
@@ -80,6 +80,18 @@ verifyCorePin();
 const core = await import(
   pathToFileURL(path.join(coreRootPath(), 'src', 'index.js')).href
 );
+
+/**
+ * Returns the Core identities carried by every successful worker response.
+ *
+ * @returns {{core_commit: string, core_version: string}} Exact and semantic Core identities.
+ */
+function coreIdentity() {
+  return {
+    core_commit: CORE_COMMIT,
+    core_version: core.getVersion()
+  };
+}
 
 /**
  * Normalizes provider-native records through the canonical speech-session seam.
@@ -159,7 +171,7 @@ function execute(request) {
   if (request?.operation === 'ping') {
     return {
       ok: true,
-      core_commit: CORE_COMMIT
+      ...coreIdentity()
     };
   }
 
@@ -182,7 +194,7 @@ function execute(request) {
     });
     return {
       ok: true,
-      core_commit: CORE_COMMIT,
+      ...coreIdentity(),
       projection: withHtmlUnits(session.project(options), options),
       diagnostics: session.diagnostics
     };
@@ -192,7 +204,7 @@ function execute(request) {
     const entry = requireSession(request.session_id);
     return {
       ok: true,
-      core_commit: CORE_COMMIT,
+      ...coreIdentity(),
       projection: withHtmlUnits(entry.session.project(options), options),
       diagnostics: entry.session.diagnostics
     };
@@ -206,7 +218,7 @@ function execute(request) {
     entry.session.append(request.records);
     return {
       ok: true,
-      core_commit: CORE_COMMIT,
+      ...coreIdentity(),
       projection: withHtmlUnits(entry.session.project(options), options),
       diagnostics: entry.session.diagnostics
     };
@@ -217,7 +229,7 @@ function execute(request) {
     const projection = entry.session.project(options);
     return {
       ok: true,
-      core_commit: CORE_COMMIT,
+      ...coreIdentity(),
       location: core.locateCanonicalWord(
         projection.events,
         request.word_id,
@@ -230,7 +242,7 @@ function execute(request) {
     sessions.delete(request.session_id);
     return {
       ok: true,
-      core_commit: CORE_COMMIT
+      ...coreIdentity()
     };
   }
 
@@ -256,7 +268,7 @@ function execute(request) {
 
   return {
     ok: true,
-    core_commit: CORE_COMMIT,
+    ...coreIdentity(),
     projection: withHtmlUnits(projection, options)
   };
 }
