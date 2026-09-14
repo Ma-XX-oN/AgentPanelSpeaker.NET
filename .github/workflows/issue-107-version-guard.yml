@@ -1,0 +1,85 @@
+name: Temporary issue 107 version guard validation
+
+on:
+  push:
+    branches:
+      - issue-107-version-acceptance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify active development version
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Verify-VersionConsistency.ps1 -Executable $exe
+
+      - name: Prove development guard rejects mismatch
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          $guard = Join-Path $env:GITHUB_WORKSPACE 'DEVELOPMENT-VERSION'
+          $original = Get-Content -LiteralPath $guard -Raw
+          try {
+            Set-Content -LiteralPath $guard -Value '1.0.0-issue.94.999' -NoNewline
+            $rejected = $false
+            try {
+              & tools/Verify-VersionConsistency.ps1 -Executable $exe
+            } catch {
+              if ($_.Exception.Message -notlike '*Active development version mismatch*') {
+                throw
+              }
+              $rejected = $true
+              Write-Host "PASS mismatched development version rejected: $($_.Exception.Message)"
+            }
+            if (-not $rejected) {
+              throw 'Development version mismatch was not rejected.'
+            }
+          } finally {
+            Set-Content -LiteralPath $guard -Value $original -NoNewline
+          }
+
+      - name: Run built AgentPanelSpeaker regression suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and test deployed application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) {
+            throw "Published application missing: $exe"
+          }
+          & tools/Verify-VersionConsistency.ps1 -Executable $exe
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Validate whitespace and patch integrity
+        shell: pwsh
+        run: |
+          git fetch origin feature/aiconversationcore-integration --depth=1
+          git diff --check FETCH_HEAD HEAD
