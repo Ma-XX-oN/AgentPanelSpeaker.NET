@@ -1,0 +1,67 @@
+name: Temporary issue 94 provider rate measurement
+
+on:
+  push:
+    branches:
+      - issue-94-system-speech-sample-rate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Add temporary issue 94 suite entry point
+        shell: pwsh
+        run: |
+          $script = @'
+          from pathlib import Path
+
+          path = Path("AgentPanelSpeaker/Program.cs")
+          text = path.read_text(encoding="utf-8")
+          marker = '''      if (args.Length == 2 &&
+          string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
+'''
+          if text.count(marker) != 1:
+            raise RuntimeError("Could not locate redundancy suite insertion point exactly once.")
+          block = '''      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "system-speech-rate-timing",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "system-speech-rate-timing",
+          Issue94SystemSpeechSampleRateRegressionTestRunner.Run);
+        return;
+      }
+
+'''
+          path.write_text(text.replace(marker, block + marker, 1), encoding="utf-8")
+          '@
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'wire-issue94.py'
+          Set-Content -LiteralPath $scriptPath -Value $script -Encoding utf8
+          python $scriptPath
+          if ($LASTEXITCODE -ne 0) { throw 'Could not wire the temporary issue #94 suite.' }
+
+      - name: Build issue 94 measurement
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Measure provider rate semantics
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite system-speech-rate-timing
