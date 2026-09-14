@@ -53,6 +53,10 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
         TestPlaybackHighlightsExactCanonicalWordId),
       ("core-word-id/off-window-playback-requests-canonical-word",
         TestOffWindowPlaybackRequestsCanonicalWord),
+      ("core-word-id/speech-fragment-list-range-is-structurally-legal",
+        TestSpeechFragmentListRangeIsStructurallyLegal),
+      ("core-word-id/speech-fragment-list-preserves-canonical-dom",
+        TestSpeechFragmentListPreservesCanonicalDom),
       ("core-word-id/playback-host-retains-core-lookup-session",
         TestPlaybackHostRetainsCoreLookupSession)
     };
@@ -793,6 +797,222 @@ internal static class Issue75CoreWordIdMigrationRegressionTestRunner
       BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
     Require(render is not null,
       "TranscriptView has no Core word-ID window-materialization path.");
+  }
+
+  /// <summary>
+  /// A list ordinal is represented by its owning LI while the following body
+  /// words are descendant spans. Fragment installation must normalize that
+  /// structural owner before calling Range.surroundContents; an illegal
+  /// partially-contained-element range must never reach the mutator.
+  /// </summary>
+  private static void TestSpeechFragmentListRangeIsStructurallyLegal()
+  {
+    (CanonicalHtmlUnitProjection unit, long[] firstIds, long[] secondIds) =
+      BuildIssue106ListFixture();
+    using BrowserFixture fixture = BrowserFixture.Create();
+    string html = JsonSerializer.Serialize(unit.Html);
+    string first = JsonSerializer.Serialize(firstIds);
+    string second = JsonSerializer.Serialize(secondIds);
+    ExecuteBrowserScript(
+      fixture.WebView,
+      $"""
+(() => {{
+  replaceTranscript({html}, false, []);
+  window.__issue106IllegalSurroundCalls = 0;
+  const originalSurroundContents = Range.prototype.surroundContents;
+  Range.prototype.surroundContents = function(wrapper) {{
+    try {{
+      return originalSurroundContents.call(this, wrapper);
+    }} catch (error) {{
+      window.__issue106IllegalSurroundCalls += 1;
+      throw error;
+    }}
+  }};
+  try {{
+    setSpeechFragments([
+      {{fragmentId:10601, wordIds:{first}}},
+      {{fragmentId:10602, wordIds:{second}}}
+    ]);
+  }} finally {{
+    Range.prototype.surroundContents = originalSurroundContents;
+  }}
+}})()
+""");
+
+    JsonElement result = ExecuteBrowserJsonProbe(
+      fixture.WebView,
+      $"""
+(() => JSON.stringify({{
+  illegalCalls:Number(window.__issue106IllegalSurroundCalls || 0),
+  firstOwner:document.getElementById('word-' + {firstIds[0]})?.tagName || '',
+  firstBodyOwner:document.getElementById('word-' + {firstIds[1]})?.tagName || ''
+}}))()
+""");
+    Require(
+      string.Equals(
+        result.GetProperty("firstOwner").GetString(),
+        "LI",
+        StringComparison.Ordinal),
+      "Issue #106 fixture did not preserve Core's structural LI ordinal owner.");
+    Require(
+      string.Equals(
+        result.GetProperty("firstBodyOwner").GetString(),
+        "SPAN",
+        StringComparison.Ordinal),
+      "Issue #106 fixture did not preserve descendant canonical body words.");
+    Require(result.GetProperty("illegalCalls").GetInt32() == 0,
+      "Speech-fragment installation passed an illegal partial-element Range " +
+      "to surroundContents().");
+  }
+
+  /// <summary>
+  /// Installing fragment highlighting must leave canonical list/table/emphasis
+  /// structure byte-for-byte equivalent at the structural-element level.
+  /// </summary>
+  private static void TestSpeechFragmentListPreservesCanonicalDom()
+  {
+    (CanonicalHtmlUnitProjection unit, long[] firstIds, long[] secondIds) =
+      BuildIssue106ListFixture();
+    using BrowserFixture fixture = BrowserFixture.Create();
+    string html = JsonSerializer.Serialize(unit.Html);
+    string first = JsonSerializer.Serialize(firstIds);
+    string second = JsonSerializer.Serialize(secondIds);
+    ExecuteBrowserScript(
+      fixture.WebView,
+      $"""
+(() => {{
+  replaceTranscript({html}, false, []);
+  window.__issue106Structure = () => JSON.stringify({{
+    olCount:transcript.querySelectorAll('ol').length,
+    liCount:transcript.querySelectorAll('li').length,
+    emptyLiCount:[...transcript.querySelectorAll('li')]
+      .filter(item => item.textContent.trim().length === 0).length,
+    olChildTags:[...transcript.querySelectorAll('ol')]
+      .map(list => [...list.children].map(child => child.tagName)),
+    liIds:[...transcript.querySelectorAll('li')].map(item => item.id),
+    liParentTags:[...transcript.querySelectorAll('li')]
+      .map(item => item.parentElement?.tagName || ''),
+    tableCount:transcript.querySelectorAll('table').length,
+    tableOwnerIds:[...transcript.querySelectorAll('table')]
+      .map(table => table.closest('li')?.id || ''),
+    delCount:transcript.querySelectorAll('del').length,
+    delText:[...transcript.querySelectorAll('del')]
+      .map(item => item.textContent)
+  }});
+  window.__issue106Before = window.__issue106Structure();
+  setSpeechFragments([
+    {{fragmentId:10601, wordIds:{first}}},
+    {{fragmentId:10602, wordIds:{second}}}
+  ]);
+  window.__issue106After = window.__issue106Structure();
+}})()
+""");
+
+    JsonElement result = ExecuteBrowserJsonProbe(
+      fixture.WebView,
+      """
+(() => JSON.stringify({
+  before:JSON.parse(window.__issue106Before),
+  after:JSON.parse(window.__issue106After)
+}))()
+""");
+    string before = result.GetProperty("before").GetRawText();
+    string after = result.GetProperty("after").GetRawText();
+    Require(string.Equals(before, after, StringComparison.Ordinal),
+      "Speech-fragment installation changed canonical ordered-list/table/" +
+      $"emphasis structure. Before={before}; After={after}");
+  }
+
+  private static (
+    CanonicalHtmlUnitProjection Unit,
+    long[] FirstIds,
+    long[] SecondIds) BuildIssue106ListFixture()
+  {
+    const string markdown = """
+Like this:
+
+1. **Outer item**
+   1. *Nested numbered item with a table inside it*
+
+      | Column | Value | Style |
+      |---|---:|---|
+      | Alpha | 1 | **bold** |
+      | Beta | 2 | `code` |
+      | Gamma | 3 | *italic* |
+
+   2. Another nested numbered item
+   3. One more for good measure
+
+2. **Second outer item**
+   1. Nested item after the table
+   2. Nested item with ~~strikethrough~~
+
+```text
+START=2026-09-07T14:50:47.4817218-04:00
+END=2026-09-07T14:50:57.4483323-04:00
+ELAPSED=0:09.967
+```
+""";
+    string record = JsonSerializer.Serialize(new
+    {
+      timestamp = "2026-09-07T18:51:12.316Z",
+      type = "event_msg",
+      payload = new
+      {
+        type = "agent_message",
+        message = markdown,
+        phase = "final_answer",
+        memory_citation = (string?)null
+      }
+    });
+    using var client = new AIConversationCoreClient();
+    AIConversationProjection projection = client.Project(
+      AgentSource.Codex,
+      new[] { record });
+    CanonicalHtmlUnitProjection unit = RequireHtmlUnits(projection)
+      .Single(item => item.Html.Contains(
+        "Nested item after the table",
+        StringComparison.Ordinal));
+    WordProbe[] words = ReadSpeechWords(unit);
+    long[] firstIds = FindIssue106WordSequence(
+      words,
+      "1.", "Nested", "item", "after", "the", "table");
+    long[] secondIds = FindIssue106WordSequence(
+      words,
+      "2.", "Nested", "item", "with", "strikethrough");
+    return (unit, firstIds, secondIds);
+  }
+
+  private static long[] FindIssue106WordSequence(
+    IReadOnlyList<WordProbe> words,
+    params string[] expected)
+  {
+    for (int start = 0; start + expected.Length <= words.Count; ++start)
+    {
+      bool matches = true;
+      for (int offset = 0; offset < expected.Length; ++offset)
+      {
+        if (!string.Equals(
+              words[start + offset].Text,
+              expected[offset],
+              StringComparison.Ordinal))
+        {
+          matches = false;
+          break;
+        }
+      }
+      if (matches)
+      {
+        return words
+          .Skip(start)
+          .Take(expected.Length)
+          .Select(word => word.Id)
+          .ToArray();
+      }
+    }
+    throw new InvalidOperationException(
+      "Issue #106 Core fixture did not contain expected word sequence: " +
+      string.Join(" ", expected));
   }
 
   private static AIConversationProjection ProjectClaude(string text)
