@@ -36,6 +36,7 @@ jobs:
             throw "RED failure was not caused by the missing rate-toggle contract."
           }
           Write-Host "Expected RED established: new rate-toggle contract is absent."
+          exit 0
 
       - name: Apply production implementation
         shell: pwsh
