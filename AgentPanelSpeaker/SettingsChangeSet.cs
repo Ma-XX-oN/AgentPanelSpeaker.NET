@@ -57,6 +57,11 @@ internal static class SettingsChangeSet
     AddScalar("Speech/FencedCodeTypes", ["Speech", "Spoken code-block types"], saved.SpokenFencedCodeTypes, working.SpokenFencedCodeTypes);
     AddScalar("Speech/SpeakExisting", ["Speech", "Speak latest existing message on startup"], saved.SpeakLastExistingEnabledMessage, working.SpeakLastExistingEnabledMessage);
     AddScalar("Speech/KeepDisplayOn", ["Speech", "Keep display on while speaking"], saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking);
+    AddScalar(
+      "Speech/MatchDesktopAndWindowsMediaRates",
+      ["Speech", "Match Desktop and Windows Media rates"],
+      saved.MatchDesktopAndWindowsMediaRates,
+      working.MatchDesktopAndWindowsMediaRates);
 
     AddScalar("General/PollInterval", ["General", "Polling interval"], saved.PollIntervalMilliseconds, working.PollIntervalMilliseconds);
     AddScalar("General/Theme", ["General", "Theme"], saved.Theme, working.Theme);
@@ -289,6 +294,10 @@ internal static class SettingsChangeSet
       SpokenFencedCodeTypes = Pick("Speech/FencedCodeTypes", saved.SpokenFencedCodeTypes, working.SpokenFencedCodeTypes),
       SpeakLastExistingEnabledMessage = Pick("Speech/SpeakExisting", saved.SpeakLastExistingEnabledMessage, working.SpeakLastExistingEnabledMessage),
       KeepDisplayOnWhileSpeaking = Pick("Speech/KeepDisplayOn", saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking),
+      MatchDesktopAndWindowsMediaRates = Pick(
+        "Speech/MatchDesktopAndWindowsMediaRates",
+        saved.MatchDesktopAndWindowsMediaRates,
+        working.MatchDesktopAndWindowsMediaRates),
       PollIntervalMilliseconds = Pick("General/PollInterval", saved.PollIntervalMilliseconds, working.PollIntervalMilliseconds),
       Theme = Pick("General/Theme", saved.Theme, working.Theme),
       Transcript = saved.Transcript with

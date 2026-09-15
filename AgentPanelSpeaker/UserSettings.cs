@@ -20,7 +20,7 @@ internal sealed record UserSettings(
   int WindowHeight,
   bool HasWindowPlacement)
 {
-  public const int CurrentVersion = 17;
+  public const int CurrentVersion = 18;
 
   /// <summary>
   /// Gets the main speech profile used for background-agent results.
@@ -69,6 +69,12 @@ internal sealed record UserSettings(
     SpeechMasterSettings.Default;
 
   /// <summary>
+  /// Gets whether Desktop/System.Speech rates are calibrated to the
+  /// Windows.Media application rate scale.
+  /// </summary>
+  public bool MatchDesktopAndWindowsMediaRates { get; init; } = true;
+
+  /// <summary>
   /// Creates defaults using the first installed voice for assistant output.
   /// </summary>
   public static UserSettings CreateDefault(IReadOnlyList<string> voices)
@@ -112,6 +118,7 @@ internal sealed record UserSettings(
       Theme = AppTheme.System,
       Hotkeys = HotkeySettings.Default,
       MasterSpeech = SpeechMasterSettings.Default,
+      MatchDesktopAndWindowsMediaRates = true,
       SubagentAssistant = Profile(subagentVoice, 0),
       SubagentReasoning = Profile(subagentVoice, -10),
       UserContext = Profile(userVoice, -10),

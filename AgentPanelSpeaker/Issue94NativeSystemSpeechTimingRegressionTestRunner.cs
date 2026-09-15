@@ -164,10 +164,12 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
       "MapSystemSpeechRate",
       BindingFlags.Static | BindingFlags.NonPublic) ??
       throw new InvalidOperationException("MapSystemSpeechRate is missing.");
-    return method.Invoke(null, new object[] { applicationRate }) is int rate
-      ? rate
-      : throw new InvalidOperationException(
-          "MapSystemSpeechRate returned no provider rate.");
+    return method.Invoke(
+      null,
+      new object[] { applicationRate, true }) is int rate
+        ? rate
+        : throw new InvalidOperationException(
+            "MapSystemSpeechRate returned no provider rate.");
   }
 
   private static NativeReference SynthesizeProviderDefault(int rate)
@@ -217,6 +219,7 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
       profile,
       SystemSpeechVoiceName,
       synthesizer,
+      true,
       null,
       null
     };
@@ -227,7 +230,7 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
         throw new InvalidOperationException(
           "Production System.Speech synthesis returned no waveform.");
       IReadOnlyList<SpeechWordBoundary> boundaries =
-        arguments[4] as IReadOnlyList<SpeechWordBoundary> ??
+        arguments[5] as IReadOnlyList<SpeechWordBoundary> ??
         throw new InvalidOperationException(
           "Production System.Speech synthesis returned no boundary list.");
       return new ProductionReference(wave, boundaries);
