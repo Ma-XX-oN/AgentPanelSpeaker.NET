@@ -15,13 +15,13 @@ AppToolTip Central Registration Accounting Works
     ...    []
     ...    {"initiallyUnregistered":true,"firstRegistrationVisible":true,"secondRegistrationSurvivesFirstRemoval":true,"finalRemovalClearsRegistration":true}
 
-Tooltip Coverage Covers Controls And Exempts Hover Popups
+Tooltip Coverage Covers Controls And Suppresses Hover Popup Tooltips
     [Template]    Static Method Should Return V1
     ${TEST_PROBE}
     ...    AgentPanelSpeaker.TooltipCoverage
     ...    GetContractSnapshot
     ...    []
-    ...    {"labelledSliderCovered":true,"textButtonCovered":true,"curatedTooltipPreserved":true,"passiveLabelExcluded":true,"hoverPopupAnchorExempt":true}
+    ...    {"labelledSliderCovered":true,"textButtonCovered":true,"curatedTooltipPreserved":true,"passiveLabelExcluded":true,"explicitHoverPopupTooltipSuppressed":true}
 
 Application Idle Audits Every Open Form
     [Template]    File Should Contain Text V1
