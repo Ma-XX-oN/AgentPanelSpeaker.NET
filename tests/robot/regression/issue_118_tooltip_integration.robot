@@ -3,15 +3,20 @@ Resource      ../resources/TemplatesV1.resource
 Force Tags    regression    issue-118    permanent    ui    tooltip
 
 *** Test Cases ***
-MainForm Uses Central AppToolTip
+Central Tooltip Alias Targets AppToolTip
+    File Should Contain Text V1
+    ...    ${EXECDIR}${/}AgentPanelSpeaker${/}GlobalUsings.cs
+    ...    global using ToolTip = AgentPanelSpeaker.AppToolTip;
+
+MainForm Uses Central Tooltip Alias
     File Should Contain Text V1
     ...    ${EXECDIR}${/}AgentPanelSpeaker${/}MainForm.cs
-    ...    private readonly AppToolTip _toolTip = new();
+    ...    private readonly ToolTip _toolTip = new();
 
-UiText Preserves AppToolTip Dispatch
+UiText Uses Central Tooltip Alias
     File Should Contain Text V1
     ...    ${EXECDIR}${/}AgentPanelSpeaker${/}UiText.cs
-    ...    AppToolTip? toolTip = null
+    ...    ToolTip? toolTip = null
 
 Bluetooth Utility Button Has Tooltip
     [Template]    Ui Text Should Equal V1
@@ -28,6 +33,14 @@ Reset Utility Button Uses Concise Tooltip
 Hotkeys Utility Button Has Tooltip
     [Template]    Ui Text Should Equal V1
     ${TEST_PROBE}    Main.Hotkeys.Tooltip    Configure hotkeys
+
+Disabled Registered Control Uses Parent Pointer Fallback
+    [Template]    Static Method Should Return V1
+    ${TEST_PROBE}
+    ...    AgentPanelSpeaker.AppToolTip
+    ...    GetDisabledControlContractSnapshot
+    ...    []
+    ...    {"disabledControlPointerFallback":true,"disabledPointerSchedulesPresentation":true,"leavingDisabledControlCancelsPresentation":true}
 
 Application Tooltip Leaves Pointer Clearance
     [Template]    Static Method Should Return V1
