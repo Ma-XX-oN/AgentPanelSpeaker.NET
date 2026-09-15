@@ -50,11 +50,13 @@ Rate Match Tooltip Explains Native Range Tradeoff
     ...    native rate range
 
 Rate Match Tooltip Is Split Across Two Lines
-    Probe Should Return Json V1
-    ...    ${TEST_PROBE}
-    ...    ui-text
-    ...    "Desktop/System.Speech and Windows Media use different rate scales.\\nEnable this to make their speaking rates closer; this compresses the Desktop voice's available native rate range."
-    ...    Main.MatchDesktopAndWindowsMediaRates.Tooltip
+    ${result}=    Run Process    ${TEST_PROBE}    ui-text    Main.MatchDesktopAndWindowsMediaRates.Tooltip    stdout=PIPE    stderr=PIPE
+    Should Be Equal As Integers    ${result.rc}    0
+    ${text}=    Evaluate    json.loads($result.stdout)    modules=json
+    ${lf_count}=    Evaluate    $text.count(chr(10))
+    ${cr_count}=    Evaluate    $text.count(chr(13))
+    Should Be Equal As Integers    ${lf_count}    1
+    Should Be Equal As Integers    ${cr_count}    0
 
 Application Tooltip Is Owner Drawn From Construction With Prompt Focus Delay
     [Template]    Static Method Should Return V1
