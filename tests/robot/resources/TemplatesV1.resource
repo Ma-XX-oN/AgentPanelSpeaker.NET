@@ -1,7 +1,6 @@
 *** Settings ***
 Library    OperatingSystem
 Library    Process
-Library    String
 
 *** Variables ***
 ${TEMPLATE_API_VERSION}    1
@@ -74,7 +73,7 @@ Probe Should Return Json V1
     IF    ${result.rc} != 0
         Fail    Probe '${command}' failed with ${result.rc}. Error: ${result.stderr}
     END
-    ${actual}=    Strip String    ${result.stdout}
+    ${actual}=    Evaluate    $result.stdout.strip()
     Should Be Equal As Strings    ${actual}    ${expected_json}
 
 Static Method Should Return V1
