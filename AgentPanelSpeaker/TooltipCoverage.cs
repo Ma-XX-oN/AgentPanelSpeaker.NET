@@ -76,6 +76,10 @@ internal static class TooltipCoverage
     using var passive = new Label { Text = "Passive" };
     using var curated = new Button { Text = "Curated" };
     using var hoverPopupAnchor = new SpeechProfileCompactControl("Profile");
+    using var transcriptSettingsAnchor = new GlyphButton
+    {
+      AccessibleName = "Transcript Settings"
+    };
     using var curatedToolTip = new AppToolTip();
 
     root.Controls.Add(label, 0, 0);
@@ -88,6 +92,9 @@ internal static class TooltipCoverage
     root.SetColumnSpan(hoverPopupAnchor, 2);
     curatedToolTip.SetToolTip(curated, "Curated tooltip");
     curatedToolTip.SetToolTip(hoverPopupAnchor, "Must not be shown");
+    curatedToolTip.SetToolTip(
+      transcriptSettingsAnchor,
+      "Must be suppressed before parenting");
 
     EnsureTree(root, dark: false);
 
@@ -97,6 +104,8 @@ internal static class TooltipCoverage
     bool passiveLabelExcluded = !AppToolTip.HasCentralToolTip(passive);
     bool explicitHoverPopupTooltipSuppressed =
       !AppToolTip.HasCentralToolTip(hoverPopupAnchor);
+    bool unparentedTranscriptSettingsTooltipSuppressed =
+      !AppToolTip.HasCentralToolTip(transcriptSettingsAnchor);
 
     return new
     {
@@ -104,7 +113,8 @@ internal static class TooltipCoverage
       textButtonCovered,
       curatedTooltipPreserved,
       passiveLabelExcluded,
-      explicitHoverPopupTooltipSuppressed
+      explicitHoverPopupTooltipSuppressed,
+      unparentedTranscriptSettingsTooltipSuppressed
     };
   }
 
@@ -124,11 +134,11 @@ internal static class TooltipCoverage
       return true;
     }
 
-    Form? form = control.FindForm();
     string accessibleName = control.AccessibleName ?? string.Empty;
 
-    // Main transcript settings is itself a hover-popup anchor.
-    if (form is MainForm &&
+    // MainForm assigns this tooltip before parenting the glyph button, so the
+    // identity itself must be sufficient to suppress that competing tooltip.
+    if (control is GlyphButton &&
         string.Equals(
           accessibleName,
           "Transcript Settings",
@@ -136,6 +146,8 @@ internal static class TooltipCoverage
     {
       return true;
     }
+
+    Form? form = control.FindForm();
 
     // The changed-settings link opens ChangedSettingsPopup on hover/focus.
     if (form is SaveChangedSettingsDialog && control is LinkLabel)
