@@ -25,4 +25,4 @@ if ($LASTEXITCODE -ne 0) {
 & (Join-Path $repoRoot 'tools\Verify-VersionConsistency.ps1') -Executable $exe
 & (Join-Path $repoRoot 'tools\Invoke-TestSuite.ps1') -SelfTest
 & (Join-Path $repoRoot 'tools\Invoke-TestSuite.ps1') -Executable $exe -Suite all
-& (Join-Path $repoRoot 'tools\tasks\robot.ps1')
+& (Join-Path $repoRoot 'tools\tasks\robot.ps1') -SkipBuildPreparation

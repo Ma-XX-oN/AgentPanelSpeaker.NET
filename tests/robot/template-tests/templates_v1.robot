@@ -57,3 +57,40 @@ Relative Difference Accepts Value Inside Limit
 Relative Difference Rejects Value Outside Limit
     Run Keyword And Expect Error    *Relative difference*exceeds maximum*
     ...    Relative Difference Should Be At Most V1    1.06    1.0    0.05
+
+Static Method Template Uses Generic Probe
+    Static Method Should Return V1
+    ...    ${TEST_PROBE}
+    ...    AgentPanelSpeaker.TestSuiteCompletionMarker
+    ...    Format
+    ...    ["fixture",0]
+    ...    "TEST-SUITE-COMPLETE fixture exit=0"
+
+Static Method Template Rejects Wrong Expected Value
+    Run Keyword And Expect Error    *TEST-SUITE-COMPLETE fixture exit=1*
+    ...    Static Method Should Return V1
+    ...    ${TEST_PROBE}
+    ...    AgentPanelSpeaker.TestSuiteCompletionMarker
+    ...    Format
+    ...    ["fixture",0]
+    ...    "TEST-SUITE-COMPLETE fixture exit=1"
+
+Setting Contract Template Uses Production Settings Path
+    Setting Contract Should Match V1
+    ...    ${TEST_PROBE}
+    ...    KeepDisplayOnWhileSpeaking
+    ...    true
+    ...    Speech/KeepDisplayOn
+    ...    {"defaultValue":false,"roundTripValue":true,"changeKeyPresent":true,"selectedMergeValue":true}
+
+UI Text Equality Template Uses Production Resources
+    Ui Text Should Equal V1
+    ...    ${TEST_PROBE}
+    ...    Main.KeepDisplayOn.Name
+    ...    Keep display on while speaking
+
+UI Text Contains Template Uses Production Resources
+    Ui Text Should Contain V1
+    ...    ${TEST_PROBE}
+    ...    Main.KeepDisplayOn.Name
+    ...    display on
