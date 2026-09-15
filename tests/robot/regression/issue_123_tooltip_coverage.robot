@@ -15,13 +15,31 @@ AppToolTip Central Registration Accounting Works
     ...    []
     ...    {"initiallyUnregistered":true,"firstRegistrationVisible":true,"secondRegistrationSurvivesFirstRemoval":true,"finalRemovalClearsRegistration":true}
 
-Tooltip Coverage Covers Controls And Suppresses Hover Popup Tooltips
+Generic Coverage Does Not Manufacture Tooltips From Labels Or Values
     [Template]    Static Method Should Return V1
     ${TEST_PROBE}
     ...    AgentPanelSpeaker.TooltipCoverage
     ...    GetContractSnapshot
     ...    []
-    ...    {"labelledSliderCovered":true,"textButtonCovered":true,"curatedTooltipPreserved":true,"passiveLabelExcluded":true,"explicitHoverPopupTooltipSuppressed":true,"unparentedTranscriptSettingsTooltipSuppressed":true}
+    ...    {"labelledSliderCovered":false,"textButtonCovered":false,"curatedTooltipPreserved":true,"passiveLabelExcluded":true,"explicitHoverPopupTooltipSuppressed":true,"unparentedTranscriptSettingsTooltipSuppressed":true}
+
+Poll Interval Has Purpose Tooltip Text
+    [Template]    Ui Text Should Equal V1
+    ${TEST_PROBE}
+    ...    Main.PollInterval.Description
+    ...    Set how often AgentPanelSpeaker checks the selected session for new content.
+
+Pronunciations Button Has Purpose Tooltip Text
+    [Template]    Ui Text Should Equal V1
+    ${TEST_PROBE}
+    ...    Main.Pronunciations.Description
+    ...    Open spelling and pronunciation rules, including IPA pronunciations.
+
+Bluetooth Wake Button Has Purpose Tooltip Text
+    [Template]    Ui Text Should Equal V1
+    ${TEST_PROBE}
+    ...    Main.BluetoothWake.Tooltip
+    ...    Configure the wake audio used to keep Bluetooth devices ready for speech.
 
 Application Idle Audits Every Open Form
     [Template]    File Should Contain Text V1
