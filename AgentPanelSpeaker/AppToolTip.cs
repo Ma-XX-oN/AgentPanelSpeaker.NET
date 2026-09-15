@@ -191,7 +191,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   /// </summary>
   internal static object GetSizingContractSnapshot()
   {
-    Font font = SystemFonts.StatusFont;
+    Font font = GetToolTipFont();
     var wideWorkingArea = new Rectangle(0, 0, 1600, 900);
     var narrowWorkingArea = new Rectangle(0, 0, 360, 600);
 
@@ -582,7 +582,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     Rectangle workingArea = Screen.FromControl(control).WorkingArea;
     Size popupSize = CalculatePopupSize(
       caption,
-      SystemFonts.StatusFont,
+      GetToolTipFont(),
       workingArea);
     Rectangle anchorBounds = control.RectangleToScreen(control.ClientRectangle);
     Point screenLocation = CalculatePopupScreenLocation(
@@ -629,8 +629,13 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
 
     eventArgs.ToolTipSize = CalculatePopupSize(
       caption,
-      SystemFonts.StatusFont,
+      GetToolTipFont(),
       Screen.FromControl(control).WorkingArea);
+  }
+
+  private static Font GetToolTipFont()
+  {
+    return SystemFonts.StatusFont ?? Control.DefaultFont;
   }
 
   private static Size CalculatePopupSize(
