@@ -15,6 +15,6 @@ App Tooltip Registers Central Popup Sizing Handler
     [Template]    File Should Contain Text V1
     ${EXECDIR}${/}AgentPanelSpeaker${/}AppToolTip.cs    Popup += ToolTipPopup;
 
-Tooltip Drawing Uses Shared Text Format Contract
+Tooltip Measurement Uses Central Text Format Contract
     [Template]    File Should Contain Text V1
-    ${EXECDIR}${/}AgentPanelSpeaker${/}ThemeManager.cs    AppToolTip.ToolTipTextFormat
+    ${EXECDIR}${/}AgentPanelSpeaker${/}AppToolTip.cs    ToolTipTextFormat);
