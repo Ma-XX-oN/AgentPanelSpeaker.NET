@@ -81,3 +81,23 @@ The test lease invokes that production handler with the noninteractive Windows
 shutdown close reason so a save-settings dialog cannot block unattended CI.
 Directly calling `Dispose()` is not equivalent and can contaminate a later UI
 test in the same process.
+
+## Robot Framework template layer
+
+Robot Framework is an orchestration and reusable-template layer above these test
+classifications; it does not change them. A Robot test that invokes a component
+probe remains component coverage, while an acceptance claim must still satisfy
+the acceptance-oracle rules above.
+
+Reusable project templates live under `tests/robot/resources` and have explicit
+compatibility versions. Their mechanics are tested independently under
+`tests/robot/template-tests` before permanent regression specifications rely on
+them. Issue-specific cases should therefore be expressed as data against an
+existing tested template whenever possible instead of introducing another
+bespoke runner or workflow.
+
+Permanent Robot regressions live under `tests/robot/regression`, are catalogued
+in `tests/robot/TEST-CATALOGUE.md`, and remain after the issue that introduced
+them closes. The checked-in task runner selects repository tasks by name; CI
+inputs select versioned repository behaviour and do not inject transient test
+programs or shell bodies.
