@@ -1,0 +1,39 @@
+name: Repair issue 94 implementation workflow
+
+on:
+  push:
+    branches:
+      - issue-94-system-speech-sample-rate
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore: repair issue 94 implementation workflow'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-94-system-speech-sample-rate
+          fetch-depth: 0
+      - name: Repair and retrigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/issue-94-rate-match-toggle.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '        shell: python\n'
+          new = '        shell: python {0}\n'
+          if text.count(old) != 1:
+            raise SystemExit(f'expected exactly one shell declaration, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          Path('.github/workflows/fix-issue-94-rate-workflow.yml').unlink()
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: apply issue 94 rate-match toggle"
+          git push origin HEAD:issue-94-system-speech-sample-rate
