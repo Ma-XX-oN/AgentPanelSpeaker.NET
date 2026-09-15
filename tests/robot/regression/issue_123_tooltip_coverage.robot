@@ -21,7 +21,7 @@ Tooltip Coverage Covers Controls And Suppresses Hover Popup Tooltips
     ...    AgentPanelSpeaker.TooltipCoverage
     ...    GetContractSnapshot
     ...    []
-    ...    {"labelledSliderCovered":true,"textButtonCovered":true,"curatedTooltipPreserved":true,"passiveLabelExcluded":true,"explicitHoverPopupTooltipSuppressed":true}
+    ...    {"labelledSliderCovered":true,"textButtonCovered":true,"curatedTooltipPreserved":true,"passiveLabelExcluded":true,"explicitHoverPopupTooltipSuppressed":true,"unparentedTranscriptSettingsTooltipSuppressed":true}
 
 Application Idle Audits Every Open Form
     [Template]    File Should Contain Text V1
