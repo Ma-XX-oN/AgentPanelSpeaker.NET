@@ -48,3 +48,17 @@ Rate Match Tooltip Explains Native Range Tradeoff
     ${TEST_PROBE}
     ...    Main.MatchDesktopAndWindowsMediaRates.Tooltip
     ...    native rate range
+
+Rate Match Tooltip Is Split Across Two Lines
+    [Template]    Ui Text Should Equal V1
+    ${TEST_PROBE}
+    ...    Main.MatchDesktopAndWindowsMediaRates.Tooltip
+    ...    Desktop/System.Speech and Windows Media use different rate scales.${\n}Enable this to make their speaking rates closer; this compresses the Desktop voice's available native rate range.
+
+Application Tooltip Is Owner Drawn From Construction With Prompt Focus Delay
+    [Template]    Static Method Should Return V1
+    ${TEST_PROBE}
+    ...    AgentPanelSpeaker.AppToolTip
+    ...    GetContractSnapshot
+    ...    []
+    ...    {"ownerDraw":true,"initialDelayMilliseconds":750,"reshowDelayMilliseconds":150,"autoPopDelayMilliseconds":7500,"showAlways":true,"keyboardFocusDelayMilliseconds":750}
