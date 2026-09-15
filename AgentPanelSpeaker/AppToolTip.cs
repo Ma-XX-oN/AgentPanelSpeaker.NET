@@ -65,6 +65,15 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   {
     ArgumentNullException.ThrowIfNull(control);
 
+    // Hover-popup anchors own a richer explanatory surface. Never allow a
+    // tooltip registration to compete with that popup, even when a caller
+    // explicitly attempts to assign one.
+    if (!string.IsNullOrEmpty(caption) &&
+        TooltipCoverage.IsHoverPopupExempt(control))
+    {
+      caption = null;
+    }
+
     // Never give the native ToolTip component a caption.  That suppresses its
     // OS-controlled automatic hover path; AppToolTip owns all presentation.
     base.SetToolTip(control, string.Empty);
