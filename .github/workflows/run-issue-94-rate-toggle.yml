@@ -1,0 +1,99 @@
+name: Run issue 94 rate toggle implementation
+
+on:
+  push:
+    branches:
+      - issue-94-system-speech-sample-rate
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-94-system-speech-sample-rate
+          fetch-depth: 0
+
+      - name: Advance issue version
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          replacements = {
+            Path('DEVELOPMENT-VERSION'): (
+              '1.0.0-issue.94.3',
+              '1.0.0-issue.94.4'),
+            Path('AgentPanelSpeaker/AgentPanelSpeaker.csproj'): (
+              '<Version>1.0.0-issue.94.3</Version>',
+              '<Version>1.0.0-issue.94.4</Version>')
+          }
+          for path, (old, new) in replacements.items():
+            text = path.read_text(encoding='utf-8')
+            if text.count(old) != 1:
+              raise SystemExit(
+                f'{path}: expected one version marker, found {text.count(old)}')
+            path.write_text(text.replace(old, new), encoding='utf-8')
+
+      - name: Commit issue version
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add DEVELOPMENT-VERSION AgentPanelSpeaker/AgentPanelSpeaker.csproj
+          git commit -m "chore: advance issue 94 to iteration 4"
+          git push origin HEAD:issue-94-system-speech-sample-rate
+
+      - name: Apply source implementation
+        shell: python {0}
+        run: |
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/issue-94-rate-match-toggle.yml')
+          text = workflow.read_text(encoding='utf-8')
+          start_marker = '        run: |\n'
+          end_marker = '\n      - name: Build\n'
+          start = text.index(start_marker) + len(start_marker)
+          end = text.index(end_marker, start)
+          script = dedent(text[start:end])
+
+          version_block = """replace_once('DEVELOPMENT-VERSION',
+            '1.0.0-issue.94.3', '1.0.0-issue.94.4')
+          replace_once('AgentPanelSpeaker/AgentPanelSpeaker.csproj',
+            '<Version>1.0.0-issue.94.3</Version>',
+            '<Version>1.0.0-issue.94.4</Version>')
+
+          """
+          if script.count(version_block) != 1:
+            raise SystemExit('could not isolate obsolete version patch block')
+          script = script.replace(version_block, '')
+          self_delete = (
+            "Path('.github/workflows/issue-94-rate-match-toggle.yml').unlink()\n")
+          if script.count(self_delete) != 1:
+            raise SystemExit('could not isolate temporary-workflow deletion')
+          script = script.replace(self_delete, '')
+          exec(compile(script, '<issue-94-implementation>', 'exec'))
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release
+
+      - name: Verify version consistency
+        shell: pwsh
+        run: ./tools/Verify-VersionConsistency.ps1
+
+      - name: Run issue 94 focused regression
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release --no-build -- --test system-speech-native-timing
+
+      - name: Commit implementation
+        shell: pwsh
+        run: |
+          git status --short
+          git add DEVELOPMENT-VERSION AgentPanelSpeaker
+          git diff --cached --check
+          git commit -m "feat: add issue 94 rate-match toggle"
+          git push origin HEAD:issue-94-system-speech-sample-rate
