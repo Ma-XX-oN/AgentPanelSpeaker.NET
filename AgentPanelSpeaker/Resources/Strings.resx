@@ -29,7 +29,7 @@
   <data name="Main.MatchDesktopAndWindowsMediaRates.Name" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>
   <data name="Main.MatchDesktopAndWindowsMediaRates.Description" xml:space="preserve"><value>Calibrates Desktop/System.Speech speaking rates toward the Windows Media rate scale.</value></data>
   <data name="Main.MatchDesktopAndWindowsMediaRates.Text" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>
-  <data name="Main.MatchDesktopAndWindowsMediaRates.Tooltip" xml:space="preserve"><value>Desktop/System.Speech and Windows Media use different rate scales. Enable this to make their speaking rates closer; this compresses the Desktop voice&apos;s available native rate range.</value></data>
+  <data name="Main.MatchDesktopAndWindowsMediaRates.Tooltip" xml:space="preserve"><value>Desktop/System.Speech and Windows Media use different rate scales.&#10;Enable this to make their speaking rates closer; this compresses the Desktop voice&apos;s available native rate range.</value></data>
   <data name="Main.Theme.Name" xml:space="preserve"><value>Application theme</value></data>
   <data name="Main.Pronunciations.Name" xml:space="preserve"><value>Pronunciations</value></data>
   <data name="Main.BluetoothWake.Name" xml:space="preserve"><value>Bluetooth audio wake settings</value></data>

@@ -48,3 +48,20 @@ Rate Match Tooltip Explains Native Range Tradeoff
     ${TEST_PROBE}
     ...    Main.MatchDesktopAndWindowsMediaRates.Tooltip
     ...    native rate range
+
+Rate Match Tooltip Is Split Across Two Lines
+    ${result}=    Run Process    ${TEST_PROBE}    ui-text    Main.MatchDesktopAndWindowsMediaRates.Tooltip    stdout=PIPE    stderr=PIPE
+    Should Be Equal As Integers    ${result.rc}    0
+    ${text}=    Evaluate    json.loads($result.stdout)    modules=json
+    ${lf_count}=    Evaluate    $text.count(chr(10))
+    ${cr_count}=    Evaluate    $text.count(chr(13))
+    Should Be Equal As Integers    ${lf_count}    1
+    Should Be Equal As Integers    ${cr_count}    0
+
+Application Tooltip Is Owner Drawn From Construction With Prompt Focus Delay
+    [Template]    Static Method Should Return V1
+    ${TEST_PROBE}
+    ...    AgentPanelSpeaker.AppToolTip
+    ...    GetContractSnapshot
+    ...    []
+    ...    {"ownerDraw":true,"initialDelayMilliseconds":750,"reshowDelayMilliseconds":150,"autoPopDelayMilliseconds":7500,"showAlways":true,"keyboardFocusDelayMilliseconds":750}
