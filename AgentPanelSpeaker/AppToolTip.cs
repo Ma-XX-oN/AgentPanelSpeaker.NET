@@ -162,7 +162,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       return;
     }
 
-    string caption = GetToolTip(control);
+    string caption = GetToolTip(control) ?? string.Empty;
     if (caption.Length == 0)
     {
       return;
