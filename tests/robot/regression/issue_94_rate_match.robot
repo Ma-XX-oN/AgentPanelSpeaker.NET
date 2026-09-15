@@ -58,10 +58,10 @@ Rate Match Tooltip Is Split Across Two Lines
     Should Be Equal As Integers    ${lf_count}    1
     Should Be Equal As Integers    ${cr_count}    0
 
-Application Tooltip Is Owner Drawn From Construction With Prompt Focus Delay
+Application Tooltip Uses Explicit Pointer And Focus Scheduling
     [Template]    Static Method Should Return V1
     ${TEST_PROBE}
     ...    AgentPanelSpeaker.AppToolTip
     ...    GetContractSnapshot
     ...    []
-    ...    {"ownerDraw":true,"initialDelayMilliseconds":750,"reshowDelayMilliseconds":150,"autoPopDelayMilliseconds":7500,"showAlways":true,"keyboardFocusDelayMilliseconds":750}
+    ...    {"ownerDraw":true,"autoPopDelayMilliseconds":7500,"showAlways":true,"presentationDelayMilliseconds":750,"pointerHoverDelayMilliseconds":750,"keyboardFocusDelayMilliseconds":750,"nativeAutomaticHoverSuppressed":true,"pointerEnterSchedulesPresentation":true,"pointerLeaveCancelsWithoutFocus":true,"keyboardEnterSchedulesPresentation":true,"pointerLeavePreservesFocus":true,"focusLeavePreservesPointer":true}
