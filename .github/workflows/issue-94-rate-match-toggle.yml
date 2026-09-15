@@ -1,0 +1,160 @@
+name: Issue 94 rate-match toggle
+
+on:
+  push:
+    branches:
+      - issue-94-system-speech-sample-rate
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.event.head_commit.message == 'chore: apply issue 94 rate-match toggle'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-94-system-speech-sample-rate
+          fetch-depth: 0
+
+      - name: Apply issue 94 toggle
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+            p = Path(path)
+            text = p.read_text(encoding='utf-8')
+            count = text.count(old)
+            if count != 1:
+              raise RuntimeError(f'{path}: expected one match, found {count}: {old!r}')
+            p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once('DEVELOPMENT-VERSION',
+            '1.0.0-issue.94.3', '1.0.0-issue.94.4')
+          replace_once('AgentPanelSpeaker/AgentPanelSpeaker.csproj',
+            '<Version>1.0.0-issue.94.3</Version>',
+            '<Version>1.0.0-issue.94.4</Version>')
+
+          replace_once('AgentPanelSpeaker/UserSettings.cs',
+            '  public const int CurrentVersion = 17;',
+            '  public const int CurrentVersion = 18;')
+          replace_once('AgentPanelSpeaker/UserSettings.cs',
+            '  public SpeechMasterSettings MasterSpeech { get; init; } =\n    SpeechMasterSettings.Default;\n',
+            '  public SpeechMasterSettings MasterSpeech { get; init; } =\n    SpeechMasterSettings.Default;\n\n  /// <summary>\n  /// Gets whether Desktop/System.Speech rates are calibrated to the\n  /// Windows.Media application rate scale.\n  /// </summary>\n  public bool MatchDesktopAndWindowsMediaRates { get; init; } = true;\n')
+          replace_once('AgentPanelSpeaker/UserSettings.cs',
+            '      MasterSpeech = SpeechMasterSettings.Default,\n      SubagentAssistant = Profile(subagentVoice, 0),',
+            '      MasterSpeech = SpeechMasterSettings.Default,\n      MatchDesktopAndWindowsMediaRates = true,\n      SubagentAssistant = Profile(subagentVoice, 0),')
+
+          replace_once('AgentPanelSpeaker/SettingsDocument.cs',
+            '  public const int CurrentSchemaVersion = 17;',
+            '  public const int CurrentSchemaVersion = 18;')
+          replace_once('AgentPanelSpeaker/SettingsDocument.cs',
+            '      KeepDisplayOnWhileSpeaking = settings.KeepDisplayOnWhileSpeaking\n',
+            '      KeepDisplayOnWhileSpeaking = settings.KeepDisplayOnWhileSpeaking,\n      MatchDesktopAndWindowsMediaRates =\n        settings.MatchDesktopAndWindowsMediaRates\n')
+          replace_once('AgentPanelSpeaker/SettingsDocument.cs',
+            '      KeepDisplayOnWhileSpeaking = Speech.KeepDisplayOnWhileSpeaking,\n      PollIntervalMilliseconds = General.PollIntervalMilliseconds,',
+            '      KeepDisplayOnWhileSpeaking = Speech.KeepDisplayOnWhileSpeaking,\n      MatchDesktopAndWindowsMediaRates =\n        Speech.MatchDesktopAndWindowsMediaRates,\n      PollIntervalMilliseconds = General.PollIntervalMilliseconds,')
+          replace_once('AgentPanelSpeaker/SettingsDocument.cs',
+            '  public bool KeepDisplayOnWhileSpeaking { get; init; }\n}',
+            '  public bool KeepDisplayOnWhileSpeaking { get; init; }\n  public bool MatchDesktopAndWindowsMediaRates { get; init; } = true;\n}')
+
+          replace_once('AgentPanelSpeaker/SettingsChangeSet.cs',
+            '    AddScalar("Speech/KeepDisplayOn", ["Speech", "Keep display on while speaking"], saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking);\n',
+            '    AddScalar("Speech/KeepDisplayOn", ["Speech", "Keep display on while speaking"], saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking);\n    AddScalar(\n      "Speech/MatchDesktopAndWindowsMediaRates",\n      ["Speech", "Match Desktop and Windows Media rates"],\n      saved.MatchDesktopAndWindowsMediaRates,\n      working.MatchDesktopAndWindowsMediaRates);\n')
+          replace_once('AgentPanelSpeaker/SettingsChangeSet.cs',
+            '      KeepDisplayOnWhileSpeaking = Pick("Speech/KeepDisplayOn", saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking),\n',
+            '      KeepDisplayOnWhileSpeaking = Pick("Speech/KeepDisplayOn", saved.KeepDisplayOnWhileSpeaking, working.KeepDisplayOnWhileSpeaking),\n      MatchDesktopAndWindowsMediaRates = Pick(\n        "Speech/MatchDesktopAndWindowsMediaRates",\n        saved.MatchDesktopAndWindowsMediaRates,\n        working.MatchDesktopAndWindowsMediaRates),\n')
+
+          replace_once('AgentPanelSpeaker/SapiSpeechEngine.cs',
+            '  private int _windowsMediaBookmarkMode =\n    (int)WindowsMediaBookmarkMode.Fallback;\n',
+            '  private int _windowsMediaBookmarkMode =\n    (int)WindowsMediaBookmarkMode.Fallback;\n  private int _matchDesktopAndWindowsMediaRates = 1;\n')
+          replace_once('AgentPanelSpeaker/SapiSpeechEngine.cs',
+            '  public void SetWindowsMediaBookmarkMode(WindowsMediaBookmarkMode mode)\n  {\n    if (!Enum.IsDefined(typeof(WindowsMediaBookmarkMode), mode))\n    {\n      throw new ArgumentOutOfRangeException(nameof(mode), mode, null);\n    }\n    Volatile.Write(ref _windowsMediaBookmarkMode, (int)mode);\n  }\n',
+            '  public void SetWindowsMediaBookmarkMode(WindowsMediaBookmarkMode mode)\n  {\n    if (!Enum.IsDefined(typeof(WindowsMediaBookmarkMode), mode))\n    {\n      throw new ArgumentOutOfRangeException(nameof(mode), mode, null);\n    }\n    Volatile.Write(ref _windowsMediaBookmarkMode, (int)mode);\n  }\n\n  /// <summary>\n  /// Enables or disables Desktop/System.Speech rate calibration against the\n  /// Windows.Media application rate scale.\n  /// </summary>\n  public void SetMatchDesktopAndWindowsMediaRates(bool enabled)\n  {\n    Volatile.Write(ref _matchDesktopAndWindowsMediaRates, enabled ? 1 : 0);\n  }\n')
+          replace_once('AgentPanelSpeaker/SapiSpeechEngine.cs',
+            '        wave = RenderSystemSpeech(\n          markup,\n          profile,\n          backend.ProviderVoiceId,\n          synthesizer,\n          out boundaries,\n          out trackingDegradation);',
+            '        wave = RenderSystemSpeech(\n          markup,\n          profile,\n          backend.ProviderVoiceId,\n          synthesizer,\n          Volatile.Read(ref _matchDesktopAndWindowsMediaRates) != 0,\n          out boundaries,\n          out trackingDegradation);')
+          replace_once('AgentPanelSpeaker/SapiSpeechEngine.cs',
+            '  private static int MapSystemSpeechRate(int applicationRate)\n  {\n    Debug.Assert(applicationRate is >= -10 and <= 10);\n    return (int)Math.Round(\n      applicationRate / 2.0,\n      MidpointRounding.AwayFromZero);\n  }',
+            '  private static int MapSystemSpeechRate(\n    int applicationRate,\n    bool matchDesktopAndWindowsMediaRates)\n  {\n    Debug.Assert(applicationRate is >= -10 and <= 10);\n    if (!matchDesktopAndWindowsMediaRates)\n    {\n      return applicationRate;\n    }\n    return (int)Math.Round(\n      applicationRate / 2.0,\n      MidpointRounding.AwayFromZero);\n  }')
+          replace_once('AgentPanelSpeaker/SapiSpeechEngine.cs',
+            '    string providerVoiceId,\n    SystemSpeechSynthesizer synthesizer,\n    out IReadOnlyList<SpeechWordBoundary> boundaries,',
+            '    string providerVoiceId,\n    SystemSpeechSynthesizer synthesizer,\n    bool matchDesktopAndWindowsMediaRates,\n    out IReadOnlyList<SpeechWordBoundary> boundaries,')
+          replace_once('AgentPanelSpeaker/SapiSpeechEngine.cs',
+            '    int providerRate = MapSystemSpeechRate(profile.Rate);\n    synthesizer.Rate = providerRate;\n    DiagnosticLog.Write("speech.system_speech_rate_mapped", new\n    {\n      applicationRate = profile.Rate,\n      providerRate\n    });',
+            '    int providerRate = MapSystemSpeechRate(\n      profile.Rate,\n      matchDesktopAndWindowsMediaRates);\n    synthesizer.Rate = providerRate;\n    DiagnosticLog.Write("speech.system_speech_rate_mapped", new\n    {\n      applicationRate = profile.Rate,\n      providerRate,\n      matchDesktopAndWindowsMediaRates\n    });')
+
+          replace_once('AgentPanelSpeaker/SpeechService.cs',
+            '  public void SetWindowsMediaBookmarkMode(WindowsMediaBookmarkMode mode)\n  {\n    _engine.SetWindowsMediaBookmarkMode(mode);\n  }\n',
+            '  public void SetWindowsMediaBookmarkMode(WindowsMediaBookmarkMode mode)\n  {\n    _engine.SetWindowsMediaBookmarkMode(mode);\n  }\n\n  /// <summary>\n  /// Enables or disables Desktop/System.Speech rate calibration.\n  /// </summary>\n  public void SetMatchDesktopAndWindowsMediaRates(bool enabled)\n  {\n    _engine.SetMatchDesktopAndWindowsMediaRates(enabled);\n  }\n')
+
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '  private readonly CheckBox _keepDisplayOnCheckBox = new();\n',
+            '  private readonly CheckBox _keepDisplayOnCheckBox = new();\n  private readonly CheckBox _matchDesktopAndWindowsMediaRatesCheckBox = new();\n')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '    _toolTip.SetToolTip(\n      _keepDisplayOnCheckBox,\n      "Prevents Windows from turning off the display during active speech.");\n    _fenceDebounceTimer.Interval = 1000;',
+            '    _toolTip.SetToolTip(\n      _keepDisplayOnCheckBox,\n      "Prevents Windows from turning off the display during active speech.");\n    _matchDesktopAndWindowsMediaRatesCheckBox.AutoSize = true;\n    _matchDesktopAndWindowsMediaRatesCheckBox.Margin =\n      new Padding(3, 6, 3, 3);\n    _matchDesktopAndWindowsMediaRatesCheckBox.Text =\n      "Match Desktop and Windows Media rates";\n    _toolTip.SetToolTip(\n      _matchDesktopAndWindowsMediaRatesCheckBox,\n      "Desktop/System.Speech and Windows Media use different rate scales. " +\n      "Enable this to make their speaking rates closer; this compresses the " +\n      "Desktop voice's available native rate range.");\n    _fenceDebounceTimer.Interval = 1000;')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '      _pronunciationsButton,\n      _speakExistingCheckBox, _keepDisplayOnCheckBox\n    });',
+            '      _pronunciationsButton,\n      _speakExistingCheckBox, _keepDisplayOnCheckBox,\n      _matchDesktopAndWindowsMediaRatesCheckBox\n    });')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '      _pronunciationsButton,\n      _speakExistingCheckBox,\n      _keepDisplayOnCheckBox);',
+            '      _pronunciationsButton,\n      _speakExistingCheckBox,\n      _keepDisplayOnCheckBox,\n      _matchDesktopAndWindowsMediaRatesCheckBox);')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '    UiText.Apply(_keepDisplayOnCheckBox, "Main.KeepDisplayOn", _toolTip);\n',
+            '    UiText.Apply(_keepDisplayOnCheckBox, "Main.KeepDisplayOn", _toolTip);\n    UiText.Apply(\n      _matchDesktopAndWindowsMediaRatesCheckBox,\n      "Main.MatchDesktopAndWindowsMediaRates",\n      _toolTip);\n')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '    _keepDisplayOnCheckBox.CheckedChanged += (_, _) =>\n    {\n      SaveControlsToSettings();\n      UpdateDisplayAwakeState();\n    };\n',
+            '    _keepDisplayOnCheckBox.CheckedChanged += (_, _) =>\n    {\n      SaveControlsToSettings();\n      UpdateDisplayAwakeState();\n    };\n    _matchDesktopAndWindowsMediaRatesCheckBox.CheckedChanged += (_, _) =>\n    {\n      SaveControlsToSettings();\n      _speech.SetMatchDesktopAndWindowsMediaRates(\n        _matchDesktopAndWindowsMediaRatesCheckBox.Checked);\n    };\n')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '      _keepDisplayOnCheckBox.Checked =\n        settings.KeepDisplayOnWhileSpeaking;\n      _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;',
+            '      _keepDisplayOnCheckBox.Checked =\n        settings.KeepDisplayOnWhileSpeaking;\n      _matchDesktopAndWindowsMediaRatesCheckBox.Checked =\n        settings.MatchDesktopAndWindowsMediaRates;\n      _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '      _speech.SetWindowsMediaBookmarkMode(\n        WindowsMediaBookmarkMode.Always);\n',
+            '      _speech.SetWindowsMediaBookmarkMode(\n        WindowsMediaBookmarkMode.Always);\n      _speech.SetMatchDesktopAndWindowsMediaRates(\n        settings.MatchDesktopAndWindowsMediaRates);\n')
+          replace_once('AgentPanelSpeaker/MainForm.cs',
+            '      KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,\n      PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),',
+            '      KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,\n      MatchDesktopAndWindowsMediaRates =\n        _matchDesktopAndWindowsMediaRatesCheckBox.Checked,\n      PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),')
+
+          replace_once('AgentPanelSpeaker/Resources/Strings.resx',
+            '  <data name="Main.KeepDisplayOn.Name" xml:space="preserve"><value>Keep display on while speaking</value></data>\n',
+            '  <data name="Main.KeepDisplayOn.Name" xml:space="preserve"><value>Keep display on while speaking</value></data>\n  <data name="Main.MatchDesktopAndWindowsMediaRates.Name" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>\n  <data name="Main.MatchDesktopAndWindowsMediaRates.Description" xml:space="preserve"><value>Calibrates Desktop/System.Speech speaking rates toward the Windows Media rate scale.</value></data>\n  <data name="Main.MatchDesktopAndWindowsMediaRates.Text" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>\n  <data name="Main.MatchDesktopAndWindowsMediaRates.Tooltip" xml:space="preserve"><value>Desktop/System.Speech and Windows Media use different rate scales. Enable this to make their speaking rates closer; this compresses the Desktop voice&apos;s available native rate range.</value></data>\n')
+
+          replace_once('AgentPanelSpeaker/Issue94NativeSystemSpeechTimingRegressionTestRunner.cs',
+            '      ("system-speech-native-timing/provider-neutral-rate-semantics",\n        TestProviderNeutralRateSemantics)\n',
+            '      ("system-speech-native-timing/provider-neutral-rate-semantics",\n        TestProviderNeutralRateSemantics),\n      ("system-speech-native-timing/rate-match-toggle",\n        TestRateMatchToggle),\n      ("system-speech-native-timing/rate-match-setting-persistence",\n        TestRateMatchSettingPersistence)\n')
+          replace_once('AgentPanelSpeaker/Issue94NativeSystemSpeechTimingRegressionTestRunner.cs',
+            '  private static int GetProductionSystemSpeechRate(int applicationRate)\n  {\n    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(\n      "MapSystemSpeechRate",\n      BindingFlags.Static | BindingFlags.NonPublic) ??\n      throw new InvalidOperationException("MapSystemSpeechRate is missing.");\n    return method.Invoke(null, new object[] { applicationRate }) is int rate\n      ? rate\n      : throw new InvalidOperationException(\n          "MapSystemSpeechRate returned no provider rate.");\n  }\n',
+            '  private static void TestRateMatchToggle()\n  {\n    Require(GetProductionSystemSpeechRate(6, true) == 3,\n      "Matched application rate 6 must map to System.Speech rate 3.");\n    Require(GetProductionSystemSpeechRate(6, false) == 6,\n      "Unmatched application rate 6 must preserve System.Speech rate 6.");\n    Require(GetProductionSystemSpeechRate(-10, false) == -10,\n      "Unmatched minimum application rate must preserve -10.");\n    Require(GetProductionSystemSpeechRate(10, false) == 10,\n      "Unmatched maximum application rate must preserve +10.");\n  }\n\n  private static void TestRateMatchSettingPersistence()\n  {\n    UserSettings defaults = UserSettings.CreateDefault(Array.Empty<string>());\n    Require(defaults.MatchDesktopAndWindowsMediaRates,\n      "Rate matching must default on for existing .94.3 behavior.");\n\n    UserSettings disabled = defaults with\n    {\n      MatchDesktopAndWindowsMediaRates = false\n    };\n    SettingsDocument document = SettingsDocument.FromRuntime(disabled);\n    UserSettings roundTrip = document.ToRuntime(Array.Empty<string>());\n    Require(!roundTrip.MatchDesktopAndWindowsMediaRates,\n      "A disabled rate-match setting did not survive settings persistence.");\n\n    var legacyShape = new SettingsDocument\n    {\n      Speech = new SpeechSettingsDocument()\n    };\n    Require(legacyShape.ToRuntime(Array.Empty<string>())\n        .MatchDesktopAndWindowsMediaRates,\n      "Settings without the new field must retain matched .94.3 behavior.");\n  }\n\n  private static int GetProductionSystemSpeechRate(\n    int applicationRate,\n    bool matchDesktopAndWindowsMediaRates = true)\n  {\n    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(\n      "MapSystemSpeechRate",\n      BindingFlags.Static | BindingFlags.NonPublic) ??\n      throw new InvalidOperationException("MapSystemSpeechRate is missing.");\n    return method.Invoke(\n      null,\n      new object[]\n      {\n        applicationRate,\n        matchDesktopAndWindowsMediaRates\n      }) is int rate\n      ? rate\n      : throw new InvalidOperationException(\n          "MapSystemSpeechRate returned no provider rate.");\n  }\n')
+          replace_once('AgentPanelSpeaker/Issue94NativeSystemSpeechTimingRegressionTestRunner.cs',
+            '      synthesizer,\n      null,\n      null\n    };',
+            '      synthesizer,\n      true,\n      null,\n      null\n    };')
+          replace_once('AgentPanelSpeaker/Issue94NativeSystemSpeechTimingRegressionTestRunner.cs',
+            '        arguments[4] as IReadOnlyList<SpeechWordBoundary> ??',
+            '        arguments[5] as IReadOnlyList<SpeechWordBoundary> ??')
+
+          # Remove this one-shot workflow before committing the implementation.
+          Path('.github/workflows/issue-94-rate-match-toggle.yml').unlink()
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release
+
+      - name: Verify version consistency
+        shell: pwsh
+        run: ./tools/Verify-VersionConsistency.ps1
+
+      - name: Run issue 94 focused regression
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release --no-build -- --test system-speech-native-timing
+
+      - name: Commit implementation
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add issue 94 rate-match toggle"
+          git push origin HEAD:issue-94-system-speech-sample-rate
