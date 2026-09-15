@@ -14,6 +14,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   internal const int KeyboardFocusDelayMilliseconds =
     PresentationDelayMilliseconds;
   internal const int AutoPopDelayMilliseconds = 7500;
+  internal const int PresentationGapPixels = 32;
 
   private readonly System.Windows.Forms.Timer _presentationTimer = new()
   {
@@ -21,6 +22,8 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   };
   private readonly HashSet<Control> _registeredControls = new();
   private readonly Dictionary<Control, string> _captions = new();
+  private readonly Dictionary<Control, Control> _pointerHostsByControl = new();
+  private readonly Dictionary<Control, int> _pointerHostReferenceCounts = new();
   private Control? _pointerTarget;
   private Control? _focusTarget;
   private Control? _scheduledTarget;
@@ -121,6 +124,56 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     };
   }
 
+  /// <summary>
+  /// Exercises the parent-level pointer path used for disabled controls.
+  /// </summary>
+  internal static object GetDisabledControlContractSnapshot()
+  {
+    using var toolTip = new AppToolTip();
+    using var host = new Panel();
+    using var control = new Button
+    {
+      Bounds = new Rectangle(8, 8, 80, 24),
+      Enabled = false
+    };
+    host.Controls.Add(control);
+    toolTip.SetToolTip(control, "disabled contract");
+
+    bool disabledControlPointerFallback =
+      toolTip.IsPointerHostRegisteredFor(control);
+
+    toolTip.ToolTipPointerHostMouseMove(
+      host,
+      new MouseEventArgs(MouseButtons.None, 0, 16, 16, 0));
+    bool disabledPointerSchedulesPresentation =
+      toolTip.IsScheduledFor(control);
+
+    toolTip.ToolTipPointerHostMouseMove(
+      host,
+      new MouseEventArgs(MouseButtons.None, 0, 120, 60, 0));
+    bool leavingDisabledControlCancelsPresentation =
+      !toolTip.IsScheduledFor(control);
+
+    return new
+    {
+      disabledControlPointerFallback,
+      disabledPointerSchedulesPresentation,
+      leavingDisabledControlCancelsPresentation
+    };
+  }
+
+  /// <summary>
+  /// Returns the stable pointer-clearance placement contract.
+  /// </summary>
+  internal static object GetPlacementContractSnapshot()
+  {
+    return new
+    {
+      presentationGapPixels = PresentationGapPixels,
+      minimumPointerClearancePixels = PresentationGapPixels
+    };
+  }
+
   protected override void Dispose(bool disposing)
   {
     if (disposing)
@@ -134,8 +187,15 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
         DetachControl(control);
       }
 
+      foreach (Control host in _pointerHostReferenceCounts.Keys.ToArray())
+      {
+        DetachPointerHostEvents(host);
+      }
+
       _registeredControls.Clear();
       _captions.Clear();
+      _pointerHostsByControl.Clear();
+      _pointerHostReferenceCounts.Clear();
       _pointerTarget = null;
       _focusTarget = null;
       _scheduledTarget = null;
@@ -149,6 +209,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   {
     if (!_registeredControls.Add(control))
     {
+      RefreshPointerHost(control);
       return;
     }
 
@@ -156,7 +217,9 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     control.MouseLeave += ToolTipControlMouseLeave;
     control.Enter += ToolTipControlEnter;
     control.Leave += ToolTipControlLeave;
+    control.ParentChanged += ToolTipControlParentChanged;
     control.Disposed += ToolTipControlDisposed;
+    RefreshPointerHost(control);
   }
 
   private void UnregisterControl(Control control)
@@ -176,6 +239,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     }
     CancelScheduled(control);
     HideVisible(control);
+    RemovePointerHost(control);
     DetachControl(control);
     ScheduleRemainingActiveTarget();
   }
@@ -186,7 +250,58 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     control.MouseLeave -= ToolTipControlMouseLeave;
     control.Enter -= ToolTipControlEnter;
     control.Leave -= ToolTipControlLeave;
+    control.ParentChanged -= ToolTipControlParentChanged;
     control.Disposed -= ToolTipControlDisposed;
+  }
+
+  private void RefreshPointerHost(Control control)
+  {
+    RemovePointerHost(control);
+
+    Control? host = control.Parent;
+    if (host is null)
+    {
+      return;
+    }
+
+    _pointerHostsByControl[control] = host;
+    if (_pointerHostReferenceCounts.TryGetValue(host, out int count))
+    {
+      _pointerHostReferenceCounts[host] = count + 1;
+      return;
+    }
+
+    _pointerHostReferenceCounts[host] = 1;
+    host.MouseMove += ToolTipPointerHostMouseMove;
+    host.MouseLeave += ToolTipPointerHostMouseLeave;
+  }
+
+  private void RemovePointerHost(Control control)
+  {
+    if (!_pointerHostsByControl.Remove(control, out Control? host))
+    {
+      return;
+    }
+
+    if (!_pointerHostReferenceCounts.TryGetValue(host, out int count))
+    {
+      return;
+    }
+
+    if (count > 1)
+    {
+      _pointerHostReferenceCounts[host] = count - 1;
+      return;
+    }
+
+    _pointerHostReferenceCounts.Remove(host);
+    DetachPointerHostEvents(host);
+  }
+
+  private void DetachPointerHostEvents(Control host)
+  {
+    host.MouseMove -= ToolTipPointerHostMouseMove;
+    host.MouseLeave -= ToolTipPointerHostMouseLeave;
   }
 
   private void ToolTipControlMouseEnter(object? sender, EventArgs eventArgs)
@@ -196,8 +311,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       return;
     }
 
-    _pointerTarget = control;
-    SchedulePresentation(control);
+    SetPointerTarget(control);
   }
 
   private void ToolTipControlMouseLeave(object? sender, EventArgs eventArgs)
@@ -208,8 +322,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       return;
     }
 
-    _pointerTarget = null;
-    HandleTargetExit(control);
+    SetPointerTarget(null);
   }
 
   private void ToolTipControlEnter(object? sender, EventArgs eventArgs)
@@ -235,12 +348,90 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     HandleTargetExit(control);
   }
 
+  private void ToolTipControlParentChanged(object? sender, EventArgs eventArgs)
+  {
+    if (sender is Control control && _registeredControls.Contains(control))
+    {
+      RefreshPointerHost(control);
+    }
+  }
+
   private void ToolTipControlDisposed(object? sender, EventArgs eventArgs)
   {
     if (sender is Control control)
     {
       _captions.Remove(control);
       UnregisterControl(control);
+    }
+  }
+
+  private void ToolTipPointerHostMouseMove(object? sender, MouseEventArgs eventArgs)
+  {
+    if (sender is not Control host || host.IsDisposed)
+    {
+      return;
+    }
+
+    Control? target = FindRegisteredDisabledChild(host, eventArgs.Location);
+    if (target is not null)
+    {
+      SetPointerTarget(target);
+      return;
+    }
+
+    if (_pointerTarget is not null && !_pointerTarget.Enabled &&
+        _pointerHostsByControl.TryGetValue(_pointerTarget, out Control? oldHost) &&
+        ReferenceEquals(oldHost, host))
+    {
+      SetPointerTarget(null);
+    }
+  }
+
+  private void ToolTipPointerHostMouseLeave(object? sender, EventArgs eventArgs)
+  {
+    if (sender is not Control host || _pointerTarget is null ||
+        _pointerTarget.Enabled ||
+        !_pointerHostsByControl.TryGetValue(_pointerTarget, out Control? oldHost) ||
+        !ReferenceEquals(oldHost, host))
+    {
+      return;
+    }
+
+    SetPointerTarget(null);
+  }
+
+  private Control? FindRegisteredDisabledChild(Control host, Point location)
+  {
+    foreach (Control child in host.Controls)
+    {
+      if (_registeredControls.Contains(child) && !child.Enabled &&
+          child.Visible && child.Bounds.Contains(location))
+      {
+        return child;
+      }
+    }
+
+    return null;
+  }
+
+  private void SetPointerTarget(Control? control)
+  {
+    if (ReferenceEquals(_pointerTarget, control))
+    {
+      return;
+    }
+
+    Control? previous = _pointerTarget;
+    _pointerTarget = control;
+
+    if (previous is not null)
+    {
+      HandleTargetExit(previous);
+    }
+
+    if (control is not null)
+    {
+      SchedulePresentation(control);
     }
   }
 
@@ -282,7 +473,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     _scheduledTarget = null;
 
     if (control is null || !IsActive(control) || control.IsDisposed ||
-        !control.Enabled || !control.Visible ||
+        !control.Visible ||
         !_captions.TryGetValue(control, out string? caption) ||
         caption.Length == 0)
     {
@@ -299,7 +490,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       caption,
       control,
       0,
-      control.Height + 2,
+      control.Height + PresentationGapPixels,
       AutoPopDelayMilliseconds);
     _visibleTarget = control;
   }
@@ -362,5 +553,10 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   {
     return ReferenceEquals(_scheduledTarget, control) &&
       _presentationTimer.Enabled;
+  }
+
+  private bool IsPointerHostRegisteredFor(Control control)
+  {
+    return _pointerHostsByControl.ContainsKey(control);
   }
 }

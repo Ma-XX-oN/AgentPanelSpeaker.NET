@@ -9,7 +9,7 @@
   <data name="Main.SaveSettings.Tooltip" xml:space="preserve"><value>Save settings</value></data>
   <data name="Main.ResetDefaults.Name" xml:space="preserve"><value>Reset settings to defaults</value></data>
   <data name="Main.ResetDefaults.Description" xml:space="preserve"><value>Choose which settings to reset to their default values.</value></data>
-  <data name="Main.ResetDefaults.Tooltip" xml:space="preserve"><value>Reset settings to defaults</value></data>
+  <data name="Main.ResetDefaults.Tooltip" xml:space="preserve"><value>Reset settings</value></data>
   <data name="Main.Hotkeys.Name" xml:space="preserve"><value>Configure hotkeys</value></data>
   <data name="Main.Hotkeys.Description" xml:space="preserve"><value>Open the keyboard shortcut settings.</value></data>
   <data name="Main.Hotkeys.Tooltip" xml:space="preserve"><value>Configure hotkeys</value></data>
@@ -33,6 +33,7 @@
   <data name="Main.Theme.Name" xml:space="preserve"><value>Application theme</value></data>
   <data name="Main.Pronunciations.Name" xml:space="preserve"><value>Pronunciations</value></data>
   <data name="Main.BluetoothWake.Name" xml:space="preserve"><value>Bluetooth audio wake settings</value></data>
+  <data name="Main.BluetoothWake.Tooltip" xml:space="preserve"><value>Bluetooth audio wake settings</value></data>
   <data name="Main.AcceptedText.Name" xml:space="preserve"><value>Accepted text preview</value></data>
   <data name="Main.ActivityLog.Name" xml:space="preserve"><value>Activity log</value></data>
   <data name="Main.DiagnosticTabs.Name" xml:space="preserve"><value>Transcript and diagnostic tabs</value></data>
