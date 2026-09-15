@@ -4,7 +4,7 @@ namespace AgentPanelSpeaker;
 /// Provides one application-wide tooltip contract for pointer hover and
 /// keyboard focus.  Tooltip presentation is owned by the application rather
 /// than the native automatic-hover timer so both input paths have identical,
-/// deterministic timing and owner-drawn styling.
+/// deterministic timing, sizing, placement, and owner-drawn styling.
 /// </summary>
 internal sealed class AppToolTip : System.Windows.Forms.ToolTip
 {
@@ -15,6 +15,15 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     PresentationDelayMilliseconds;
   internal const int AutoPopDelayMilliseconds = 7500;
   internal const int PresentationGapPixels = 32;
+  internal const int PopupWorkingAreaMarginPixels = 8;
+  internal const int PopupHorizontalPaddingPixels = 12;
+  internal const int PopupVerticalPaddingPixels = 8;
+
+  internal const TextFormatFlags ToolTipTextFormat =
+    TextFormatFlags.Left |
+    TextFormatFlags.VerticalCenter |
+    TextFormatFlags.NoPrefix |
+    TextFormatFlags.WordBreak;
 
   private readonly System.Windows.Forms.Timer _presentationTimer = new()
   {
@@ -28,16 +37,19 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   private Control? _focusTarget;
   private Control? _scheduledTarget;
   private Control? _visibleTarget;
+  private Control? _presentingTarget;
+  private Size _presentingSize;
 
   /// <summary>
-  /// Creates a tooltip whose drawing mode and presentation timing are fixed
-  /// for its entire lifetime.
+  /// Creates a tooltip whose drawing mode, sizing, and presentation timing are
+  /// fixed for its entire lifetime.
   /// </summary>
   public AppToolTip()
   {
     OwnerDraw = true;
     AutoPopDelay = AutoPopDelayMilliseconds;
     ShowAlways = true;
+    Popup += ToolTipPopup;
     _presentationTimer.Tick += PresentationTimerTick;
   }
 
@@ -174,6 +186,84 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     };
   }
 
+  /// <summary>
+  /// Exercises sizing and screen-edge placement with representative captions.
+  /// </summary>
+  internal static object GetSizingContractSnapshot()
+  {
+    Font font = GetToolTipFont();
+    var wideWorkingArea = new Rectangle(0, 0, 1600, 900);
+    var narrowWorkingArea = new Rectangle(0, 0, 360, 600);
+
+    const string shortCaption = "Save settings";
+    Size shortText = MeasureText(shortCaption, font, wideWorkingArea.Width);
+    Size shortPopup = CalculatePopupSize(
+      shortCaption,
+      font,
+      wideWorkingArea);
+    bool shortCaptionFits =
+      shortPopup.Width >= shortText.Width + PopupHorizontalPaddingPixels &&
+      shortPopup.Height >= shortText.Height + PopupVerticalPaddingPixels;
+
+    const string twoLineCaption =
+      "On: start at the first speakable content.\n" +
+      "Off: wait at the current conversation end.";
+    Size singleLineHeight = MeasureText("sample", font, wideWorkingArea.Width);
+    Size twoLinePopup = CalculatePopupSize(
+      twoLineCaption,
+      font,
+      wideWorkingArea);
+    bool explicitTwoLineCaptionFits =
+      twoLinePopup.Height >=
+        (singleLineHeight.Height * 2) + PopupVerticalPaddingPixels;
+
+    const string longCaption =
+      "This representative tooltip caption is deliberately long enough to " +
+      "require wrapping when the available working area is narrow while " +
+      "remaining complete and readable.";
+    Size widePopup = CalculatePopupSize(longCaption, font, wideWorkingArea);
+    Size narrowPopup = CalculatePopupSize(longCaption, font, narrowWorkingArea);
+    int narrowMaximumWidth = Math.Max(
+      1,
+      narrowWorkingArea.Width - (PopupWorkingAreaMarginPixels * 2));
+    bool longCaptionWrapsWithinWorkingArea =
+      narrowPopup.Width <= narrowMaximumWidth;
+    bool longCaptionUsesMoreHeightWhenConstrained =
+      narrowPopup.Height > widePopup.Height;
+
+    bool paddingIsIncluded =
+      shortPopup.Width > shortText.Width &&
+      shortPopup.Height > shortText.Height;
+
+    var placementWorkingArea = new Rectangle(0, 0, 400, 300);
+    Point rightEdgeLocation = CalculatePopupScreenLocation(
+      new Rectangle(380, 50, 20, 20),
+      new Size(120, 40),
+      placementWorkingArea);
+    bool rightEdgePlacementClamped =
+      rightEdgeLocation.X >= placementWorkingArea.Left &&
+      rightEdgeLocation.X + 120 <= placementWorkingArea.Right;
+
+    var bottomAnchor = new Rectangle(100, 260, 60, 20);
+    Point bottomEdgeLocation = CalculatePopupScreenLocation(
+      bottomAnchor,
+      new Size(160, 50),
+      placementWorkingArea);
+    bool bottomEdgePlacementFlipsAbove =
+      bottomEdgeLocation.Y + 50 <= bottomAnchor.Top - PresentationGapPixels;
+
+    return new
+    {
+      shortCaptionFits,
+      explicitTwoLineCaptionFits,
+      longCaptionWrapsWithinWorkingArea,
+      longCaptionUsesMoreHeightWhenConstrained,
+      paddingIsIncluded,
+      rightEdgePlacementClamped,
+      bottomEdgePlacementFlipsAbove
+    };
+  }
+
   protected override void Dispose(bool disposing)
   {
     if (disposing)
@@ -181,6 +271,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       _presentationTimer.Stop();
       _presentationTimer.Tick -= PresentationTimerTick;
       _presentationTimer.Dispose();
+      Popup -= ToolTipPopup;
 
       foreach (Control control in _registeredControls.ToArray())
       {
@@ -200,6 +291,8 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       _focusTarget = null;
       _scheduledTarget = null;
       _visibleTarget = null;
+      _presentingTarget = null;
+      _presentingSize = Size.Empty;
     }
 
     base.Dispose(disposing);
@@ -486,13 +579,130 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       HideVisible(_visibleTarget);
     }
 
-    Show(
+    Rectangle workingArea = Screen.FromControl(control).WorkingArea;
+    Size popupSize = CalculatePopupSize(
       caption,
-      control,
-      0,
-      control.Height + PresentationGapPixels,
-      AutoPopDelayMilliseconds);
+      GetToolTipFont(),
+      workingArea);
+    Rectangle anchorBounds = control.RectangleToScreen(control.ClientRectangle);
+    Point screenLocation = CalculatePopupScreenLocation(
+      anchorBounds,
+      popupSize,
+      workingArea);
+    Point clientLocation = control.PointToClient(screenLocation);
+
+    _presentingTarget = control;
+    _presentingSize = popupSize;
+    try
+    {
+      Show(
+        caption,
+        control,
+        clientLocation.X,
+        clientLocation.Y,
+        AutoPopDelayMilliseconds);
+    }
+    finally
+    {
+      _presentingTarget = null;
+      _presentingSize = Size.Empty;
+    }
     _visibleTarget = control;
+  }
+
+  private void ToolTipPopup(object? sender, PopupEventArgs eventArgs)
+  {
+    Control? control = _presentingTarget ?? eventArgs.AssociatedControl;
+    if (control is null || control.IsDisposed ||
+        !_captions.TryGetValue(control, out string? caption) ||
+        caption.Length == 0)
+    {
+      return;
+    }
+
+    if (ReferenceEquals(control, _presentingTarget) &&
+        !_presentingSize.IsEmpty)
+    {
+      eventArgs.ToolTipSize = _presentingSize;
+      return;
+    }
+
+    eventArgs.ToolTipSize = CalculatePopupSize(
+      caption,
+      GetToolTipFont(),
+      Screen.FromControl(control).WorkingArea);
+  }
+
+  private static Font GetToolTipFont()
+  {
+    return SystemFonts.StatusFont ?? Control.DefaultFont;
+  }
+
+  private static Size CalculatePopupSize(
+    string caption,
+    Font font,
+    Rectangle workingArea)
+  {
+    int maximumPopupWidth = Math.Max(
+      1,
+      workingArea.Width - (PopupWorkingAreaMarginPixels * 2));
+    int maximumTextWidth = Math.Max(
+      1,
+      maximumPopupWidth - PopupHorizontalPaddingPixels);
+    Size measured = MeasureText(caption, font, maximumTextWidth);
+
+    int popupWidth = Math.Min(
+      maximumPopupWidth,
+      Math.Max(1, measured.Width + PopupHorizontalPaddingPixels));
+    int popupHeight = Math.Max(
+      1,
+      measured.Height + PopupVerticalPaddingPixels);
+    return new Size(popupWidth, popupHeight);
+  }
+
+  private static Size MeasureText(
+    string caption,
+    Font font,
+    int maximumTextWidth)
+  {
+    return TextRenderer.MeasureText(
+      caption,
+      font,
+      new Size(Math.Max(1, maximumTextWidth), int.MaxValue),
+      ToolTipTextFormat);
+  }
+
+  private static Point CalculatePopupScreenLocation(
+    Rectangle anchorBounds,
+    Size popupSize,
+    Rectangle workingArea)
+  {
+    int minimumX = workingArea.Left;
+    int maximumX = Math.Max(
+      minimumX,
+      workingArea.Right - popupSize.Width);
+    int x = Math.Clamp(anchorBounds.Left, minimumX, maximumX);
+
+    int belowY = anchorBounds.Bottom + PresentationGapPixels;
+    int aboveY = anchorBounds.Top - PresentationGapPixels - popupSize.Height;
+    int y;
+    if (belowY + popupSize.Height <= workingArea.Bottom)
+    {
+      y = belowY;
+    }
+    else if (aboveY >= workingArea.Top)
+    {
+      y = aboveY;
+    }
+    else
+    {
+      int maximumY = Math.Max(
+        workingArea.Top,
+        workingArea.Bottom - popupSize.Height);
+      y = Math.Clamp(belowY, workingArea.Top, maximumY);
+    }
+
+    return new Point(x, y);
   }
 
   private void HandleTargetExit(Control control)
