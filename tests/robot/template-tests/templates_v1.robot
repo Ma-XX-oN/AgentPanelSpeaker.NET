@@ -48,7 +48,7 @@ File Contains Template Accepts Matching Text
 File Regex Template Rejects Missing Pattern
     ${path}=    Set Variable    ${CURDIR}${/}templates_v1.robot
     ${missing}=    Catenate    SEPARATOR=    THIS_PATTERN_    MUST_NOT_EXIST_108
-    Run Keyword And Expect Error    *does not match pattern*
+    Run Keyword And Expect Error    *does not match*THIS_PATTERN_MUST_NOT_EXIST_108*
     ...    Text File Should Match Regex V1    ${path}    ${missing}
 
 Relative Difference Accepts Value Inside Limit
