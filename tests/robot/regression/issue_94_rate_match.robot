@@ -50,10 +50,11 @@ Rate Match Tooltip Explains Native Range Tradeoff
     ...    native rate range
 
 Rate Match Tooltip Is Split Across Two Lines
-    [Template]    Ui Text Should Equal V1
-    ${TEST_PROBE}
+    Probe Should Return Json V1
+    ...    ${TEST_PROBE}
+    ...    ui-text
+    ...    "Desktop/System.Speech and Windows Media use different rate scales.\\nEnable this to make their speaking rates closer; this compresses the Desktop voice's available native rate range."
     ...    Main.MatchDesktopAndWindowsMediaRates.Tooltip
-    ...    Desktop/System.Speech and Windows Media use different rate scales.${\n}Enable this to make their speaking rates closer; this compresses the Desktop voice's available native rate range.
 
 Application Tooltip Is Owner Drawn From Construction With Prompt Focus Delay
     [Template]    Static Method Should Return V1
