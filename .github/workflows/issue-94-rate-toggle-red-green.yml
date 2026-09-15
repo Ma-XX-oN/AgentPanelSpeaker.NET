@@ -1,0 +1,69 @@
+name: Issue 94 rate toggle RED GREEN
+
+on:
+  push:
+    branches:
+      - issue-94-system-speech-sample-rate
+
+permissions:
+  contents: write
+
+jobs:
+  red-green:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-94-system-speech-sample-rate
+          fetch-depth: 0
+
+      - name: Add regression expectations
+        shell: pwsh
+        run: python tools/apply_issue94_rate_toggle.py tests
+
+      - name: Prove RED before production change
+        shell: pwsh
+        run: |
+          $output = dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | Write-Host
+          if ($exitCode -eq 0) {
+            throw "Expected the new rate-toggle regression to fail before implementation."
+          }
+          $joined = $output -join "`n"
+          if ($joined -notmatch "MatchDesktopAndWindowsMediaRates") {
+            throw "RED failure was not caused by the missing rate-toggle contract."
+          }
+          Write-Host "Expected RED established: new rate-toggle contract is absent."
+
+      - name: Apply production implementation
+        shell: pwsh
+        run: python tools/apply_issue94_rate_toggle.py production
+
+      - name: Build GREEN
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release
+
+      - name: Verify version consistency
+        shell: pwsh
+        run: ./tools/Verify-VersionConsistency.ps1
+
+      - name: Run issue 94 focused regression
+        shell: pwsh
+        run: dotnet run --project AgentPanelSpeaker/AgentPanelSpeaker.csproj -c Release --no-build -- --test system-speech-native-timing
+
+      - name: Verify patch integrity
+        shell: pwsh
+        run: git diff --check
+
+      - name: Commit GREEN implementation
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git status --short
+          git add AgentPanelSpeaker
+          git diff --cached --check
+          git commit -m "feat: add issue 94 rate-match toggle"
+          git push origin HEAD:issue-94-system-speech-sample-rate
