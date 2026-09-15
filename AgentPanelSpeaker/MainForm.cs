@@ -131,6 +131,7 @@ internal sealed class MainForm : Form, IMessageFilter
   private readonly TextBox _fenceTypesTextBox = new();
   private readonly CheckBox _speakExistingCheckBox = new();
   private readonly CheckBox _keepDisplayOnCheckBox = new();
+  private readonly CheckBox _matchDesktopAndWindowsMediaRatesCheckBox = new();
   private readonly GlyphButton _playPauseButton = new();
   private readonly GlyphButton _processingTimeButton = new();
   private readonly GlyphButton _rewindSpeakerButton = new();
@@ -407,6 +408,16 @@ internal sealed class MainForm : Form, IMessageFilter
     _toolTip.SetToolTip(
       _keepDisplayOnCheckBox,
       "Prevents Windows from turning off the display during active speech.");
+    _matchDesktopAndWindowsMediaRatesCheckBox.AutoSize = true;
+    _matchDesktopAndWindowsMediaRatesCheckBox.Margin =
+      new Padding(3, 6, 3, 3);
+    _matchDesktopAndWindowsMediaRatesCheckBox.Text =
+      "Match Desktop and Windows Media rates";
+    _toolTip.SetToolTip(
+      _matchDesktopAndWindowsMediaRatesCheckBox,
+      "Desktop/System.Speech and Windows Media use different rate scales. " +
+      "Enable this to make their speaking rates closer; this compresses the " +
+      "Desktop voice's available native rate range.");
     _fenceDebounceTimer.Interval = 1000;
 
     var sessionControls = new FlowLayoutPanel
@@ -457,13 +468,15 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       MakeInlineLabel("Spoken fenced-code types:"), _fenceTypesTextBox,
       _pronunciationsButton,
-      _speakExistingCheckBox, _keepDisplayOnCheckBox
+      _speakExistingCheckBox, _keepDisplayOnCheckBox,
+      _matchDesktopAndWindowsMediaRatesCheckBox
     });
     SetTabOrder(
       _fenceTypesTextBox,
       _pronunciationsButton,
       _speakExistingCheckBox,
-      _keepDisplayOnCheckBox);
+      _keepDisplayOnCheckBox,
+      _matchDesktopAndWindowsMediaRatesCheckBox);
 
     var transport = new FlowLayoutPanel
     {
@@ -603,6 +616,10 @@ internal sealed class MainForm : Form, IMessageFilter
     UiText.Apply(_fenceTypesTextBox, "Main.FencedCodeTypes", _toolTip);
     UiText.Apply(_speakExistingCheckBox, "Main.SpeakExisting", _toolTip);
     UiText.Apply(_keepDisplayOnCheckBox, "Main.KeepDisplayOn", _toolTip);
+    UiText.Apply(
+      _matchDesktopAndWindowsMediaRatesCheckBox,
+      "Main.MatchDesktopAndWindowsMediaRates",
+      _toolTip);
     UiText.Apply(_themeComboBox, "Main.Theme", _toolTip);
     UiText.Apply(_pronunciationsButton, "Main.Pronunciations", _toolTip);
     UiText.Apply(_audioWakeButton, "Main.BluetoothWake", _toolTip);
@@ -627,6 +644,12 @@ internal sealed class MainForm : Form, IMessageFilter
     {
       SaveControlsToSettings();
       UpdateDisplayAwakeState();
+    };
+    _matchDesktopAndWindowsMediaRatesCheckBox.CheckedChanged += (_, _) =>
+    {
+      SaveControlsToSettings();
+      _speech.SetMatchDesktopAndWindowsMediaRates(
+        _matchDesktopAndWindowsMediaRatesCheckBox.Checked);
     };
     _fenceTypesTextBox.TextChanged += FenceTypesTextChanged;
     _fenceDebounceTimer.Tick += FenceDebounceTimerTick;
@@ -1186,10 +1209,14 @@ internal sealed class MainForm : Form, IMessageFilter
       _speakExistingCheckBox.Checked = settings.SpeakLastExistingEnabledMessage;
       _keepDisplayOnCheckBox.Checked =
         settings.KeepDisplayOnWhileSpeaking;
+      _matchDesktopAndWindowsMediaRatesCheckBox.Checked =
+        settings.MatchDesktopAndWindowsMediaRates;
       _fenceTypesTextBox.Text = settings.SpokenFencedCodeTypes;
       _themeComboBox.SelectedItem = settings.Theme;
       _speech.SetWindowsMediaBookmarkMode(
         WindowsMediaBookmarkMode.Always);
+      _speech.SetMatchDesktopAndWindowsMediaRates(
+        settings.MatchDesktopAndWindowsMediaRates);
       bool transcriptDark = ThemeManager.IsDark(settings.Theme);
       _transcriptSettingsPopup.SetSettings(
         settings.Transcript,
@@ -2561,6 +2588,8 @@ internal sealed class MainForm : Form, IMessageFilter
         .NormalizedCsv,
       SpeakLastExistingEnabledMessage = _speakExistingCheckBox.Checked,
       KeepDisplayOnWhileSpeaking = _keepDisplayOnCheckBox.Checked,
+      MatchDesktopAndWindowsMediaRates =
+        _matchDesktopAndWindowsMediaRatesCheckBox.Checked,
       PollIntervalMilliseconds = Decimal.ToInt32(_pollNumeric.Value),
       Theme = GetSelectedTheme(),
       Transcript = _transcriptSettingsPopup.Settings with

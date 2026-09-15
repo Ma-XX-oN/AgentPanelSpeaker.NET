@@ -226,6 +226,14 @@ internal sealed class SpeechService : IDisposable
   }
 
   /// <summary>
+  /// Enables or disables Desktop/System.Speech rate calibration.
+  /// </summary>
+  public void SetMatchDesktopAndWindowsMediaRates(bool enabled)
+  {
+    _engine.SetMatchDesktopAndWindowsMediaRates(enabled);
+  }
+
+  /// <summary>
   /// Changes rolled-back-history playback eligibility in place. Canonical
   /// history and node identifiers remain untouched.
   /// </summary>

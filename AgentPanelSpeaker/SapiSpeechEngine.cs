@@ -36,6 +36,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   private int _wordBoundaryPollMilliseconds = DefaultWorkerPollMilliseconds;
   private int _windowsMediaBookmarkMode =
     (int)WindowsMediaBookmarkMode.Fallback;
+  private int _matchDesktopAndWindowsMediaRates = 1;
   private long _lastAudioEndTimestamp;
   private bool _hasAudioEndTimestamp;
   private bool _disposed;
@@ -130,6 +131,15 @@ internal sealed class SapiSpeechEngine : IDisposable
       throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
     }
     Volatile.Write(ref _windowsMediaBookmarkMode, (int)mode);
+  }
+
+  /// <summary>
+  /// Enables or disables Desktop/System.Speech rate calibration against the
+  /// Windows.Media application rate scale.
+  /// </summary>
+  public void SetMatchDesktopAndWindowsMediaRates(bool enabled)
+  {
+    Volatile.Write(ref _matchDesktopAndWindowsMediaRates, enabled ? 1 : 0);
   }
 
   /// <summary>
@@ -983,6 +993,7 @@ internal sealed class SapiSpeechEngine : IDisposable
           profile,
           backend.ProviderVoiceId,
           synthesizer,
+          Volatile.Read(ref _matchDesktopAndWindowsMediaRates) != 0,
           out boundaries,
           out trackingDegradation);
         break;
@@ -1154,9 +1165,15 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// one System.Speech step is approximately two application-rate
   /// steps over the supported UI range.
   /// </summary>
-  private static int MapSystemSpeechRate(int applicationRate)
+  private static int MapSystemSpeechRate(
+    int applicationRate,
+    bool matchDesktopAndWindowsMediaRates)
   {
     Debug.Assert(applicationRate is >= -10 and <= 10);
+    if (!matchDesktopAndWindowsMediaRates)
+    {
+      return applicationRate;
+    }
     return (int)Math.Round(
       applicationRate / 2.0,
       MidpointRounding.AwayFromZero);
@@ -1170,6 +1187,7 @@ internal sealed class SapiSpeechEngine : IDisposable
     SpeechProfileSettings profile,
     string providerVoiceId,
     SystemSpeechSynthesizer synthesizer,
+    bool matchDesktopAndWindowsMediaRates,
     out IReadOnlyList<SpeechWordBoundary> boundaries,
     out SpeechTrackingDegradation? trackingDegradation)
   {
@@ -1178,12 +1196,15 @@ internal sealed class SapiSpeechEngine : IDisposable
     bool mappingFailed = false;
 
     synthesizer.SelectVoice(providerVoiceId);
-    int providerRate = MapSystemSpeechRate(profile.Rate);
+    int providerRate = MapSystemSpeechRate(
+      profile.Rate,
+      matchDesktopAndWindowsMediaRates);
     synthesizer.Rate = providerRate;
     DiagnosticLog.Write("speech.system_speech_rate_mapped", new
     {
       applicationRate = profile.Rate,
-      providerRate
+      providerRate,
+      matchDesktopAndWindowsMediaRates
     });
     synthesizer.Volume = profile.Volume;
     string ssml = BuildSsmlDocument(
