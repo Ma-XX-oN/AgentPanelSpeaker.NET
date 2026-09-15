@@ -25,6 +25,10 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     TextFormatFlags.NoPrefix |
     TextFormatFlags.WordBreak;
 
+  private static readonly object CentralRegistrationSync = new();
+  private static readonly Dictionary<Control, int> CentralRegistrationCounts =
+    new();
+
   private readonly System.Windows.Forms.Timer _presentationTimer = new()
   {
     Interval = PresentationDelayMilliseconds
@@ -85,6 +89,21 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   }
 
   /// <summary>
+  /// Gets whether any AppToolTip instance currently owns a non-empty caption
+  /// for the control.  Coverage auditing uses this instead of the native
+  /// ToolTip caption, which AppToolTip intentionally keeps empty.
+  /// </summary>
+  internal static bool HasCentralToolTip(Control control)
+  {
+    ArgumentNullException.ThrowIfNull(control);
+    lock (CentralRegistrationSync)
+    {
+      return CentralRegistrationCounts.TryGetValue(control, out int count) &&
+        count > 0;
+    }
+  }
+
+  /// <summary>
   /// Returns the application tooltip contract and exercises its real pointer
   /// and focus scheduling state transitions for generic regression probes.
   /// </summary>
@@ -133,6 +152,35 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       keyboardEnterSchedulesPresentation,
       pointerLeavePreservesFocus,
       focusLeavePreservesPointer
+    };
+  }
+
+  /// <summary>
+  /// Exercises global registration accounting across multiple AppToolTip
+  /// instances so coverage auditing cannot mistake native empty captions for
+  /// missing centralized tooltips.
+  /// </summary>
+  internal static object GetCentralizationContractSnapshot()
+  {
+    using var first = new AppToolTip();
+    using var second = new AppToolTip();
+    using var control = new Button();
+
+    bool initiallyUnregistered = !HasCentralToolTip(control);
+    first.SetToolTip(control, "first");
+    bool firstRegistrationVisible = HasCentralToolTip(control);
+    second.SetToolTip(control, "second");
+    first.SetToolTip(control, null);
+    bool secondRegistrationSurvivesFirstRemoval = HasCentralToolTip(control);
+    second.SetToolTip(control, null);
+    bool finalRemovalClearsRegistration = !HasCentralToolTip(control);
+
+    return new
+    {
+      initiallyUnregistered,
+      firstRegistrationVisible,
+      secondRegistrationSurvivesFirstRemoval,
+      finalRemovalClearsRegistration
     };
   }
 
@@ -275,6 +323,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
 
       foreach (Control control in _registeredControls.ToArray())
       {
+        UnregisterCentralCoverage(control);
         DetachControl(control);
       }
 
@@ -306,6 +355,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       return;
     }
 
+    RegisterCentralCoverage(control);
     control.MouseEnter += ToolTipControlMouseEnter;
     control.MouseLeave += ToolTipControlMouseLeave;
     control.Enter += ToolTipControlEnter;
@@ -322,6 +372,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       return;
     }
 
+    UnregisterCentralCoverage(control);
     if (ReferenceEquals(_pointerTarget, control))
     {
       _pointerTarget = null;
@@ -335,6 +386,34 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     RemovePointerHost(control);
     DetachControl(control);
     ScheduleRemainingActiveTarget();
+  }
+
+  private static void RegisterCentralCoverage(Control control)
+  {
+    lock (CentralRegistrationSync)
+    {
+      CentralRegistrationCounts.TryGetValue(control, out int count);
+      CentralRegistrationCounts[control] = count + 1;
+    }
+  }
+
+  private static void UnregisterCentralCoverage(Control control)
+  {
+    lock (CentralRegistrationSync)
+    {
+      if (!CentralRegistrationCounts.TryGetValue(control, out int count))
+      {
+        return;
+      }
+      if (count <= 1)
+      {
+        CentralRegistrationCounts.Remove(control);
+      }
+      else
+      {
+        CentralRegistrationCounts[control] = count - 1;
+      }
+    }
   }
 
   private void DetachControl(Control control)

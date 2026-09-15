@@ -53,8 +53,9 @@ internal static class UiText
       control.Text = text;
     }
 
-    string? tip = GetOptional($"{resourcePrefix}.Tooltip");
-    if (toolTip is not null && tip is not null)
+    string? tip =
+      GetOptional($"{resourcePrefix}.Tooltip") ?? control.AccessibleDescription;
+    if (toolTip is not null && !string.IsNullOrWhiteSpace(tip))
     {
       toolTip.SetToolTip(control, tip);
     }
