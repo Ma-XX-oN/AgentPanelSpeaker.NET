@@ -24,7 +24,10 @@
   <data name="Main.FollowNewest.Name" xml:space="preserve"><value>Auto-follow newest session</value></data>
   <data name="Main.PollInterval.Name" xml:space="preserve"><value>Polling interval in milliseconds</value></data>
   <data name="Main.FencedCodeTypes.Name" xml:space="preserve"><value>Spoken fenced-code types</value></data>
-  <data name="Main.SpeakExisting.Name" xml:space="preserve"><value>Speak latest existing message on startup</value></data>
+  <data name="Main.SpeakExisting.Name" xml:space="preserve"><value>Start playback from latest user prompt</value></data>
+  <data name="Main.SpeakExisting.Description" xml:space="preserve"><value>Choose whether startup playback begins at the latest user prompt or waits at the current conversation end.</value></data>
+  <data name="Main.SpeakExisting.Text" xml:space="preserve"><value>Start playback from latest user prompt</value></data>
+  <data name="Main.SpeakExisting.Tooltip" xml:space="preserve"><value>On: start at the first speakable content at or after the latest user prompt.&#10;Off: start at the current conversation end and wait for new content.</value></data>
   <data name="Main.KeepDisplayOn.Name" xml:space="preserve"><value>Keep display on while speaking</value></data>
   <data name="Main.MatchDesktopAndWindowsMediaRates.Name" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>
   <data name="Main.MatchDesktopAndWindowsMediaRates.Description" xml:space="preserve"><value>Calibrates Desktop/System.Speech speaking rates toward the Windows Media rate scale.</value></data>

@@ -36,6 +36,6 @@ Startup Position Tooltip Is Split Across Two Lines
     Should Be Equal As Integers    ${lf_count}    1
     Should Be Equal As Integers    ${cr_count}    0
 
-MainForm Does Not Use Legacy Hard Coded Startup Label
-    ${content}=    Get File    ${EXECDIR}${/}AgentPanelSpeaker${/}MainForm.cs
-    Should Not Contain    ${content}    Speak complete latest turn on start
+MainForm Applies Startup Position Resource
+    [Template]    File Should Contain Text V1
+    ${EXECDIR}${/}AgentPanelSpeaker${/}MainForm.cs    UiText.Apply(_speakExistingCheckBox, "Main.SpeakExisting", _toolTip);
