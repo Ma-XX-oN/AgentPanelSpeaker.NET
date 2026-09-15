@@ -87,6 +87,7 @@ internal static class TooltipCoverage
     root.Controls.Add(hoverPopupAnchor, 0, 3);
     root.SetColumnSpan(hoverPopupAnchor, 2);
     curatedToolTip.SetToolTip(curated, "Curated tooltip");
+    curatedToolTip.SetToolTip(hoverPopupAnchor, "Must not be shown");
 
     EnsureTree(root, dark: false);
 
@@ -94,7 +95,7 @@ internal static class TooltipCoverage
     bool textButtonCovered = AppToolTip.HasCentralToolTip(button);
     bool curatedTooltipPreserved = AppToolTip.HasCentralToolTip(curated);
     bool passiveLabelExcluded = !AppToolTip.HasCentralToolTip(passive);
-    bool hoverPopupAnchorExempt =
+    bool explicitHoverPopupTooltipSuppressed =
       !AppToolTip.HasCentralToolTip(hoverPopupAnchor);
 
     return new
@@ -103,8 +104,60 @@ internal static class TooltipCoverage
       textButtonCovered,
       curatedTooltipPreserved,
       passiveLabelExcluded,
-      hoverPopupAnchorExempt
+      explicitHoverPopupTooltipSuppressed
     };
+  }
+
+  /// <summary>
+  /// Gets whether hovering or focusing this control intentionally owns a richer
+  /// popup surface. AppToolTip uses the same classification to reject accidental
+  /// tooltip registrations on those anchors.
+  /// </summary>
+  internal static bool IsHoverPopupExempt(Control control)
+  {
+    ArgumentNullException.ThrowIfNull(control);
+
+    // SpeechProfileCompactControl owns a HoverPopupController for its entire
+    // surface. A tooltip would compete with the speech-profile popup.
+    if (control is SpeechProfileCompactControl)
+    {
+      return true;
+    }
+
+    Form? form = control.FindForm();
+    string accessibleName = control.AccessibleName ?? string.Empty;
+
+    // Main transcript settings is itself a hover-popup anchor.
+    if (form is MainForm &&
+        string.Equals(
+          accessibleName,
+          "Transcript Settings",
+          StringComparison.OrdinalIgnoreCase))
+    {
+      return true;
+    }
+
+    // The changed-settings link opens ChangedSettingsPopup on hover/focus.
+    if (form is SaveChangedSettingsDialog && control is LinkLabel)
+    {
+      return true;
+    }
+
+    // These TranscriptSettingsPopup controls are nested hover-popup anchors.
+    if (form is TranscriptSettingsPopup &&
+        (string.Equals(
+           accessibleName,
+           "Edit highlight colour",
+           StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(
+           accessibleName,
+           "Advanced transcript settings",
+           StringComparison.OrdinalIgnoreCase)))
+    {
+      return true;
+    }
+
+    return false;
   }
 
   private static void ApplicationIdle(object? sender, EventArgs eventArgs)
@@ -169,51 +222,6 @@ internal static class TooltipCoverage
     }
 
     return control.TabStop || control.Cursor == Cursors.Hand;
-  }
-
-  private static bool IsHoverPopupExempt(Control control)
-  {
-    // SpeechProfileCompactControl owns a HoverPopupController for its entire
-    // surface. A tooltip would compete with the speech-profile popup.
-    if (control is SpeechProfileCompactControl)
-    {
-      return true;
-    }
-
-    Form? form = control.FindForm();
-    string accessibleName = control.AccessibleName ?? string.Empty;
-
-    // Main transcript settings is itself a hover-popup anchor.
-    if (form is MainForm &&
-        string.Equals(
-          accessibleName,
-          "Transcript Settings",
-          StringComparison.OrdinalIgnoreCase))
-    {
-      return true;
-    }
-
-    // The changed-settings link opens ChangedSettingsPopup on hover/focus.
-    if (form is SaveChangedSettingsDialog && control is LinkLabel)
-    {
-      return true;
-    }
-
-    // These TranscriptSettingsPopup controls are nested hover-popup anchors.
-    if (form is TranscriptSettingsPopup &&
-        (string.Equals(
-           accessibleName,
-           "Edit highlight colour",
-           StringComparison.OrdinalIgnoreCase) ||
-         string.Equals(
-           accessibleName,
-           "Advanced transcript settings",
-           StringComparison.OrdinalIgnoreCase)))
-    {
-      return true;
-    }
-
-    return false;
   }
 
   private static string BuildCaption(Control control, out string source)
