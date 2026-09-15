@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Reflection;
 using System.Speech.Synthesis;
 using VoiceInformation = Windows.Media.SpeechSynthesis.VoiceInformation;
@@ -25,6 +24,8 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
   private const double TimingToleranceMilliseconds = 35.0;
   private const double DurationToleranceMilliseconds = 1.0;
   private const double RateSemanticToleranceRatio = 0.05;
+
+  private static readonly int[] RateSemanticSamples = { 2, 4, 6 };
 
   private sealed record NativeReference(
     PcmWaveData Wave,
@@ -70,7 +71,8 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
 
   private static void TestNativeOutputAndNormalizedTiming()
   {
-    NativeReference native = SynthesizeProviderDefault(TestRate);
+    int providerRate = GetProductionSystemSpeechRate(TestRate);
+    NativeReference native = SynthesizeProviderDefault(providerRate);
     ProductionReference production = SynthesizeSystemSpeechProduction(TestRate);
 
     Require(native.Progress.Count > 0,
@@ -98,6 +100,7 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
 
     Console.WriteLine(
       "      native-timing: " +
+      $"application-rate={TestRate}, provider-rate={providerRate}, " +
       $"native={native.Wave.SampleRate} Hz, " +
       $"production={production.Wave.SampleRate} Hz, " +
       $"scale={timingScale:F9}, " +
@@ -122,47 +125,49 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
   private static void TestProviderNeutralRateSemantics()
   {
     ProductionReference systemZero = SynthesizeSystemSpeechProduction(0);
-    ProductionReference systemRequested =
-      SynthesizeSystemSpeechProduction(TestRate);
     PcmWaveData mediaZero = SynthesizeWindowsMediaProduction(0);
-    PcmWaveData mediaRequested = SynthesizeWindowsMediaProduction(TestRate);
 
-    double systemSpeedup = systemZero.Wave.Duration.TotalMilliseconds /
-      systemRequested.Wave.Duration.TotalMilliseconds;
-    double mediaSpeedup = mediaZero.Duration.TotalMilliseconds /
-      mediaRequested.Duration.TotalMilliseconds;
-    double relativeDifference = Math.Abs(systemSpeedup - mediaSpeedup) /
-      mediaSpeedup;
-
-    var calibration = new List<string>();
-    NativeReference providerZero = SynthesizeProviderDefault(0);
-    for (int providerRate = 1; providerRate <= TestRate; ++providerRate)
+    foreach (int applicationRate in RateSemanticSamples)
     {
-      NativeReference provider = SynthesizeProviderDefault(providerRate);
-      double speedup = providerZero.Wave.Duration.TotalMilliseconds /
-        provider.Wave.Duration.TotalMilliseconds;
-      calibration.Add($"r{providerRate}={speedup:F6}");
+      ProductionReference systemRequested =
+        SynthesizeSystemSpeechProduction(applicationRate);
+      PcmWaveData mediaRequested =
+        SynthesizeWindowsMediaProduction(applicationRate);
+
+      double systemSpeedup = systemZero.Wave.Duration.TotalMilliseconds /
+        systemRequested.Wave.Duration.TotalMilliseconds;
+      double mediaSpeedup = mediaZero.Duration.TotalMilliseconds /
+        mediaRequested.Duration.TotalMilliseconds;
+      double relativeDifference = Math.Abs(systemSpeedup - mediaSpeedup) /
+        mediaSpeedup;
+      int providerRate = GetProductionSystemSpeechRate(applicationRate);
+
+      Console.WriteLine(
+        "      rate-semantics: " +
+        $"application-rate={applicationRate}, provider-rate={providerRate}, " +
+        $"SystemSpeech speedup={systemSpeedup:F6}, " +
+        $"WindowsMedia speedup={mediaSpeedup:F6}, " +
+        $"difference={relativeDifference:P2}");
+
+      Require(relativeDifference <= RateSemanticToleranceRatio,
+        "The shared application Rate setting has provider-dependent semantics " +
+        $"at rate {applicationRate}: System.Speech speedup={systemSpeedup:F6}, " +
+        $"Windows.Media speedup={mediaSpeedup:F6}, " +
+        $"relative difference={relativeDifference:P2}; expected <= " +
+        $"{RateSemanticToleranceRatio:P0}.");
     }
+  }
 
-    PcmWaveData prosodyRequested = SynthesizeSystemSpeechProsodyRate(TestRate);
-    double prosodySpeedup = providerZero.Wave.Duration.TotalMilliseconds /
-      prosodyRequested.Duration.TotalMilliseconds;
-
-    Console.WriteLine(
-      "      rate-semantics: " +
-      $"SystemSpeech speedup={systemSpeedup:F6}; " +
-      $"WindowsMedia speedup={mediaSpeedup:F6}; " +
-      $"difference={relativeDifference:P2}; " +
-      $"prosody={GetSystemSpeechProsodyRateValue(TestRate)} " +
-      $"speedup={prosodySpeedup:F6}; " +
-      $"SystemSpeech provider matrix [{string.Join(", ", calibration)}]");
-
-    Require(relativeDifference <= RateSemanticToleranceRatio,
-      "The shared application Rate setting has provider-dependent semantics: " +
-      $"System.Speech speedup={systemSpeedup:F6}, " +
-      $"Windows.Media speedup={mediaSpeedup:F6}, " +
-      $"relative difference={relativeDifference:P2}; expected <= " +
-      $"{RateSemanticToleranceRatio:P0}.");
+  private static int GetProductionSystemSpeechRate(int applicationRate)
+  {
+    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
+      "MapSystemSpeechRate",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("MapSystemSpeechRate is missing.");
+    return method.Invoke(null, new object[] { applicationRate }) is int rate
+      ? rate
+      : throw new InvalidOperationException(
+          "MapSystemSpeechRate returned no provider rate.");
   }
 
   private static NativeReference SynthesizeProviderDefault(int rate)
@@ -192,41 +197,6 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
     return new NativeReference(
       PcmWaveData.Parse(stream.ToArray()),
       progress);
-  }
-
-  private static PcmWaveData SynthesizeSystemSpeechProsodyRate(int rate)
-  {
-    SpeechMarkup markup = BuildMarkup();
-    using var synthesizer = CreateSystemSpeechSynthesizer(0);
-    string ratedContent =
-      $"<prosody rate=\"{GetSystemSpeechProsodyRateValue(rate)}\">" +
-      markup.SsmlContent +
-      "</prosody>";
-    string ssml = BuildSsmlDocument(
-      ratedContent,
-      synthesizer.Voice.Culture.Name);
-    using var stream = new MemoryStream();
-    try
-    {
-      synthesizer.SetOutputToWaveStream(stream);
-      synthesizer.SpeakSsml(ssml);
-    }
-    finally
-    {
-      synthesizer.SetOutputToNull();
-    }
-    return PcmWaveData.Parse(stream.ToArray());
-  }
-
-  private static string GetSystemSpeechProsodyRateValue(int rate)
-  {
-    double relativePercent = (Math.Pow(2.0, rate / 10.0) - 1.0) * 100.0;
-    string magnitude = Math.Abs(relativePercent).ToString(
-      "0.###",
-      CultureInfo.InvariantCulture);
-    return relativePercent >= 0
-      ? $"+{magnitude}%"
-      : $"-{magnitude}%";
   }
 
   private static ProductionReference SynthesizeSystemSpeechProduction(int rate)
