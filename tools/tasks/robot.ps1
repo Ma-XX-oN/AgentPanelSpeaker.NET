@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $requirements = Join-Path $repoRoot 'requirements-test.txt'
 $tests = Join-Path $repoRoot 'tests\robot'
+$appProject = Join-Path $repoRoot 'AgentPanelSpeaker\AgentPanelSpeaker.csproj'
 $probeProject = Join-Path $repoRoot 'tests\AgentPanelSpeaker.TestProbe\AgentPanelSpeaker.TestProbe.csproj'
 $probeExe = Join-Path $repoRoot 'tests\AgentPanelSpeaker.TestProbe\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.TestProbe.exe'
 $outputRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
@@ -18,20 +19,15 @@ else {
 
 if (-not $SkipBuildPreparation) {
   & (Join-Path $repoRoot 'tools\Prepare-Build.ps1')
-  & dotnet build $probeProject --configuration Release
+  & dotnet build $appProject --configuration Release
   if ($LASTEXITCODE -ne 0) {
-    throw 'Building the generic Robot test probe failed.'
+    throw 'Building AgentPanelSpeaker for Robot probes failed.'
   }
 }
-else {
-  & dotnet restore $probeProject
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Restoring the generic Robot test probe failed.'
-  }
-  & dotnet build $probeProject --configuration Release --no-restore -p:BuildProjectReferences=false
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Building the generic Robot test probe failed.'
-  }
+
+& dotnet build $probeProject --configuration Release
+if ($LASTEXITCODE -ne 0) {
+  throw 'Building the generic Robot test probe failed.'
 }
 
 if (-not (Test-Path -LiteralPath $probeExe)) {

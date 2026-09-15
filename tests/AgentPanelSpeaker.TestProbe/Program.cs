@@ -1,4 +1,8 @@
+using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -17,7 +21,7 @@ internal static class Program
   };
 
   private static readonly Assembly ApplicationAssembly =
-    Assembly.Load("AgentPanelSpeaker");
+    Assembly.LoadFrom(GetApplicationAssemblyPath());
 
   private static int Main(string[] args)
   {
@@ -200,6 +204,29 @@ internal static class Program
     object? result = method.Invoke(null, new object[] { args[1] });
     WriteJson(result);
     return 0;
+  }
+
+  private static string GetApplicationAssemblyPath()
+  {
+    DirectoryInfo? directory = new(AppContext.BaseDirectory);
+    while (directory is not null)
+    {
+      string candidate = Path.Combine(
+        directory.FullName,
+        "AgentPanelSpeaker",
+        "bin",
+        "Release",
+        "net10.0-windows10.0.22621.0",
+        "AgentPanelSpeaker.dll");
+      if (File.Exists(candidate))
+      {
+        return candidate;
+      }
+      directory = directory.Parent;
+    }
+
+    throw new FileNotFoundException(
+      "The Release AgentPanelSpeaker assembly was not found above the test probe output directory.");
   }
 
   private static Type GetApplicationType(string name) =>
