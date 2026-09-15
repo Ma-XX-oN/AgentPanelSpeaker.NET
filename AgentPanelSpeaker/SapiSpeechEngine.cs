@@ -1149,9 +1149,6 @@ internal sealed class SapiSpeechEngine : IDisposable
   }
 
   /// <summary>
-  /// Renders System.Speech SSML into an in-memory WAVE file.
-  /// </summary>
-  /// <summary>
   /// Maps the provider-neutral application rate onto System.Speech's
   /// coarser integer rate scale.  Issue #94 measurements show that
   /// one System.Speech step is approximately two application-rate
@@ -1164,6 +1161,10 @@ internal sealed class SapiSpeechEngine : IDisposable
       applicationRate / 2.0,
       MidpointRounding.AwayFromZero);
   }
+
+  /// <summary>
+  /// Renders System.Speech SSML into an in-memory WAVE file.
+  /// </summary>
   private static PcmWaveData RenderSystemSpeech(
     SpeechMarkup markup,
     SpeechProfileSettings profile,
@@ -1177,13 +1178,13 @@ internal sealed class SapiSpeechEngine : IDisposable
     bool mappingFailed = false;
 
     synthesizer.SelectVoice(providerVoiceId);
-      int providerRate = MapSystemSpeechRate(profile.Rate);
-      synthesizer.Rate = providerRate;
-      DiagnosticLog.Write("speech.system_speech_rate_mapped", new
-      {
-        applicationRate = profile.Rate,
-        providerRate
-      });
+    int providerRate = MapSystemSpeechRate(profile.Rate);
+    synthesizer.Rate = providerRate;
+    DiagnosticLog.Write("speech.system_speech_rate_mapped", new
+    {
+      applicationRate = profile.Rate,
+      providerRate
+    });
     synthesizer.Volume = profile.Volume;
     string ssml = BuildSsmlDocument(
       markup.SsmlContent,
