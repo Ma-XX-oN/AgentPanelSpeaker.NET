@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Speech.Synthesis;
 using VoiceInformation = Windows.Media.SpeechSynthesis.VoiceInformation;
@@ -143,11 +144,17 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
       calibration.Add($"r{providerRate}={speedup:F6}");
     }
 
+    PcmWaveData prosodyRequested = SynthesizeSystemSpeechProsodyRate(TestRate);
+    double prosodySpeedup = providerZero.Wave.Duration.TotalMilliseconds /
+      prosodyRequested.Duration.TotalMilliseconds;
+
     Console.WriteLine(
       "      rate-semantics: " +
       $"SystemSpeech speedup={systemSpeedup:F6}; " +
       $"WindowsMedia speedup={mediaSpeedup:F6}; " +
       $"difference={relativeDifference:P2}; " +
+      $"prosody={GetSystemSpeechProsodyRateValue(TestRate)} " +
+      $"speedup={prosodySpeedup:F6}; " +
       $"SystemSpeech provider matrix [{string.Join(", ", calibration)}]");
 
     Require(relativeDifference <= RateSemanticToleranceRatio,
@@ -185,6 +192,41 @@ internal static class Issue94NativeSystemSpeechTimingRegressionTestRunner
     return new NativeReference(
       PcmWaveData.Parse(stream.ToArray()),
       progress);
+  }
+
+  private static PcmWaveData SynthesizeSystemSpeechProsodyRate(int rate)
+  {
+    SpeechMarkup markup = BuildMarkup();
+    using var synthesizer = CreateSystemSpeechSynthesizer(0);
+    string ratedContent =
+      $"<prosody rate=\"{GetSystemSpeechProsodyRateValue(rate)}\">" +
+      markup.SsmlContent +
+      "</prosody>";
+    string ssml = BuildSsmlDocument(
+      ratedContent,
+      synthesizer.Voice.Culture.Name);
+    using var stream = new MemoryStream();
+    try
+    {
+      synthesizer.SetOutputToWaveStream(stream);
+      synthesizer.SpeakSsml(ssml);
+    }
+    finally
+    {
+      synthesizer.SetOutputToNull();
+    }
+    return PcmWaveData.Parse(stream.ToArray());
+  }
+
+  private static string GetSystemSpeechProsodyRateValue(int rate)
+  {
+    double relativePercent = (Math.Pow(2.0, rate / 10.0) - 1.0) * 100.0;
+    string magnitude = Math.Abs(relativePercent).ToString(
+      "0.###",
+      CultureInfo.InvariantCulture);
+    return relativePercent >= 0
+      ? $"+{magnitude}%"
+      : $"-{magnitude}%";
   }
 
   private static ProductionReference SynthesizeSystemSpeechProduction(int rate)
