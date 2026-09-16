@@ -186,23 +186,22 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
 
   private static void TestTransformedSsmlRetainsCanonicalBookmarks()
   {
-    var markup = new SpeechMarkup(
-      "jsonl done.",
-      "jsonl done.",
-      "jay son ell done.",
-      Words: new[]
+    const string text = "jsonl done.";
+    SpeechMarkup markup = SpeechSapiXmlBuilder.Build(
+      text,
+      0,
+      Array.Empty<string>(),
+      PronunciationRuleSet.Parse("jsonl=jay son ell"));
+    markup = markup with
+    {
+      Words = new[]
       {
         new SpeechMarkupWord(0, "jsonl", 0, 5),
         new SpeechMarkupWord(1, "done", 6, 4),
         new SpeechMarkupWord(2, ".", 10, 1)
-      },
-      SsmlProvenance: new[]
-      {
-        new SpeechMarkupProvenanceSpan(0, 11, 0, 5),
-        new SpeechMarkupProvenanceSpan(11, 1, 5, 1),
-        new SpeechMarkupProvenanceSpan(12, 4, 6, 4),
-        new SpeechMarkupProvenanceSpan(16, 1, 10, 1)
-      });
+      }
+    };
+
     MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
       "TryBuildBookmarkedSsml",
       BindingFlags.Static | BindingFlags.NonPublic) ??
@@ -211,7 +210,7 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
     object?[] arguments = { markup, "en-US", null };
     bool built = Convert.ToBoolean(method.Invoke(null, arguments));
     Require(built,
-      "A source-changing SSML transform caused canonical bookmark construction to fail.");
+      "A configured spoken-text transform caused canonical bookmark construction to fail.");
     string ssml = arguments[2] as string ?? string.Empty;
     foreach (int wordIndex in new[] { 0, 1, 2 })
     {
