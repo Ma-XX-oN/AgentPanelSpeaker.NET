@@ -1808,25 +1808,22 @@ internal sealed class SapiSpeechEngine : IDisposable
         var mark = new XElement(
           ns + "mark",
           new XAttribute("name", $"aps_{word.WordIndex}"));
-        XElement? textOnlyOwner = node
+        XElement? outerWrapper = node
           .Ancestors()
-          .FirstOrDefault(element =>
-            string.Equals(
+          .TakeWhile(element =>
+            !string.Equals(
               element.Name.LocalName,
-              "say-as",
-              StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
+              "speak",
+              StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
               element.Name.LocalName,
-              "sub",
-              StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
-              element.Name.LocalName,
-              "phoneme",
-              StringComparison.OrdinalIgnoreCase));
-        bool markOutsideTextOnlyOwner = textOnlyOwner is not null;
-        if (markOutsideTextOnlyOwner)
+              "prosody",
+              StringComparison.OrdinalIgnoreCase))
+          .LastOrDefault();
+        bool markOutsideWrapper = outerWrapper is not null;
+        if (markOutsideWrapper)
         {
-          textOnlyOwner!.AddBeforeSelf(mark);
+          outerWrapper!.AddBeforeSelf(mark);
         }
 
         var replacement = new List<object>();
@@ -1834,7 +1831,7 @@ internal sealed class SapiSpeechEngine : IDisposable
         {
           replacement.Add(new XText(prefix));
         }
-        if (!markOutsideTextOnlyOwner)
+        if (!markOutsideWrapper)
         {
           replacement.Add(mark);
         }
