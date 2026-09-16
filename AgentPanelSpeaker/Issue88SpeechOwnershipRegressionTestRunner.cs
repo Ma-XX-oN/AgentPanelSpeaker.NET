@@ -30,6 +30,8 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
         TestSpellOutTokenCanSpanSsmlNodes),
       ("speech-ownership/transformed-ssml-retains-canonical-bookmarks",
         TestTransformedSsmlRetainsCanonicalBookmarks),
+      ("speech-ownership/bookmarks-escape-nested-atomic-ssml",
+        TestBookmarksEscapeNestedAtomicSsml),
       ("speech-ownership/browser-has-fragment-wrapper-path",
         TestBrowserHasFragmentWrapperPath),
       ("speech-ownership/fragment-ids-assigned-by-monitor",
@@ -147,11 +149,7 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
       "AI-transcript",
       "<break time=\"100ms\"/><say-as interpret-as=\"spell-out\">AI</say-as>" +
         "<break time=\"100ms\"/>-transcript");
-    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
-      "TryBuildBookmarkedSsml",
-      BindingFlags.Static | BindingFlags.NonPublic) ??
-      throw new InvalidOperationException(
-        "Windows.Media bookmark builder is missing.");
+    MethodInfo method = GetBookmarkBuilder();
     object?[] arguments = { markup, "en-US", null };
     bool built = Convert.ToBoolean(method.Invoke(null, arguments));
     Require(built,
@@ -161,14 +159,7 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
       "Spanning spell-out token produced no canonical ownership bookmark.");
 
     var document = System.Xml.Linq.XDocument.Parse(ssml);
-    System.Xml.Linq.XElement mark = document
-      .Descendants()
-      .Single(element =>
-        element.Name.LocalName == "mark" &&
-        string.Equals(
-          element.Attribute("name")?.Value,
-          "aps_0",
-          StringComparison.Ordinal));
+    System.Xml.Linq.XElement mark = GetMark(document, 0);
     System.Xml.Linq.XElement sayAs = document
       .Descendants()
       .Single(element => element.Name.LocalName == "say-as");
@@ -202,11 +193,7 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
       }
     };
 
-    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
-      "TryBuildBookmarkedSsml",
-      BindingFlags.Static | BindingFlags.NonPublic) ??
-      throw new InvalidOperationException(
-        "Windows.Media bookmark builder is missing.");
+    MethodInfo method = GetBookmarkBuilder();
     object?[] arguments = { markup, "en-US", null };
     bool built = Convert.ToBoolean(method.Invoke(null, arguments));
     Require(built,
@@ -222,14 +209,7 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
     System.Xml.Linq.XElement substitution = document
       .Descendants()
       .Single(element => element.Name.LocalName == "sub");
-    System.Xml.Linq.XElement transformedMark = document
-      .Descendants()
-      .Single(element =>
-        element.Name.LocalName == "mark" &&
-        string.Equals(
-          element.Attribute("name")?.Value,
-          "aps_0",
-          StringComparison.Ordinal));
+    System.Xml.Linq.XElement transformedMark = GetMark(document, 0);
     Require(transformedMark.Parent == substitution.Parent,
       "Transformed-word ownership mark is nested inside text-only SSML sub.");
     System.Xml.Linq.XElement? nextElement = transformedMark
@@ -240,6 +220,63 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
       "Transformed-word ownership mark is not immediately before its SSML sub.");
     Require(!substitution.Descendants().Any(element => element.Name.LocalName == "mark"),
       "Text-only SSML sub still contains a nested ownership mark.");
+  }
+
+  private static void TestBookmarksEscapeNestedAtomicSsml()
+  {
+    var markup = new SpeechMarkup(
+      "word",
+      "word",
+      "<sub alias=\"word\"><phoneme alphabet=\"ipa\" ph=\"wɜːd\">word</phoneme></sub>",
+      Words: new[]
+      {
+        new SpeechMarkupWord(0, "word", 0, 4)
+      });
+    MethodInfo method = GetBookmarkBuilder();
+    object?[] arguments = { markup, "en-US", null };
+    bool built = Convert.ToBoolean(method.Invoke(null, arguments));
+    Require(built,
+      "Nested speech transforms prevented canonical bookmark construction.");
+
+    string ssml = arguments[2] as string ?? string.Empty;
+    var document = System.Xml.Linq.XDocument.Parse(ssml);
+    System.Xml.Linq.XElement mark = GetMark(document, 0);
+    string[] atomicNames = { "say-as", "sub", "phoneme" };
+    foreach (string atomicName in atomicNames)
+    {
+      Require(!mark.Ancestors().Any(element => string.Equals(
+          element.Name.LocalName,
+          atomicName,
+          StringComparison.OrdinalIgnoreCase)),
+        $"Ownership mark remained nested inside atomic SSML <{atomicName}>.");
+    }
+    Require(mark.Parent is not null &&
+        (string.Equals(mark.Parent.Name.LocalName, "speak", StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(mark.Parent.Name.LocalName, "prosody", StringComparison.OrdinalIgnoreCase)),
+      "Ownership mark is not placed under a bookmark-safe SSML container.");
+  }
+
+  private static MethodInfo GetBookmarkBuilder()
+  {
+    return typeof(SapiSpeechEngine).GetMethod(
+      "TryBuildBookmarkedSsml",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "Windows.Media bookmark builder is missing.");
+  }
+
+  private static System.Xml.Linq.XElement GetMark(
+    System.Xml.Linq.XDocument document,
+    int wordIndex)
+  {
+    return document
+      .Descendants()
+      .Single(element =>
+        element.Name.LocalName == "mark" &&
+        string.Equals(
+          element.Attribute("name")?.Value,
+          $"aps_{wordIndex}",
+          StringComparison.Ordinal));
   }
 
   private static void TestBrowserHasFragmentWrapperPath()
