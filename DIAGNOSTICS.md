@@ -100,3 +100,37 @@ semantic-version literal.
 Semantic version and exact commit identity answer different questions.  Use the
 application semantic version for product/release identity and the repository/Core
 commit identities when exact source provenance is required.
+
+## WebView2 shutdown fault injection
+
+The Activity tab contains the diagnostic control `Test WebView2 shutdown fault`.
+It exists to reproduce the invalid WebView2 lifetime ordering that originally
+caused issue #128 without relying on a timing-sensitive large-session shutdown.
+It is a fault injector, not part of the normal transcript shutdown path.
+
+The diagnostic must use an isolated real WebView2.  It must never dispose,
+reparent, or otherwise corrupt the production `TranscriptView` WebView2.  Its
+intentional sequence is:
+
+1. create an isolated off-screen owner and initialize a real `CoreWebView2`;
+2. log `diagnostic.webview_shutdown_fault_requested` and then
+   `diagnostic.webview_shutdown_fault_ready`;
+3. destroy the isolated native owner handle while the managed WebView2 remains
+   undisposed;
+4. log `diagnostic.webview_shutdown_fault_owner_destroyed`;
+5. call `WebView2.Dispose()` after owner destruction and let any resulting
+   provider exception reach the application's normal `Application.ThreadException`
+   handler.
+
+On a WebView2 runtime that reproduces the original failure class, the expected
+next record is `app.thread_exception`, ordinarily carrying the disposed-state or
+invalid-state WebView2 exception.  If that runtime accepts the deliberately
+invalid disposal instead, the diagnostic records
+`diagnostic.webview_shutdown_fault_not_reproduced`; that result means the fault
+injector exercised the required invalid ordering but the provider did not fault.
+It must not be converted into a synthetic generic exception.
+
+This diagnostic does not relax the production shutdown invariant established by
+#128.  Normal application shutdown must still dispose `TranscriptView`/WebView2
+exactly once before the MainForm owner handle is destroyed, and normal shutdown
+must not emit `app.thread_exception`.
