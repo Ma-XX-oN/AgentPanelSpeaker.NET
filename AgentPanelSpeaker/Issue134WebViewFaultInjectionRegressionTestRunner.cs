@@ -5,6 +5,9 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal static class Issue134WebViewFaultInjectionRegressionTestRunner
 {
+  private const string ExpectedDisposedStateMessage =
+    "CoreWebView2 members cannot be accessed after the WebView2 control is disposed.";
+
   public static int Run()
   {
     var tests = new (string Name, Action Body)[]
@@ -125,6 +128,9 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
     Require(
       scenario.DisposeAttempted,
       "diagnostic scenario never attempted managed WebView2 disposal.");
+    Require(
+      scenario.WebViewDisposed,
+      "diagnostic WebView2 was not disposed before the provider fault.");
     if (providerFault is null)
     {
       throw new InvalidOperationException(
@@ -132,10 +138,15 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
         "a WebView2 disposed-state provider exception.");
     }
     Require(
-      providerFault is InvalidOperationException ||
-      providerFault is System.Runtime.InteropServices.COMException,
+      providerFault is InvalidOperationException,
       "The diagnostic raised an unexpected exception type: " +
       providerFault.GetType().FullName + ".");
+    Require(
+      providerFault.Message.Contains(
+        ExpectedDisposedStateMessage,
+        StringComparison.Ordinal),
+      "The diagnostic did not raise the issue #128 CoreWebView2 disposed-state " +
+      "failure. Actual message: " + providerFault.Message);
   }
 
   private static IEnumerable<Control> EnumerateControls(Control root)
