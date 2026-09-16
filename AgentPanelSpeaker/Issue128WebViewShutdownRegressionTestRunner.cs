@@ -1,10 +1,11 @@
+using System.Reflection;
 using Microsoft.Web.WebView2.WinForms;
 
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Verifies that an initialized transcript WebView2 follows the owning WinForms
-/// lifetime without touching CoreWebView2 after its controller is torn down.
+/// Verifies that the production MainForm tears down its initialized transcript
+/// WebView2 before destroying the native owner hierarchy.
 /// </summary>
 internal static class Issue128WebViewShutdownRegressionTestRunner
 {
@@ -16,8 +17,8 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("webview-shutdown/ancestor-handle-destroy-before-managed-dispose-is-clean",
-        TestAncestorHandleDestroyBeforeManagedDisposeIsClean)
+      ("webview-shutdown/webview-precedes-owner-handle-destruction",
+        TestWebViewPrecedesOwnerHandleDestruction)
     };
 
     int failures = 0;
@@ -47,53 +48,42 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
   }
 
   /// <summary>
-  /// Reproduces the ordering captured in the production failure: Form disposal
-  /// first destroys the ancestor native window tree, then managed child-control
-  /// disposal reaches TranscriptView and its initialized WebView2.
+  /// Exercises the real MainFormClosing path through MainFormTestLease and
+  /// requires the transcript WebView2 to be disposed before the MainForm HWND
+  /// is destroyed. The production #128 log shows the inverse order immediately
+  /// before WebView2.Dispose accesses an already-invalid CoreWebView2 profile.
   /// </summary>
-  private static void TestAncestorHandleDestroyBeforeManagedDisposeIsClean()
+  private static void TestWebViewPrecedesOwnerHandleDestruction()
   {
-    var threadExceptions = new List<Exception>();
-    ThreadExceptionEventHandler handler = (_, eventArgs) =>
-      threadExceptions.Add(eventArgs.Exception);
-    Application.ThreadException += handler;
-
-    var form = new ShutdownOwnerForm
-    {
-      Width = 900,
-      Height = 700,
-      ShowInTaskbar = false,
-      StartPosition = FormStartPosition.Manual,
-      Location = new Point(-30000, -30000)
-    };
-    var layout = new TableLayoutPanel { Dock = DockStyle.Fill };
-    var tabs = new TabControl { Dock = DockStyle.Fill };
-    var page = new TabPage("Transcript");
-    var view = new TranscriptView { Dock = DockStyle.Fill };
+    var lease = new MainFormTestLease();
+    MainForm form = lease.Form;
+    TranscriptView view = ReadField<TranscriptView>(form, "_transcriptView");
     WebView2 webView = view.Controls.OfType<WebView2>().Single();
-    page.Controls.Add(view);
-    tabs.TabPages.Add(page);
-    layout.Controls.Add(tabs);
-    form.Controls.Add(layout);
 
+    bool ownerHandleDestroyed = false;
+    bool webViewDisposedBeforeOwnerHandle = false;
+    bool webViewDisposedObserved = false;
     Exception? disposeFailure = null;
+
+    void WebViewDisposed(object? sender, EventArgs eventArgs) =>
+      webViewDisposedObserved = true;
+    void OwnerHandleDestroyed(object? sender, EventArgs eventArgs)
+    {
+      ownerHandleDestroyed = true;
+      webViewDisposedBeforeOwnerHandle = webView.IsDisposed;
+    }
+
+    webView.Disposed += WebViewDisposed;
+    form.HandleDestroyed += OwnerHandleDestroyed;
     try
     {
-      form.Show();
-      Application.DoEvents();
       PumpUntil(
         () => webView.CoreWebView2 is not null && webView.Visible,
-        "initialized transcript WebView2");
-
-      form.DestroyNativeOwnerHandle();
-      Application.DoEvents();
-      Require(
-        !form.IsHandleCreated,
-        "The owner handle remained alive after the production-order teardown step.");
+        "initialized production transcript WebView2");
 
       try
       {
-        view.Dispose();
+        lease.Dispose();
         Application.DoEvents();
       }
       catch (Exception exception)
@@ -103,24 +93,40 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
 
       Require(
         disposeFailure is null,
-        "Disposing TranscriptView after ancestor handle destruction threw " +
+        "Production MainForm teardown threw " +
         $"{disposeFailure?.GetType().Name}: {disposeFailure?.Message}");
       Require(
-        threadExceptions.Count == 0,
-        "The production-order teardown raised a Windows Forms thread " +
-        "exception: " + string.Join(" | ", threadExceptions.Select(
-          exception => $"{exception.GetType().Name}: {exception.Message}")));
-      Require(view.IsDisposed, "TranscriptView was not disposed.");
-      Require(webView.IsDisposed, "WebView2 was not disposed with TranscriptView.");
+        ownerHandleDestroyed,
+        "Production MainForm teardown did not destroy the owner handle.");
+      Require(
+        webViewDisposedObserved,
+        "Production MainForm teardown never disposed the transcript WebView2.");
+      Require(
+        webViewDisposedBeforeOwnerHandle,
+        "Transcript WebView2 was still live when MainForm destroyed its native " +
+        "owner handle; WebView2 must be disposed first.");
     }
     finally
     {
-      Application.ThreadException -= handler;
-      if (disposeFailure is null)
-      {
-        form.Dispose();
-      }
+      webView.Disposed -= WebViewDisposed;
+      form.HandleDestroyed -= OwnerHandleDestroyed;
+      lease.Dispose();
     }
+  }
+
+  private static T ReadField<T>(object target, string name)
+  {
+    FieldInfo field = target.GetType().GetField(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException($"Field {name} was not found.");
+    object? value = field.GetValue(target);
+    if (value is not T typed)
+    {
+      throw new InvalidOperationException(
+        $"Field {name} was not {typeof(T).Name}.");
+    }
+    return typed;
   }
 
   private static void PumpUntil(
@@ -142,14 +148,6 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
     if (!condition)
     {
       throw new InvalidOperationException(message);
-    }
-  }
-
-  private sealed class ShutdownOwnerForm : Form
-  {
-    public void DestroyNativeOwnerHandle()
-    {
-      DestroyHandle();
     }
   }
 }
