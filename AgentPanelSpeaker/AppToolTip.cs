@@ -18,6 +18,7 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
   internal const int PopupWorkingAreaMarginPixels = 8;
   internal const int PopupHorizontalPaddingPixels = 12;
   internal const int PopupVerticalPaddingPixels = 8;
+  internal const int MaximumPopupWidthPixels = 640;
 
   internal const TextFormatFlags ToolTipTextFormat =
     TextFormatFlags.Left |
@@ -278,8 +279,16 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
       "This representative tooltip caption is deliberately long enough to " +
       "require wrapping when the available working area is narrow while " +
       "remaining complete and readable.";
+    Size wideUnconstrainedText = MeasureText(
+      longCaption,
+      font,
+      wideWorkingArea.Width);
     Size widePopup = CalculatePopupSize(longCaption, font, wideWorkingArea);
     Size narrowPopup = CalculatePopupSize(longCaption, font, narrowWorkingArea);
+    bool wideWorkingAreaUsesReadableMaximumWidth =
+      wideUnconstrainedText.Width + PopupHorizontalPaddingPixels >
+        MaximumPopupWidthPixels &&
+      widePopup.Width <= MaximumPopupWidthPixels;
     int narrowMaximumWidth = Math.Max(
       1,
       narrowWorkingArea.Width - (PopupWorkingAreaMarginPixels * 2));
@@ -313,6 +322,8 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     {
       shortCaptionFits,
       explicitTwoLineCaptionFits,
+      wideWorkingAreaUsesReadableMaximumWidth,
+      maximumPopupWidthPixels = MaximumPopupWidthPixels,
       longCaptionWrapsWithinWorkingArea,
       longCaptionUsesMoreHeightWhenConstrained,
       paddingIsIncluded,
@@ -731,9 +742,12 @@ internal sealed class AppToolTip : System.Windows.Forms.ToolTip
     Font font,
     Rectangle workingArea)
   {
-    int maximumPopupWidth = Math.Max(
+    int workingAreaMaximumPopupWidth = Math.Max(
       1,
       workingArea.Width - (PopupWorkingAreaMarginPixels * 2));
+    int maximumPopupWidth = Math.Min(
+      MaximumPopupWidthPixels,
+      workingAreaMaximumPopupWidth);
     int maximumTextWidth = Math.Max(
       1,
       maximumPopupWidth - PopupHorizontalPaddingPixels);

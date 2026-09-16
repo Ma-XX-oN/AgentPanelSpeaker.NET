@@ -9,7 +9,7 @@ Tooltip Sizing Contract Preserves Complete Captions
     ...    AgentPanelSpeaker.AppToolTip
     ...    GetSizingContractSnapshot
     ...    []
-    ...    {"shortCaptionFits":true,"explicitTwoLineCaptionFits":true,"longCaptionWrapsWithinWorkingArea":true,"longCaptionUsesMoreHeightWhenConstrained":true,"paddingIsIncluded":true,"rightEdgePlacementClamped":true,"bottomEdgePlacementFlipsAbove":true}
+    ...    {"shortCaptionFits":true,"explicitTwoLineCaptionFits":true,"wideWorkingAreaUsesReadableMaximumWidth":true,"maximumPopupWidthPixels":640,"longCaptionWrapsWithinWorkingArea":true,"longCaptionUsesMoreHeightWhenConstrained":true,"paddingIsIncluded":true,"rightEdgePlacementClamped":true,"bottomEdgePlacementFlipsAbove":true}
 
 App Tooltip Registers Central Popup Sizing Handler
     [Template]    File Should Contain Text V1

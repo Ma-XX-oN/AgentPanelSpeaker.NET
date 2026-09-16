@@ -33,7 +33,7 @@ Pronunciations Button Has Purpose Tooltip Text
     [Template]    Ui Text Should Equal V1
     ${TEST_PROBE}
     ...    Main.Pronunciations.Description
-    ...    Open spelling and pronunciation rules, including IPA pronunciations.
+    ...    Open spell-out and IPA pronunciation rules.
 
 Bluetooth Wake Button Has Purpose Tooltip Text
     [Template]    Ui Text Should Equal V1
