@@ -1,3 +1,4 @@
+using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 namespace AgentPanelSpeaker;
@@ -104,16 +105,18 @@ internal static class WebViewShutdownFaultDiagnostic
       webViewDisposed = scenario.WebViewDisposed
     });
 
-    // This is the intentionally invalid operation under test.  Do not catch
-    // the provider failure here: Application.ThreadException is the production
-    // diagnostic path that this control exists to exercise.
-    scenario.DisposeWebView();
+    // Reproduce the actual provider failure class from #128. The scenario
+    // disposes the real isolated WebView2 and then accesses the retained
+    // CoreWebView2.Profile object after its control lifetime is invalid. Do not
+    // catch the provider failure here: Application.ThreadException is the
+    // production diagnostic path that this control exists to exercise.
+    scenario.TriggerDisposedStateFault();
 
     DiagnosticLog.Write(NotReproducedEventName, new
     {
       message =
-        "WebView2 disposal completed without reproducing the disposed-state " +
-        "provider exception."
+        "Disposed CoreWebView2.Profile access completed without reproducing " +
+        "the disposed-state provider exception."
     });
     scenario.DisposeHostAfterNonFaultingRun();
     button.Enabled = true;
@@ -155,13 +158,16 @@ internal sealed class WebViewShutdownFaultScenario
 {
   private readonly FaultHostForm _host;
   private readonly WebView2 _webView;
+  private readonly CoreWebView2 _coreWebView;
 
   private WebViewShutdownFaultScenario(
     FaultHostForm host,
-    WebView2 webView)
+    WebView2 webView,
+    CoreWebView2 coreWebView)
   {
     _host = host;
     _webView = webView;
+    _coreWebView = coreWebView;
   }
 
   public bool CoreInitialized => _webView.CoreWebView2 is not null;
@@ -194,7 +200,8 @@ internal sealed class WebViewShutdownFaultScenario
     _ = host.Handle;
 
     await webView.EnsureCoreWebView2Async();
-    if (webView.CoreWebView2 is null)
+    CoreWebView2? coreWebView = webView.CoreWebView2;
+    if (coreWebView is null)
     {
       webView.Dispose();
       host.Dispose();
@@ -202,7 +209,7 @@ internal sealed class WebViewShutdownFaultScenario
         "The diagnostic WebView2 did not initialize CoreWebView2.");
     }
 
-    return new WebViewShutdownFaultScenario(host, webView);
+    return new WebViewShutdownFaultScenario(host, webView, coreWebView);
   }
 
   /// <summary>
@@ -225,17 +232,22 @@ internal sealed class WebViewShutdownFaultScenario
   }
 
   /// <summary>
-  /// Attempts the same managed WebView2 disposal that failed after owner-handle
-  /// destruction in the original issue #128 shutdown sequence.
+  /// Invalidates the isolated WebView2 and then touches the exact CoreWebView2
+  /// profile member involved in the original issue #128 disposed-state failure.
   /// </summary>
-  public void DisposeWebView()
+  public void TriggerDisposedStateFault()
   {
     DisposeAttempted = true;
     _webView.Dispose();
+
+    // The reference is intentionally retained across WebView2.Dispose().
+    // Accessing Profile now asks the real provider to use an invalidated
+    // CoreWebView2 object; the provider itself must raise the diagnostic fault.
+    _ = _coreWebView.Profile;
   }
 
   /// <summary>
-  /// Cleans up only when the invalid sequence unexpectedly does not fault.
+  /// Cleans up only when the provider unexpectedly does not raise the fault.
   /// </summary>
   public void DisposeHostAfterNonFaultingRun()
   {
