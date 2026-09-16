@@ -16,8 +16,8 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
   {
     var tests = new (string Name, Action Body)[]
     {
-      ("webview-shutdown/initialized-owner-close-is-clean",
-        TestInitializedOwnerCloseIsClean)
+      ("webview-shutdown/ancestor-handle-destroy-before-managed-dispose-is-clean",
+        TestAncestorHandleDestroyBeforeManagedDisposeIsClean)
     };
 
     int failures = 0;
@@ -47,74 +47,78 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
   }
 
   /// <summary>
-  /// Reproduces the production ownership path: a top-level form owns a
-  /// TranscriptView, the TranscriptView owns a real initialized WebView2, and
-  /// closing the top-level owner tears the hierarchy down through WinForms.
+  /// Reproduces the ordering captured in the production failure: Form disposal
+  /// first destroys the ancestor native window tree, then managed child-control
+  /// disposal reaches TranscriptView and its initialized WebView2.
   /// </summary>
-  private static void TestInitializedOwnerCloseIsClean()
+  private static void TestAncestorHandleDestroyBeforeManagedDisposeIsClean()
   {
     var threadExceptions = new List<Exception>();
     ThreadExceptionEventHandler handler = (_, eventArgs) =>
       threadExceptions.Add(eventArgs.Exception);
     Application.ThreadException += handler;
 
-    Form? form = null;
-    TranscriptView? view = null;
-    WebView2? webView = null;
-    Exception? closeFailure = null;
+    var form = new ShutdownOwnerForm
+    {
+      Width = 900,
+      Height = 700,
+      ShowInTaskbar = false,
+      StartPosition = FormStartPosition.Manual,
+      Location = new Point(-30000, -30000)
+    };
+    var layout = new TableLayoutPanel { Dock = DockStyle.Fill };
+    var tabs = new TabControl { Dock = DockStyle.Fill };
+    var page = new TabPage("Transcript");
+    var view = new TranscriptView { Dock = DockStyle.Fill };
+    WebView2 webView = view.Controls.OfType<WebView2>().Single();
+    page.Controls.Add(view);
+    tabs.TabPages.Add(page);
+    layout.Controls.Add(tabs);
+    form.Controls.Add(layout);
+
+    Exception? disposeFailure = null;
     try
     {
-      form = new Form
-      {
-        Width = 900,
-        Height = 700,
-        ShowInTaskbar = false,
-        StartPosition = FormStartPosition.Manual,
-        Location = new Point(-30000, -30000)
-      };
-      view = new TranscriptView { Dock = DockStyle.Fill };
-      form.Controls.Add(view);
       form.Show();
       Application.DoEvents();
-
-      webView = view.Controls.OfType<WebView2>().Single();
       PumpUntil(
         () => webView.CoreWebView2 is not null && webView.Visible,
         "initialized transcript WebView2");
 
+      form.DestroyNativeOwnerHandle();
+      Application.DoEvents();
+      Require(
+        !form.IsHandleCreated,
+        "The owner handle remained alive after the production-order teardown step.");
+
       try
       {
-        form.Close();
+        view.Dispose();
         Application.DoEvents();
       }
       catch (Exception exception)
       {
-        closeFailure = exception;
+        disposeFailure = exception;
       }
 
       Require(
-        closeFailure is null,
-        "Closing the initialized owner threw " +
-        $"{closeFailure?.GetType().Name}: {closeFailure?.Message}");
+        disposeFailure is null,
+        "Disposing TranscriptView after ancestor handle destruction threw " +
+        $"{disposeFailure?.GetType().Name}: {disposeFailure?.Message}");
       Require(
         threadExceptions.Count == 0,
-        "Closing the initialized owner raised a Windows Forms thread " +
+        "The production-order teardown raised a Windows Forms thread " +
         "exception: " + string.Join(" | ", threadExceptions.Select(
           exception => $"{exception.GetType().Name}: {exception.Message}")));
-      Require(form.IsDisposed, "The owner form was not disposed by Close().");
-      Require(view.IsDisposed, "TranscriptView was not disposed with its owner.");
+      Require(view.IsDisposed, "TranscriptView was not disposed.");
       Require(webView.IsDisposed, "WebView2 was not disposed with TranscriptView.");
     }
     finally
     {
       Application.ThreadException -= handler;
-      if (form is not null && !form.IsDisposed)
+      if (disposeFailure is null)
       {
         form.Dispose();
-      }
-      else if (view is not null && !view.IsDisposed)
-      {
-        view.Dispose();
       }
     }
   }
@@ -138,6 +142,14 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
     if (!condition)
     {
       throw new InvalidOperationException(message);
+    }
+  }
+
+  private sealed class ShutdownOwnerForm : Form
+  {
+    public void DestroyNativeOwnerHandle()
+    {
+      DestroyHandle();
     }
   }
 }
