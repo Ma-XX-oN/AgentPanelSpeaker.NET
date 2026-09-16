@@ -13,8 +13,8 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
         "webview-fault-injection/control-is-activity-scoped",
         DiagnosticControlIsActivityScoped),
       (
-        "webview-fault-injection/real-webview-owner-destroyed-before-dispose",
-        RealWebViewOwnerDestroyedBeforeDispose)
+        "webview-fault-injection/real-webview-disposed-state-fault-is-raised",
+        RealWebViewDisposedStateFaultIsRaised)
     };
 
     Console.WriteLine(
@@ -85,7 +85,7 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
       "diagnostic button is not scoped to the Activity tab.");
   }
 
-  private static void RealWebViewOwnerDestroyedBeforeDispose()
+  private static void RealWebViewDisposedStateFaultIsRaised()
   {
     Task<WebViewShutdownFaultScenario> createTask =
       WebViewShutdownFaultScenario.CreateAsync();
@@ -125,14 +125,15 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
     Require(
       scenario.DisposeAttempted,
       "diagnostic scenario never attempted managed WebView2 disposal.");
-
-    // The exact provider failure is runtime-sensitive and is the real-machine
-    // acceptance target. The automated invariant is the actual invalid order:
-    // initialized WebView2 -> destroyed owner HWND -> WebView2.Dispose().
-    if (providerFault is null)
-    {
-      scenario.DisposeHostAfterNonFaultingRun();
-    }
+    Require(
+      providerFault is not null,
+      "The diagnostic invalid lifetime sequence completed without raising " +
+      "a WebView2 disposed-state provider exception.");
+    Require(
+      providerFault is InvalidOperationException ||
+      providerFault is System.Runtime.InteropServices.COMException,
+      "The diagnostic raised an unexpected exception type: " +
+      providerFault.GetType().FullName + ".");
   }
 
   private static IEnumerable<Control> EnumerateControls(Control root)
