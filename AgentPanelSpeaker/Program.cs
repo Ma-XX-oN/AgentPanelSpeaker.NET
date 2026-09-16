@@ -317,6 +317,19 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "webview-fault-injection",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "webview-fault-injection",
+          () => RunWithWinFormsMessageLoop(
+            Issue134WebViewFaultInjectionRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -376,6 +389,8 @@ internal static class Program
         "system-speech-native-timing");
       int webViewShutdown = RunIsolatedTestSuite(
         "webview-shutdown");
+      int webViewFaultInjection = RunIsolatedTestSuite(
+        "webview-fault-injection");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -404,7 +419,8 @@ internal static class Program
                              previewCursor == 0 &&
                              systemSpeechProvenance == 0 &&
                              systemSpeechNativeTiming == 0 &&
-                             webViewShutdown == 0
+                             webViewShutdown == 0 &&
+                             webViewFaultInjection == 0
         ? 0
         : 1;
       Console.WriteLine(
@@ -445,7 +461,9 @@ internal static class Program
     };
 
     ApplicationConfiguration.Initialize();
-    Application.Run(new MainForm());
+    var mainForm = new MainForm();
+    WebViewShutdownFaultDiagnostic.Install(mainForm);
+    Application.Run(mainForm);
   }
 
   /// <summary>
