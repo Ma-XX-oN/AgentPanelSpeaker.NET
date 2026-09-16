@@ -170,6 +170,8 @@ internal sealed class WebViewShutdownFaultScenario
 
   public bool WebViewDisposed => _webView.IsDisposed;
 
+  public bool DisposeAttempted { get; private set; }
+
   /// <summary>
   /// Creates and initializes a real WebView2 on an isolated off-screen owner.
   /// </summary>
@@ -228,6 +230,7 @@ internal sealed class WebViewShutdownFaultScenario
   /// </summary>
   public void DisposeWebView()
   {
+    DisposeAttempted = true;
     _webView.Dispose();
   }
 
