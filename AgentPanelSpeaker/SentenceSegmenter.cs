@@ -1,9 +1,11 @@
+using System.Text.RegularExpressions;
+
 namespace AgentPanelSpeaker;
 
 /// <summary>
 /// Splits one complete JSONL narration block into replayable speech fragments.
 /// </summary>
-internal static class SentenceSegmenter
+internal static partial class SentenceSegmenter
 {
   /// <summary>
   /// Splits text at sentence punctuation and applies one structural pause to the
@@ -23,12 +25,22 @@ internal static class SentenceSegmenter
       return Array.Empty<SentenceSegment>();
     }
 
+    Match ordinal = OrderedListOrdinalRegex().Match(text);
+    string ordinalPrefix = ordinal.Success ? ordinal.Value : string.Empty;
+    int protectedOrdinalEnd = ordinal.Success ? ordinal.Length : 0;
+
     var result = new List<SentenceSegment>();
     int start = 0;
     int index = 0;
     while (index < text.Length)
     {
       char current = text[index];
+      if (index < protectedOrdinalEnd)
+      {
+        ++index;
+        continue;
+      }
+
       if (current is '.' or '?' or '!')
       {
         int end = index + 1;
@@ -58,6 +70,12 @@ internal static class SentenceSegmenter
       Add(result, text[start..]);
     }
 
+    if (ordinalPrefix.Length != 0 && result.Count != 0 &&
+        !result[0].Text.StartsWith(ordinalPrefix, StringComparison.Ordinal))
+    {
+      result[0] = result[0] with { Text = ordinalPrefix + result[0].Text };
+    }
+
     if (pauseAfterLast && result.Count != 0)
     {
       result[^1] = result[^1] with { PauseAfter = true };
@@ -77,6 +95,13 @@ internal static class SentenceSegmenter
       result.Add(new SentenceSegment(trimmed, PauseAfter: false));
     }
   }
+
+  /// <summary>
+  /// Matches an ordered-list marker only at the beginning of a speech block so
+  /// its punctuation is not mistaken for a sentence boundary.
+  /// </summary>
+  [GeneratedRegex(@"^\s*\d+[.)]\s+")]
+  private static partial Regex OrderedListOrdinalRegex();
 }
 
 /// <summary>

@@ -19,28 +19,24 @@ internal sealed class TranscriptSearchIndex
     @"^<\s*(?<close>/)?\s*(?<name>[A-Za-z0-9]+)",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
   private static readonly Regex RecordRegex = new(
-    "class=\\\"record-anchor\\\"[^>]*data-jsonl-record=\\\"(?<record>[^\\\"]*)\\\"[^>]*data-source-id=\\\"(?<source>[^\\\"]*)\\\"",
+    "class=\"record-anchor\"[^>]*data-jsonl-record=\"(?<record>[^\"]*)\"",
     RegexOptions.Compiled | RegexOptions.CultureInvariant);
+  private static readonly Regex ListItemTagRegex = new(
+    "<li\\b[^>]*\\bdata-list-ordinal\\s*=\\s*\"(?<ordinal>-?\\d+)\"[^>]*>",
+    RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
   private static readonly HashSet<string> BlockTags = new(
     new[] { "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "summary" },
     StringComparer.OrdinalIgnoreCase);
 
   private readonly SearchRecord[] _allRecords;
   private readonly SearchRecord[] _voicedRecords;
-  private readonly Dictionary<string, TranscriptRecordWordMap> _wordMaps;
-  private readonly Dictionary<long, TranscriptWordMap> _wordsById;
 
   private TranscriptSearchIndex(
     SearchRecord[] allRecords,
-    SearchRecord[] voicedRecords,
-    Dictionary<string, TranscriptRecordWordMap> wordMaps)
+    SearchRecord[] voicedRecords)
   {
     _allRecords = allRecords;
     _voicedRecords = voicedRecords;
-    _wordMaps = wordMaps;
-    _wordsById = wordMaps.Values
-      .SelectMany(record => record.Words)
-      .ToDictionary(word => word.WordId);
   }
 
   /// <summary>
@@ -62,9 +58,9 @@ internal sealed class TranscriptSearchIndex
     int nextBlockId = 0;
     int implicitBlockId = -1;
     int recordNumber = 0;
-    string sourceId = string.Empty;
 
-    foreach (Match part in HtmlPartRegex.Matches(html))
+    string mappingHtml = AddCoreOrdinalMappingTokens(html);
+    foreach (Match part in HtmlPartRegex.Matches(mappingHtml))
     {
       cancellationToken.ThrowIfCancellationRequested();
       string value = part.Value;
@@ -78,7 +74,6 @@ internal sealed class TranscriptSearchIndex
             NumberStyles.Integer,
             CultureInfo.InvariantCulture,
             out recordNumber);
-          sourceId = WebUtility.HtmlDecode(anchor.Groups["source"].Value);
           blockStack.Clear();
           implicitBlockId = -1;
         }
@@ -131,16 +126,13 @@ internal sealed class TranscriptSearchIndex
         bool spaceBefore = blocksWithTokens.Contains(blockId) &&
           (pendingWhitespace || gap.Any(char.IsWhiteSpace));
         int localIndex = tokens.Count == 0 ||
-          tokens[^1].RecordNumber != recordNumber ||
-          !string.Equals(tokens[^1].SourceId, sourceId, StringComparison.Ordinal)
+          tokens[^1].RecordNumber != recordNumber
             ? 0
             : tokens[^1].RecordWordIndex + 1;
         tokens.Add(new MutableToken(
           token.Value,
           recordNumber,
-          sourceId,
           blockId,
-          tokens.Count,
           localIndex,
           spaceBefore));
         blocksWithTokens.Add(blockId);
@@ -156,8 +148,53 @@ internal sealed class TranscriptSearchIndex
     MarkVoicedTokens(tokens, identities, cancellationToken);
     SearchRecord[] allRecords = BuildCorpus(tokens, voicedOnly: false);
     SearchRecord[] voicedRecords = BuildCorpus(tokens, voicedOnly: true);
-    Dictionary<string, TranscriptRecordWordMap> wordMaps = BuildWordMaps(tokens);
-    return new TranscriptSearchIndex(allRecords, voicedRecords, wordMaps);
+    return new TranscriptSearchIndex(allRecords, voicedRecords);
+  }
+
+  /// <summary>
+  /// Adds non-visual mapping tokens for Core-owned ordered-list ordinals.
+  /// </summary>
+  /// <remarks>
+  /// Core already resolved the semantic ordinal and exposed it through
+  /// <c>data-list-ordinal</c>.  This method does not infer list semantics; it
+  /// only makes that Core metadata addressable by the existing speech-token
+  /// mapper.  Existing mapping spans are preserved without duplication.
+  /// </remarks>
+  private static string AddCoreOrdinalMappingTokens(string html)
+  {
+    MatchCollection matches = ListItemTagRegex.Matches(html);
+    if (matches.Count == 0)
+    {
+      return html;
+    }
+
+    var result = new StringBuilder(html.Length + matches.Count * 80);
+    int cursor = 0;
+    foreach (Match match in matches)
+    {
+      result.Append(html, cursor, match.Index - cursor);
+      result.Append(match.Value);
+      cursor = match.Index + match.Length;
+
+      int probe = cursor;
+      while (probe < html.Length && char.IsWhiteSpace(html[probe]))
+      {
+        ++probe;
+      }
+      if (html.AsSpan(probe).StartsWith(
+          "<span class=\"speech-ordinal-map\"",
+          StringComparison.OrdinalIgnoreCase))
+      {
+        continue;
+      }
+
+      string ordinal = match.Groups["ordinal"].Value;
+      result.Append(
+        "<span class=\"speech-ordinal-map\" aria-hidden=\"true\" " +
+        "style=\"display:none\">" + ordinal + ". </span>");
+    }
+    result.Append(html, cursor, html.Length - cursor);
+    return result.ToString();
   }
 
   /// <summary>
@@ -168,7 +205,6 @@ internal sealed class TranscriptSearchIndex
     long nodeId,
     int nodeWordIndex,
     out int recordNumber,
-    out string sourceId,
     out int recordWordIndex)
   {
     foreach (SearchRecord record in _voicedRecords)
@@ -178,55 +214,13 @@ internal sealed class TranscriptSearchIndex
         if (token.NodeId == nodeId && token.NodeWordIndex == nodeWordIndex)
         {
           recordNumber = token.RecordNumber;
-          sourceId = token.SourceId;
           recordWordIndex = token.RecordWordIndex;
           return true;
         }
       }
     }
     recordNumber = 0;
-    sourceId = string.Empty;
     recordWordIndex = -1;
-    return false;
-  }
-
-  /// <summary>
-  /// Returns the stable word identities for the requested virtual records.
-  /// Word IDs are assigned once when the full transcript search index is built
-  /// and never depend on which virtual window is currently rendered.
-  /// </summary>
-  public IReadOnlyList<TranscriptRecordWordMap> GetWordMaps(
-    IEnumerable<TranscriptVirtualRecord> records)
-  {
-    var result = new List<TranscriptRecordWordMap>();
-    foreach (TranscriptVirtualRecord record in records)
-    {
-      string key = MakeKey(record.RecordNumber, record.SourceId);
-      if (_wordMaps.TryGetValue(key, out TranscriptRecordWordMap? map))
-      {
-        result.Add(map);
-      }
-    }
-    return result;
-  }
-
-  /// <summary>
-  /// Resolves one stable transcript word ID to the authoritative speech
-  /// node/word coordinate associated with that exact rendered token.
-  /// </summary>
-  public bool TryResolveSpeechWord(
-    long wordId,
-    out long nodeId,
-    out int nodeWordIndex)
-  {
-    if (_wordsById.TryGetValue(wordId, out TranscriptWordMap? word))
-    {
-      nodeId = word.NodeId;
-      nodeWordIndex = word.NodeWordIndex;
-      return nodeId > 0 && nodeWordIndex >= 0;
-    }
-    nodeId = 0;
-    nodeWordIndex = -1;
     return false;
   }
 
@@ -244,10 +238,10 @@ internal sealed class TranscriptSearchIndex
           request.Query,
           request.CaseSensitive,
           request.WholeWord,
-          cancellationToken)
+          cancellationToken).ConfigureAwait(false)
       : await Task.Run(
           () => FindLiteral(records, request, cancellationToken),
-          cancellationToken);
+          cancellationToken).ConfigureAwait(false);
     return MapMatches(raw, records);
   }
 
@@ -329,20 +323,11 @@ internal sealed class TranscriptSearchIndex
           break;
         }
       }
-      long[] wordIds = tokens[first..(last + 1)]
-        .Select(token => token.WordId)
-        .ToArray();
-      long seekWordId = voiced.NodeId > 0 && voiced.NodeWordIndex >= 0
-        ? voiced.WordId
-        : 0;
       result.Add(new TranscriptSearchMatch(
         result.Count + 1,
         firstToken.RecordNumber,
-        firstToken.SourceId,
         firstToken.RecordWordIndex,
         tokens[last].RecordWordIndex,
-        wordIds,
-        seekWordId,
         voiced.NodeId,
         voiced.NodeWordIndex));
     }
@@ -392,9 +377,9 @@ internal sealed class TranscriptSearchIndex
     bool voicedOnly)
   {
     var records = new List<SearchRecord>();
-    foreach (IGrouping<string, MutableToken> group in source
+    foreach (IGrouping<int, MutableToken> group in source
       .Where(token => !voicedOnly || token.NodeId > 0)
-      .GroupBy(token => token.RecordKey, StringComparer.Ordinal))
+      .GroupBy(token => token.RecordNumber))
     {
       var builder = new StringBuilder();
       var tokens = new List<SearchToken>();
@@ -417,9 +402,7 @@ internal sealed class TranscriptSearchIndex
         tokens.Add(new SearchToken(
           start,
           builder.Length,
-          token.WordId,
           token.RecordNumber,
-          token.SourceId,
           token.RecordWordIndex,
           token.NodeId,
           token.NodeWordIndex));
@@ -433,30 +416,6 @@ internal sealed class TranscriptSearchIndex
       }
     }
     return records.ToArray();
-  }
-
-  private static Dictionary<string, TranscriptRecordWordMap> BuildWordMaps(
-    IReadOnlyList<MutableToken> tokens)
-  {
-    var result = new Dictionary<string, TranscriptRecordWordMap>(
-      StringComparer.Ordinal);
-    foreach (IGrouping<string, MutableToken> group in tokens.GroupBy(
-      token => token.RecordKey,
-      StringComparer.Ordinal))
-    {
-      MutableToken first = group.First();
-      TranscriptWordMap[] words = group
-        .Select(token => new TranscriptWordMap(
-          token.WordId,
-          token.NodeId,
-          token.NodeWordIndex))
-        .ToArray();
-      result[group.Key] = new TranscriptRecordWordMap(
-        first.RecordNumber,
-        first.SourceId,
-        words);
-    }
-    return result;
   }
 
   private static void PopThroughTag(Stack<BlockContext> stack, string name)
@@ -480,12 +439,12 @@ internal sealed class TranscriptSearchIndex
     IReadOnlyList<TranscriptNodeIdentity> identities,
     CancellationToken cancellationToken)
   {
-    var cursors = new Dictionary<string, int>(StringComparer.Ordinal);
+    var cursors = new Dictionary<int, int>();
     foreach (TranscriptNodeIdentity identity in identities)
     {
       cancellationToken.ThrowIfCancellationRequested();
-      string key = MakeKey(identity.RecordNumber, identity.SourceId);
-      int cursor = cursors.TryGetValue(key, out int value) ? value : 0;
+      int recordNumber = identity.RecordNumber;
+      int cursor = cursors.TryGetValue(recordNumber, out int value) ? value : 0;
       int nodeWordIndex = 0;
       foreach (string segment in identity.Segments)
       {
@@ -497,10 +456,10 @@ internal sealed class TranscriptSearchIndex
         {
           continue;
         }
-        int start = FindTokenSequence(tokens, key, target, cursor);
+        int start = FindTokenSequence(tokens, recordNumber, target, cursor);
         if (start < 0 && cursor > 0)
         {
-          start = FindTokenSequence(tokens, key, target, 0);
+          start = FindTokenSequence(tokens, recordNumber, target, 0);
         }
         if (start < 0)
         {
@@ -512,14 +471,14 @@ internal sealed class TranscriptSearchIndex
           tokens[index].NodeWordIndex = nodeWordIndex++;
         }
         cursor = start + target.Length;
-        cursors[key] = cursor;
+        cursors[recordNumber] = cursor;
       }
     }
   }
 
   private static int FindTokenSequence(
     IReadOnlyList<MutableToken> tokens,
-    string key,
+    int recordNumber,
     IReadOnlyList<string> target,
     int start)
   {
@@ -527,7 +486,7 @@ internal sealed class TranscriptSearchIndex
          index <= tokens.Count - target.Count;
          ++index)
     {
-      if (!string.Equals(tokens[index].RecordKey, key, StringComparison.Ordinal))
+      if (tokens[index].RecordNumber != recordNumber)
       {
         continue;
       }
@@ -535,7 +494,7 @@ internal sealed class TranscriptSearchIndex
       for (int offset = 0; offset < target.Count; ++offset)
       {
         MutableToken candidate = tokens[index + offset];
-        if (!string.Equals(candidate.RecordKey, key, StringComparison.Ordinal) ||
+        if (candidate.RecordNumber != recordNumber ||
             !string.Equals(
               candidate.Text,
               target[offset],
@@ -553,40 +512,26 @@ internal sealed class TranscriptSearchIndex
     return -1;
   }
 
-  private static string MakeKey(int recordNumber, string sourceId)
-  {
-    return sourceId + "\0" + recordNumber.ToString(CultureInfo.InvariantCulture);
-  }
 
   private sealed class MutableToken
   {
     public MutableToken(
       string text,
       int recordNumber,
-      string sourceId,
       int blockId,
-      int renderedIndex,
       int recordWordIndex,
       bool spaceBefore)
     {
       Text = text;
       RecordNumber = recordNumber;
-      SourceId = sourceId;
-      RecordKey = MakeKey(recordNumber, sourceId);
       BlockId = blockId;
-      RenderedIndex = renderedIndex;
-      WordId = renderedIndex + 1L;
       RecordWordIndex = recordWordIndex;
       SpaceBefore = spaceBefore;
     }
 
     public string Text { get; }
     public int RecordNumber { get; }
-    public string SourceId { get; }
-    public string RecordKey { get; }
     public int BlockId { get; }
-    public int RenderedIndex { get; }
-    public long WordId { get; }
     public int RecordWordIndex { get; }
     public bool SpaceBefore { get; }
     public long NodeId { get; set; }
@@ -598,9 +543,7 @@ internal sealed class TranscriptSearchIndex
   private readonly record struct SearchToken(
     int Start,
     int End,
-    long WordId,
     int RecordNumber,
-    string SourceId,
     int RecordWordIndex,
     long NodeId,
     int NodeWordIndex);
@@ -617,21 +560,8 @@ internal sealed record TranscriptSearchRequest(
 internal sealed record TranscriptSearchMatch(
   int FileOrdinal,
   int RecordNumber,
-  string SourceId,
   int StartWordIndex,
   int EndWordIndex,
-  IReadOnlyList<long> WordIds,
-  long SeekWordId,
-  long NodeId,
-  int NodeWordIndex);
-
-internal sealed record TranscriptRecordWordMap(
-  int RecordNumber,
-  string SourceId,
-  IReadOnlyList<TranscriptWordMap> Words);
-
-internal sealed record TranscriptWordMap(
-  long WordId,
   long NodeId,
   int NodeWordIndex);
 

@@ -20,6 +20,41 @@ namespace AgentPanelSpeaker;
 /// <param name="StartsUserTurn">
 /// Whether this fragment belongs to an actual User prompt that starts a turn.
 /// </param>
+/// <param name="RevisionStatus">
+/// Core-owned Codex revision status (`original`, `superseded`, `edited`), or
+/// null for ordinary/non-revision content.
+/// </param>
+/// <param name="RevisionDepth">
+/// Core-owned zero-based revision depth, or null for non-revision content.
+/// </param>
+/// <param name="ProjectionVisible">
+/// Core-owned effective visibility for the projection that produced this
+/// fragment.
+/// </param>
+/// <param name="RevisionHistoryControlled">
+/// Whether Core marks this fragment as belonging to revision-history policy.
+/// </param>
+/// <param name="HistoricalRevision">
+/// Whether Core classifies this fragment as historical revision content.
+/// </param>
+/// <summary>
+/// Maps one immutable Core transcript word into one app-owned speech fragment.
+/// </summary>
+/// <param name="Id">
+/// Globally unique AIConversationCore canonical WordId. It does not reset at
+/// speech-fragment boundaries.
+/// </param>
+/// <param name="Text">Canonical word text carried into speech.</param>
+/// <param name="CharacterStart">
+/// Zero-based character offset inside this SpeechFragment's text.
+/// </param>
+/// <param name="CharacterLength">Character length inside the fragment.</param>
+internal sealed record SpeechFragmentWord(
+  long Id,
+  string Text,
+  int CharacterStart,
+  int CharacterLength);
+
 internal sealed record SpeechFragment(
   long NodeId,
   ContentCategory Category,
@@ -31,7 +66,22 @@ internal sealed record SpeechFragment(
   int FenceLineCount = 0,
   bool PauseAfter = false,
   DateTimeOffset? NodeTimestampUtc = null,
-  bool StartsUserTurn = false);
+  bool StartsUserTurn = false,
+  string? RevisionStatus = null,
+  int? RevisionDepth = null,
+  bool ProjectionVisible = true,
+  bool RevisionHistoryControlled = false,
+  bool HistoricalRevision = false,
+  IReadOnlyList<SpeechFragmentWord>? TranscriptWords = null,
+  long FragmentId = -1)
+{
+  /// <summary>
+  /// Temporary migration view of the Core IDs carried by TranscriptWords.
+  /// </summary>
+  public IReadOnlyList<long>? WordIds => TranscriptWords?
+    .Select(static word => word.Id)
+    .ToArray();
+}
 
 /// <summary>
 /// Identifies how existing history should begin playback.

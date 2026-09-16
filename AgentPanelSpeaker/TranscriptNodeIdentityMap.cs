@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -5,8 +6,8 @@ using System.Text.Json;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Reconstructs the monitor's stable accepted-node numbering so rendered
-/// transcript words can be associated with the exact source node being read.
+/// Reconstructs the monitor's stable accepted-node numbering from the same
+/// AIConversationCore projection used by speech/history and transcript display.
 /// </summary>
 internal static class TranscriptNodeIdentityMap
 {
@@ -14,44 +15,68 @@ internal static class TranscriptNodeIdentityMap
 
   /// <summary>
   /// Reads one session and returns accepted speech-text segments in node order.
+  /// Provider-native JSON is validated only as an ordered record container;
+  /// identity and conversational semantics come from AIConversationCore.
   /// </summary>
   public static IReadOnlyList<TranscriptNodeIdentity> Build(
     string path,
     AgentSource source,
-    CancellationToken cancellationToken = default)
+    CancellationToken cancellationToken = default,
+    bool includeRolledBackTurns = false,
+    IProgress<TranscriptBuildProgress>? progress = null)
   {
-    var result = new List<TranscriptNodeIdentity>();
-    var recentQueue = new Queue<string>();
-    var recentSet = new HashSet<string>(StringComparer.Ordinal);
-    long nextNodeId = 1;
-    int recordNumber = 0;
-    var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
-      StringComparer.Ordinal);
-
-    foreach (string line in File.ReadLines(path))
+    ArgumentException.ThrowIfNullOrWhiteSpace(path);
+    var jsonLines = new List<string>();
+    foreach (string line in ReadSharedLines(path))
     {
       cancellationToken.ThrowIfCancellationRequested();
       if (string.IsNullOrWhiteSpace(line))
       {
         continue;
       }
-      recordNumber++;
 
-      ExtractionResult extraction;
-      string sourceId;
-      try
+      using JsonDocument document = JsonDocument.Parse(line);
+      if (document.RootElement.ValueKind != JsonValueKind.Object)
       {
-        using JsonDocument document = JsonDocument.Parse(line);
-        sourceId = JsonlRecordIdentity.GetSourceId(
-          source,
-          document.RootElement,
-          recordNumber);
-        extraction = JsonlRecordExtractor.Extract(source, line);
+        throw new JsonException("A transcript JSONL record must be an object.");
       }
-      catch (JsonException)
-      {
-        continue;
-      }
+      jsonLines.Add(line);
+    }
+
+    if (jsonLines.Count == 0)
+    {
+      progress?.Report(new TranscriptBuildProgress(0, 0));
+      return Array.Empty<TranscriptNodeIdentity>();
+    }
+
+    progress?.Report(new TranscriptBuildProgress(0, jsonLines.Count));
+    using var client = new AIConversationCoreClient();
+    var projectOptions = new AIConversationCoreProjectOptions(
+      IncludeRolledBackTurns: includeRolledBackTurns,
+      CodexSessionIndexPath: source == AgentSource.Codex
+        ? SessionLocator.GetCodexSessionIndexPath()
+        : null,
+      // User Context is always part of the indexed speech-history namespace.
+      // The UI setting controls playback eligibility, not node numbering.
+      IncludeUserContext: true);
+    AIConversationProjection projection = CanonicalSpeechProjection.Prepare(
+      client.Project(source, jsonLines, projectOptions));
+    cancellationToken.ThrowIfCancellationRequested();
+
+    var result = new List<TranscriptNodeIdentity>();
+    var recentQueue = new Queue<string>();
+    var recentSet = new HashSet<string>(StringComparer.Ordinal);
+    long nextNodeId = 1;
+    var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
+      StringComparer.Ordinal);
+
+    for (int sourceIndex = 0; sourceIndex < jsonLines.Count; ++sourceIndex)
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      ExtractionResult extraction = CanonicalProjectionExtractor.ExtractRecord(
+        projection,
+        source,
+        sourceIndex);
 
       if (extraction.InputRequest is CodexInputRequest request)
       {
@@ -60,6 +85,7 @@ internal static class TranscriptNodeIdentityMap
       IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
         extraction.InputResponse,
         pendingInputRequests);
+      int recordNumber = sourceIndex + 1;
 
       foreach (ExtractedNode node in extraction.Nodes.Concat(responseNodes))
       {
@@ -85,11 +111,14 @@ internal static class TranscriptNodeIdentityMap
         result.Add(new TranscriptNodeIdentity(
           nextNodeId++,
           recordNumber,
-          sourceId,
           IsRenderedKind(source, node.Kind)
             ? BuildSegments(parts)
             : Array.Empty<string>()));
       }
+
+      progress?.Report(new TranscriptBuildProgress(
+        sourceIndex + 1,
+        jsonLines.Count));
     }
 
     return result;
@@ -119,14 +148,14 @@ internal static class TranscriptNodeIdentityMap
   {
     if (source == AgentSource.Claude)
     {
-      return kind is "claude.user_text" or
-        "claude.queued_command.context" or "claude.queued_command" or
-        "claude.thinking" or "claude.text" or
-        "claude.subagent.result";
+      return kind.StartsWith("claude.canonical.", StringComparison.Ordinal) ||
+        kind is "claude.queued_command.context" or
+          "claude.queued_command" or
+          "claude.subagent.result";
     }
 
-    return kind == "codex.user_message" ||
-      kind.StartsWith("codex.agent_message", StringComparison.Ordinal);
+    return kind.StartsWith("codex.canonical.", StringComparison.Ordinal) ||
+      kind == "codex.plan";
   }
 
   private static IReadOnlyList<ExtractedNode> ResolveInputResponse(
@@ -252,13 +281,58 @@ internal static class TranscriptNodeIdentityMap
       set.Remove(removed);
     }
   }
+
+  private static int? ReadInt32(JsonElement element, string propertyName)
+  {
+    return element.ValueKind == JsonValueKind.Object &&
+      element.TryGetProperty(propertyName, out JsonElement value) &&
+      value.ValueKind == JsonValueKind.Number &&
+      value.TryGetInt32(out int result)
+        ? result
+        : null;
+  }
+
+  private static string ReadString(JsonElement element, string propertyName)
+  {
+    return element.ValueKind == JsonValueKind.Object &&
+      element.TryGetProperty(propertyName, out JsonElement value) &&
+      value.ValueKind == JsonValueKind.String
+        ? value.GetString() ?? string.Empty
+        : string.Empty;
+  }
+
+  private static IEnumerable<string> ReadSharedLines(string path)
+  {
+    using var stream = new FileStream(
+      path,
+      FileMode.Open,
+      FileAccess.Read,
+      FileShare.ReadWrite | FileShare.Delete);
+    using var reader = new StreamReader(
+      stream,
+      Encoding.UTF8,
+      detectEncodingFromByteOrderMarks: true,
+      bufferSize: 64 * 1024,
+      leaveOpen: false);
+    while (reader.ReadLine() is string line)
+    {
+      yield return line;
+    }
+  }
 }
 
 /// <summary>
-/// Associates one monitor node identifier with its ordered speakable segments.
+/// Reports determinate completion of record-oriented transcript preparation.
+/// </summary>
+internal readonly record struct TranscriptBuildProgress(
+  int Completed,
+  int Total);
+
+/// <summary>
+/// Associates one monitor node identifier with its source-file record number
+/// and ordered speakable segments.
 /// </summary>
 internal sealed record TranscriptNodeIdentity(
   long NodeId,
   int RecordNumber,
-  string SourceId,
   IReadOnlyList<string> Segments);

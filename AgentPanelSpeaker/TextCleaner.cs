@@ -608,7 +608,8 @@ internal static partial class TextCleaner
   }
 
   /// <summary>
-  /// Removes nested block prefixes such as quote-plus-list markers.
+  /// Removes nested non-semantic block prefixes while preserving ordered-list
+  /// ordinals because those numbers are meaningful speech content.
   /// </summary>
   private static string StripMarkdownPrefixes(string text)
   {
@@ -748,7 +749,7 @@ internal static partial class TextCleaner
   private static partial Regex TableSeparatorRegex();
 
   [GeneratedRegex(
-    @"(?m)^\s{0,3}(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+)")]
+    @"(?m)^\s{0,3}(?:#{1,6}\s+|>\s*|[-+*]\s+)")]
   private static partial Regex MarkdownPrefixRegex();
 
   [GeneratedRegex(@"(?:\*\*|__|~~)(.+?)(?:\*\*|__|~~)")]

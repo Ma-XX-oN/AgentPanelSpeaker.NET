@@ -27,7 +27,9 @@ internal sealed record MonitorSettings(
   bool FollowLatest,
   bool SpeakExistingLatestTurn,
   TimeSpan PollInterval,
-  SpeechHistorySnapshot? PreindexedHistory = null);
+  SpeechHistorySnapshot? PreindexedHistory = null,
+  bool IncludeRolledBackTurns = false,
+  bool IncludeUserContext = false);
 
 /// <summary>
 /// Tails Claude or Codex session JSONL and emits conversational text.
@@ -40,6 +42,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     TimeSpan.FromSeconds(1);
 
   private readonly object _sync = new();
+  private readonly CanonicalSessionExtractor _canonicalExtractor = new();
   private CancellationTokenSource? _cancellation;
   private Thread? _thread;
   private bool _disposed;
@@ -182,6 +185,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     Stop("dispose");
+    _canonicalExtractor.Dispose();
     _disposed = true;
   }
 
@@ -192,7 +196,9 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// </summary>
   public SpeechHistorySnapshot LoadHistoryPreview(
     LocatedSession session,
-    bool speakExistingLatestTurn)
+    bool speakExistingLatestTurn,
+    bool includeRolledBackTurns = false,
+    bool includeUserContext = false)
   {
     ArgumentNullException.ThrowIfNull(session);
     lock (_sync)
@@ -206,6 +212,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     }
 
     long nextNodeId = 1;
+    long nextFragmentId = 0;
     var recentFingerprintQueue = new Queue<string>();
     var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
     var preview = new Queue<string>();
@@ -215,10 +222,13 @@ internal sealed class JsonlSessionMonitor : IDisposable
       session,
       speakExistingLatestTurn,
       ref nextNodeId,
+      ref nextFragmentId,
       recentFingerprintQueue,
       recentFingerprintSet,
       preview,
-      pendingInputRequests);
+      pendingInputRequests,
+      includeRolledBackTurns,
+      includeUserContext);
   }
 
   /// <summary>
@@ -232,6 +242,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
       StringComparer.Ordinal);
     long nextNodeId = 1;
+    long nextFragmentId = 0;
     DateTime nextLatestRefreshUtc = DateTime.MinValue;
 
     try
@@ -245,9 +256,19 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
       if (settings.PreindexedHistory is SpeechHistorySnapshot preindexedHistory)
       {
+        _canonicalExtractor.Prime(
+          session.Source,
+          ReadSharedLines(session.Path),
+          ProjectionOptions(
+            session,
+            settings.IncludeRolledBackTurns,
+            settings.IncludeUserContext));
         nextNodeId = preindexedHistory.Fragments.Count == 0
           ? 1
           : preindexedHistory.Fragments.Max(fragment => fragment.NodeId) + 1;
+        nextFragmentId = preindexedHistory.Fragments.Count == 0
+          ? 0
+          : preindexedHistory.Fragments.Max(fragment => fragment.FragmentId) + 1;
         DiagnosticLog.Write("monitor.preindexed_history_reused", new
         {
           session.Path,
@@ -262,10 +283,13 @@ internal sealed class JsonlSessionMonitor : IDisposable
           session,
           settings.SpeakExistingLatestTurn,
           ref nextNodeId,
+          ref nextFragmentId,
           recentFingerprintQueue,
           recentFingerprintSet,
           preview,
-          pendingInputRequests);
+          pendingInputRequests,
+          settings.IncludeRolledBackTurns,
+          settings.IncludeUserContext);
         HistoryLoaded?.Invoke(initialHistory);
         MessagesChanged?.Invoke(preview.ToArray());
       }
@@ -297,14 +321,18 @@ internal sealed class JsonlSessionMonitor : IDisposable
             recentFingerprintSet.Clear();
             preview.Clear();
             pendingInputRequests.Clear();
+            nextFragmentId = 0;
             SpeechHistorySnapshot switchedHistory = LoadExistingHistory(
               session,
               speakExistingLatestTurn: false,
               ref nextNodeId,
+              ref nextFragmentId,
               recentFingerprintQueue,
               recentFingerprintSet,
               preview,
-              pendingInputRequests);
+              pendingInputRequests,
+              settings.IncludeRolledBackTurns,
+              settings.IncludeUserContext);
             HistoryLoaded?.Invoke(switchedHistory);
             MessagesChanged?.Invoke(preview.ToArray());
           }
@@ -317,6 +345,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
             session,
             line,
             ref nextNodeId,
+            ref nextFragmentId,
             recentFingerprintQueue,
             recentFingerprintSet,
             preview,
@@ -375,12 +404,13 @@ internal sealed class JsonlSessionMonitor : IDisposable
   }
 
   /// <summary>
-  /// Parses and classifies one newly appended JSONL line.
+  /// Canonically classifies one newly appended JSONL line.
   /// </summary>
   private void ProcessLine(
     LocatedSession session,
     string line,
     ref long nextNodeId,
+    ref long nextFragmentId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
@@ -389,9 +419,22 @@ internal sealed class JsonlSessionMonitor : IDisposable
   {
     try
     {
-      ExtractionResult result = JsonlRecordExtractor.Extract(
+      ExtractionResult? result = _canonicalExtractor.Append(
         session.Source,
         line);
+      if (result is null)
+      {
+        DiagnosticLog.Write("jsonl.invalid_record", new
+        {
+          session.Source,
+          session.Path,
+          byteOffset,
+          exception = "Record is not a valid JSON object.",
+          linePreview = Abbreviate(line, 240)
+        });
+        return;
+      }
+
       RegisterInputRequest(result.InputRequest, pendingInputRequests);
       IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
         result.InputResponse,
@@ -414,6 +457,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
           session,
           node,
           ref nextNodeId,
+          ref nextFragmentId,
           recentFingerprintQueue,
           recentFingerprintSet,
           preview);
@@ -460,13 +504,26 @@ internal sealed class JsonlSessionMonitor : IDisposable
     LocatedSession session,
     ExtractedNode node,
     ref long nextNodeId,
+    ref long nextFragmentId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
     List<SpeechFragment>? history = null,
     bool emitLive = true)
   {
-    IReadOnlyList<SpeechTextPart> parts = TextCleaner.ParseForSpeech(node.Text);
+    IReadOnlyList<SpeechTextPart> parts;
+    IReadOnlyList<IReadOnlyList<SpeechFragmentWord>?> partTranscriptWords;
+    if (node.CanonicalWords is { Count: > 0 } canonicalWords)
+    {
+      (parts, partTranscriptWords) = BuildCanonicalSpeechParts(canonicalWords);
+    }
+    else
+    {
+      parts = TextCleaner.ParseForSpeech(node.Text);
+      partTranscriptWords = Enumerable
+        .Repeat<IReadOnlyList<SpeechFragmentWord>?>(null, parts.Count)
+        .ToArray();
+    }
     if (parts.Count == 0)
     {
       DiagnosticLog.Write("jsonl.node_skipped", new
@@ -519,7 +576,30 @@ internal sealed class JsonlSessionMonitor : IDisposable
           ? ContentCategory.UserContext
           : node.Category;
       bool startsUserTurn = node.StartsUserTurn && partIndex == 0;
-      if (part.Kind == SpeechFragmentKind.Prose)
+      IReadOnlyList<SpeechFragmentWord>? canonicalPartWords =
+        partTranscriptWords[partIndex];
+      if (canonicalPartWords is not null)
+      {
+        fragments.Add(new SpeechFragment(
+          nodeId,
+          fragmentCategory,
+          part.Kind,
+          part.Text,
+          part.FenceType,
+          part.FenceBlockId,
+          part.FenceLineIndex,
+          part.FenceLineCount,
+          PauseAfter: part.PauseAfter,
+          NodeTimestampUtc: nodeTimestampUtc,
+          StartsUserTurn: startsUserTurn,
+          RevisionStatus: node.RevisionStatus,
+          RevisionDepth: node.RevisionDepth,
+          ProjectionVisible: node.ProjectionVisible,
+          RevisionHistoryControlled: node.RevisionHistoryControlled,
+          HistoricalRevision: node.HistoricalRevision,
+          TranscriptWords: canonicalPartWords));
+      }
+      else if (part.Kind == SpeechFragmentKind.Prose)
       {
         SpeechFragmentKind fragmentKind = part.FenceType.Length == 0
           ? SpeechFragmentKind.Prose
@@ -542,7 +622,12 @@ internal sealed class JsonlSessionMonitor : IDisposable
             part.FenceLineCount,
             PauseAfter: sentence.PauseAfter,
             NodeTimestampUtc: nodeTimestampUtc,
-            StartsUserTurn: startsUserTurn && sentenceIndex == 0));
+            StartsUserTurn: startsUserTurn && sentenceIndex == 0,
+            RevisionStatus: node.RevisionStatus,
+            RevisionDepth: node.RevisionDepth,
+            ProjectionVisible: node.ProjectionVisible,
+            RevisionHistoryControlled: node.RevisionHistoryControlled,
+            HistoricalRevision: node.HistoricalRevision));
         }
       }
       else
@@ -558,9 +643,22 @@ internal sealed class JsonlSessionMonitor : IDisposable
           part.FenceLineCount,
           PauseAfter: part.PauseAfter,
           NodeTimestampUtc: nodeTimestampUtc,
-          StartsUserTurn: startsUserTurn));
+          StartsUserTurn: startsUserTurn,
+          RevisionStatus: node.RevisionStatus,
+          RevisionDepth: node.RevisionDepth,
+          ProjectionVisible: node.ProjectionVisible,
+          RevisionHistoryControlled: node.RevisionHistoryControlled,
+          HistoricalRevision: node.HistoricalRevision));
       }
     }
+    for (int fragmentIndex = 0; fragmentIndex < fragments.Count; ++fragmentIndex)
+    {
+      fragments[fragmentIndex] = fragments[fragmentIndex] with
+      {
+        FragmentId = nextFragmentId++
+      };
+    }
+
     DiagnosticLog.Write("jsonl.node_accepted", new
     {
       session.Source,
@@ -595,6 +693,212 @@ internal sealed class JsonlSessionMonitor : IDisposable
       MessagesChanged?.Invoke(preview.ToArray());
     }
   }
+
+  /// <summary>
+  /// Builds transcript-backed speech parts directly from the authoritative Core
+  /// word stream. Core separators preserve word adjacency; APS never retokenizes
+  /// these words to decide identity. Ordered-list ordinals such as `1.` remain
+  /// one canonical word and begin their own list-item part after a line break.
+  /// </summary>
+  private static (
+    IReadOnlyList<SpeechTextPart> Parts,
+    IReadOnlyList<IReadOnlyList<SpeechFragmentWord>?> TranscriptWords)
+      BuildCanonicalSpeechParts(
+        IReadOnlyList<CanonicalSpeechWordProjection> words)
+  {
+    var groups = new List<List<CanonicalSpeechWordProjection>>();
+    var current = new List<CanonicalSpeechWordProjection>();
+    string currentFence = string.Empty;
+
+    foreach (CanonicalSpeechWordProjection word in words)
+    {
+      string fence = FenceType(word);
+      bool fenceChanged = current.Count != 0 &&
+        !string.Equals(fence, currentFence, StringComparison.OrdinalIgnoreCase);
+      bool newFenceLine = current.Count != 0 &&
+        fence.Length != 0 &&
+        word.SeparatorBefore.Contains('\n');
+      bool newNavigationUnit = current.Count != 0 &&
+        fence.Length == 0 &&
+        word.NavigationBoundaryBefore;
+      if (fenceChanged || newFenceLine || newNavigationUnit)
+      {
+        groups.Add(current);
+        current = new List<CanonicalSpeechWordProjection>();
+      }
+      if (current.Count == 0)
+      {
+        currentFence = fence;
+      }
+      current.Add(word);
+    }
+    if (current.Count != 0)
+    {
+      groups.Add(current);
+    }
+
+    var parts = new List<SpeechTextPart>();
+    var transcriptWords = new List<IReadOnlyList<SpeechFragmentWord>?>();
+    int fenceLineIndex = 0;
+    int fenceLineCount = groups.Count(group => FenceType(group[0]).Length != 0);
+    foreach (List<CanonicalSpeechWordProjection> group in groups)
+    {
+      string fenceType = FenceType(group[0]);
+      if (fenceType.Length != 0)
+      {
+        (string line, SpeechFragmentWord[] mappedWords) =
+          BuildCanonicalFragment(group, preserveWhitespace: true);
+        if (line.Length != 0)
+        {
+          parts.Add(new SpeechTextPart(
+            SpeechFragmentKind.FencedCodeLine,
+            line,
+            fenceType,
+            FenceBlockId: 0,
+            FenceLineIndex: fenceLineIndex++,
+            FenceLineCount: fenceLineCount,
+            PauseAfter: true,
+            SpeechTextStyle.Main));
+          transcriptWords.Add(mappedWords);
+        }
+        continue;
+      }
+
+      AddCanonicalProseParts(group, parts, transcriptWords);
+    }
+    return (parts, transcriptWords);
+  }
+
+  /// <summary>
+  /// Splits one Core prose/list-item word run at canonical sentence punctuation.
+  /// Structural ordered-list ordinals contain their own dot and are therefore
+  /// not punctuation tokens here.
+  /// </summary>
+  private static void AddCanonicalProseParts(
+    IReadOnlyList<CanonicalSpeechWordProjection> words,
+    ICollection<SpeechTextPart> parts,
+    ICollection<IReadOnlyList<SpeechFragmentWord>?> transcriptWords)
+  {
+    int start = 0;
+    for (int index = 0; index < words.Count; ++index)
+    {
+      if (words[index].Text is not ("." or "?" or "!"))
+      {
+        continue;
+      }
+      int end = index + 1;
+      while (end < words.Count &&
+             words[end].SeparatorBefore.Length == 0 &&
+             words[end].Text is "\"" or "'" or ")" or "]" or "}")
+      {
+        ++end;
+      }
+      if (end < words.Count && words[end].SeparatorBefore.Length == 0)
+      {
+        continue;
+      }
+
+      AddCanonicalProsePart(
+        words,
+        start,
+        end,
+        parts,
+        transcriptWords,
+        pauseAfter: false);
+      start = end;
+      index = end - 1;
+    }
+    if (start < words.Count)
+    {
+      AddCanonicalProsePart(
+        words,
+        start,
+        words.Count,
+        parts,
+        transcriptWords,
+        pauseAfter: true);
+    }
+    else if (parts.Count != 0 && parts.Last().PauseAfter is false)
+    {
+      SpeechTextPart last = parts.Last();
+      parts.Remove(last);
+      parts.Add(last with { PauseAfter = true });
+    }
+  }
+
+  private static void AddCanonicalProsePart(
+    IReadOnlyList<CanonicalSpeechWordProjection> words,
+    int start,
+    int end,
+    ICollection<SpeechTextPart> parts,
+    ICollection<IReadOnlyList<SpeechFragmentWord>?> transcriptWords,
+    bool pauseAfter)
+  {
+    CanonicalSpeechWordProjection[] slice = words
+      .Skip(start)
+      .Take(end - start)
+      .ToArray();
+    if (slice.Length == 0)
+    {
+      return;
+    }
+    (string text, SpeechFragmentWord[] mappedWords) =
+      BuildCanonicalFragment(slice, preserveWhitespace: false);
+    parts.Add(new SpeechTextPart(
+      SpeechFragmentKind.Prose,
+      text,
+      string.Empty,
+      FenceBlockId: -1,
+      FenceLineIndex: -1,
+      FenceLineCount: 0,
+      PauseAfter: pauseAfter,
+      SpeechTextStyle.Main));
+    transcriptWords.Add(mappedWords);
+  }
+
+  /// <summary>
+  /// Reconstructs one app-owned utterance from Core words while recording each
+  /// authoritative word's exact character range in that utterance.  A non-empty
+  /// Core separator either remains exact (code) or becomes one speech space
+  /// (prose); no tokenizer or visible-text search participates.
+  /// </summary>
+  private static (string Text, SpeechFragmentWord[] Words)
+    BuildCanonicalFragment(
+      IReadOnlyList<CanonicalSpeechWordProjection> words,
+      bool preserveWhitespace)
+  {
+    var text = new StringBuilder();
+    var mappedWords = new List<SpeechFragmentWord>(words.Count);
+    for (int index = 0; index < words.Count; ++index)
+    {
+      CanonicalSpeechWordProjection word = words[index];
+      if (index != 0 && word.SeparatorBefore.Length != 0)
+      {
+        text.Append(preserveWhitespace ? word.SeparatorBefore : " ");
+      }
+      int characterStart = text.Length;
+      text.Append(word.Text);
+      mappedWords.Add(new SpeechFragmentWord(
+        word.Id,
+        word.Text,
+        characterStart,
+        word.Text.Length));
+    }
+    return (text.ToString(), mappedWords.ToArray());
+  }
+
+  private static string FenceType(CanonicalSpeechWordProjection word)
+  {
+    if (!word.Groups.Contains("fenced_code", StringComparer.Ordinal))
+    {
+      return string.Empty;
+    }
+    const string prefix = "fence:";
+    string? group = word.Groups.FirstOrDefault(value =>
+      value.StartsWith(prefix, StringComparison.Ordinal));
+    return group is null ? "untyped" : group[prefix.Length..];
+  }
+
 
   /// <summary>
   /// Retains one request_user_input call until its matching output arrives.
@@ -730,21 +1034,27 @@ internal sealed class JsonlSessionMonitor : IDisposable
     LocatedSession session,
     bool speakExistingLatestTurn,
     ref long nextNodeId,
+    ref long nextFragmentId,
     Queue<string> recentFingerprintQueue,
     HashSet<string> recentFingerprintSet,
     Queue<string> preview,
-    IDictionary<string, CodexInputRequest> pendingInputRequests)
+    IDictionary<string, CodexInputRequest> pendingInputRequests,
+    bool includeRolledBackTurns,
+    bool includeUserContext)
   {
     var fragments = new List<SpeechFragment>();
     EligibleHistory eligibleHistory = ReadEligibleHistory(
       session,
-      pendingInputRequests);
+      pendingInputRequests,
+      includeRolledBackTurns,
+      includeUserContext);
     foreach (ExtractedNode node in eligibleHistory.Nodes)
     {
       ProcessNode(
         session,
         node,
         ref nextNodeId,
+        ref nextFragmentId,
         recentFingerprintQueue,
         recentFingerprintSet,
         preview,
@@ -773,66 +1083,79 @@ internal sealed class JsonlSessionMonitor : IDisposable
   /// <summary>
   /// Reads all currently present conversational nodes and turn completions.
   /// </summary>
-  private static EligibleHistory ReadEligibleHistory(
+  private EligibleHistory ReadEligibleHistory(
     LocatedSession session,
     IDictionary<string, CodexInputRequest> pendingInputRequests,
+    bool includeRolledBackTurns,
+    bool includeUserContext,
     DateTime? minimumTimestampUtc = null)
   {
     pendingInputRequests.Clear();
     var nodes = new List<ExtractedNode>();
     var completions = new List<TurnCompletion>();
     var backgroundWorkEvents = new List<BackgroundWorkEvent>();
-    foreach (string line in ReadSharedLines(session.Path))
+    IReadOnlyList<ExtractionResult> results = _canonicalExtractor.Load(
+      session.Source,
+      ReadSharedLines(session.Path),
+      ProjectionOptions(
+        session,
+        includeRolledBackTurns,
+        includeUserContext));
+    foreach (ExtractionResult result in results)
     {
-      try
+      RegisterInputRequest(result.InputRequest, pendingInputRequests);
+      IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
+        result.InputResponse,
+        pendingInputRequests);
+      foreach (ExtractedNode node in result.Nodes.Concat(responseNodes))
       {
-        ExtractionResult result = JsonlRecordExtractor.Extract(
-          session.Source,
-          line);
-        RegisterInputRequest(result.InputRequest, pendingInputRequests);
-        IReadOnlyList<ExtractedNode> responseNodes = ResolveInputResponse(
-          result.InputResponse,
-          pendingInputRequests);
-        foreach (ExtractedNode node in result.Nodes.Concat(responseNodes))
+        if (minimumTimestampUtc is null ||
+            IsAtOrAfter(node.Timestamp, minimumTimestampUtc.Value))
         {
-          if (minimumTimestampUtc is null ||
-              IsAtOrAfter(node.Timestamp, minimumTimestampUtc.Value))
-          {
-            nodes.Add(node);
-          }
-        }
-
-        foreach (BackgroundWorkEvent workEvent in
-                 result.BackgroundWorkEvents ??
-                   Array.Empty<BackgroundWorkEvent>())
-        {
-          if (minimumTimestampUtc is null ||
-              workEvent.StartUtc.UtcDateTime >= minimumTimestampUtc.Value ||
-              workEvent.EndUtc is DateTimeOffset endUtc &&
-                endUtc.UtcDateTime >= minimumTimestampUtc.Value)
-          {
-            backgroundWorkEvents.Add(workEvent);
-          }
-        }
-
-        TurnCompletion? completion = CreateTurnCompletion(
-          result.CompletionTimestamp);
-        if (completion is not null)
-        {
-          if (minimumTimestampUtc is null ||
-              completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value)
-          {
-            completions.Add(completion);
-          }
+          nodes.Add(node);
         }
       }
-      catch (JsonException)
+
+      foreach (BackgroundWorkEvent workEvent in
+               result.BackgroundWorkEvents ??
+                 Array.Empty<BackgroundWorkEvent>())
       {
-        // Ignore malformed historical records; live parsing logs new failures.
+        if (minimumTimestampUtc is null ||
+            workEvent.StartUtc.UtcDateTime >= minimumTimestampUtc.Value ||
+            workEvent.EndUtc is DateTimeOffset endUtc &&
+              endUtc.UtcDateTime >= minimumTimestampUtc.Value)
+        {
+          backgroundWorkEvents.Add(workEvent);
+        }
+      }
+
+      TurnCompletion? completion = CreateTurnCompletion(
+        result.CompletionTimestamp);
+      if (completion is not null &&
+          (minimumTimestampUtc is null ||
+           completion.TimestampUtc.UtcDateTime >= minimumTimestampUtc.Value))
+      {
+        completions.Add(completion);
       }
     }
 
     return new EligibleHistory(nodes, completions, backgroundWorkEvents);
+  }
+
+  /// <summary>
+  /// Builds the core projection options for one selected session.
+  /// </summary>
+  private static AIConversationCoreProjectOptions ProjectionOptions(
+    LocatedSession session,
+    bool includeRolledBackTurns,
+    bool includeUserContext)
+  {
+    return new AIConversationCoreProjectOptions(
+      IncludeRolledBackTurns: includeRolledBackTurns,
+      IncludeUserContext: includeUserContext,
+      CodexSessionIndexPath: session.Source == AgentSource.Codex
+        ? SessionLocator.GetCodexSessionIndexPath()
+        : null);
   }
 
   /// <summary>
@@ -845,7 +1168,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
       ? new TurnCompletion(value)
       : null;
   }
-
 
   private sealed record EligibleHistory(
     IReadOnlyList<ExtractedNode> Nodes,
@@ -962,7 +1284,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
     {
       preview.Dequeue();
     }
-
   }
 
   /// <summary>

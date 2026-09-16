@@ -1,0 +1,56 @@
+name: Repository task
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to check out. Blank uses the selected workflow ref.
+        required: false
+        type: string
+      task:
+        description: Checked-in task name under tools/tasks (for example verify or robot).
+        required: true
+        default: verify
+        type: string
+  pull_request:
+    branches:
+      - main
+      - feature/aiconversationcore-integration
+  push:
+    branches:
+      - 'issue-*'
+
+permissions:
+  contents: read
+
+jobs:
+  task:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out selected repository ref and submodules
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run checked-in repository task
+        shell: pwsh
+        env:
+          REPOSITORY_TASK: ${{ github.event_name == 'workflow_dispatch' && inputs.task || 'verify' }}
+        run: '& tools/Invoke-RepositoryTask.ps1 -Task $env:REPOSITORY_TASK'
