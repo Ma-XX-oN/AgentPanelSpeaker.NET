@@ -125,10 +125,12 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
     Require(
       scenario.DisposeAttempted,
       "diagnostic scenario never attempted managed WebView2 disposal.");
-    Require(
-      providerFault is not null,
-      "The diagnostic invalid lifetime sequence completed without raising " +
-      "a WebView2 disposed-state provider exception.");
+    if (providerFault is null)
+    {
+      throw new InvalidOperationException(
+        "The diagnostic invalid lifetime sequence completed without raising " +
+        "a WebView2 disposed-state provider exception.");
+    }
     Require(
       providerFault is InvalidOperationException ||
       providerFault is System.Runtime.InteropServices.COMException,
