@@ -304,6 +304,19 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "webview-shutdown",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "webview-shutdown",
+          () => RunWithWinFormsMessageLoop(
+            Issue128WebViewShutdownRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -361,6 +374,8 @@ internal static class Program
         "system-speech-provenance");
       int systemSpeechNativeTiming = RunIsolatedTestSuite(
         "system-speech-native-timing");
+      int webViewShutdown = RunIsolatedTestSuite(
+        "webview-shutdown");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -388,7 +403,8 @@ internal static class Program
                              speechOwnership == 0 &&
                              previewCursor == 0 &&
                              systemSpeechProvenance == 0 &&
-                             systemSpeechNativeTiming == 0
+                             systemSpeechNativeTiming == 0 &&
+                             webViewShutdown == 0
         ? 0
         : 1;
       Console.WriteLine(

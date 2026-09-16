@@ -1597,7 +1597,6 @@ internal sealed class MainForm : Form, IMessageFilter
         _voiceSettingPreviewActive = false;
         await _speech.CancelPreviewPreservingPositionAsync();
       }
-
       await StartMonitoringAsync();
     }
     finally
@@ -1997,7 +1996,6 @@ internal sealed class MainForm : Form, IMessageFilter
           ? "Playback started after history indexing."
           : "Playback could not start after history indexing.");
       }
-
       AppendLog($"Indexed {snapshot.Fragments.Count} existing fragments.");
       UpdateControlState();
     });
@@ -4644,6 +4642,9 @@ internal sealed class MainForm : Form, IMessageFilter
     _closing = true;
     _playbackMailbox.Clear();
     Interlocked.Increment(ref _monitorSession);
+    // Dispose WebView2 while MainForm's native owner hierarchy is still alive.
+    // Form.Dispose otherwise destroys the owner HWND before managed children.
+    _transcriptView.Dispose();
     _monitor.Dispose();
     _displayAwake.Dispose();
     _speech.Dispose();
