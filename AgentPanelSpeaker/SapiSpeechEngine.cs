@@ -1599,7 +1599,7 @@ internal sealed class SapiSpeechEngine : IDisposable
       reader.ReadBytes(bytes);
       PcmWaveData wave = PcmWaveData.Parse(bytes);
       string bookmarkFailureReason = string.Empty;
-    if (bookmarkedSsmlBuilt && !retriedWithoutBookmarks &&
+      if (bookmarkedSsmlBuilt && !retriedWithoutBookmarks &&
           TryCreateWindowsMediaBookmarkBoundaries(
             markup,
             stream,
@@ -1808,16 +1808,25 @@ internal sealed class SapiSpeechEngine : IDisposable
         var mark = new XElement(
           ns + "mark",
           new XAttribute("name", $"aps_{word.WordIndex}"));
-        XElement? sayAs = node
+        XElement? textOnlyOwner = node
           .Ancestors()
-          .FirstOrDefault(element => string.Equals(
-            element.Name.LocalName,
-            "say-as",
-            StringComparison.OrdinalIgnoreCase));
-        bool markOutsideSayAs = sayAs is not null;
-        if (markOutsideSayAs)
+          .FirstOrDefault(element =>
+            string.Equals(
+              element.Name.LocalName,
+              "say-as",
+              StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+              element.Name.LocalName,
+              "sub",
+              StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+              element.Name.LocalName,
+              "phoneme",
+              StringComparison.OrdinalIgnoreCase));
+        bool markOutsideTextOnlyOwner = textOnlyOwner is not null;
+        if (markOutsideTextOnlyOwner)
         {
-          sayAs!.AddBeforeSelf(mark);
+          textOnlyOwner!.AddBeforeSelf(mark);
         }
 
         var replacement = new List<object>();
@@ -1825,7 +1834,7 @@ internal sealed class SapiSpeechEngine : IDisposable
         {
           replacement.Add(new XText(prefix));
         }
-        if (!markOutsideSayAs)
+        if (!markOutsideTextOnlyOwner)
         {
           replacement.Add(mark);
         }
