@@ -217,6 +217,29 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
       Require(ssml.Contains($"aps_{wordIndex}", StringComparison.Ordinal),
         $"Canonical word {wordIndex} has no ownership bookmark after SSML transformation.");
     }
+
+    var document = System.Xml.Linq.XDocument.Parse(ssml);
+    System.Xml.Linq.XElement substitution = document
+      .Descendants()
+      .Single(element => element.Name.LocalName == "sub");
+    System.Xml.Linq.XElement transformedMark = document
+      .Descendants()
+      .Single(element =>
+        element.Name.LocalName == "mark" &&
+        string.Equals(
+          element.Attribute("name")?.Value,
+          "aps_0",
+          StringComparison.Ordinal));
+    Require(transformedMark.Parent == substitution.Parent,
+      "Transformed-word ownership mark is nested inside text-only SSML sub.");
+    System.Xml.Linq.XElement? nextElement = transformedMark
+      .NodesAfterSelf()
+      .OfType<System.Xml.Linq.XElement>()
+      .FirstOrDefault();
+    Require(ReferenceEquals(nextElement, substitution),
+      "Transformed-word ownership mark is not immediately before its SSML sub.");
+    Require(!substitution.Descendants().Any(element => element.Name.LocalName == "mark"),
+      "Text-only SSML sub still contains a nested ownership mark.");
   }
 
   private static void TestBrowserHasFragmentWrapperPath()
