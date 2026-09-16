@@ -213,6 +213,9 @@ internal sealed class SpeechProfilePopup : UserControl
       SpeechProfileTestAction action = actions[index];
       var button = new Button
       {
+        AccessibleDescription =
+          $"Play a preview of {action.Text} using the current speech settings.",
+        AccessibleName = $"Preview {action.Text}",
         Dock = DockStyle.Fill,
         Margin = new Padding(3),
         Text = action.Text,
@@ -409,7 +412,6 @@ internal sealed class SpeechProfilePopup : UserControl
     _ownerControl.MoveOutsideEditor(forward: false);
   }
 
-
   private void PaintBorder(object? sender, PaintEventArgs eventArgs)
   {
     ThemeManager.LogCustomPaint(
@@ -428,6 +430,4 @@ internal sealed class SpeechProfilePopup : UserControl
       this,
       eventArgs.ClipRectangle);
   }
-
-
 }

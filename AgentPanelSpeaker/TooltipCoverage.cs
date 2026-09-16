@@ -3,10 +3,10 @@ using System.Runtime.CompilerServices;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Ensures every interactive Windows Forms control is accounted for by the
-/// centralized AppToolTip path unless hovering that control intentionally opens
-/// a richer popup. Existing curated AppToolTip captions always win; this policy
-/// supplies a caption only when a control has no centralized caption.
+/// Adds centralized tooltips only when a control has useful purpose metadata.
+/// Visible labels, current values, editor contents, and control types are not
+/// tooltip text. Existing curated AppToolTip captions always win, and controls
+/// whose hover owns a richer popup remain explicitly exempt.
 /// </summary>
 internal static class TooltipCoverage
 {
@@ -15,8 +15,7 @@ internal static class TooltipCoverage
 
   /// <summary>
   /// Installs the application-wide audit after forms have completed their
-  /// synchronous construction, so explicit per-control tooltips are registered
-  /// before coverage is evaluated. Repeated idle passes also catch dynamically
+  /// synchronous construction. Repeated idle passes also catch dynamically
   /// created controls and controls that become interactive later.
   /// </summary>
   [ModuleInitializer]
@@ -26,7 +25,8 @@ internal static class TooltipCoverage
   }
 
   /// <summary>
-  /// Applies the coverage policy synchronously to one control tree.
+  /// Applies semantic tooltip metadata synchronously to one control tree.
+  /// Controls without useful metadata intentionally receive no tooltip.
   /// </summary>
   internal static void EnsureTree(Control root, bool dark)
   {
@@ -46,15 +46,19 @@ internal static class TooltipCoverage
         continue;
       }
 
-      string caption = BuildCaption(control, out string source);
+      string caption = GetPurposeCaption(control);
+      if (caption.Length == 0)
+      {
+        continue;
+      }
+
       toolTip.SetToolTip(control, caption);
-      DiagnosticLog.Write("tooltip.coverage_applied", new
+      DiagnosticLog.Write("tooltip.semantic_applied", new
       {
         controlType = control.GetType().FullName,
         control.Name,
-        control.Text,
         control.AccessibleName,
-        source,
+        source = "accessible-description",
         caption
       });
     }
@@ -236,209 +240,65 @@ internal static class TooltipCoverage
     return control.TabStop || control.Cursor == Cursors.Hand;
   }
 
-  private static string BuildCaption(Control control, out string source)
+  private static string GetPurposeCaption(Control control)
   {
     string description = Clean(control.AccessibleDescription);
-    if (description.Length > 0)
-    {
-      source = "accessible-description";
-      return description;
-    }
-
-    string accessibleName = Clean(control.AccessibleName);
-    if (accessibleName.Length > 0)
-    {
-      source = "accessible-name";
-      return PhraseFor(control, accessibleName);
-    }
-
-    string text = Clean(control.Text);
-    if (text.Length > 0)
-    {
-      source = "control-text";
-      return PhraseFor(control, text);
-    }
-
-    string label = FindAssociatedLabel(control);
-    if (label.Length > 0)
-    {
-      source = "associated-label";
-      return PhraseFor(control, label);
-    }
-
-    string ancestor = FindAncestorIdentity(control);
-    if (ancestor.Length > 0)
-    {
-      source = "ancestor";
-      return PhraseFor(control, ancestor);
-    }
-
-    source = "control-type";
-    return control.GetType().Name switch
-    {
-      "WebView2" => "Transcript viewer.",
-      "ColorWheel" => "Select a colour.",
-      "ColorEditor" => "Edit colour values.",
-      _ when control is ComboBox => "Choose a value.",
-      _ when control is NumericUpDown => "Adjust this numeric value.",
-      _ when control is TrackBar => "Adjust this setting.",
-      _ when control is TextBoxBase textBox && textBox.ReadOnly =>
-        "View this value.",
-      _ when control is TextBoxBase => "Edit this value.",
-      _ when control is TreeView => "Browse and select items.",
-      _ when control is TabControl => "Switch between available views.",
-      _ when control is ButtonBase => "Activate this control.",
-      _ => "Use this control."
-    };
-  }
-
-  private static string PhraseFor(Control control, string identity)
-  {
-    string subject = Clean(identity).TrimEnd('.', ':');
-    if (subject.Length == 0)
-    {
-      return "Use this control.";
-    }
-
-    if (control is CheckBox)
-    {
-      return $"Toggle {LowerInitial(subject)}.";
-    }
-    if (control is RadioButton)
-    {
-      return $"Select {LowerInitial(subject)}.";
-    }
-    if (control is LinkLabel)
-    {
-      return $"Open {LowerInitial(subject)}.";
-    }
-    if (control is ComboBox)
-    {
-      return $"Choose {LowerInitial(subject)}.";
-    }
-    if (control is NumericUpDown or TrackBar)
-    {
-      return $"Adjust {LowerInitial(subject)}.";
-    }
-    if (control is TextBoxBase textBox)
-    {
-      return textBox.ReadOnly
-        ? $"View {LowerInitial(subject)}."
-        : $"Edit {LowerInitial(subject)}.";
-    }
-    if (control is TreeView or ListBox)
-    {
-      return $"Select {LowerInitial(subject)}.";
-    }
-    if (control is TabControl)
-    {
-      return $"Switch {LowerInitial(subject)}.";
-    }
-
-    return subject.EndsWith(".", StringComparison.Ordinal)
-      ? subject
-      : subject + ".";
-  }
-
-  private static string FindAssociatedLabel(Control control)
-  {
-    Control? parent = control.Parent;
-    if (parent is null)
+    if (description.Length == 0 || IsRedundantVisibleText(control, description))
     {
       return string.Empty;
     }
 
-    if (parent is TableLayoutPanel table)
-    {
-      TableLayoutPanelCellPosition position = table.GetPositionFromControl(control);
-      Label? best = null;
-      int bestColumn = int.MinValue;
-      foreach (Control sibling in parent.Controls)
-      {
-        if (sibling is not Label label)
-        {
-          continue;
-        }
-        TableLayoutPanelCellPosition labelPosition =
-          table.GetPositionFromControl(label);
-        if (labelPosition.Row == position.Row &&
-            labelPosition.Column < position.Column &&
-            labelPosition.Column > bestColumn)
-        {
-          best = label;
-          bestColumn = labelPosition.Column;
-        }
-      }
-      string tableLabel = Clean(best?.Text);
-      if (tableLabel.Length > 0)
-      {
-        return tableLabel;
-      }
-    }
-
-    int index = parent.Controls.GetChildIndex(control, throwException: false);
-    for (int siblingIndex = index + 1;
-         siblingIndex < parent.Controls.Count;
-         ++siblingIndex)
-    {
-      if (parent.Controls[siblingIndex] is Label label)
-      {
-        string text = Clean(label.Text);
-        if (text.Length > 0)
-        {
-          return text;
-        }
-      }
-    }
-
-    return string.Empty;
+    return description;
   }
 
-  private static string FindAncestorIdentity(Control control)
+  private static bool IsRedundantVisibleText(
+    Control control,
+    string description)
   {
-    for (Control? ancestor = control.Parent;
-         ancestor is not null;
-         ancestor = ancestor.Parent)
+    if (string.Equals(
+          Clean(control.Text),
+          description,
+          StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+          Clean(control.AccessibleName),
+          description,
+          StringComparison.OrdinalIgnoreCase))
     {
-      string description = Clean(ancestor.AccessibleDescription);
-      if (description.Length > 0)
+      return true;
+    }
+
+    Control root = GetRoot(control);
+    foreach (Control candidate in Enumerate(root))
+    {
+      if (ReferenceEquals(candidate, control) || candidate is not Label)
       {
-        return description;
+        continue;
       }
-      string name = Clean(ancestor.AccessibleName);
-      if (name.Length > 0)
+
+      if (string.Equals(
+            Clean(candidate.Text),
+            description,
+            StringComparison.Ordinal))
       {
-        return name;
-      }
-      if (ancestor is GroupBox or TabPage)
-      {
-        string text = Clean(ancestor.Text);
-        if (text.Length > 0)
-        {
-          return text;
-        }
+        return true;
       }
     }
-    return string.Empty;
+
+    return false;
+  }
+
+  private static Control GetRoot(Control control)
+  {
+    Control root = control;
+    while (root.Parent is not null)
+    {
+      root = root.Parent;
+    }
+    return root;
   }
 
   private static string Clean(string? value)
   {
-    return (value ?? string.Empty)
-      .Replace("&", string.Empty, StringComparison.Ordinal)
-      .Trim();
-  }
-
-  private static string LowerInitial(string value)
-  {
-    if (value.Length == 0 || !char.IsUpper(value[0]))
-    {
-      return value;
-    }
-    if (value.Length == 1)
-    {
-      return char.ToLowerInvariant(value[0]).ToString();
-    }
-    return char.ToLowerInvariant(value[0]) + value[1..];
+    return (value ?? string.Empty).Trim();
   }
 }
