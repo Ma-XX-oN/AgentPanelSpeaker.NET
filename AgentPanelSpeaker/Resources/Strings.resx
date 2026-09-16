@@ -42,7 +42,7 @@
   <data name="Main.Theme.Name" xml:space="preserve"><value>Application theme</value></data>
   <data name="Main.Theme.Description" xml:space="preserve"><value>Choose whether AgentPanelSpeaker follows the system theme or uses light or dark mode.</value></data>
   <data name="Main.Pronunciations.Name" xml:space="preserve"><value>Pronunciations</value></data>
-  <data name="Main.Pronunciations.Description" xml:space="preserve"><value>Open spelling and pronunciation rules, including IPA pronunciations.</value></data>
+  <data name="Main.Pronunciations.Description" xml:space="preserve"><value>Open spell-out and IPA pronunciation rules.</value></data>
   <data name="Main.BluetoothWake.Name" xml:space="preserve"><value>Bluetooth audio wake settings</value></data>
   <data name="Main.BluetoothWake.Description" xml:space="preserve"><value>Configure the wake audio used to keep Bluetooth devices ready for speech.</value></data>
   <data name="Main.BluetoothWake.Tooltip" xml:space="preserve"><value>Configure the wake audio used to keep Bluetooth devices ready for speech.</value></data>
