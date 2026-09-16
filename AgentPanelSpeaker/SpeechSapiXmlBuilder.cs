@@ -212,11 +212,11 @@ internal static partial class SpeechSapiXmlBuilder
           }
           else
           {
-            AppendMappedReplacement(
+            AppendMappedSubstitution(
               output,
+              next.Match.Value,
               pronunciation.Value,
               next.Match.Index,
-              next.Match.Length,
               provenance);
           }
           break;
@@ -247,38 +247,38 @@ internal static partial class SpeechSapiXmlBuilder
           break;
 
         case SpecialMatchKind.IsoDateTime:
-          AppendMappedReplacement(
+          AppendMappedSubstitution(
             output,
+            next.Match.Value,
             FormatIsoDateTime(next.Match.Value),
             next.Match.Index,
-            next.Match.Length,
             provenance);
           break;
 
         case SpecialMatchKind.IsoDate:
-          AppendMappedReplacement(
+          AppendMappedSubstitution(
             output,
+            next.Match.Value,
             FormatIsoDate(next.Match.Value),
             next.Match.Index,
-            next.Match.Length,
             provenance);
           break;
 
         case SpecialMatchKind.NumericDate:
-          AppendMappedReplacement(
+          AppendMappedSubstitution(
             output,
+            next.Match.Value,
             FormatNumericDate(next.Match.Value),
             next.Match.Index,
-            next.Match.Length,
             provenance);
           break;
 
         case SpecialMatchKind.Time:
-          AppendMappedReplacement(
+          AppendMappedSubstitution(
             output,
+            next.Match.Value,
             FormatTime(next.Match.Value),
             next.Match.Index,
-            next.Match.Length,
             provenance);
           break;
       }
@@ -434,27 +434,36 @@ internal static partial class SpeechSapiXmlBuilder
   }
 
   /// <summary>
-  /// Appends transformed speech text whose complete emitted range is owned by
-  /// the complete original source range.
+  /// Speaks replacement text while keeping the canonical source text in the
+  /// SSML text node so bookmark construction retains exact source coordinates.
+  /// Both the alias and displayed source text retain the same source ownership.
   /// </summary>
-  private static void AppendMappedReplacement(
+  private static void AppendMappedSubstitution(
     StringBuilder output,
-    string text,
+    string sourceText,
+    string spokenText,
     int sourceStart,
-    int sourceLength,
     ICollection<SpeechMarkupProvenanceSpan> provenance)
   {
-    string escaped = SecurityElement.Escape(text) ?? string.Empty;
-    int ssmlStart = output.Length;
-    output.Append(escaped);
-    if (escaped.Length != 0 && sourceLength > 0)
+    output.Append("<sub alias=\"");
+    int aliasSsmlStart = output.Length;
+    AppendAttributeEscaped(output, spokenText);
+    int aliasSsmlLength = output.Length - aliasSsmlStart;
+    if (aliasSsmlLength != 0 && sourceText.Length != 0)
     {
       provenance.Add(new SpeechMarkupProvenanceSpan(
-        ssmlStart,
-        escaped.Length,
+        aliasSsmlStart,
+        aliasSsmlLength,
         sourceStart,
-        sourceLength));
+        sourceText.Length));
     }
+    output.Append("\">");
+    AppendMappedIdentity(
+      output,
+      sourceText,
+      sourceStart,
+      provenance);
+    output.Append("</sub>");
   }
 
   /// <summary>
