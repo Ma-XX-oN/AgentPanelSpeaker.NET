@@ -243,6 +243,37 @@ sequenceDiagram
 
 The WebView does not decide which provider record corresponds to a speech fragment. That relationship must already have been established by canonical identity mapping.
 
+## SSML ownership bookmark boundary
+
+Windows.Media word highlighting uses ownership bookmarks generated from exact
+`SpeechMarkup.SsmlProvenance`.  Source offsets must never be reinterpreted as
+offsets into transformed SSML text: pronunciation substitution, spelling,
+date/time expansion, phoneme markup, and future synthesis transforms are
+allowed to change emitted text length and structure without changing canonical
+word ownership.
+
+Ownership `<mark>` elements are structural timing markers, not pronunciation
+content.  They may be inserted only at a bookmark-safe SSML container boundary.
+The current safe containers are the document `speak` element and the enclosing
+`prosody` element.  Every element between the owned text node and that safe
+container is treated as an atomic synthesis wrapper.  The bookmark is hoisted
+before the outermost such wrapper, so it cannot appear inside `say-as`, `sub`,
+`phoneme`, a nested combination of those elements, or a future transform that
+introduces another wrapper.
+
+This rule is deliberately expressed as a safe-boundary invariant rather than a
+blacklist of known-invalid element names.  Adding another synthesis transform
+must not require teaching bookmark placement about one more special-case tag.
+Nested wrappers must be escaped as one unit; moving a bookmark outside only the
+nearest wrapper is insufficient.
+
+If exact provenance cannot establish ownership, bookmark generation must fail
+rather than guess, interpolate, or text-match an approximate boundary.  The #88
+contract then degrades that fragment to whole-fragment highlighting.  Permanent
+speech-ownership regressions must cover both transformed text and nested SSML
+wrappers, and must fail if an ownership mark is emitted inside a synthesis
+wrapper.
+
 ## Find and virtualization
 
 ```mermaid
@@ -272,3 +303,8 @@ Find must be able to locate content that is not currently materialized. A hit fi
 - Speech navigation uses eligibility over stable history rather than rebuilding history.
 - Cancellation/restart preserves the selected canonical destination.
 - Display, speech, search, and highlighting use the same source/node namespace.
+- Windows.Media ownership bookmarks come from exact SSML provenance and are
+  placed only at bookmark-safe container boundaries, never inside synthesis
+  wrappers.
+- New or nested speech transforms must preserve that bookmark-placement
+  invariant without adding tag-specific exceptions.
