@@ -49,9 +49,10 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
 
   /// <summary>
   /// Exercises the real MainFormClosing path through MainFormTestLease and
-  /// requires the transcript WebView2 to be disposed before the MainForm HWND
-  /// is destroyed. The production #128 log shows the inverse order immediately
-  /// before WebView2.Dispose accesses an already-invalid CoreWebView2 profile.
+  /// requires the transcript WebView2 to be disposed exactly once before the
+  /// MainForm HWND is destroyed. The production #128 log shows the inverse
+  /// order immediately before WebView2.Dispose accesses an already-invalid
+  /// CoreWebView2 profile.
   /// </summary>
   private static void TestWebViewPrecedesOwnerHandleDestruction()
   {
@@ -62,11 +63,11 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
 
     bool ownerHandleDestroyed = false;
     bool webViewDisposedBeforeOwnerHandle = false;
-    bool webViewDisposedObserved = false;
+    int webViewDisposeCount = 0;
     Exception? disposeFailure = null;
 
     void WebViewDisposed(object? sender, EventArgs eventArgs) =>
-      webViewDisposedObserved = true;
+      webViewDisposeCount++;
     void OwnerHandleDestroyed(object? sender, EventArgs eventArgs)
     {
       ownerHandleDestroyed = true;
@@ -99,8 +100,9 @@ internal static class Issue128WebViewShutdownRegressionTestRunner
         ownerHandleDestroyed,
         "Production MainForm teardown did not destroy the owner handle.");
       Require(
-        webViewDisposedObserved,
-        "Production MainForm teardown never disposed the transcript WebView2.");
+        webViewDisposeCount == 1,
+        "Production MainForm teardown disposed the transcript WebView2 " +
+        $"{webViewDisposeCount} times instead of exactly once.");
       Require(
         webViewDisposedBeforeOwnerHandle,
         "Transcript WebView2 was still live when MainForm destroyed its native " +
