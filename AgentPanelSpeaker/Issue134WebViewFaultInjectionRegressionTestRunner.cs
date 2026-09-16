@@ -87,8 +87,13 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
 
   private static void RealWebViewOwnerDestroyedBeforeDispose()
   {
+    Task<WebViewShutdownFaultScenario> createTask =
+      WebViewShutdownFaultScenario.CreateAsync();
+    PumpUntil(
+      () => createTask.IsCompleted,
+      "diagnostic WebView2 initialization");
     WebViewShutdownFaultScenario scenario =
-      WebViewShutdownFaultScenario.CreateAsync().GetAwaiter().GetResult();
+      createTask.GetAwaiter().GetResult();
     Require(
       scenario.CoreInitialized,
       "diagnostic scenario did not initialize a real CoreWebView2.");
@@ -150,6 +155,20 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
     {
       yield return current;
     }
+  }
+
+  private static void PumpUntil(
+    Func<bool> predicate,
+    string description,
+    int timeoutMilliseconds = 30000)
+  {
+    DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMilliseconds);
+    while (!predicate() && DateTime.UtcNow < deadline)
+    {
+      Application.DoEvents();
+      Thread.Sleep(10);
+    }
+    Require(predicate(), $"Timed out waiting for {description}.");
   }
 
   private static void Require(bool condition, string message)
