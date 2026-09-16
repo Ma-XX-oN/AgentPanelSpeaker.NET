@@ -28,6 +28,8 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
         TestTrackingDegradationContract),
       ("speech-ownership/spell-out-token-can-span-ssml-nodes",
         TestSpellOutTokenCanSpanSsmlNodes),
+      ("speech-ownership/transformed-ssml-retains-canonical-bookmarks",
+        TestTransformedSsmlRetainsCanonicalBookmarks),
       ("speech-ownership/browser-has-fragment-wrapper-path",
         TestBrowserHasFragmentWrapperPath),
       ("speech-ownership/fragment-ids-assigned-by-monitor",
@@ -180,6 +182,42 @@ internal static class Issue88SpeechOwnershipRegressionTestRunner
       "Spell-out ownership mark is not immediately before say-as.");
     Require(!sayAs.Descendants().Any(element => element.Name.LocalName == "mark"),
       "Spell-out say-as still contains a nested ownership mark.");
+  }
+
+  private static void TestTransformedSsmlRetainsCanonicalBookmarks()
+  {
+    var markup = new SpeechMarkup(
+      "jsonl done.",
+      "jsonl done.",
+      "jay son ell done.",
+      Words: new[]
+      {
+        new SpeechMarkupWord(0, "jsonl", 0, 5),
+        new SpeechMarkupWord(1, "done", 6, 4),
+        new SpeechMarkupWord(2, ".", 10, 1)
+      },
+      SsmlProvenance: new[]
+      {
+        new SpeechMarkupProvenanceSpan(0, 11, 0, 5),
+        new SpeechMarkupProvenanceSpan(11, 1, 5, 1),
+        new SpeechMarkupProvenanceSpan(12, 4, 6, 4),
+        new SpeechMarkupProvenanceSpan(16, 1, 10, 1)
+      });
+    MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
+      "TryBuildBookmarkedSsml",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "Windows.Media bookmark builder is missing.");
+    object?[] arguments = { markup, "en-US", null };
+    bool built = Convert.ToBoolean(method.Invoke(null, arguments));
+    Require(built,
+      "A source-changing SSML transform caused canonical bookmark construction to fail.");
+    string ssml = arguments[2] as string ?? string.Empty;
+    foreach (int wordIndex in new[] { 0, 1, 2 })
+    {
+      Require(ssml.Contains($"aps_{wordIndex}", StringComparison.Ordinal),
+        $"Canonical word {wordIndex} has no ownership bookmark after SSML transformation.");
+    }
   }
 
   private static void TestBrowserHasFragmentWrapperPath()
