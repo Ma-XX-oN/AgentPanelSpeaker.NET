@@ -115,7 +115,7 @@ internal static class Issue134WebViewFaultInjectionRegressionTestRunner
     Exception? providerFault = null;
     try
     {
-      scenario.DisposeWebView();
+      scenario.TriggerDisposedStateFault();
     }
     catch (Exception exception)
     {
