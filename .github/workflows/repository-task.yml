@@ -21,7 +21,7 @@ on:
       - 'issue-*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   task:
@@ -48,38 +48,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-
-      - name: Apply issue 138 compatibility fix
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sourceEntry = git ls-files -s -- AgentPanelSpeaker/TranscriptView.cs
-          $sourceSha = ($sourceEntry -split '\s+')[1]
-          if ($sourceSha -ne '9f28c2be2643c44211fbdaf8c52de15327d7bc88') {
-            throw "Unexpected TranscriptView.cs blob: $sourceSha"
-          }
-          $testEntry = git ls-files -s -- AgentPanelSpeaker/Issue138LiveTailDomPreservationRegressionTestRunner.cs
-          $testSha = ($testEntry -split '\s+')[1]
-          if ($testSha -ne '70c0bc5cddbfdac4d03f7dffb0d4b5e0643751c7') {
-            throw "Unexpected issue #138 test blob: $testSha"
-          }
-          python -m py_compile tools/Issue138CompatibilityPatch.py
-          if ($LASTEXITCODE -ne 0) { throw 'Compatibility patcher compilation failed.' }
-          python tools/Issue138CompatibilityPatch.py --check
-          if ($LASTEXITCODE -ne 0) { throw 'Compatibility patch dry-run failed.' }
-          python tools/Issue138CompatibilityPatch.py
-          if ($LASTEXITCODE -ne 0) { throw 'Compatibility patch application failed.' }
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { throw 'Compatibility patch whitespace validation failed.' }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add AgentPanelSpeaker/TranscriptView.cs AgentPanelSpeaker/Issue138LiveTailDomPreservationRegressionTestRunner.cs
-          git diff --cached --check
-          if ($LASTEXITCODE -ne 0) { throw 'Staged compatibility patch validation failed.' }
-          git commit -m 'fix: retain legacy transcript replacement path'
-          if ($LASTEXITCODE -ne 0) { throw 'Compatibility patch commit failed.' }
-          git push origin HEAD:issue-138-live-tail-dom-preservation
-          if ($LASTEXITCODE -ne 0) { throw 'Compatibility patch push failed.' }
 
       - name: Run checked-in repository task
         shell: pwsh
