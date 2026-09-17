@@ -434,7 +434,7 @@ internal sealed class TranscriptView : UserControl
     {
       _lastLocatedContentPosition = position;
     }
-    if (!_initialized || _refreshInProgress)
+    if (!_initialized)
     {
       return;
     }
@@ -449,6 +449,11 @@ internal sealed class TranscriptView : UserControl
     {
       PostSpeechFragments();
       PostPlaybackPosition(position);
+      return;
+    }
+
+    if (_refreshInProgress)
+    {
       return;
     }
 
@@ -3069,6 +3074,7 @@ voicePolicyStyle.id = 'voice-policy-style';
 document.head.append(voicePolicyStyle);
 const openDisclosureOverrides = new Set();
 let discardDisclosureStateOnNextReplacement = false;
+const virtualRecordSourceHtml = new WeakMap();
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(
@@ -3171,6 +3177,82 @@ function wrapWords(nodeMap = null) {
   wrapWordsForRecordKeys(
     nodeMap === null ? null : nodeRecordKeys(nodeMap),
     false);
+}
+
+function reindexWrappedWords() {
+  words = Array.from(transcript.querySelectorAll('.word'));
+  lexicalWords = words.filter(word => word.dataset.lexical === '1');
+  for (let index = 0; index < words.length; ++index) {
+    words[index].dataset.index = String(index);
+  }
+}
+
+function virtualRecordUnitId(record) {
+  const marker = record.querySelector(
+    '.aicore-structural-unit[data-aicore-unit-id]');
+  const unitId = marker?.getAttribute('data-aicore-unit-id') || '';
+  if (!unitId) {
+    throw new Error('Virtual transcript record is missing a Core unit ID.');
+  }
+  return unitId;
+}
+
+function createVirtualSpacer(edge, height) {
+  const spacer = document.createElement('div');
+  spacer.className = 'virtual-spacer';
+  spacer.dataset.virtualSpacer = edge;
+  spacer.style.height = Math.max(0, Number(height) || 0) + 'px';
+  return spacer;
+}
+
+function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  for (const node of template.content.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE && !node.textContent.trim()) continue;
+    if (node.nodeType !== Node.ELEMENT_NODE ||
+        !node.classList.contains('virtual-record')) {
+      throw new Error(
+        'Virtual transcript window contains a non-record top-level node.');
+    }
+  }
+
+  const existingByUnitId = new Map();
+  for (const child of transcript.children) {
+    if (!child.classList.contains('virtual-record')) continue;
+    const unitId = virtualRecordUnitId(child);
+    if (existingByUnitId.has(unitId)) {
+      throw new Error('Duplicate materialized Core unit ID: ' + unitId);
+    }
+    existingByUnitId.set(unitId, child);
+  }
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(createVirtualSpacer('top', topSpacerHeight));
+  const incomingUnitIds = new Set();
+  for (const incoming of template.content.children) {
+    const unitId = virtualRecordUnitId(incoming);
+    if (incomingUnitIds.has(unitId)) {
+      throw new Error('Duplicate incoming Core unit ID: ' + unitId);
+    }
+    incomingUnitIds.add(unitId);
+    const sourceHtml = incoming.innerHTML;
+    const existing = existingByUnitId.get(unitId);
+    if (existing && virtualRecordSourceHtml.get(existing) === sourceHtml) {
+      const virtualIndex = incoming.getAttribute('data-virtual-index');
+      if (virtualIndex === null) {
+        throw new Error('Virtual transcript record is missing its index.');
+      }
+      existing.setAttribute('data-virtual-index', virtualIndex);
+      fragment.append(existing);
+      continue;
+    }
+
+    virtualRecordSourceHtml.set(incoming, sourceHtml);
+    fragment.append(incoming);
+  }
+  fragment.append(createVirtualSpacer('bottom', bottomSpacerHeight));
+  transcript.replaceChildren(fragment);
 }
 
 function structureDetailsKey(details) {
@@ -3594,7 +3676,10 @@ function replaceTranscriptWindow(
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   let phaseStarted = performance.now();
-  transcript.innerHTML = exactAssignedHtml;
+  reconcileTranscriptWindow(
+    html,
+    topSpacerHeight,
+    bottomSpacerHeight);
   resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
   const innerHtmlMilliseconds = performance.now() - phaseStarted;
@@ -3629,6 +3714,7 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-details-restore';
   phaseStarted = performance.now();
   wrapWords(nodeMap || []);
+  reindexWrappedWords();
   wrapSpeechFragments();
   const wrapWordsMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(
