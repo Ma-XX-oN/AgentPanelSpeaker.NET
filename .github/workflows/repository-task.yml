@@ -21,7 +21,7 @@ on:
       - 'issue-*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   task:
@@ -48,6 +48,33 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Apply issue 138 raw transcript compatibility fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $entry = git ls-files -s -- AgentPanelSpeaker/TranscriptView.cs
+          $sourceSha = ($entry -split '\s+')[1]
+          if ($sourceSha -ne '821235e2c70cb29b8488390b3ae888968ed6debd') {
+            throw "Unexpected TranscriptView.cs blob: $sourceSha"
+          }
+          python -m py_compile tools/Issue138RawTranscriptPatch.py
+          if ($LASTEXITCODE -ne 0) { throw 'Raw transcript patcher compilation failed.' }
+          python tools/Issue138RawTranscriptPatch.py --check
+          if ($LASTEXITCODE -ne 0) { throw 'Raw transcript patch dry-run failed.' }
+          python tools/Issue138RawTranscriptPatch.py
+          if ($LASTEXITCODE -ne 0) { throw 'Raw transcript patch application failed.' }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Raw transcript patch whitespace validation failed.' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { throw 'Staged raw transcript patch validation failed.' }
+          git commit -m 'fix: preserve raw transcript replacement API'
+          if ($LASTEXITCODE -ne 0) { throw 'Raw transcript patch commit failed.' }
+          git push origin HEAD:issue-138-live-tail-dom-preservation
+          if ($LASTEXITCODE -ne 0) { throw 'Raw transcript patch push failed.' }
 
       - name: Run checked-in repository task
         shell: pwsh
