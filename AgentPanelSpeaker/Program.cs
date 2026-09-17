@@ -317,6 +317,19 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "live-tail-dom",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "live-tail-dom",
+          () => RunWithWinFormsMessageLoop(
+            Issue138LiveTailDomPreservationRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -376,6 +389,8 @@ internal static class Program
         "system-speech-native-timing");
       int webViewShutdown = RunIsolatedTestSuite(
         "webview-shutdown");
+      int liveTailDom = RunIsolatedTestSuite(
+        "live-tail-dom");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -404,7 +419,8 @@ internal static class Program
                              previewCursor == 0 &&
                              systemSpeechProvenance == 0 &&
                              systemSpeechNativeTiming == 0 &&
-                             webViewShutdown == 0
+                             webViewShutdown == 0 &&
+                             liveTailDom == 0
         ? 0
         : 1;
       Console.WriteLine(
