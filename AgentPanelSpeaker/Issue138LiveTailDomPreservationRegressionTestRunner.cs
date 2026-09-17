@@ -25,7 +25,9 @@ internal static class Issue138LiveTailDomPreservationRegressionTestRunner
       ("live-tail-dom/legacy-window-retains-full-replacement-path",
         TestLegacyWindowRetainsFullReplacementPath),
       ("live-tail-dom/playback-message-continues-during-refresh",
-        TestPlaybackMessageContinuesDuringRefresh)
+        TestPlaybackMessageContinuesDuringRefresh),
+      ("live-tail-dom/production-live-playback-and-source-appends",
+        Issue138LiveTailProductionIntegrationTest.Run)
     };
 
     int failures = 0;
