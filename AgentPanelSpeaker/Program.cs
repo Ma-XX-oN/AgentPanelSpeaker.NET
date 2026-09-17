@@ -319,6 +319,22 @@ internal static class Program
       if (args.Length == 2 &&
           string.Equals(
             args[1],
+            "live-tail-production",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "live-tail-production",
+          () => RunWithWinFormsMessageLoop(() =>
+          {
+            Issue138LiveTailProductionIntegrationTest.Run();
+            return 0;
+          }));
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
             "live-tail-dom",
             StringComparison.OrdinalIgnoreCase))
       {

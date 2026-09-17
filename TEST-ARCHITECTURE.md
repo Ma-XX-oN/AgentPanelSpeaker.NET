@@ -52,6 +52,37 @@ For UI-setting acceptance, the test must operate the actual control/event path.
 Calling `TranscriptSettingsChanged()` directly is handler/component coverage,
 not evidence that the user-facing checkbox is wired correctly.
 
+## Windows hosted CI capability
+
+The GitHub `windows-latest` runner is a valid production-integration test
+environment for UI and speech paths.  Existing tests have demonstrated that it
+can:
+
+- show the real production `MainForm` and pump the WinForms event loop;
+- initialize and manipulate the real WebView2 control;
+- manipulate real WinForms controls and production event handlers;
+- execute JavaScript against the production WebView2 DOM;
+- run native `System.Speech` and `Windows.Media` speech synthesis;
+- receive speech progress and boundary events;
+- start the production `SpeechService` and reach active `IsSpeaking`;
+- mutate live source data while the application is running; and
+- inspect production diagnostics as a behavioural oracle.
+
+Do not reject a CI test merely because it uses WinForms, WebView2, or native
+speech synthesis.  Before requiring a real-machine acceptance test, first
+determine whether the scenario can use those production paths on Windows CI.
+
+The hosted runner does not currently expose a default WinMM audio output device.
+A test that reaches the production WinMM playback path can fail at
+`waveOutOpen` with `MMSYSERR_BADDEVICEID` (WinMM error 2).  Keep tests that
+require real audio-device playback as explicit hardware suites rather than
+weakening them with fake audio.
+
+This limitation does not make native speech timing useless.  Tests that do not
+require actual waveOut playback should use sensible timing tolerances; timing
+only needs to be close and stable enough to make the protected behaviour
+meaningful unless exact timing is itself the requirement.
+
 ## Test-process completion is part of correctness
 
 `AgentPanelSpeaker` is a Windows GUI-subsystem executable (`WinExe`).  A shell

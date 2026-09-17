@@ -11,6 +11,9 @@ namespace AgentPanelSpeaker;
 /// Black-box production-path verification for issue #138.  The test drives the
 /// real MainForm, WebView2, monitor, SpeechService, source-file tail, and
 /// diagnostic log rather than calling the DOM reconciliation function directly.
+/// It requires a working Windows multimedia output device because it starts the
+/// production WinMM playback path.  Hosted GitHub Windows runners currently have
+/// no default WinMM output device, so this suite is intentionally hardware-only.
 /// </summary>
 internal static class Issue138LiveTailProductionIntegrationTest
 {

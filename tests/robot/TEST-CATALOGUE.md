@@ -25,7 +25,23 @@ Robot's own suite discovery remains the executable source of truth.
 | `regression/issue_118_tooltip_integration.robot` | `regression`, `issue-118`, `permanent`, `ui`, `tooltip` | Central tooltip wiring for utility controls, disabled-control hover, wording, and pointer clearance. |
 | `regression/issue_121_systemic_tooltip_sizing.robot` | `regression`, `issue-121`, `permanent`, `ui`, `tooltip` | Central tooltip sizing, multiline preservation, working-area wrapping, screen-edge placement, and production Popup sizing registration. |
 | `regression/issue_123_tooltip_coverage.robot` | `regression`, `issue-123`, `permanent`, `ui`, `tooltip` | Application-wide tooltip coverage policy, AppToolTip central registration auditing, hover-popup exemptions, and UiText description reuse. |
-| `regression/issue_138_live_tail_dom_preservation.robot` | `regression`, `issue-138`, `permanent`, `ui`, `speech`, `live-tail` | Real MainForm/WebView2/SpeechService playback while a monitored Codex JSONL grows, exact DOM object retention for unchanged record/Core-unit/word nodes, continued word-boundary progress, no production playback-word DOM-loss diagnostic, exactly-once tail rendering, and a deliberate removed-word mutation proving the same diagnostic oracle turns RED. |
+| `regression/issue_138_live_tail_dom_preservation.robot` | `regression`, `issue-138`, `permanent`, `ui`, `speech`, `live-tail` | Runs the hardware-independent `live-tail-dom` suite in the real application process: unchanged Core-unit/word DOM identity, changed/tail replacement semantics, playback messages during refresh, the legacy replacement path, and the live-end refresh race retaining the last spoken content anchor. |
+
+### Hardware-dependent issue #138 acceptance
+
+The real-audio production acceptance is intentionally separate from hosted
+Robot execution:
+
+```text
+AgentPanelSpeaker.exe --test live-tail-production
+```
+
+That named suite drives the real `MainForm`, WebView2,
+`JsonlSessionMonitor`, `SpeechService`, monitored Codex JSONL growth, DOM
+identity probes, continued word-boundary progress, and the production diagnostic
+oracle.  It requires a working WinMM output device.  GitHub-hosted Windows
+runners currently provide the UI/WebView2/native synthesis environment but no
+default WinMM output device.
 
 When a new permanent regression is added, add it to an appropriate `.robot`
 suite and update this catalogue when it introduces a new behaviour category or
