@@ -1,15 +1,15 @@
 *** Settings ***
 Resource      ../resources/TemplatesV1.resource
-Force Tags    regression    issue-138    permanent    ui    speech    live-tail
+Force Tags    regression    issue-138    permanent    ui    live-tail
 
 *** Test Cases ***
-Active Playback Retains DOM Identity During Live Tail Growth
+Live Tail DOM Preservation Suite Passes
     ${result}=    Run Process    ${APP_EXE}    --test    live-tail-dom    stdout=PIPE    stderr=STDOUT
     Should Be Equal As Integers    ${result.rc}    0
     ...    msg=AgentPanelSpeaker live-tail suite failed. Output: ${result.stdout}
     Should Contain
     ...    ${result.stdout}
-    ...    PASS  live-tail-dom/production-live-playback-and-source-appends
+    ...    PASS  live-tail-dom/live-end-refresh-retains-last-content-anchor
     Should Contain
     ...    ${result.stdout}
     ...    TEST-SUITE-COMPLETE live-tail-dom exit=0
