@@ -2227,11 +2227,28 @@ internal sealed class TranscriptView : UserControl
     TranscriptVirtualDocument document,
     IReadOnlyList<TranscriptNodeIdentity> identities)
   {
-    return _settings.FollowSpeech &&
-      _pendingPosition is TranscriptPlaybackPosition position &&
-      TryResolvePositionIndex(document, identities, position, out int index)
-        ? index
-        : Math.Max(0, document.Count - 1);
+    if (!_settings.FollowSpeech)
+    {
+      return Math.Max(0, document.Count - 1);
+    }
+
+    if (_pendingPosition is TranscriptPlaybackPosition position &&
+        TryResolvePositionIndex(document, identities, position, out int index))
+    {
+      return index;
+    }
+
+    bool waitingAtLiveEnd =
+      _pendingPosition?.State is TranscriptPlaybackState.WaitingAtLiveEnd or
+        TranscriptPlaybackState.PausedAtLiveEnd;
+    if (waitingAtLiveEnd &&
+        _lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+        TryResolvePositionIndex(document, identities, located, out index))
+    {
+      return index;
+    }
+
+    return Math.Max(0, document.Count - 1);
   }
 
   private static bool TryResolvePositionIndex(
