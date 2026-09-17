@@ -8,6 +8,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $requirements = Join-Path $repoRoot 'requirements-test.txt'
 $tests = Join-Path $repoRoot 'tests\robot'
 $appProject = Join-Path $repoRoot 'AgentPanelSpeaker\AgentPanelSpeaker.csproj'
+$appExe = Join-Path $repoRoot 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
 $probeProject = Join-Path $repoRoot 'tests\AgentPanelSpeaker.TestProbe\AgentPanelSpeaker.TestProbe.csproj'
 $probeExe = Join-Path $repoRoot 'tests\AgentPanelSpeaker.TestProbe\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.TestProbe.exe'
 $outputRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
@@ -23,6 +24,10 @@ if (-not $SkipBuildPreparation) {
   if ($LASTEXITCODE -ne 0) {
     throw 'Building AgentPanelSpeaker for Robot probes failed.'
   }
+}
+
+if (-not (Test-Path -LiteralPath $appExe)) {
+  throw "AgentPanelSpeaker executable was not produced: $appExe"
 }
 
 & dotnet build $probeProject --configuration Release
@@ -46,6 +51,7 @@ try {
     '--outputdir', $outputRoot,
     '--log', 'NONE',
     '--report', 'NONE',
+    '--variable', "APP_EXE:$appExe",
     '--variable', "TEST_PROBE:$probeExe"
   )
   $arguments += $RobotArguments
