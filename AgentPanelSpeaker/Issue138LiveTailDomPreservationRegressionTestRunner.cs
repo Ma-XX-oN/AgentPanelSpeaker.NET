@@ -26,8 +26,8 @@ internal static class Issue138LiveTailDomPreservationRegressionTestRunner
         TestLegacyWindowRetainsFullReplacementPath),
       ("live-tail-dom/playback-message-continues-during-refresh",
         TestPlaybackMessageContinuesDuringRefresh),
-      ("live-tail-dom/production-live-playback-and-source-appends",
-        Issue138LiveTailProductionIntegrationTest.Run)
+      ("live-tail-dom/live-end-refresh-retains-last-content-anchor",
+        TestLiveEndRefreshRetainsLastContentAnchor)
     };
 
     int failures = 0;
@@ -279,6 +279,63 @@ replaceTranscriptWindow(
     {
       SetField(view, "_refreshInProgress", false);
     }
+  }
+
+  /// <summary>
+  /// A refresh that begins while speech is active can finish after playback has
+  /// transitioned to the live-end waiting state.  The pending waiting marker has
+  /// no content node, so Follow must retain the last located spoken content as
+  /// the render anchor instead of jumping to a newer unspoken tail unit.
+  /// </summary>
+  private static void TestLiveEndRefreshRetainsLastContentAnchor()
+  {
+    using var view = new TranscriptView();
+    TranscriptSettings settings = ReadField<TranscriptSettings>(view, "_settings") with
+    {
+      FollowSpeech = true
+    };
+    SetField(view, "_settings", settings);
+
+    TranscriptVirtualDocument document = TranscriptVirtualDocument.Build(
+      "<span class=\"record-anchor\" data-jsonl-record=\"1\"></span><p>before</p>" +
+      "<span class=\"record-anchor\" data-jsonl-record=\"2\"></span><p>spoken</p>" +
+      "<span class=\"record-anchor\" data-jsonl-record=\"3\"></span><p>new tail</p>");
+    IReadOnlyList<TranscriptNodeIdentity> identities = new[]
+    {
+      new TranscriptNodeIdentity(112, 1, Array.Empty<string>()),
+      new TranscriptNodeIdentity(113, 2, Array.Empty<string>()),
+      new TranscriptNodeIdentity(114, 3, Array.Empty<string>())
+    };
+
+    SetField(view, "_lastLocatedContentPosition", new TranscriptPlaybackPosition(
+      TranscriptPlaybackState.Speaking,
+      "spoken",
+      0,
+      "spoken",
+      113,
+      0,
+      6,
+      Stopwatch.GetTimestamp(),
+      WordId: 6337));
+    SetField(view, "_pendingPosition", new TranscriptPlaybackPosition(
+      TranscriptPlaybackState.WaitingAtLiveEnd,
+      string.Empty,
+      0,
+      string.Empty,
+      -1,
+      0,
+      0,
+      Stopwatch.GetTimestamp()));
+
+    MethodInfo method = typeof(TranscriptView).GetMethod(
+      "ResolveInitialWindowIndex",
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "ResolveInitialWindowIndex was not found.");
+    int actual = (int)(method.Invoke(view, new object[] { document, identities }) ?? -1);
+
+    Require(actual == 1,
+      $"Live-end refresh selected virtual index {actual}; expected last spoken index 1.");
   }
 
   private static TranscriptView CreateInitializedView(Form host)
