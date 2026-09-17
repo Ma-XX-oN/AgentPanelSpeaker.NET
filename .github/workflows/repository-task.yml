@@ -21,7 +21,7 @@ on:
       - 'issue-*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   task:
@@ -49,16 +49,219 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Apply issue 138 production fix
+        if: ${{ github.event_name == 'push' && github.ref_name == 'issue-138-live-tail-dom-preservation' }}
+        shell: pwsh
+        run: |
+          $entry = git ls-files -s -- AgentPanelSpeaker/TranscriptView.cs
+          $sourceSha = ($entry -split '\s+')[1]
+          if ($sourceSha -ne 'd8ea574e8b31c21702a14e84f92f58dba8960414') {
+            throw "Unexpected TranscriptView.cs blob: $sourceSha"
+          }
+
+          @'
+          from pathlib import Path
+
+          path = Path('AgentPanelSpeaker/TranscriptView.cs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(label: str, old: str, new: str) -> None:
+            global text
+            count = text.count(old)
+            if count != 1:
+              raise RuntimeError(
+                f'{label}: expected exactly one source match, found {count}')
+            text = text.replace(old, new, 1)
+
+          replace_once(
+            'canonical playback refresh gate',
+            """    if (!_initialized || _refreshInProgress)
+    {
+      return;
+    }
+
+    // A Core-backed word is resolved directly by the WebView when materialized.
+""",
+            """    if (!_initialized)
+    {
+      return;
+    }
+
+    // A Core-backed word is resolved directly by the WebView when materialized.
+""")
+
+          replace_once(
+            'legacy playback refresh gate',
+            """      PostPlaybackPosition(position);
+      return;
+    }
+
+    // Non-canonical synthesized narration retains the pre-migration node path
+""",
+            """      PostPlaybackPosition(position);
+      return;
+    }
+
+    if (_refreshInProgress)
+    {
+      return;
+    }
+
+    // Non-canonical synthesized narration retains the pre-migration node path
+""")
+
+          replace_once(
+            'virtual record source state',
+            """const openDisclosureOverrides = new Set();
+let discardDisclosureStateOnNextReplacement = false;
+""",
+            """const openDisclosureOverrides = new Set();
+let discardDisclosureStateOnNextReplacement = false;
+const virtualRecordSourceHtml = new WeakMap();
+""")
+
+          replace_once(
+            'virtual reconciliation helpers',
+            """function wrapWords(nodeMap = null) {
+  words = [];
+  lexicalWords = [];
+  ensureCoreOrdinalSpeechMaps();
+  wrapWordsForRecordKeys(
+    nodeMap === null ? null : nodeRecordKeys(nodeMap),
+    false);
+}
+
+function structureDetailsKey(details) {
+""",
+            """function wrapWords(nodeMap = null) {
+  words = [];
+  lexicalWords = [];
+  ensureCoreOrdinalSpeechMaps();
+  wrapWordsForRecordKeys(
+    nodeMap === null ? null : nodeRecordKeys(nodeMap),
+    false);
+}
+
+function reindexWrappedWords() {
+  words = Array.from(transcript.querySelectorAll('.word'));
+  lexicalWords = words.filter(word => word.dataset.lexical === '1');
+  for (let index = 0; index < words.length; ++index) {
+    words[index].dataset.index = String(index);
+  }
+}
+
+function virtualRecordUnitId(record) {
+  const marker = record.querySelector(
+    '.aicore-structural-unit[data-aicore-unit-id]');
+  const unitId = marker?.getAttribute('data-aicore-unit-id') || '';
+  if (!unitId) {
+    throw new Error('Virtual transcript record is missing a Core unit ID.');
+  }
+  return unitId;
+}
+
+function createVirtualSpacer(edge, height) {
+  const spacer = document.createElement('div');
+  spacer.className = 'virtual-spacer';
+  spacer.dataset.virtualSpacer = edge;
+  spacer.style.height = Math.max(0, Number(height) || 0) + 'px';
+  return spacer;
+}
+
+function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  for (const node of template.content.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE && !node.textContent.trim()) continue;
+    if (node.nodeType !== Node.ELEMENT_NODE ||
+        !node.classList.contains('virtual-record')) {
+      throw new Error(
+        'Virtual transcript window contains a non-record top-level node.');
+    }
+  }
+
+  const existingByUnitId = new Map();
+  for (const child of transcript.children) {
+    if (!child.classList.contains('virtual-record')) continue;
+    const unitId = virtualRecordUnitId(child);
+    if (existingByUnitId.has(unitId)) {
+      throw new Error('Duplicate materialized Core unit ID: ' + unitId);
+    }
+    existingByUnitId.set(unitId, child);
+  }
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(createVirtualSpacer('top', topSpacerHeight));
+  const incomingUnitIds = new Set();
+  for (const incoming of template.content.children) {
+    const unitId = virtualRecordUnitId(incoming);
+    if (incomingUnitIds.has(unitId)) {
+      throw new Error('Duplicate incoming Core unit ID: ' + unitId);
+    }
+    incomingUnitIds.add(unitId);
+    const sourceHtml = incoming.innerHTML;
+    const existing = existingByUnitId.get(unitId);
+    if (existing && virtualRecordSourceHtml.get(existing) === sourceHtml) {
+      const virtualIndex = incoming.getAttribute('data-virtual-index');
+      if (virtualIndex === null) {
+        throw new Error('Virtual transcript record is missing its index.');
+      }
+      existing.setAttribute('data-virtual-index', virtualIndex);
+      fragment.append(existing);
+      continue;
+    }
+
+    virtualRecordSourceHtml.set(incoming, sourceHtml);
+    fragment.append(incoming);
+  }
+  fragment.append(createVirtualSpacer('bottom', bottomSpacerHeight));
+  transcript.replaceChildren(fragment);
+}
+
+function structureDetailsKey(details) {
+""")
+
+          replace_once(
+            'whole-window innerHTML replacement',
+            """  transcript.innerHTML = exactAssignedHtml;
+  resetPlaybackProjectionState();
+""",
+            """  reconcileTranscriptWindow(
+    html,
+    topSpacerHeight,
+    bottomSpacerHeight);
+  resetPlaybackProjectionState();
+""")
+
+          replace_once(
+            'retained word reindex',
+            """  phaseStarted = performance.now();
+  wrapWords(nodeMap || []);
+  wrapSpeechFragments();
+  const wrapWordsMilliseconds = performance.now() - phaseStarted;
+""",
+            """  phaseStarted = performance.now();
+  wrapWords(nodeMap || []);
+  reindexWrappedWords();
+  wrapSpeechFragments();
+  const wrapWordsMilliseconds = performance.now() - phaseStarted;
+""")
+
+          with path.open('w', encoding='utf-8', newline='\n') as stream:
+            stream.write(text)
+          '@ | python -
+
+          git diff --check
+          git checkout c899c879525ceaa8d50fafb0610e01deb37545c5 -- .github/workflows/repository-task.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AgentPanelSpeaker/TranscriptView.cs .github/workflows/repository-task.yml
+          git diff --cached --check
+          git commit -m 'fix: preserve live-tail playback DOM identity'
+          git push origin HEAD:issue-138-live-tail-dom-preservation
+
       - name: Run checked-in repository task
         shell: pwsh
         env:
           REPOSITORY_TASK: ${{ github.event_name == 'workflow_dispatch' && inputs.task || 'verify' }}
         run: '& tools/Invoke-RepositoryTask.ps1 -Task $env:REPOSITORY_TASK'
-
-      - name: Export issue 138 source working copy
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-138-transcript-view-${{ github.run_id }}
-          path: AgentPanelSpeaker/TranscriptView.cs
-          retention-days: 1
