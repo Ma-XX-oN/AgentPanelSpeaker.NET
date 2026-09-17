@@ -3190,11 +3190,15 @@ function reindexWrappedWords() {
 function virtualRecordUnitId(record) {
   const marker = record.querySelector(
     '.aicore-structural-unit[data-aicore-unit-id]');
-  const unitId = marker?.getAttribute('data-aicore-unit-id') || '';
-  if (!unitId) {
-    throw new Error('Virtual transcript record is missing a Core unit ID.');
+  return marker?.getAttribute('data-aicore-unit-id') || '';
+}
+
+function seedVirtualRecordSourceHtml() {
+  for (const record of transcript.children) {
+    if (!record.classList.contains('virtual-record')) continue;
+    if (!virtualRecordUnitId(record)) continue;
+    virtualRecordSourceHtml.set(record, record.innerHTML);
   }
-  return unitId;
 }
 
 function createVirtualSpacer(edge, height) {
@@ -3218,9 +3222,15 @@ function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
   }
 
   const incomingRecords = Array.from(template.content.children);
+  const existingRecords = Array.from(transcript.children)
+    .filter(child => child.classList.contains('virtual-record'));
+  if (incomingRecords.some(record => !virtualRecordUnitId(record)) ||
+      existingRecords.some(record => !virtualRecordUnitId(record))) {
+    return false;
+  }
+
   const existingByUnitId = new Map();
-  for (const child of transcript.children) {
-    if (!child.classList.contains('virtual-record')) continue;
+  for (const child of existingRecords) {
     const unitId = virtualRecordUnitId(child);
     if (existingByUnitId.has(unitId)) {
       throw new Error('Duplicate materialized Core unit ID: ' + unitId);
@@ -3254,6 +3264,7 @@ function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
   }
   fragment.append(createVirtualSpacer('bottom', bottomSpacerHeight));
   transcript.replaceChildren(fragment);
+  return true;
 }
 
 function structureDetailsKey(details) {
@@ -3677,10 +3688,13 @@ function replaceTranscriptWindow(
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   let phaseStarted = performance.now();
-  reconcileTranscriptWindow(
-    html,
-    topSpacerHeight,
-    bottomSpacerHeight);
+  if (!reconcileTranscriptWindow(
+      html,
+      topSpacerHeight,
+      bottomSpacerHeight)) {
+    transcript.innerHTML = exactAssignedHtml;
+    seedVirtualRecordSourceHtml();
+  }
   resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
   const innerHtmlMilliseconds = performance.now() - phaseStarted;

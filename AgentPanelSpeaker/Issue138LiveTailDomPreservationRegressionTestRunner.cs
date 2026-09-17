@@ -22,6 +22,8 @@ internal static class Issue138LiveTailDomPreservationRegressionTestRunner
         TestUnchangedPlaybackNodeRetainsIdentity),
       ("live-tail-dom/changed-record-is-replaced-and-tail-remains-unique",
         TestChangedRecordIsReplacedAndTailRemainsUnique),
+      ("live-tail-dom/legacy-window-retains-full-replacement-path",
+        TestLegacyWindowRetainsFullReplacementPath),
       ("live-tail-dom/playback-message-continues-during-refresh",
         TestPlaybackMessageContinuesDuringRefresh)
     };
@@ -179,6 +181,56 @@ internal static class Issue138LiveTailDomPreservationRegressionTestRunner
       "Repeated identical live-tail update replaced an unchanged unit.");
     Require(result.GetProperty("tailCount").GetInt32() == 1,
       "Repeated live-tail update duplicated the appended tail unit.");
+  }
+
+  /// <summary>
+  /// Virtual windows without Core unit identity retain the established full
+  /// replacement path.  They must render correctly without inventing a keyed
+  /// reconciliation identity from record numbers or visible text.
+  /// </summary>
+  private static void TestLegacyWindowRetainsFullReplacementPath()
+  {
+    using var host = CreateOffscreenHost();
+    using var view = CreateInitializedView(host);
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+
+    JsonElement result = ExecuteJsonProbe(webView, """
+(() => {
+  const first =
+    '<section class="virtual-record" data-virtual-index="2">' +
+    '<span class="record-anchor" data-jsonl-record="3"></span>' +
+    '<p id="legacy-value">before</p></section>';
+  const changed =
+    '<section class="virtual-record" data-virtual-index="2">' +
+    '<span class="record-anchor" data-jsonl-record="3"></span>' +
+    '<p id="legacy-value">after</p></section>';
+
+  replaceTranscriptWindow(first, false, [], 2, 2, 100, 100);
+  const before = document.querySelector(
+    '.virtual-record[data-virtual-index="2"]');
+  replaceTranscriptWindow(changed, false, [], 2, 2, 100, 100);
+  const after = document.querySelector(
+    '.virtual-record[data-virtual-index="2"]');
+  return JSON.stringify({
+    firstRendered: before !== null,
+    changedRendered: after !== null,
+    changedWasReplaced: before !== after,
+    textAfterChange: document.getElementById('legacy-value')?.textContent || ''
+  });
+})()
+""");
+
+    Require(result.GetProperty("firstRendered").GetBoolean(),
+      "Legacy virtual record was not installed by the compatibility path.");
+    Require(result.GetProperty("changedRendered").GetBoolean(),
+      "Changed legacy virtual record disappeared during full replacement.");
+    Require(result.GetProperty("changedWasReplaced").GetBoolean(),
+      "Legacy virtual record was incorrectly treated as Core-keyed content.");
+    Require(string.Equals(
+        result.GetProperty("textAfterChange").GetString(),
+        "after",
+        StringComparison.Ordinal),
+      "Legacy full replacement did not install changed content.");
   }
 
   /// <summary>
