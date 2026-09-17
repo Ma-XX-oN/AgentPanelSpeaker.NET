@@ -3212,13 +3212,13 @@ function createVirtualSpacer(edge, height) {
 function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
   const template = document.createElement('template');
   template.innerHTML = html;
-  for (const node of template.content.childNodes) {
-    if (node.nodeType === Node.TEXT_NODE && !node.textContent.trim()) continue;
-    if (node.nodeType !== Node.ELEMENT_NODE ||
-        !node.classList.contains('virtual-record')) {
-      throw new Error(
-        'Virtual transcript window contains a non-record top-level node.');
-    }
+  const topLevelNodes = Array.from(template.content.childNodes)
+    .filter(node =>
+      node.nodeType !== Node.TEXT_NODE || node.textContent.trim());
+  if (topLevelNodes.some(node =>
+      node.nodeType !== Node.ELEMENT_NODE ||
+      !node.classList.contains('virtual-record'))) {
+    return false;
   }
 
   const incomingRecords = Array.from(template.content.children);
