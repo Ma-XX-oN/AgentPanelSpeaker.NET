@@ -54,3 +54,11 @@ jobs:
         env:
           REPOSITORY_TASK: ${{ github.event_name == 'workflow_dispatch' && inputs.task || 'verify' }}
         run: '& tools/Invoke-RepositoryTask.ps1 -Task $env:REPOSITORY_TASK'
+
+      - name: Export issue 138 source working copy
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-138-transcript-view-${{ github.run_id }}
+          path: AgentPanelSpeaker/TranscriptView.cs
+          retention-days: 1
