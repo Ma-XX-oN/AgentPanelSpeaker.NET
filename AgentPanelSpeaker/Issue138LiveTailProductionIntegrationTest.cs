@@ -18,14 +18,14 @@ internal static class Issue138LiveTailProductionIntegrationTest
   private const int PlaybackAdvanceTimeoutMilliseconds = 12000;
   private const int TestThreadTimeoutMilliseconds = 180000;
   private const int LiveAppendCount = 3;
+  private const int InitialSpeechMarkerRepeatCount = 16;
   private const string InitialSpeechMarker =
     "stable playback continues while the live transcript grows";
 
   private sealed record DiagnosticEntry(string Event, JsonElement? Data);
 
   /// <summary>
-  /// Runs the UI-bearing acceptance test on an STA thread when invoked from the
-  /// generic Robot test probe.
+  /// Runs the UI-bearing acceptance test on an STA thread when needed.
   /// </summary>
   public static void Run()
   {
@@ -112,14 +112,14 @@ internal static class Issue138LiveTailProductionIntegrationTest
       PumpUntil(
         () => speech.IsSpeaking,
         "production SpeechService to enter active playback");
-      PumpUntil(
+      PumpUntilPlaybackProgress(
         () => HasInitialSpeechBoundary(startupLogOffset),
-        "initial long Assistant fragment to produce a word boundary",
-        PlaybackAdvanceTimeoutMilliseconds);
-      PumpUntil(
+        startupLogOffset,
+        "initial long Assistant fragment to produce a word boundary");
+      PumpUntilPlaybackProgress(
         () => HasActivePlaybackWord(view),
-        "initial playback word to resolve in the real WebView2 DOM",
-        PlaybackAdvanceTimeoutMilliseconds);
+        startupLogOffset,
+        "initial playback word to resolve in the real WebView2 DOM");
 
       // Ignore setup-time rendering while the initial transcript and playback
       // marker are first materialized.  The behavioural oracle begins only
@@ -174,16 +174,16 @@ internal static class Issue138LiveTailProductionIntegrationTest
         int boundaryCountAfterRender = CountEventSince(
           scenarioLogOffset,
           "speech.word_boundary");
-        PumpUntil(
+        PumpUntilPlaybackProgress(
           () => CountEventSince(
             scenarioLogOffset,
             "speech.word_boundary") > boundaryCountAfterRender,
-          $"playback to advance after live append {appendIndex}",
-          PlaybackAdvanceTimeoutMilliseconds);
-        PumpUntil(
+          scenarioLogOffset,
+          $"playback to advance after live append {appendIndex}");
+        PumpUntilPlaybackProgress(
           () => HasActivePlaybackWord(view),
-          $"playback word to remain resolvable after live append {appendIndex}",
-          PlaybackAdvanceTimeoutMilliseconds);
+          scenarioLogOffset,
+          $"playback word to remain resolvable after live append {appendIndex}");
 
         Require(
           CountEventSince(
@@ -366,6 +366,39 @@ internal static class Issue138LiveTailProductionIntegrationTest
     return false;
   }
 
+  private static void PumpUntilPlaybackProgress(
+    Func<bool> predicate,
+    long diagnosticOffset,
+    string description,
+    int timeoutMilliseconds = PlaybackAdvanceTimeoutMilliseconds)
+  {
+    var timer = Stopwatch.StartNew();
+    while (!predicate())
+    {
+      DiagnosticEntry? fault = ReadDiagnosticEntriesSince(diagnosticOffset)
+        .LastOrDefault(entry => entry.Event == "speech.engine_fault");
+      if (fault is not null)
+      {
+        string detail = "unknown speech engine fault";
+        if (fault.Data is JsonElement data &&
+            data.TryGetProperty("exception", out JsonElement exception))
+        {
+          detail = exception.GetString() ?? detail;
+        }
+        throw new InvalidOperationException(
+          $"Production speech engine fault while waiting for {description}: " +
+          detail);
+      }
+      if (timer.ElapsedMilliseconds >= timeoutMilliseconds)
+      {
+        throw new TimeoutException(
+          $"Timed out waiting for {description} after {timeoutMilliseconds} ms.");
+      }
+      Application.DoEvents();
+      Thread.Sleep(10);
+    }
+  }
+
   private static bool HasActivePlaybackWord(TranscriptView view)
   {
     return ExecuteBooleanScript(
@@ -456,7 +489,8 @@ internal static class Issue138LiveTailProductionIntegrationTest
   {
     string response = string.Join(
       ' ',
-      Enumerable.Repeat(InitialSpeechMarker, 120)) + ".";
+      Enumerable.Repeat(InitialSpeechMarker, InitialSpeechMarkerRepeatCount)) +
+      ".";
     object[] records =
     {
       new
