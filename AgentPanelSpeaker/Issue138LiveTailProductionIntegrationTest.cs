@@ -1,6 +1,7 @@
 using Microsoft.Web.WebView2.WinForms;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 
@@ -15,6 +16,7 @@ internal static class Issue138LiveTailProductionIntegrationTest
 {
   private const int GeneralTimeoutMilliseconds = 30000;
   private const int PlaybackAdvanceTimeoutMilliseconds = 12000;
+  private const int TestThreadTimeoutMilliseconds = 180000;
   private const int LiveAppendCount = 3;
   private const string InitialSpeechMarker =
     "stable playback continues while the live transcript grows";
@@ -22,11 +24,55 @@ internal static class Issue138LiveTailProductionIntegrationTest
   private sealed record DiagnosticEntry(string Event, JsonElement? Data);
 
   /// <summary>
-  /// Starts real monitored playback, appends three live turns, and proves each
-  /// transcript refresh leaves playback-word resolution intact according to the
-  /// production diagnostic log.
+  /// Runs the UI-bearing acceptance test on an STA thread when invoked from the
+  /// generic Robot test probe.
   /// </summary>
   public static void Run()
+  {
+    if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
+    {
+      RunOnStaThread();
+      return;
+    }
+
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+      try
+      {
+        ApplicationConfiguration.Initialize();
+        RunOnStaThread();
+      }
+      catch (Exception exception)
+      {
+        failure = exception;
+      }
+    })
+    {
+      IsBackground = true,
+      Name = "Issue #138 live-tail production integration"
+    };
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    if (!thread.Join(TestThreadTimeoutMilliseconds))
+    {
+      throw new TimeoutException(
+        "Issue #138 production integration did not finish within " +
+        $"{TestThreadTimeoutMilliseconds} ms.");
+    }
+    if (failure is not null)
+    {
+      ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+  }
+
+  /// <summary>
+  /// Starts real monitored playback, appends three live turns, and proves each
+  /// transcript refresh preserves stable DOM object identity and playback-word
+  /// resolution.  A deliberate removed-word mutation then proves the log oracle
+  /// rejects the protected failure class.
+  /// </summary>
+  private static void RunOnStaThread()
   {
     DiagnosticLog.Initialize();
     string root = CreateTempRoot();
@@ -84,6 +130,10 @@ internal static class Issue138LiveTailProductionIntegrationTest
            appendIndex <= LiveAppendCount;
            ++appendIndex)
       {
+        JsonElement before = CaptureDomIdentityProbe(view);
+        Require(before.GetProperty("captured").GetBoolean(),
+          $"Live append {appendIndex} had no active playback word to retain.");
+
         int renderCountBefore = CountEventSince(
           scenarioLogOffset,
           "transcript.render_completed");
@@ -102,6 +152,22 @@ internal static class Issue138LiveTailProductionIntegrationTest
             scenarioLogOffset,
             "transcript.render_completed") > renderCountBefore,
           $"live append {appendIndex} to complete a production transcript render");
+
+        JsonElement after = ReadDomIdentityProbe(view, appendIndex);
+        Require(after.GetProperty("sameRecord").GetBoolean(),
+          $"Live append {appendIndex} replaced the unchanged virtual record DOM object.");
+        Require(after.GetProperty("sameUnit").GetBoolean(),
+          $"Live append {appendIndex} replaced the unchanged Core unit DOM object.");
+        Require(after.GetProperty("sameWord").GetBoolean(),
+          $"Live append {appendIndex} replaced the retained playback word DOM object.");
+        Require(after.GetProperty("recordConnected").GetBoolean(),
+          $"Live append {appendIndex} disconnected the retained virtual record.");
+        Require(after.GetProperty("unitConnected").GetBoolean(),
+          $"Live append {appendIndex} disconnected the retained Core unit.");
+        Require(after.GetProperty("wordConnected").GetBoolean(),
+          $"Live append {appendIndex} disconnected the retained playback word.");
+        Require(after.GetProperty("tailCount").GetInt32() == 1,
+          $"Live append {appendIndex} did not render its new response exactly once.");
 
         Require(speech.IsSpeaking,
           $"Playback stopped during live append {appendIndex}.");
@@ -145,6 +211,8 @@ internal static class Issue138LiveTailProductionIntegrationTest
         scenario.All(entry =>
           entry.Event != "transcript.playback_word_dom_missing"),
         "Production diagnostics reported playback-word DOM loss during live growth.");
+
+      ProveMissingWordOracleRejects(view, speech, playPause);
     }
     finally
     {
@@ -181,6 +249,104 @@ internal static class Issue138LiveTailProductionIntegrationTest
     view.ApplySettings(settings, dark: false);
   }
 
+  private static JsonElement CaptureDomIdentityProbe(TranscriptView view)
+  {
+    return ExecuteJsonProbe(view, """
+(() => {
+  const word = document.querySelector('.word.active');
+  const record = word?.closest('.virtual-record') || null;
+  const unit = record?.querySelector(
+    '.aicore-structural-unit[data-aicore-unit-id]') || null;
+  window.issue138ProductionProbe = {
+    word,
+    record,
+    unit,
+    wordId: word?.id || '',
+    unitId: unit?.dataset?.aicoreUnitId || ''
+  };
+  return JSON.stringify({captured: !!word && !!record && !!unit});
+})()
+""");
+  }
+
+  private static JsonElement ReadDomIdentityProbe(
+    TranscriptView view,
+    int appendIndex)
+  {
+    string marker = JsonSerializer.Serialize(
+      $"Live append response {appendIndex}.");
+    return ExecuteJsonProbe(view, $$"""
+(() => {
+  const probe = window.issue138ProductionProbe;
+  if (!probe || !probe.word || !probe.record || !probe.unit) {
+    return JSON.stringify({
+      sameRecord:false,
+      sameUnit:false,
+      sameWord:false,
+      recordConnected:false,
+      unitConnected:false,
+      wordConnected:false,
+      tailCount:0
+    });
+  }
+  const wordNow = document.getElementById(probe.wordId);
+  const unitNow = [...document.querySelectorAll(
+    '.aicore-structural-unit[data-aicore-unit-id]')]
+    .find(element => element.dataset.aicoreUnitId === probe.unitId) || null;
+  const recordNow = wordNow?.closest('.virtual-record') || null;
+  const marker = {{marker}};
+  const visibleText = transcript.innerText;
+  return JSON.stringify({
+    sameRecord: probe.record === recordNow,
+    sameUnit: probe.unit === unitNow,
+    sameWord: probe.word === wordNow,
+    recordConnected: probe.record.isConnected,
+    unitConnected: probe.unit.isConnected,
+    wordConnected: probe.word.isConnected,
+    tailCount: visibleText.split(marker).length - 1
+  });
+})()
+""");
+  }
+
+  private static void ProveMissingWordOracleRejects(
+    TranscriptView view,
+    SpeechService speech,
+    GlyphButton playPause)
+  {
+    if (!speech.IsPaused)
+    {
+      playPause.PerformClick();
+      PumpUntil(() => speech.IsPaused, "production playback to pause");
+    }
+    PumpUntil(
+      () => HasActiveOrPausedPlaybackWord(view),
+      "paused playback word before negative mutation");
+
+    TranscriptPlaybackPosition position =
+      ReadNullableField<TranscriptPlaybackPosition>(view, "_pendingPosition") ??
+      throw new InvalidOperationException(
+        "No production playback position was available for the negative oracle.");
+    Require(position.WordId is > 0,
+      "Negative oracle playback position had no canonical Core word ID.");
+
+    long negativeOffset = GetDiagnosticLogLength();
+    ExecuteVoidScript(view, """
+(() => {
+  const word = document.querySelector('.word.active,.word.paused');
+  if (!word) throw new Error('No playback word was available to remove.');
+  word.remove();
+})()
+""");
+    view.ShowPlaybackPosition(position);
+
+    PumpUntil(
+      () => CountEventSince(
+        negativeOffset,
+        "transcript.playback_word_dom_missing") > 0,
+      "the production missing-word oracle to reject a removed playback word");
+  }
+
   private static bool HasInitialSpeechBoundary(long offset)
   {
     foreach (DiagnosticEntry entry in ReadDiagnosticEntriesSince(offset))
@@ -202,11 +368,49 @@ internal static class Issue138LiveTailProductionIntegrationTest
 
   private static bool HasActivePlaybackWord(TranscriptView view)
   {
-    WebView2 webView = ReadField<WebView2>(view, "_webView");
-    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(
+    return ExecuteBooleanScript(
+      view,
       "document.querySelector('.word.active') !== null");
-    PumpUntilCompleted(task, "active playback-word DOM probe");
+  }
+
+  private static bool HasActiveOrPausedPlaybackWord(TranscriptView view)
+  {
+    return ExecuteBooleanScript(
+      view,
+      "document.querySelector('.word.active,.word.paused') !== null");
+  }
+
+  private static JsonElement ExecuteJsonProbe(
+    TranscriptView view,
+    string script)
+  {
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(script);
+    PumpUntilCompleted(task, "issue #138 production browser probe");
+    string encoded = JsonSerializer.Deserialize<string>(task.Result) ??
+      throw new InvalidOperationException(
+        "Issue #138 production browser probe returned no JSON string.");
+    using JsonDocument document = JsonDocument.Parse(encoded);
+    return document.RootElement.Clone();
+  }
+
+  private static bool ExecuteBooleanScript(
+    TranscriptView view,
+    string script)
+  {
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(script);
+    PumpUntilCompleted(task, "issue #138 production boolean browser probe");
     return JsonSerializer.Deserialize<bool>(task.Result);
+  }
+
+  private static void ExecuteVoidScript(
+    TranscriptView view,
+    string script)
+  {
+    WebView2 webView = ReadField<WebView2>(view, "_webView");
+    Task<string> task = webView.CoreWebView2.ExecuteScriptAsync(script);
+    PumpUntilCompleted(task, "issue #138 production browser mutation");
   }
 
   private static void AppendLiveTurn(string path, int index)
@@ -363,6 +567,16 @@ internal static class Issue138LiveTailProductionIntegrationTest
         $"Field {name} was not {typeof(T).Name}.");
   }
 
+  private static T? ReadNullableField<T>(object target, string name)
+    where T : class
+  {
+    FieldInfo field = target.GetType().GetField(
+      name,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException($"Field {name} was not found.");
+    return field.GetValue(target) as T;
+  }
+
   private static void SetField<T>(object target, string name, T value)
   {
     FieldInfo field = target.GetType().GetField(
@@ -385,7 +599,7 @@ internal static class Issue138LiveTailProductionIntegrationTest
     catch (TargetInvocationException exception) when (
       exception.InnerException is not null)
     {
-      throw exception.InnerException;
+      ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
     }
   }
 
