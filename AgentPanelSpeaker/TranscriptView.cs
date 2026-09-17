@@ -3217,6 +3217,7 @@ function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
     }
   }
 
+  const incomingRecords = Array.from(template.content.children);
   const existingByUnitId = new Map();
   for (const child of transcript.children) {
     if (!child.classList.contains('virtual-record')) continue;
@@ -3230,7 +3231,7 @@ function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
   const fragment = document.createDocumentFragment();
   fragment.append(createVirtualSpacer('top', topSpacerHeight));
   const incomingUnitIds = new Set();
-  for (const incoming of template.content.children) {
+  for (const incoming of incomingRecords) {
     const unitId = virtualRecordUnitId(incoming);
     if (incomingUnitIds.has(unitId)) {
       throw new Error('Duplicate incoming Core unit ID: ' + unitId);
