@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 
@@ -11,6 +13,10 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
   private const int TimeoutMilliseconds = 30000;
   private const string AppendedSpeech =
     "Appended Claude speech after retained session growth.";
+  private const string FirstPreindexedAppend =
+    "First Claude append after preindexed history.";
+  private const string SecondPreindexedAppend =
+    "Second Claude append after preindexed history.";
 
   /// <summary>
   /// Runs the issue #139 Claude live-tail regression suite.
@@ -21,13 +27,15 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
     var tests = new (string Name, Action Body)[]
     {
       ("claude-live-tail/appended-record-reaches-speech-history",
-        TestAppendedClaudeRecordReachesSpeechHistory)
+        TestAppendedClaudeRecordReachesSpeechHistory),
+      ("claude-live-tail/preindexed-history-repeated-appends-reach-speech-history",
+        TestPreindexedHistoryRepeatedAppendsReachSpeechHistory)
     };
 
     int failures = 0;
     Console.WriteLine();
     Console.WriteLine(
-      $"Issue #139 Claude live-tail suite: {tests.Length} test");
+      $"Issue #139 Claude live-tail suite: {tests.Length} tests");
     foreach ((string name, Action body) in tests)
     {
       try
@@ -58,16 +66,7 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
   /// </summary>
   private static void TestAppendedClaudeRecordReachesSpeechHistory()
   {
-    string root = Path.Combine(
-      Path.GetTempPath(),
-      $"AgentPanelSpeaker-issue139-{Guid.NewGuid():N}");
-    Directory.CreateDirectory(root);
-    string path = Path.Combine(root, "claude-live-tail.jsonl");
-    File.WriteAllText(
-      path,
-      BuildInitialJsonl(),
-      new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
+    string root = CreateFixture(out string path);
     using var historyReady = new ManualResetEventSlim(false);
     using var appendedReady = new ManualResetEventSlim(false);
     using var faulted = new ManualResetEventSlim(false);
@@ -84,9 +83,7 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
     };
     monitor.TextReady += fragment =>
     {
-      if (fragment.Text.Contains(
-            "Appended Claude speech",
-            StringComparison.Ordinal))
+      if (fragment.Text == AppendedSpeech)
       {
         appendedFragment = fragment;
         appendedReady.Set();
@@ -118,10 +115,11 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
           fragment.Text.Contains("Initial Claude answer", StringComparison.Ordinal)),
         "Initial Claude history did not establish the test precondition.");
 
-      File.AppendAllText(
+      AppendRecord(
         path,
-        BuildAppendedRecord() + Environment.NewLine,
-        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        "issue139-assistant-2",
+        "2026-09-18T00:00:02.000Z",
+        AppendedSpeech);
 
       WaitForSuccessOrFault(
         appendedReady,
@@ -142,18 +140,156 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
     }
     finally
     {
-      monitor.Stop("issue-139-regression");
-      try
-      {
-        Directory.Delete(root, recursive: true);
-      }
-      catch (IOException)
-      {
-      }
-      catch (UnauthorizedAccessException)
-      {
-      }
+      StopAndDelete(monitor, root);
     }
+  }
+
+  /// <summary>
+  /// Reproduces the MainForm path: index paused history first, reuse that exact
+  /// snapshot when monitoring starts, then require multiple later file appends
+  /// to enter live speech without republishing the indexed prefix.
+  /// </summary>
+  private static void TestPreindexedHistoryRepeatedAppendsReachSpeechHistory()
+  {
+    string root = CreateFixture(out string path);
+    using var firstReady = new ManualResetEventSlim(false);
+    using var secondReady = new ManualResetEventSlim(false);
+    using var faulted = new ManualResetEventSlim(false);
+    using var monitor = new JsonlSessionMonitor();
+
+    Exception? monitorFault = null;
+    SpeechFragment? firstFragment = null;
+    SpeechFragment? secondFragment = null;
+    int historyLoadedEvents = 0;
+    int republishedInitialFragments = 0;
+
+    try
+    {
+      LocatedSession session = SessionLocator.FromPath(
+        path,
+        AgentSource.Claude);
+      SpeechHistorySnapshot snapshot = monitor.LoadHistoryPreview(
+        session,
+        speakExistingLatestTurn: false,
+        includeRolledBackTurns: true,
+        includeUserContext: true);
+      Require(
+        snapshot.Fragments.Any(fragment =>
+          fragment.Text.Contains("Initial Claude answer", StringComparison.Ordinal)),
+        "Preindexed Claude history did not establish the production precondition.");
+
+      object extractor = ReadRequiredField<object>(
+        monitor,
+        "_canonicalExtractor");
+      object? projectionBeforeStart = ReadField<object?>(
+        extractor,
+        "_projection");
+      Require(
+        projectionBeforeStart is not null,
+        "Preindexed Claude history did not retain a canonical projection.");
+
+      monitor.HistoryLoaded += _ => Interlocked.Increment(
+        ref historyLoadedEvents);
+      monitor.TextReady += fragment =>
+      {
+        if (fragment.Text.Contains(
+              "Initial Claude",
+              StringComparison.Ordinal))
+        {
+          Interlocked.Increment(ref republishedInitialFragments);
+        }
+        if (fragment.Text == FirstPreindexedAppend)
+        {
+          firstFragment = fragment;
+          firstReady.Set();
+        }
+        if (fragment.Text == SecondPreindexedAppend)
+        {
+          secondFragment = fragment;
+          secondReady.Set();
+        }
+      };
+      monitor.Faulted += exception =>
+      {
+        monitorFault = exception;
+        faulted.Set();
+      };
+
+      monitor.Start(new MonitorSettings(
+        AgentSource.Claude,
+        path,
+        FollowLatest: false,
+        SpeakExistingLatestTurn: false,
+        PollInterval: TimeSpan.FromMilliseconds(20),
+        PreindexedHistory: snapshot,
+        IncludeRolledBackTurns: true,
+        IncludeUserContext: true));
+
+      WaitForProjectionReplacement(
+        extractor,
+        projectionBeforeStart,
+        faulted,
+        () => monitorFault);
+
+      AppendRecord(
+        path,
+        "issue139-assistant-preindexed-1",
+        "2026-09-18T00:00:03.000Z",
+        FirstPreindexedAppend);
+      WaitForSuccessOrFault(
+        firstReady,
+        faulted,
+        () => monitorFault,
+        "first preindexed-history Claude append");
+
+      AppendRecord(
+        path,
+        "issue139-assistant-preindexed-2",
+        "2026-09-18T00:00:04.000Z",
+        SecondPreindexedAppend);
+      WaitForSuccessOrFault(
+        secondReady,
+        faulted,
+        () => monitorFault,
+        "second preindexed-history Claude append");
+
+      Require(
+        firstFragment?.Text == FirstPreindexedAppend,
+        "The first repeated Claude append did not reach TextReady.");
+      Require(
+        secondFragment?.Text == SecondPreindexedAppend,
+        "The second repeated Claude append did not reach TextReady.");
+      Require(
+        Volatile.Read(ref historyLoadedEvents) == 0,
+        "Reusing preindexed history unexpectedly republished HistoryLoaded.");
+      Require(
+        Volatile.Read(ref republishedInitialFragments) == 0,
+        "Reusing preindexed history republished an already indexed speech fragment.");
+      Require(
+        monitorFault is null,
+        $"Claude monitor faulted during repeated appends: {monitorFault}");
+      Require(
+        monitor.IsRunning,
+        "Claude monitor stopped during repeated preindexed-history appends.");
+    }
+    finally
+    {
+      StopAndDelete(monitor, root);
+    }
+  }
+
+  private static string CreateFixture(out string path)
+  {
+    string root = Path.Combine(
+      Path.GetTempPath(),
+      $"AgentPanelSpeaker-issue139-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    path = Path.Combine(root, "claude-live-tail.jsonl");
+    File.WriteAllText(
+      path,
+      BuildInitialJsonl(),
+      new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    return root;
   }
 
   private static string BuildInitialJsonl()
@@ -199,24 +335,85 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
       Environment.NewLine;
   }
 
-  private static string BuildAppendedRecord()
+  private static void AppendRecord(
+    string path,
+    string uuid,
+    string timestamp,
+    string speech)
   {
-    return JsonSerializer.Serialize(new
+    string record = JsonSerializer.Serialize(new
     {
-      uuid = "issue139-assistant-2",
+      uuid,
       type = "assistant",
       isSidechain = false,
-      timestamp = "2026-09-18T00:00:02.000Z",
+      timestamp,
       message = new
       {
         model = "claude-test",
         role = "assistant",
         content = new[]
         {
-          new { type = "text", text = AppendedSpeech }
+          new { type = "text", text = speech }
         }
       }
     });
+    File.AppendAllText(
+      path,
+      record + Environment.NewLine,
+      new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+  }
+
+  private static void WaitForProjectionReplacement(
+    object extractor,
+    object projectionBeforeStart,
+    ManualResetEventSlim fault,
+    Func<Exception?> readFault)
+  {
+    var stopwatch = Stopwatch.StartNew();
+    while (stopwatch.ElapsedMilliseconds < TimeoutMilliseconds)
+    {
+      if (fault.IsSet)
+      {
+        throw new InvalidOperationException(
+          "Monitor faulted while priming preindexed Claude history: " +
+          readFault());
+      }
+
+      object? current = ReadField<object?>(extractor, "_projection");
+      if (current is not null &&
+          !ReferenceEquals(current, projectionBeforeStart))
+      {
+        return;
+      }
+
+      Thread.Sleep(10);
+    }
+
+    throw new TimeoutException(
+      "Timed out waiting for the preindexed Claude projection to be " +
+      $"reprojected after {TimeoutMilliseconds} ms.");
+  }
+
+  private static T ReadRequiredField<T>(
+    object instance,
+    string fieldName)
+    where T : class
+  {
+    T? value = ReadField<T?>(instance, fieldName);
+    return value ?? throw new InvalidOperationException(
+      $"Required field {fieldName} was null.");
+  }
+
+  private static T ReadField<T>(
+    object instance,
+    string fieldName)
+  {
+    FieldInfo field = instance.GetType().GetField(
+      fieldName,
+      BindingFlags.Instance | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        $"Field {fieldName} was not found on {instance.GetType().Name}.");
+    return (T)field.GetValue(instance)!;
   }
 
   private static void WaitForSuccessOrFault(
@@ -241,6 +438,23 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
     }
     throw new TimeoutException(
       $"Timed out waiting for {description} after {TimeoutMilliseconds} ms.");
+  }
+
+  private static void StopAndDelete(
+    JsonlSessionMonitor monitor,
+    string root)
+  {
+    monitor.Stop("issue-139-regression");
+    try
+    {
+      Directory.Delete(root, recursive: true);
+    }
+    catch (IOException)
+    {
+    }
+    catch (UnauthorizedAccessException)
+    {
+    }
   }
 
   private static void Require(bool condition, string message)
