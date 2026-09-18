@@ -1,5 +1,28 @@
 # Agent Panel Speaker internal design
 
+## AIConversationCore canonical transcript boundary
+
+Claude and Codex provider semantics are owned by `AIConversationCore`, not by AgentPanelSpeaker.  Raw JSONL records are accumulated by `CanonicalSessionExtractor`, projected through the persistent `AIConversationCoreClient`/Node worker, and converted by `CanonicalProjectionExtractor` into the app-owned speech/navigation model.
+
+The canonical provenance chain is:
+
+`source JSONL record -> canonical source_record_id/source_index -> TranscriptNodeIdentity -> rendered record/source anchor -> search/speech/highlight coordinates`.
+
+`TranscriptMarkdownFormatter` renders canonical Markdown and only adds AgentPanelSpeaker DOM anchoring required by virtualization/search.  `TranscriptNodeIdentityMap` derives identity from the same canonical projection used for speech, so display and speech no longer run independent provider parsers.  `JsonlRecordExtractor` now performs format detection only; the former semantic extraction implementation and `JsonlRecordIdentity` were removed after the v212 migration parity gate passed.
+
+AgentPanelSpeaker continues to own application policy: session discovery and follow-latest selection, live file tailing, duplicate suppression, speech segmentation and role/fenced-code policy, SAPI timing/playback, WebView2 virtualization, Find/navigation, and highlight behaviour.
+
+The bridge is intentionally pinned to AIConversationCore commit `74a96db899acacf2be7eec42a1175b733b6e7cfb`; the C# client, Node worker, bundled runtime, and integration workflow reject a mismatched core revision.
+
+## Canonical transcript word identity
+
+AIConversationCore owns transcript-word identity.  Every canonical transcript word has one positive numeric `word_id`; Core-rendered HTML exposes the same handle as `id="word-N"` on the owner and `data-word-id="N"` on any additional rendered pieces of that same canonical word.  `SpeechFragmentWord.Id`, `TranscriptPlaybackPosition.WordId`, Find/Ctrl+click seek requests, and browser playback therefore refer to the same immutable Core handle.  Visible text, browser token ordinals, `NodeId`, and reconstructed node-word indexes are not alternate identities for Core-backed transcript words.
+
+Core-backed playback highlights the exact `word-N` owner and all of its `data-word-id` pieces.  When that word is outside the materialized virtual window, `TranscriptView` does not search visible text or maintain a word-to-unit map.  The display projection retains the Core session that produced its HTML units, asks `AIConversationCoreClient.LocateRetainedWord()` for the requested `word_id`, receives Core's containing unit ID, resolves only that unit ID to the app-owned virtual-window index, and materializes the resulting window.  Core is therefore the sole semantic word-to-unit resolver; AgentPanelSpeaker owns only viewport/materialization policy.
+
+Speech eligibility is policy over immutable Core identity, not identity mutation.  `SpeechService` publishes contiguous Core word-ID ranges that are currently seekable.  The browser retains those ranges centrally and updates one CSS/CSSOM policy surface for the Ctrl affordance instead of adding or removing eligibility classes on every word node.  Changing role, fence, revision, or other speech policy cannot renumber or rewrite canonical word identity.
+
+
 ## v68 decimal-aware bookmark tokens
 
 `SpeechTokenization` recognizes decimal values before general period and word

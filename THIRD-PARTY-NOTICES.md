@@ -24,3 +24,16 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## marked
+
+Agent Panel Speaker bundles `marked` 18.0.11 through AIConversationCore for
+Core-owned Markdown-to-HTML rendering. `marked` is distributed under the MIT
+License. The package's `LICENSE` file is included with the deployed runtime.
+
+## Robot Framework
+
+The repository uses Robot Framework 7.4.2 as a development/test dependency for
+reusable data-driven regression tests. Robot Framework is licensed under the
+Apache License 2.0. It is installed from the pinned `requirements-test.txt` for
+test execution and is not bundled with the Agent Panel Speaker application.

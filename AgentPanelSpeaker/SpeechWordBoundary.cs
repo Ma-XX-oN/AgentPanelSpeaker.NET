@@ -1,7 +1,10 @@
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Identifies one spoken word and its start position in the playback buffer.
+/// Identifies one spoken token and its start position in the playback buffer.
+/// <c>WordIndex</c> is zero-based within the current engine utterance;
+/// SpeechService translates it into a SpeechFragment-relative offset. It is
+/// never an AIConversationCore canonical WordId.
 /// </summary>
 internal sealed record SpeechWordBoundary(
   TimeSpan AudioPosition,
@@ -9,4 +12,5 @@ internal sealed record SpeechWordBoundary(
   int CharacterPosition,
   int CharacterCount,
   string Text,
-  bool Exact);
+  bool Exact,
+  int WordCount = 1);

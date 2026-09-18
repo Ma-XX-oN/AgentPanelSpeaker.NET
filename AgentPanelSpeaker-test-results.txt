@@ -1,0 +1,10 @@
+AgentPanelSpeaker regression suite: 4 tests
+Runtime: 10.0.12
+Suite: settings
+
+PASS  settings/fenced-code-normalization
+PASS  settings/spelled-word-normalization
+PASS  settings/hotkey-round-trip
+PASS  settings/hotkey-collision-normalization
+
+PASS: 4/4 regression tests passed.
