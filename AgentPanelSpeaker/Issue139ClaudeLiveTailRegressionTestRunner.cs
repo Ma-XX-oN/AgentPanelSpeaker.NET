@@ -181,12 +181,11 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
       object extractor = ReadRequiredField<object>(
         monitor,
         "_canonicalExtractor");
-      object? projectionBeforeStart = ReadField<object?>(
+      object projectionBeforeStart = ReadField<object?>(
         extractor,
-        "_projection");
-      Require(
-        projectionBeforeStart is not null,
-        "Preindexed Claude history did not retain a canonical projection.");
+        "_projection") ??
+        throw new InvalidOperationException(
+          "Preindexed Claude history did not retain a canonical projection.");
 
       monitor.HistoryLoaded += _ => Interlocked.Increment(
         ref historyLoadedEvents);
