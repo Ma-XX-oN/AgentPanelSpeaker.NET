@@ -13,10 +13,10 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
   private const int TimeoutMilliseconds = 60000;
 
   /// <summary>
-  /// Starts paused-history preparation, proves that its Core worker is active
-  /// while the preview remains in flight, then starts the real MainForm monitor
-  /// path. The returned contract requires one complete history build to own
-  /// both preview and monitor startup.
+  /// Starts the real fire-and-forget paused-history preparation path, proves
+  /// that its Core worker is active while no completed preview is available,
+  /// then starts the real MainForm monitor path. The returned contract requires
+  /// one complete history build to own both preview and monitor startup.
   /// </summary>
   internal static object GetContractSnapshot()
   {
@@ -84,21 +84,20 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
 
       ConfigureSession(form, path);
       LocatedSession session = SessionLocator.FromPath(path, AgentSource.Codex);
-      Task previewTask = InvokeTask(
-        form,
-        "LoadPausedHistoryPreviewAsync",
-        session);
+      _ = InvokePrivate(form, "SetSessionDisplay", session, false);
 
       object extractor = ReadField<object>(monitor, "_canonicalExtractor");
       object client = ReadField<object>(extractor, "_client");
       PumpUntil(
         () => ReadNullableField(client, "_process") is Process process &&
-          !process.HasExited && !previewTask.IsCompleted,
-        "paused preview Core worker while the preview remains in flight");
-      bool previewWasInFlightAtPlay = !previewTask.IsCompleted;
+          !process.HasExited &&
+          ReadNullableField(form, "_selectedSessionHistory") is null,
+        "fire-and-forget paused preview Core worker before preview publication");
+      bool previewWasInFlightAtPlay =
+        ReadNullableField(form, "_selectedSessionHistory") is null;
       Require(
         previewWasInFlightAtPlay,
-        "Paused history completed before the deterministic in-flight gate; " +
+        "Paused history published before the deterministic in-flight gate; " +
         "the fixture no longer exercises issue #144.");
 
       Task startTask = InvokeTask(form, "StartMonitoringAsync");
@@ -110,10 +109,6 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
       PumpUntil(
         () => monitorHistoryLoaded.IsSet,
         "monitor history to load after Play");
-      PumpUntil(
-        () => previewTask.IsCompleted,
-        "original paused preview task to finish");
-      previewTask.GetAwaiter().GetResult();
       Application.DoEvents();
 
       SpeechHistorySnapshot loadedSnapshot = monitorSnapshot ??
@@ -267,14 +262,25 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
     File.WriteAllLines(path, records);
   }
 
-  private static Task InvokeTask(object target, string methodName, params object?[] arguments)
+  private static object? InvokePrivate(
+    object target,
+    string methodName,
+    params object?[] arguments)
   {
     MethodInfo method = target.GetType().GetMethod(
       methodName,
       BindingFlags.Instance | BindingFlags.NonPublic) ??
       throw new InvalidOperationException(
         $"Method '{methodName}' was not found on {target.GetType().Name}.");
-    return method.Invoke(target, arguments) as Task ??
+    return method.Invoke(target, arguments);
+  }
+
+  private static Task InvokeTask(
+    object target,
+    string methodName,
+    params object?[] arguments)
+  {
+    return InvokePrivate(target, methodName, arguments) as Task ??
       throw new InvalidOperationException(
         $"Method '{methodName}' did not return Task.");
   }
