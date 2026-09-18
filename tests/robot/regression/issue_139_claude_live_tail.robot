@@ -12,4 +12,7 @@ Claude Live Tail Speech Suite Passes
     ...    PASS  claude-live-tail/appended-record-reaches-speech-history
     Should Contain
     ...    ${result.stdout}
+    ...    PASS  claude-live-tail/preindexed-history-repeated-appends-reach-speech-history
+    Should Contain
+    ...    ${result.stdout}
     ...    TEST-SUITE-COMPLETE claude-live-tail exit=0

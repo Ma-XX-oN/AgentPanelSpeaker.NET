@@ -26,7 +26,7 @@ Robot's own suite discovery remains the executable source of truth.
 | `regression/issue_121_systemic_tooltip_sizing.robot` | `regression`, `issue-121`, `permanent`, `ui`, `tooltip` | Central tooltip sizing, multiline preservation, working-area wrapping, screen-edge placement, and production Popup sizing registration. |
 | `regression/issue_123_tooltip_coverage.robot` | `regression`, `issue-123`, `permanent`, `ui`, `tooltip` | Application-wide tooltip coverage policy, AppToolTip central registration auditing, hover-popup exemptions, and UiText description reuse. |
 | `regression/issue_138_live_tail_dom_preservation.robot` | `regression`, `issue-138`, `permanent`, `ui`, `speech`, `live-tail` | Runs the hardware-independent `live-tail-dom` suite in the real application process: unchanged Core-unit/word DOM identity, changed/tail replacement semantics, playback messages during refresh, the legacy replacement path, and the live-end refresh race retaining the last spoken content anchor. |
-| `regression/issue_139_claude_live_tail.robot` | `regression`, `issue-139`, `permanent`, `claude`, `live-tail` | Runs the production `JsonlSessionMonitor` against an append-only Claude JSONL and requires the appended Assistant record to reach `TextReady` while the monitor remains alive and fault-free. |
+| `regression/issue_139_claude_live_tail.robot` | `regression`, `issue-139`, `permanent`, `claude`, `live-tail` | Runs the production `JsonlSessionMonitor` against append-only Claude JSONL in both fresh-history and MainForm-style preindexed-history modes; requires repeated appended Assistant records to reach `TextReady`, forbids republishing the indexed prefix, and requires the monitor to remain alive and fault-free. |
 
 ### Hardware-dependent issue #138 acceptance
 
