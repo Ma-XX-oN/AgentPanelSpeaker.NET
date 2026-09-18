@@ -52,8 +52,7 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
     if (failure is not null)
     {
       throw new InvalidOperationException(
-        "Issue #144 contract probe failed.",
-        failure);
+        "Issue #144 contract probe failed: " + failure);
     }
     return snapshot ?? throw new InvalidOperationException(
       "Issue #144 contract probe returned no snapshot.");
