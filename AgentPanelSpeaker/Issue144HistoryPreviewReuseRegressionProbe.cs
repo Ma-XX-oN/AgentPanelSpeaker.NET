@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 
@@ -12,10 +13,10 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
   private const int TimeoutMilliseconds = 60000;
 
   /// <summary>
-  /// Starts paused-history preparation, proves that work is in flight after its
-  /// retained Core session exists, then starts the real MainForm monitor path.
-  /// The returned contract requires one complete history build to own both
-  /// preview and monitor startup.
+  /// Starts paused-history preparation, proves that its Core worker is active
+  /// while the preview remains in flight, then starts the real MainForm monitor
+  /// path. The returned contract requires one complete history build to own
+  /// both preview and monitor startup.
   /// </summary>
   internal static object GetContractSnapshot()
   {
@@ -89,9 +90,11 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
         session);
 
       object extractor = ReadField<object>(monitor, "_canonicalExtractor");
+      object client = ReadField<object>(extractor, "_client");
       PumpUntil(
-        () => ReadNullableField(extractor, "_sessionId") is string,
-        "paused preview to establish its retained Core session");
+        () => ReadNullableField(client, "_process") is Process process &&
+          !process.HasExited && !previewTask.IsCompleted,
+        "paused preview Core worker while the preview remains in flight");
       bool previewWasInFlightAtPlay = !previewTask.IsCompleted;
       Require(
         previewWasInFlightAtPlay,
