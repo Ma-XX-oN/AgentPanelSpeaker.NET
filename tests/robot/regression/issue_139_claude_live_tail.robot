@@ -1,6 +1,6 @@
 *** Settings ***
 Resource      ../resources/TemplatesV1.resource
-Force Tags    regression    issue-139    permanent    claude    live-tail
+Force Tags    regression    issue-139    issue-142    permanent    claude    live-tail
 
 *** Test Cases ***
 Claude Live Tail Speech Suite Passes
@@ -13,6 +13,9 @@ Claude Live Tail Speech Suite Passes
     Should Contain
     ...    ${result.stdout}
     ...    PASS  claude-live-tail/preindexed-history-repeated-appends-reach-speech-history
+    Should Contain
+    ...    ${result.stdout}
+    ...    PASS  claude-live-tail/duplicate-uuid-keeps-source-word-occurrences-separate
     Should Contain
     ...    ${result.stdout}
     ...    TEST-SUITE-COMPLETE claude-live-tail exit=0
