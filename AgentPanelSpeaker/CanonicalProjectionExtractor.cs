@@ -680,7 +680,7 @@ internal static class CanonicalProjectionExtractor
       {
         throw new InvalidDataException(
           $"Core block {node.CanonicalBlockId} has speech text but no " +
-          "canonical word projection for source record {sourceIndex}.");
+          $"canonical word projection for source record {sourceIndex}.");
       }
       for (int index = 0; index < words.Length; ++index)
       {
