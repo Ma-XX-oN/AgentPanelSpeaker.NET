@@ -346,6 +346,18 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "claude-live-tail",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "claude-live-tail",
+          Issue139ClaudeLiveTailRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -407,6 +419,8 @@ internal static class Program
         "webview-shutdown");
       int liveTailDom = RunIsolatedTestSuite(
         "live-tail-dom");
+      int claudeLiveTail = RunIsolatedTestSuite(
+        "claude-live-tail");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -436,7 +450,8 @@ internal static class Program
                              systemSpeechProvenance == 0 &&
                              systemSpeechNativeTiming == 0 &&
                              webViewShutdown == 0 &&
-                             liveTailDom == 0
+                             liveTailDom == 0 &&
+                             claudeLiveTail == 0
         ? 0
         : 1;
       Console.WriteLine(
