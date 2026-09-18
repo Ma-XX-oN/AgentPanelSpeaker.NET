@@ -11,22 +11,11 @@ try {
     throw 'Failed to initialize repository submodules.'
   }
 
-  $treeLine = (& git ls-tree HEAD dependencies/AIConversationCore)
-  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($treeLine)) {
-    throw 'Unable to read the pinned AIConversationCore gitlink from HEAD.'
-  }
-  $parts = $treeLine.Trim() -split '\s+'
-  if ($parts.Count -lt 3) {
-    throw "Unexpected AIConversationCore gitlink record: $treeLine"
-  }
-  $expected = $parts[2]
-  $actual = (& git -C $corePath rev-parse HEAD).Trim()
+  & (Join-Path $PSScriptRoot 'Verify-CorePinConsistency.ps1')
   if ($LASTEXITCODE -ne 0) {
-    throw 'Unable to read the checked-out AIConversationCore revision.'
+    throw 'AIConversationCore pin consistency verification failed.'
   }
-  if ($actual -ne $expected) {
-    throw "Unexpected AIConversationCore submodule revision: expected=$expected actual=$actual"
-  }
+  $actual = (& git -C $corePath rev-parse HEAD).Trim()
 
   & npm ci --prefix $corePath --no-audit --no-fund
   if ($LASTEXITCODE -ne 0) {

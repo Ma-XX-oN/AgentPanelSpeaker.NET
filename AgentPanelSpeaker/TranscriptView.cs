@@ -434,7 +434,7 @@ internal sealed class TranscriptView : UserControl
     {
       _lastLocatedContentPosition = position;
     }
-    if (!_initialized || _refreshInProgress)
+    if (!_initialized)
     {
       return;
     }
@@ -449,6 +449,11 @@ internal sealed class TranscriptView : UserControl
     {
       PostSpeechFragments();
       PostPlaybackPosition(position);
+      return;
+    }
+
+    if (_refreshInProgress)
+    {
       return;
     }
 
@@ -2222,11 +2227,28 @@ internal sealed class TranscriptView : UserControl
     TranscriptVirtualDocument document,
     IReadOnlyList<TranscriptNodeIdentity> identities)
   {
-    return _settings.FollowSpeech &&
-      _pendingPosition is TranscriptPlaybackPosition position &&
-      TryResolvePositionIndex(document, identities, position, out int index)
-        ? index
-        : Math.Max(0, document.Count - 1);
+    if (!_settings.FollowSpeech)
+    {
+      return Math.Max(0, document.Count - 1);
+    }
+
+    if (_pendingPosition is TranscriptPlaybackPosition position &&
+        TryResolvePositionIndex(document, identities, position, out int index))
+    {
+      return index;
+    }
+
+    bool waitingAtLiveEnd =
+      _pendingPosition?.State is TranscriptPlaybackState.WaitingAtLiveEnd or
+        TranscriptPlaybackState.PausedAtLiveEnd;
+    if (waitingAtLiveEnd &&
+        _lastLocatedContentPosition is TranscriptPlaybackPosition located &&
+        TryResolvePositionIndex(document, identities, located, out index))
+    {
+      return index;
+    }
+
+    return Math.Max(0, document.Count - 1);
   }
 
   private static bool TryResolvePositionIndex(
@@ -3069,6 +3091,7 @@ voicePolicyStyle.id = 'voice-policy-style';
 document.head.append(voicePolicyStyle);
 const openDisclosureOverrides = new Set();
 let discardDisclosureStateOnNextReplacement = false;
+const virtualRecordSourceHtml = new WeakMap();
 
 function tokenize(text) {
   return (text || '').toLocaleLowerCase().match(
@@ -3171,6 +3194,94 @@ function wrapWords(nodeMap = null) {
   wrapWordsForRecordKeys(
     nodeMap === null ? null : nodeRecordKeys(nodeMap),
     false);
+}
+
+function reindexWrappedWords() {
+  words = Array.from(transcript.querySelectorAll('.word'));
+  lexicalWords = words.filter(word => word.dataset.lexical === '1');
+  for (let index = 0; index < words.length; ++index) {
+    words[index].dataset.index = String(index);
+  }
+}
+
+function virtualRecordUnitId(record) {
+  const marker = record.querySelector(
+    '.aicore-structural-unit[data-aicore-unit-id]');
+  return marker?.getAttribute('data-aicore-unit-id') || '';
+}
+
+function seedVirtualRecordSourceHtml() {
+  for (const record of transcript.children) {
+    if (!record.classList.contains('virtual-record')) continue;
+    if (!virtualRecordUnitId(record)) continue;
+    virtualRecordSourceHtml.set(record, record.innerHTML);
+  }
+}
+
+function createVirtualSpacer(edge, height) {
+  const spacer = document.createElement('div');
+  spacer.className = 'virtual-spacer';
+  spacer.dataset.virtualSpacer = edge;
+  spacer.style.height = Math.max(0, Number(height) || 0) + 'px';
+  return spacer;
+}
+
+function reconcileTranscriptWindow(html, topSpacerHeight, bottomSpacerHeight) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const topLevelNodes = Array.from(template.content.childNodes)
+    .filter(node =>
+      node.nodeType !== Node.TEXT_NODE || node.textContent.trim());
+  if (topLevelNodes.some(node =>
+      node.nodeType !== Node.ELEMENT_NODE ||
+      !node.classList.contains('virtual-record'))) {
+    return false;
+  }
+
+  const incomingRecords = Array.from(template.content.children);
+  const existingRecords = Array.from(transcript.children)
+    .filter(child => child.classList.contains('virtual-record'));
+  if (incomingRecords.some(record => !virtualRecordUnitId(record)) ||
+      existingRecords.some(record => !virtualRecordUnitId(record))) {
+    return false;
+  }
+
+  const existingByUnitId = new Map();
+  for (const child of existingRecords) {
+    const unitId = virtualRecordUnitId(child);
+    if (existingByUnitId.has(unitId)) {
+      throw new Error('Duplicate materialized Core unit ID: ' + unitId);
+    }
+    existingByUnitId.set(unitId, child);
+  }
+
+  const fragment = document.createDocumentFragment();
+  fragment.append(createVirtualSpacer('top', topSpacerHeight));
+  const incomingUnitIds = new Set();
+  for (const incoming of incomingRecords) {
+    const unitId = virtualRecordUnitId(incoming);
+    if (incomingUnitIds.has(unitId)) {
+      throw new Error('Duplicate incoming Core unit ID: ' + unitId);
+    }
+    incomingUnitIds.add(unitId);
+    const sourceHtml = incoming.innerHTML;
+    const existing = existingByUnitId.get(unitId);
+    if (existing && virtualRecordSourceHtml.get(existing) === sourceHtml) {
+      const virtualIndex = incoming.getAttribute('data-virtual-index');
+      if (virtualIndex === null) {
+        throw new Error('Virtual transcript record is missing its index.');
+      }
+      existing.setAttribute('data-virtual-index', virtualIndex);
+      fragment.append(existing);
+      continue;
+    }
+
+    virtualRecordSourceHtml.set(incoming, sourceHtml);
+    fragment.append(incoming);
+  }
+  fragment.append(createVirtualSpacer('bottom', bottomSpacerHeight));
+  transcript.replaceChildren(fragment);
+  return true;
 }
 
 function structureDetailsKey(details) {
@@ -3594,7 +3705,13 @@ function replaceTranscriptWindow(
     '<div class="virtual-spacer" data-virtual-spacer="bottom" style="height:' +
     Math.max(0, Number(bottomSpacerHeight) || 0) + 'px"></div>';
   let phaseStarted = performance.now();
-  transcript.innerHTML = exactAssignedHtml;
+  if (!reconcileTranscriptWindow(
+      html,
+      topSpacerHeight,
+      bottomSpacerHeight)) {
+    transcript.innerHTML = exactAssignedHtml;
+    seedVirtualRecordSourceHtml();
+  }
   resetPlaybackProjectionState();
   applyRevisionVisibility(showRolledBackHistory);
   const innerHtmlMilliseconds = performance.now() - phaseStarted;
@@ -3629,6 +3746,7 @@ function replaceTranscriptWindow(
   previousStructureStage = 'after-details-restore';
   phaseStarted = performance.now();
   wrapWords(nodeMap || []);
+  reindexWrappedWords();
   wrapSpeechFragments();
   const wrapWordsMilliseconds = performance.now() - phaseStarted;
   previousStructureMap = postStructureStage(

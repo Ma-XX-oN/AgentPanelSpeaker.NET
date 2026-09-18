@@ -11,6 +11,10 @@ Project Has Authoritative Version Property
     [Template]    Text File Should Match Regex V1
     ${EXECDIR}${/}AgentPanelSpeaker${/}AgentPanelSpeaker.csproj    <Version>[0-9]+[.][0-9]+[.][0-9]+(?:-issue[.][0-9]+[.][0-9]+)?</Version>
 
+AIConversationCore Pin Authorities Agree
+    [Template]    Command Should Succeed V1
+    pwsh    -NoProfile    -File    ${EXECDIR}${/}tools${/}Verify-CorePinConsistency.ps1
+
 Test Suite Completion Guard Self Test Passes
     [Template]    Command Should Succeed V1
     pwsh    -NoProfile    -File    ${EXECDIR}${/}tools${/}Invoke-TestSuite.ps1    -SelfTest

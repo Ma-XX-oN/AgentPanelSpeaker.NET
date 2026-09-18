@@ -4,6 +4,8 @@ namespace AgentPanelSpeaker;
 
 internal static class Program
 {
+  private static readonly TimeSpan IsolatedTestSuiteTimeout =
+    TimeSpan.FromMinutes(3);
   private static int _externalTerminationRequested;
 
   /// <summary>
@@ -34,6 +36,51 @@ internal static class Program
       }
 
       ApplicationConfiguration.Initialize();
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "isolation-timeout-probe",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Thread.Sleep(TimeSpan.FromSeconds(10));
+        Environment.ExitCode = 0;
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "isolation-no-marker-probe",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = 0;
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "isolation-success-probe",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "isolation-success-probe",
+          () => 0);
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "test-isolation-timeout",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "test-isolation-timeout",
+          Issue140IsolationTimeoutRegressionTestRunner.Run);
+        return;
+      }
 
       if (args.Length == 2 &&
           string.Equals(args[1], "extended", StringComparison.OrdinalIgnoreCase))
@@ -317,6 +364,47 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "live-tail-production",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "live-tail-production",
+          () => RunWithWinFormsMessageLoop(() =>
+          {
+            Issue138LiveTailProductionIntegrationTest.Run();
+            return 0;
+          }));
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "live-tail-dom",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "live-tail-dom",
+          () => RunWithWinFormsMessageLoop(
+            Issue138LiveTailDomPreservationRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "claude-live-tail",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "claude-live-tail",
+          Issue139ClaudeLiveTailRegressionTestRunner.Run);
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -376,6 +464,12 @@ internal static class Program
         "system-speech-native-timing");
       int webViewShutdown = RunIsolatedTestSuite(
         "webview-shutdown");
+      int liveTailDom = RunIsolatedTestSuite(
+        "live-tail-dom");
+      int claudeLiveTail = RunIsolatedTestSuite(
+        "claude-live-tail");
+      int testIsolationTimeout = RunIsolatedTestSuite(
+        "test-isolation-timeout");
 
       Environment.ExitCode = primary == 0 &&
                              extended == 0 &&
@@ -404,7 +498,10 @@ internal static class Program
                              previewCursor == 0 &&
                              systemSpeechProvenance == 0 &&
                              systemSpeechNativeTiming == 0 &&
-                             webViewShutdown == 0
+                             webViewShutdown == 0 &&
+                             liveTailDom == 0 &&
+                             claudeLiveTail == 0 &&
+                             testIsolationTimeout == 0
         ? 0
         : 1;
       Console.WriteLine(
@@ -516,6 +613,31 @@ internal static class Program
   /// </summary>
   private static int RunIsolatedTestSuite(string suite)
   {
+    return RunIsolatedTestSuite(suite, IsolatedTestSuiteTimeout);
+  }
+
+  /// <summary>
+  /// Exposes the bounded child-process contract to its in-assembly regression
+  /// tests without changing the timeout used by ordinary suites.
+  /// </summary>
+  internal static int RunIsolatedTestSuiteForTest(
+    string suite,
+    TimeSpan timeout)
+  {
+    return RunIsolatedTestSuite(suite, timeout);
+  }
+
+  private static int RunIsolatedTestSuite(
+    string suite,
+    TimeSpan timeout)
+  {
+    ArgumentException.ThrowIfNullOrWhiteSpace(suite);
+    if (timeout <= TimeSpan.Zero ||
+        timeout.TotalMilliseconds > int.MaxValue)
+    {
+      throw new ArgumentOutOfRangeException(nameof(timeout));
+    }
+
     string? executable = Environment.ProcessPath;
     if (string.IsNullOrWhiteSpace(executable))
     {
@@ -539,21 +661,45 @@ internal static class Program
     process.StartInfo.ArgumentList.Add(suite);
     if (!process.Start())
     {
-      Console.Error.WriteLine($"FAIL  test-isolation/{suite}: process did not start.");
+      Console.Error.WriteLine(
+        $"FAIL  test-isolation/{suite}: process did not start.");
       return 1;
     }
 
     Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
     Task<string> stderrTask = process.StandardError.ReadToEndAsync();
-    process.WaitForExit();
-    Task.WaitAll(stdoutTask, stderrTask);
-    string stdout = stdoutTask.Result;
-    string stderr = stderrTask.Result;
-    Console.Out.Write(stdout);
-    Console.Error.Write(stderr);
+    int timeoutMilliseconds = checked(
+      (int)Math.Ceiling(timeout.TotalMilliseconds));
+    if (!process.WaitForExit(timeoutMilliseconds))
+    {
+      bool terminated = TryTerminateProcess(process);
+      bool drained = Task.WaitAll(
+        new Task[] { stdoutTask, stderrTask },
+        TimeSpan.FromSeconds(5));
+      WriteCompletedOutput(stdoutTask, Console.Out);
+      WriteCompletedOutput(stderrTask, Console.Error);
+      Console.Error.WriteLine(
+        $"FAIL  test-isolation/{suite}: child exceeded " +
+        $"{timeoutMilliseconds} ms; terminated={terminated}; " +
+        $"outputDrained={drained}.");
+      return 1;
+    }
+
+    bool outputDrained = Task.WaitAll(
+      new Task[] { stdoutTask, stderrTask },
+      TimeSpan.FromSeconds(5));
+    WriteCompletedOutput(stdoutTask, Console.Out);
+    WriteCompletedOutput(stderrTask, Console.Error);
+    if (!outputDrained)
+    {
+      Console.Error.WriteLine(
+        $"FAIL  test-isolation/{suite}: child exited but redirected output " +
+        "did not drain within 5000 ms.");
+      return 1;
+    }
 
     if (!TestSuiteCompletionMarker.IsSuccessful(
-          stdout,
+          stdoutTask.Result,
           suite,
           process.ExitCode))
     {
@@ -563,5 +709,35 @@ internal static class Program
       return 1;
     }
     return 0;
+  }
+
+  private static bool TryTerminateProcess(Process process)
+  {
+    try
+    {
+      if (!process.HasExited)
+      {
+        process.Kill(entireProcessTree: true);
+      }
+      return process.HasExited || process.WaitForExit(5000);
+    }
+    catch (InvalidOperationException)
+    {
+      return true;
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+      return false;
+    }
+  }
+
+  private static void WriteCompletedOutput(
+    Task<string> task,
+    TextWriter writer)
+  {
+    if (task.IsCompletedSuccessfully)
+    {
+      writer.Write(task.Result);
+    }
   }
 }

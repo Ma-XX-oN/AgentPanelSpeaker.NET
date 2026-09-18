@@ -161,7 +161,7 @@ internal static class CanonicalProjectionExtractor
         : $"accepted {acceptedCount} canonical conversational node(s)";
 
     return new ExtractionResult(
-      AttachCanonicalWords(nodes, projection),
+      AttachCanonicalWords(nodes, projection, sourceIndex),
       decision,
       $"canonical.{provider}",
       payloadSummary,
@@ -645,12 +645,14 @@ internal static class CanonicalProjectionExtractor
 
   /// <summary>
   /// Attaches Core-owned word records to direct canonical-block speech nodes.
-  /// Provenance.block_id and block_word_index are authoritative. Visible text
-  /// is never searched or retokenized to recover transcript identity.
+  /// Provenance.block_id, source.record_index, and block_word_index are
+  /// authoritative. Visible text is never searched or retokenized to recover
+  /// transcript identity.
   /// </summary>
   private static IReadOnlyList<ExtractedNode> AttachCanonicalWords(
     IReadOnlyList<ExtractedNode> nodes,
-    AIConversationProjection projection)
+    AIConversationProjection projection,
+    int sourceIndex)
   {
     CanonicalSpeechWordProjection[] allWords = (projection.HtmlUnits ??
       Array.Empty<CanonicalHtmlUnitProjection>())
@@ -666,17 +668,19 @@ internal static class CanonicalProjectionExtractor
       }
 
       CanonicalSpeechWordProjection[] words = allWords
-        .Where(word => string.Equals(
-          word.Provenance?.BlockId,
-          node.CanonicalBlockId,
-          StringComparison.Ordinal))
+        .Where(word =>
+          HasSourceRecordIndex(word, sourceIndex) &&
+          string.Equals(
+            word.Provenance?.BlockId,
+            node.CanonicalBlockId,
+            StringComparison.Ordinal))
         .OrderBy(word => word.Provenance!.BlockWordIndex)
         .ToArray();
       if (words.Length == 0)
       {
         throw new InvalidDataException(
           $"Core block {node.CanonicalBlockId} has speech text but no " +
-          "canonical word projection.");
+          $"canonical word projection for source record {sourceIndex}.");
       }
       for (int index = 0; index < words.Length; ++index)
       {
@@ -689,6 +693,22 @@ internal static class CanonicalProjectionExtractor
       }
       return node with { CanonicalWords = words };
     }).ToArray();
+  }
+
+  /// <summary>
+  /// Returns whether a canonical word belongs to one exact source occurrence.
+  /// </summary>
+  private static bool HasSourceRecordIndex(
+    CanonicalSpeechWordProjection word,
+    int sourceIndex)
+  {
+    JsonElement? provenanceSource = word.Provenance?.Source;
+    return provenanceSource is JsonElement source &&
+      source.ValueKind == JsonValueKind.Object &&
+      source.TryGetProperty("record_index", out JsonElement recordIndex) &&
+      recordIndex.ValueKind == JsonValueKind.Number &&
+      recordIndex.TryGetInt32(out int value) &&
+      value == sourceIndex;
   }
 
   /// <summary>

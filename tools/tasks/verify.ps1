@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $project = Join-Path $repoRoot 'AgentPanelSpeaker\AgentPanelSpeaker.csproj'
 $exe = Join-Path $repoRoot 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+$exceptionMessageProbe = Join-Path $repoRoot 'tests\AgentPanelSpeaker.ExceptionMessageProbe\AgentPanelSpeaker.ExceptionMessageProbe.csproj'
 
 & (Join-Path $repoRoot 'tools\Prepare-Build.ps1')
 
@@ -20,6 +21,11 @@ if ($LASTEXITCODE -ne 0) {
 & dotnet build $project --configuration Release
 if ($LASTEXITCODE -ne 0) {
   throw 'AgentPanelSpeaker Release build failed.'
+}
+
+& dotnet run --project $exceptionMessageProbe --configuration Release
+if ($LASTEXITCODE -ne 0) {
+  throw 'Issue #142 canonical source-record diagnostic regression failed.'
 }
 
 & (Join-Path $repoRoot 'tools\Verify-VersionConsistency.ps1') -Executable $exe
