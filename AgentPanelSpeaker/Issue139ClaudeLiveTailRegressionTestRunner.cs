@@ -17,6 +17,10 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
     "First Claude append after preindexed history.";
   private const string SecondPreindexedAppend =
     "Second Claude append after preindexed history.";
+  private const string DuplicateUuid =
+    "367fa423-f933-46a3-8061-d1a9c94eac15";
+  private const string DuplicateReasoning =
+    "Repeated reasoning text for source occurrence identity.";
 
   /// <summary>
   /// Runs the issue #139 Claude live-tail regression suite.
@@ -29,7 +33,9 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
       ("claude-live-tail/appended-record-reaches-speech-history",
         TestAppendedClaudeRecordReachesSpeechHistory),
       ("claude-live-tail/preindexed-history-repeated-appends-reach-speech-history",
-        TestPreindexedHistoryRepeatedAppendsReachSpeechHistory)
+        TestPreindexedHistoryRepeatedAppendsReachSpeechHistory),
+      ("claude-live-tail/duplicate-uuid-keeps-source-word-occurrences-separate",
+        TestDuplicateUuidKeepsSourceWordOccurrencesSeparate)
     };
 
     int failures = 0;
@@ -275,6 +281,128 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
     {
       StopAndDelete(monitor, root);
     }
+  }
+
+  /// <summary>
+  /// Reproduces Claude branch replay where two exact source occurrences reuse
+  /// one provider UUID and therefore one canonical block ID. The app must not
+  /// combine the two Core provenance sequences when extracting either record.
+  /// </summary>
+  private static void TestDuplicateUuidKeepsSourceWordOccurrencesSeparate()
+  {
+    string[] records =
+    {
+      BuildDuplicateReasoningRecord(
+        parentUuid: "branch-parent-old",
+        branch: "issue-old"),
+      BuildDuplicateReasoningRecord(
+        parentUuid: "branch-parent-new",
+        branch: "issue-new")
+    };
+
+    using var extractor = new CanonicalSessionExtractor();
+    IReadOnlyList<ExtractionResult> results = extractor.Load(
+      AgentSource.Claude,
+      records);
+
+    Require(results.Count == 2,
+      $"Expected two source slices, received {results.Count}.");
+
+    ExtractedNode first = RequireReasoningNode(results[0], 0);
+    ExtractedNode second = RequireReasoningNode(results[1], 1);
+    Require(
+      string.Equals(
+        first.CanonicalBlockId,
+        second.CanonicalBlockId,
+        StringComparison.Ordinal),
+      "Fixture did not reproduce the shared canonical block identity.");
+
+    AssertExactSourceOccurrence(first, sourceIndex: 0);
+    AssertExactSourceOccurrence(second, sourceIndex: 1);
+
+    long[] firstIds = first.CanonicalWords!.Select(word => word.Id).ToArray();
+    long[] secondIds = second.CanonicalWords!.Select(word => word.Id).ToArray();
+    Require(
+      !firstIds.Intersect(secondIds).Any(),
+      "Distinct source occurrences unexpectedly shared canonical word IDs.");
+  }
+
+  private static ExtractedNode RequireReasoningNode(
+    ExtractionResult result,
+    int sourceIndex)
+  {
+    ExtractedNode[] nodes = result.Nodes
+      .Where(node => node.Category == ContentCategory.Reasoning)
+      .ToArray();
+    Require(
+      nodes.Length == 1,
+      $"Source {sourceIndex} produced {nodes.Length} reasoning nodes instead of one.");
+    Require(
+      nodes[0].CanonicalWords is { Count: > 0 },
+      $"Source {sourceIndex} reasoning node has no canonical words.");
+    return nodes[0];
+  }
+
+  private static void AssertExactSourceOccurrence(
+    ExtractedNode node,
+    int sourceIndex)
+  {
+    IReadOnlyList<CanonicalSpeechWordProjection> words = node.CanonicalWords!;
+    for (int index = 0; index < words.Count; ++index)
+    {
+      CanonicalSpeechWordProjection word = words[index];
+      Require(
+        word.Provenance?.BlockWordIndex == index,
+        $"Source {sourceIndex} block word {index} was not contiguous.");
+      Require(
+        ReadSourceRecordIndex(word) == sourceIndex,
+        $"Source {sourceIndex} attached a word owned by another source occurrence.");
+    }
+  }
+
+  private static int ReadSourceRecordIndex(
+    CanonicalSpeechWordProjection word)
+  {
+    JsonElement? provenanceSource = word.Provenance?.Source;
+    if (provenanceSource is not JsonElement source ||
+        source.ValueKind != JsonValueKind.Object ||
+        !source.TryGetProperty("record_index", out JsonElement recordIndex) ||
+        recordIndex.ValueKind != JsonValueKind.Number ||
+        !recordIndex.TryGetInt32(out int value))
+    {
+      throw new InvalidOperationException(
+        $"Core word {word.Id} omitted provenance source record_index.");
+    }
+    return value;
+  }
+
+  private static string BuildDuplicateReasoningRecord(
+    string parentUuid,
+    string branch)
+  {
+    return JsonSerializer.Serialize(new
+    {
+      uuid = DuplicateUuid,
+      parentUuid,
+      type = "assistant",
+      isSidechain = false,
+      timestamp = "2026-09-17T02:55:27.339Z",
+      gitBranch = branch,
+      message = new
+      {
+        id = "msg_011Cf8FqfuhDSW4b9C9n8q5s",
+        model = "claude-sonnet-4-6",
+        role = "assistant",
+        content = new object[]
+        {
+          new
+          {
+            type = "thinking",
+            thinking = DuplicateReasoning
+          }
+        }
+      }
+    });
   }
 
   private static string CreateFixture(out string path)
