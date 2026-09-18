@@ -405,6 +405,19 @@ internal static class Program
       }
 
       if (args.Length == 2 &&
+          string.Equals(
+            args[1],
+            "transport-state-ownership",
+            StringComparison.OrdinalIgnoreCase))
+      {
+        Environment.ExitCode = RunNamedSuite(
+          "transport-state-ownership",
+          () => RunWithWinFormsMessageLoop(
+            Issue141TransportStateRegressionTestRunner.Run));
+        return;
+      }
+
+      if (args.Length == 2 &&
           string.Equals(args[1], "redundancy", StringComparison.OrdinalIgnoreCase))
       {
         Environment.ExitCode = RunNamedSuite(
@@ -468,6 +481,8 @@ internal static class Program
         "live-tail-dom");
       int claudeLiveTail = RunIsolatedTestSuite(
         "claude-live-tail");
+      int transportStateOwnership = RunIsolatedTestSuite(
+        "transport-state-ownership");
       int testIsolationTimeout = RunIsolatedTestSuite(
         "test-isolation-timeout");
 
@@ -501,6 +516,7 @@ internal static class Program
                              webViewShutdown == 0 &&
                              liveTailDom == 0 &&
                              claudeLiveTail == 0 &&
+                             transportStateOwnership == 0 &&
                              testIsolationTimeout == 0
         ? 0
         : 1;
