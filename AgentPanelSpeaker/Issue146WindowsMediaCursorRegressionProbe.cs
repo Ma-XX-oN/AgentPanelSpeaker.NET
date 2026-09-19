@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
+using Windows.Media.Core;
+using Windows.Media.SpeechSynthesis;
 using VoiceInformation = Windows.Media.SpeechSynthesis.VoiceInformation;
 using WinRtSpeechSynthesizer = Windows.Media.SpeechSynthesis.SpeechSynthesizer;
 
@@ -48,6 +50,10 @@ internal static class Issue146WindowsMediaCursorRegressionProbe
     {
       Volume = 70
     };
+    BookmarkInventory inventory = InspectProviderBookmarks(
+      markup,
+      profile,
+      voice);
     using var synthesizer = new WinRtSpeechSynthesizer();
     MethodInfo method = typeof(SapiSpeechEngine).GetMethod(
       "RenderWindowsMediaSpeech",
@@ -99,7 +105,11 @@ internal static class Issue146WindowsMediaCursorRegressionProbe
       "Windows.Media returned an empty waveform.");
     Require(degradation is null,
       "Windows.Media degraded exact word tracking: " +
-      $"{degradation?.Reason ?? "unknown"}.");
+      $"{degradation?.Reason ?? "unknown"}. " +
+      $"Provider bookmark cues={inventory.BookmarkCueCount}, " +
+      $"owners={inventory.ObservedOwnerCount}/{inventory.ExpectedOwnerCount}, " +
+      $"missing=[{string.Join(", ", inventory.MissingOwners)}], " +
+      $"tracks=[{string.Join(", ", inventory.TrackLabels)}].");
     Require(boundaries.Count > 1,
       "Windows.Media did not return moving word-level boundaries.");
     Require(observed.SequenceEqual(expected),
@@ -115,6 +125,87 @@ internal static class Issue146WindowsMediaCursorRegressionProbe
       BoundaryCount: boundaries.Count,
       Exact: boundaries.All(boundary => boundary.Exact),
       DegradationReason: degradation?.Reason ?? string.Empty);
+  }
+
+  private static BookmarkInventory InspectProviderBookmarks(
+    SpeechMarkup markup,
+    SpeechProfileSettings profile,
+    VoiceInformation voice)
+  {
+    MethodInfo builder = typeof(SapiSpeechEngine).GetMethod(
+      "TryBuildBookmarkedSsml",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException("TryBuildBookmarkedSsml is missing.");
+    object?[] buildArguments = { markup, voice.Language, null };
+    bool built = builder.Invoke(null, buildArguments) as bool? ?? false;
+    string ssml = buildArguments[2] as string ?? string.Empty;
+    Require(built && ssml.Length != 0,
+      "Production Windows.Media bookmark SSML could not be built.");
+
+    using var synthesizer = new WinRtSpeechSynthesizer
+    {
+      Voice = voice
+    };
+    synthesizer.Options.IncludeWordBoundaryMetadata = true;
+    synthesizer.Options.IncludeSentenceBoundaryMetadata = true;
+    synthesizer.Options.SpeakingRate = Math.Pow(2.0, profile.Rate / 10.0);
+    synthesizer.Options.AudioPitch = 1.0;
+    synthesizer.Options.AudioVolume = profile.Volume / 100.0;
+    using SpeechSynthesisStream stream = synthesizer
+      .SynthesizeSsmlToStreamAsync(ssml)
+      .AsTask()
+      .GetAwaiter()
+      .GetResult();
+
+    string[] labels = stream.TimedMetadataTracks
+      .Select(track => track.Label ?? string.Empty)
+      .ToArray();
+    TimedMetadataTrack? bookmarkTrack = stream.TimedMetadataTracks
+      .FirstOrDefault(track => string.Equals(
+        track.Label,
+        "SpeechBookmark",
+        StringComparison.OrdinalIgnoreCase));
+    var observedOwners = new List<int>();
+    int cueCount = 0;
+    if (bookmarkTrack is not null)
+    {
+      foreach (SpeechCue cue in bookmarkTrack.Cues.OfType<SpeechCue>())
+      {
+        ++cueCount;
+        string identity = string.IsNullOrWhiteSpace(cue.Text)
+          ? cue.Id ?? string.Empty
+          : cue.Text;
+        Match match = Regex.Match(identity, @"aps_(\d+)$");
+        if (match.Success &&
+            int.TryParse(match.Groups[1].Value, out int ownerIndex))
+        {
+          observedOwners.Add(ownerIndex);
+        }
+      }
+    }
+
+    SpeechMarkupWord[] expectedWords = markup.Words!.ToArray();
+    HashSet<int> observed = observedOwners.ToHashSet();
+    string[] missing = expectedWords
+      .Where(word => !observed.Contains(word.WordIndex))
+      .Select(word =>
+        $"{word.WordIndex}:{EscapeDiagnosticToken(word.Text)}")
+      .ToArray();
+    return new BookmarkInventory(
+      expectedWords.Length,
+      observed.Count,
+      cueCount,
+      missing,
+      labels);
+  }
+
+  private static string EscapeDiagnosticToken(string value)
+  {
+    return value
+      .Replace("\\", "\\\\", StringComparison.Ordinal)
+      .Replace("\r", "\\r", StringComparison.Ordinal)
+      .Replace("\n", "\\n", StringComparison.Ordinal)
+      .Replace(",", "\\,", StringComparison.Ordinal);
   }
 
   private static SpeechMarkup BuildTrackedMarkup(string text)
@@ -143,6 +234,13 @@ internal static class Issue146WindowsMediaCursorRegressionProbe
       throw new InvalidOperationException(message);
     }
   }
+
+  private sealed record BookmarkInventory(
+    int ExpectedOwnerCount,
+    int ObservedOwnerCount,
+    int BookmarkCueCount,
+    IReadOnlyList<string> MissingOwners,
+    IReadOnlyList<string> TrackLabels);
 
   private sealed record ContractSnapshot(
     string Voice,
