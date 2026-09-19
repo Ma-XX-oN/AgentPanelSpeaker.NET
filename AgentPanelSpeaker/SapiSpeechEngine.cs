@@ -1602,6 +1602,7 @@ internal sealed class SapiSpeechEngine : IDisposable
       if (bookmarkedSsmlBuilt && !retriedWithoutBookmarks &&
           TryCreateWindowsMediaBookmarkBoundaries(
             markup,
+            ssml,
             stream,
             out IReadOnlyList<SpeechWordBoundary> bookmarkBoundaries,
             out bookmarkFailureReason))
@@ -1905,6 +1906,7 @@ internal sealed class SapiSpeechEngine : IDisposable
   /// </summary>
   private static bool TryCreateWindowsMediaBookmarkBoundaries(
     SpeechMarkup markup,
+    string submittedSsml,
     SpeechSynthesisStream stream,
     out IReadOnlyList<SpeechWordBoundary> boundaries,
     out string failureReason)
@@ -1964,9 +1966,42 @@ internal sealed class SapiSpeechEngine : IDisposable
       .ToArray();
     if (!observed.SequenceEqual(expected))
     {
-      boundaries = Array.Empty<SpeechWordBoundary>();
-      failureReason = "windows_media_incomplete_speechbookmark_mapping";
-      return false;
+      if (!WindowsMediaBookmarkBoundaryRecovery.TryRecoverMissingOwners(
+            markup,
+            submittedSsml,
+            stream,
+            words,
+            raw,
+            out IReadOnlyList<SpeechWordBoundary> recovered,
+            out string rejectionReason))
+      {
+        DiagnosticLog.Write("speech.windows_media_bookmark_recovery_rejected", new
+        {
+          expectedOwners = expected,
+          observedOwners = observed,
+          reason = rejectionReason
+        });
+        boundaries = Array.Empty<SpeechWordBoundary>();
+        failureReason = "windows_media_incomplete_speechbookmark_mapping";
+        return false;
+      }
+
+      raw.AddRange(recovered);
+      observed = raw.Select(boundary => boundary.WordIndex)
+        .Distinct()
+        .Order()
+        .ToArray();
+      if (!observed.SequenceEqual(expected))
+      {
+        boundaries = Array.Empty<SpeechWordBoundary>();
+        failureReason = "windows_media_incomplete_speechbookmark_mapping";
+        return false;
+      }
+      DiagnosticLog.Write("speech.windows_media_bookmark_owners_recovered", new
+      {
+        recoveredOwners = recovered.Select(boundary => boundary.WordIndex).ToArray(),
+        recoveredCount = recovered.Count
+      });
     }
 
     raw.Sort(static (left, right) =>
