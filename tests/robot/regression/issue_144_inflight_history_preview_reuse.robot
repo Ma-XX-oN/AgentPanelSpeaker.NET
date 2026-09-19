@@ -21,7 +21,7 @@ In-Flight Paused History Is Reused By Monitoring
     ...    msg=Starting monitoring while preview is in flight built complete history more than once: ${snapshot}
     Should Be Equal As Integers    ${snapshot}[PreindexedReuseCount]    1
     ...    msg=Monitoring did not reuse the one prepared history snapshot: ${snapshot}
-    Should Be True    ${snapshot}[SelectedHistoryPresent]
-    ...    msg=The completed matching preview was not retained as selected-session history: ${snapshot}
+    Should Be True    ${snapshot}[MonitorReceivedPreparedSnapshot]
+    ...    msg=Monitoring did not receive the exact prepared history snapshot instance: ${snapshot}
     Should Start With    ${snapshot}[LatestTurnUserText]    Issue 144 user source 0399.
     ...    msg=LatestTurn did not resolve from the final genuine User prompt: ${snapshot}
