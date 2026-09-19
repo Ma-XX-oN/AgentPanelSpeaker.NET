@@ -245,19 +245,25 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
         () => monitorFault,
         "second preindexed-history Claude append");
 
+      SpeechFragment firstObserved = firstFragment ??
+        throw new InvalidOperationException(
+          "The append after the prepared history extent did not reach TextReady.");
+      SpeechFragment secondObserved = secondFragment ??
+        throw new InvalidOperationException(
+          "The second repeated Claude append did not reach TextReady.");
       Require(
-        firstFragment?.Text == FirstPreindexedAppend,
-        "The append after the prepared history extent did not reach TextReady.");
+        firstObserved.Text == FirstPreindexedAppend,
+        "The append after the prepared history extent had unexpected text.");
       Require(
-        firstFragment.NodeId > maximumInitialNodeId &&
-        firstFragment.FragmentId > maximumInitialFragmentId,
+        firstObserved.NodeId > maximumInitialNodeId &&
+        firstObserved.FragmentId > maximumInitialFragmentId,
         "The first append did not continue prepared node/fragment identity.");
       Require(
-        secondFragment?.Text == SecondPreindexedAppend,
-        "The second repeated Claude append did not reach TextReady.");
+        secondObserved.Text == SecondPreindexedAppend,
+        "The second repeated Claude append had unexpected text.");
       Require(
-        secondFragment.NodeId > firstFragment.NodeId &&
-        secondFragment.FragmentId > firstFragment.FragmentId,
+        secondObserved.NodeId > firstObserved.NodeId &&
+        secondObserved.FragmentId > firstObserved.FragmentId,
         "The second append did not continue live node/fragment identity.");
       Require(
         Volatile.Read(ref historyLoadedEvents) == 0,
