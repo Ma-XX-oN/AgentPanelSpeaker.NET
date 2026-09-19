@@ -16,11 +16,33 @@ internal sealed class JsonlTailReader
   /// </summary>
   /// <param name="path">JSONL path.</param>
   public JsonlTailReader(string path)
+    : this(path, initialOffset: null)
+  {
+  }
+
+  /// <summary>
+  /// Initializes a tail reader at an exact previously prepared file extent.
+  /// </summary>
+  /// <param name="path">JSONL path.</param>
+  /// <param name="initialOffset">Next unread byte offset.</param>
+  public JsonlTailReader(string path, long initialOffset)
+    : this(path, (long?)initialOffset)
+  {
+  }
+
+  private JsonlTailReader(string path, long? initialOffset)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
     Path = System.IO.Path.GetFullPath(path);
     using var stream = OpenShared(Path);
-    _offset = stream.Length;
+    long offset = initialOffset ?? stream.Length;
+    if (offset < 0 || offset > stream.Length)
+    {
+      throw new InvalidDataException(
+        $"JSONL tail offset {offset} is outside the current file length " +
+        $"{stream.Length} for '{Path}'.");
+    }
+    _offset = offset;
   }
 
   /// <summary>

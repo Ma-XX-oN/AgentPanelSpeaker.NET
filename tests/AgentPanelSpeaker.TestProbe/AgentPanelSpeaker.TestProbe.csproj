@@ -10,4 +10,26 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\tools\AIConversationCore-worker.mjs"
+          Link="tools\AIConversationCore-worker.mjs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tools\AIConversationCore-runtime\CORE_COMMIT"
+          Link="tools\AIConversationCore-runtime\CORE_COMMIT"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\dependencies\AIConversationCore\package.json"
+          Link="tools\AIConversationCore-runtime\package.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\dependencies\AIConversationCore\src\**\*"
+          Link="tools\AIConversationCore-runtime\src\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tools\AIConversationCore-runtime\node_modules\marked\**\*"
+          Link="tools\AIConversationCore-runtime\node_modules\marked\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Speech" Version="10.0.9" />
+  </ItemGroup>
 </Project>

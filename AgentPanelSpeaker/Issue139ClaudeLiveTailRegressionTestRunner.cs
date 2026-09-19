@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Reflection;
 using System.Text;
 using System.Text.Json;
 
@@ -151,9 +149,10 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
   }
 
   /// <summary>
-  /// Reproduces the MainForm path: index paused history first, reuse that exact
-  /// snapshot when monitoring starts, then require multiple later file appends
-  /// to enter live speech without republishing the indexed prefix.
+  /// Reproduces the MainForm path: index paused history first, append one record
+  /// after that exact prepared extent, then reuse the snapshot when monitoring
+  /// starts. Both the between-preview-and-Start append and a later live append
+  /// must enter speech without republishing the indexed prefix.
   /// </summary>
   private static void TestPreindexedHistoryRepeatedAppendsReachSpeechHistory()
   {
@@ -183,15 +182,8 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
         snapshot.Fragments.Any(fragment =>
           fragment.Text.Contains("Initial Claude answer", StringComparison.Ordinal)),
         "Preindexed Claude history did not establish the production precondition.");
-
-      object extractor = ReadRequiredField<object>(
-        monitor,
-        "_canonicalExtractor");
-      object projectionBeforeStart = ReadField<object?>(
-        extractor,
-        "_projection") ??
-        throw new InvalidOperationException(
-          "Preindexed Claude history did not retain a canonical projection.");
+      long maximumInitialNodeId = snapshot.Fragments.Max(fragment => fragment.NodeId);
+      long maximumInitialFragmentId = snapshot.Fragments.Max(fragment => fragment.FragmentId);
 
       monitor.HistoryLoaded += _ => Interlocked.Increment(
         ref historyLoadedEvents);
@@ -220,6 +212,12 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
         faulted.Set();
       };
 
+      AppendRecord(
+        path,
+        "issue139-assistant-preindexed-1",
+        "2026-09-18T00:00:03.000Z",
+        FirstPreindexedAppend);
+
       monitor.Start(new MonitorSettings(
         AgentSource.Claude,
         path,
@@ -230,17 +228,6 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
         IncludeRolledBackTurns: true,
         IncludeUserContext: true));
 
-      WaitForProjectionReplacement(
-        extractor,
-        projectionBeforeStart,
-        faulted,
-        () => monitorFault);
-
-      AppendRecord(
-        path,
-        "issue139-assistant-preindexed-1",
-        "2026-09-18T00:00:03.000Z",
-        FirstPreindexedAppend);
       WaitForSuccessOrFault(
         firstReady,
         faulted,
@@ -258,12 +245,26 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
         () => monitorFault,
         "second preindexed-history Claude append");
 
+      SpeechFragment firstObserved = firstFragment ??
+        throw new InvalidOperationException(
+          "The append after the prepared history extent did not reach TextReady.");
+      SpeechFragment secondObserved = secondFragment ??
+        throw new InvalidOperationException(
+          "The second repeated Claude append did not reach TextReady.");
       Require(
-        firstFragment?.Text == FirstPreindexedAppend,
-        "The first repeated Claude append did not reach TextReady.");
+        firstObserved.Text == FirstPreindexedAppend,
+        "The append after the prepared history extent had unexpected text.");
       Require(
-        secondFragment?.Text == SecondPreindexedAppend,
-        "The second repeated Claude append did not reach TextReady.");
+        firstObserved.NodeId > maximumInitialNodeId &&
+        firstObserved.FragmentId > maximumInitialFragmentId,
+        "The first append did not continue prepared node/fragment identity.");
+      Require(
+        secondObserved.Text == SecondPreindexedAppend,
+        "The second repeated Claude append had unexpected text.");
+      Require(
+        secondObserved.NodeId > firstObserved.NodeId &&
+        secondObserved.FragmentId > firstObserved.FragmentId,
+        "The second append did not continue live node/fragment identity.");
       Require(
         Volatile.Read(ref historyLoadedEvents) == 0,
         "Reusing preindexed history unexpectedly republished HistoryLoaded.");
@@ -488,59 +489,6 @@ internal static class Issue139ClaudeLiveTailRegressionTestRunner
       path,
       record + Environment.NewLine,
       new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-  }
-
-  private static void WaitForProjectionReplacement(
-    object extractor,
-    object projectionBeforeStart,
-    ManualResetEventSlim fault,
-    Func<Exception?> readFault)
-  {
-    var stopwatch = Stopwatch.StartNew();
-    while (stopwatch.ElapsedMilliseconds < TimeoutMilliseconds)
-    {
-      if (fault.IsSet)
-      {
-        throw new InvalidOperationException(
-          "Monitor faulted while priming preindexed Claude history: " +
-          readFault());
-      }
-
-      object? current = ReadField<object?>(extractor, "_projection");
-      if (current is not null &&
-          !ReferenceEquals(current, projectionBeforeStart))
-      {
-        return;
-      }
-
-      Thread.Sleep(10);
-    }
-
-    throw new TimeoutException(
-      "Timed out waiting for the preindexed Claude projection to be " +
-      $"reprojected after {TimeoutMilliseconds} ms.");
-  }
-
-  private static T ReadRequiredField<T>(
-    object instance,
-    string fieldName)
-    where T : class
-  {
-    T? value = ReadField<T?>(instance, fieldName);
-    return value ?? throw new InvalidOperationException(
-      $"Required field {fieldName} was null.");
-  }
-
-  private static T ReadField<T>(
-    object instance,
-    string fieldName)
-  {
-    FieldInfo field = instance.GetType().GetField(
-      fieldName,
-      BindingFlags.Instance | BindingFlags.NonPublic) ??
-      throw new InvalidOperationException(
-        $"Field {fieldName} was not found on {instance.GetType().Name}.");
-    return (T)field.GetValue(instance)!;
   }
 
   private static void WaitForSuccessOrFault(
