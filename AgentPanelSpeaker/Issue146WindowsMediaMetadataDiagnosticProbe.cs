@@ -95,6 +95,7 @@ internal static class Issue146WindowsMediaMetadataDiagnosticProbe
         StringComparison.OrdinalIgnoreCase))
       .Select(element => element.Attribute("name")?.Value ?? string.Empty)
       .ToArray();
+    MarkerPosition[] markerPositions = FindMarkerPositions(ssml);
 
     using var synthesizer = new WinRtSpeechSynthesizer
     {
@@ -113,13 +114,12 @@ internal static class Issue146WindowsMediaMetadataDiagnosticProbe
 
     SpeechMarkupWord[] expectedWords = markup.Words!.ToArray();
     TimedMetadataTrack? bookmarkTrack = FindTrack(stream, "SpeechBookmark");
-    int[] bookmarkOwners = bookmarkTrack is null
-      ? Array.Empty<int>()
-      : bookmarkTrack.Cues
-        .OfType<SpeechCue>()
-        .Select(TryReadBookmarkOwner)
-        .Where(owner => owner >= 0)
-        .ToArray();
+    SpeechCue[] bookmarkCues = bookmarkTrack?.Cues.OfType<SpeechCue>().ToArray() ??
+      Array.Empty<SpeechCue>();
+    int[] bookmarkOwners = bookmarkCues
+      .Select(TryReadBookmarkOwner)
+      .Where(owner => owner >= 0)
+      .ToArray();
     HashSet<int> observed = bookmarkOwners.ToHashSet();
     string[] missingOwners = expectedWords
       .Where(word => !observed.Contains(word.WordIndex))
@@ -147,17 +147,153 @@ internal static class Issue146WindowsMediaMetadataDiagnosticProbe
       .Select(index => $"cue[{index}] {DescribeCue(wordCues[index])}")
       .ToArray();
 
+    OwnerCueSnapshot[] ownerCueSnapshots = expectedWords
+      .Where(word => string.Equals(word.Text, "138", StringComparison.Ordinal) ||
+        missingOwners.Any(missing => missing.StartsWith(
+          word.WordIndex + ":",
+          StringComparison.Ordinal)))
+      .Select(word => BuildOwnerCueSnapshot(
+        word,
+        markerPositions,
+        wordCues,
+        bookmarkCues))
+      .ToArray();
+
+    OwnerTimingComparison[] bookmarkTimingComparisons = expectedWords
+      .Select(word => BuildOwnerTimingComparison(
+        word,
+        markerPositions,
+        wordCues,
+        bookmarkCues))
+      .Where(comparison => comparison is not null)
+      .Cast<OwnerTimingComparison>()
+      .ToArray();
+
     return new CaseSnapshot(
       name,
       expectedWords.Length,
       generatedMarks.Length,
       generatedMarks.Distinct(StringComparer.Ordinal).Count(),
+      markerPositions.Length,
       bookmarkTrack?.Cues.Count ?? 0,
       bookmarkOwners.Distinct().Count(),
       missingOwners,
       wordCues.Length,
       wordCueDiagnostics,
+      ownerCueSnapshots,
+      bookmarkTimingComparisons.Length,
+      bookmarkTimingComparisons.Count(comparison => comparison.TimeDeltaTicks == 0),
+      bookmarkTimingComparisons
+        .Where(comparison => comparison.TimeDeltaTicks != 0)
+        .Take(12)
+        .ToArray(),
       stream.TimedMetadataTracks.Select(track => track.Label ?? string.Empty).ToArray());
+  }
+
+  private static MarkerPosition[] FindMarkerPositions(string ssml)
+  {
+    MatchCollection matches = Regex.Matches(
+      ssml,
+      @"<mark\b[^>]*\bname=\"aps_(\d+)\"[^>]*/>",
+      RegexOptions.CultureInvariant);
+    return matches
+      .Cast<Match>()
+      .Select(match => new MarkerPosition(
+        int.Parse(match.Groups[1].Value),
+        match.Index,
+        match.Index + match.Length))
+      .OrderBy(marker => marker.Start)
+      .ToArray();
+  }
+
+  private static OwnerCueSnapshot BuildOwnerCueSnapshot(
+    SpeechMarkupWord word,
+    IReadOnlyList<MarkerPosition> markers,
+    IReadOnlyList<SpeechCue> wordCues,
+    IReadOnlyList<SpeechCue> bookmarkCues)
+  {
+    MarkerPosition marker = markers.Single(item => item.OwnerIndex == word.WordIndex);
+    int nextMarkerStart = markers
+      .Where(item => item.Start > marker.Start)
+      .Select(item => item.Start)
+      .DefaultIfEmpty(int.MaxValue)
+      .Min();
+    SpeechCue[] native = wordCues
+      .Where(cue =>
+      {
+        long start = ReadInputPosition(cue, "StartPositionInInput");
+        return start >= marker.End && start < nextMarkerStart;
+      })
+      .OrderBy(cue => cue.StartTime)
+      .ToArray();
+    SpeechCue? bookmark = bookmarkCues.FirstOrDefault(cue =>
+      TryReadBookmarkOwner(cue) == word.WordIndex);
+    return new OwnerCueSnapshot(
+      word.WordIndex,
+      word.Text,
+      marker.Start,
+      marker.End,
+      nextMarkerStart == int.MaxValue ? -1 : nextMarkerStart,
+      native.Select(cue => cue.Text ?? string.Empty).Distinct().ToArray(),
+      native.Select(cue => ReadInputPosition(cue, "StartPositionInInput"))
+        .Distinct()
+        .ToArray(),
+      native.Select(cue => ReadInputPosition(cue, "EndPositionInInput"))
+        .Distinct()
+        .ToArray(),
+      native.Length,
+      native.Length == 0 ? null : native[0].StartTime.Ticks,
+      bookmark?.StartTime.Ticks,
+      native.Length == 0 || bookmark is null
+        ? null
+        : native[0].StartTime.Ticks - bookmark.StartTime.Ticks);
+  }
+
+  private static OwnerTimingComparison? BuildOwnerTimingComparison(
+    SpeechMarkupWord word,
+    IReadOnlyList<MarkerPosition> markers,
+    IReadOnlyList<SpeechCue> wordCues,
+    IReadOnlyList<SpeechCue> bookmarkCues)
+  {
+    MarkerPosition marker = markers.Single(item => item.OwnerIndex == word.WordIndex);
+    int nextMarkerStart = markers
+      .Where(item => item.Start > marker.Start)
+      .Select(item => item.Start)
+      .DefaultIfEmpty(int.MaxValue)
+      .Min();
+    SpeechCue? native = wordCues
+      .Where(cue =>
+      {
+        long start = ReadInputPosition(cue, "StartPositionInInput");
+        return start >= marker.End && start < nextMarkerStart;
+      })
+      .OrderBy(cue => cue.StartTime)
+      .FirstOrDefault();
+    SpeechCue? bookmark = bookmarkCues.FirstOrDefault(cue =>
+      TryReadBookmarkOwner(cue) == word.WordIndex);
+    if (native is null || bookmark is null)
+    {
+      return null;
+    }
+    return new OwnerTimingComparison(
+      word.WordIndex,
+      word.Text,
+      native.StartTime.Ticks,
+      bookmark.StartTime.Ticks,
+      native.StartTime.Ticks - bookmark.StartTime.Ticks,
+      ReadInputPosition(native, "StartPositionInInput"),
+      ReadInputPosition(native, "EndPositionInInput"));
+  }
+
+  private static long ReadInputPosition(SpeechCue cue, string propertyName)
+  {
+    PropertyInfo property = cue.GetType().GetProperty(propertyName) ??
+      throw new InvalidOperationException(
+        $"SpeechCue.{propertyName} is unavailable.");
+    object value = property.GetValue(cue) ??
+      throw new InvalidOperationException(
+        $"SpeechCue.{propertyName} returned null.");
+    return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
   }
 
   private static TimedMetadataTrack? FindTrack(
@@ -231,10 +367,43 @@ internal static class Issue146WindowsMediaMetadataDiagnosticProbe
     int ExpectedWordCount,
     int GeneratedMarkCount,
     int DistinctGeneratedMarkCount,
+    int MarkerPositionCount,
     int BookmarkCueCount,
     int ObservedBookmarkOwnerCount,
     IReadOnlyList<string> MissingBookmarkOwners,
     int SpeechWordCueCount,
     IReadOnlyList<string> SpeechWordCueDiagnostics,
+    IReadOnlyList<OwnerCueSnapshot> OwnerCueSnapshots,
+    int BookmarkTimingComparisonCount,
+    int ExactBookmarkTimingMatchCount,
+    IReadOnlyList<OwnerTimingComparison> NonMatchingBookmarkTimings,
     IReadOnlyList<string> TrackLabels);
+
+  private sealed record MarkerPosition(
+    int OwnerIndex,
+    int Start,
+    int End);
+
+  private sealed record OwnerCueSnapshot(
+    int OwnerIndex,
+    string Text,
+    int MarkerStart,
+    int MarkerEnd,
+    int NextMarkerStart,
+    IReadOnlyList<string> NativeTexts,
+    IReadOnlyList<long> NativeStartPositions,
+    IReadOnlyList<long> NativeEndPositions,
+    int NativeCueCount,
+    long? EarliestNativeTimeTicks,
+    long? BookmarkTimeTicks,
+    long? TimeDeltaTicks);
+
+  private sealed record OwnerTimingComparison(
+    int OwnerIndex,
+    string Text,
+    long NativeTimeTicks,
+    long BookmarkTimeTicks,
+    long TimeDeltaTicks,
+    long NativeStartPosition,
+    long NativeEndPosition);
 }
