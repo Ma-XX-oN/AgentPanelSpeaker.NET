@@ -4,10 +4,9 @@ using System.Runtime.ExceptionServices;
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Provides the issue #146 application-level acceptance harness with the same
-/// WinForms synchronization context used by production UI work, plus a direct
-/// fail-closed provider/degradation proof that does not depend on WinMM clock
-/// advancement.
+/// Provides issue #146 application-level acceptance through the repository's
+/// established WinForms message-loop harness, plus a direct fail-closed
+/// provider/degradation proof that does not depend on WinMM clock advancement.
 /// </summary>
 internal static class Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
 {
@@ -32,12 +31,12 @@ internal static class Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
 
   /// <summary>
   /// Runs the existing real MainForm/SpeechService/WebView acceptance body on
-  /// an STA that has an explicit WinForms synchronization context before any
-  /// production control creates <see cref="Progress{T}"/> instances.
+  /// the exact WinForms message-loop harness used by the repository's other
+  /// WebView acceptance suites.
   /// </summary>
   internal static object GetApplicationPlaybackSnapshot()
   {
-    return RunOnWinFormsSta(() =>
+    return RunWithRepositoryWinFormsMessageLoop(() =>
     {
       MethodInfo method =
         typeof(Issue146WindowsMediaApplicationPlaybackProbe).GetMethod(
@@ -263,6 +262,54 @@ internal static class Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
     field.SetValue(target, Enum.Parse(field.FieldType, value));
   }
 
+  private static object RunWithRepositoryWinFormsMessageLoop(Func<object> action)
+  {
+    object? result = null;
+    Exception? failure = null;
+    Func<int> suite = () =>
+    {
+      try
+      {
+        result = action();
+        return 0;
+      }
+      catch (Exception exception)
+      {
+        failure = exception;
+        return 1;
+      }
+    };
+
+    MethodInfo harness = typeof(Program).GetMethod(
+      "RunWithWinFormsMessageLoop",
+      BindingFlags.Static | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        "Repository WinForms message-loop harness was not found.");
+    int exitCode;
+    try
+    {
+      exitCode = (int)(harness.Invoke(null, new object?[] { suite }) ?? 1);
+    }
+    catch (TargetInvocationException exception)
+      when (exception.InnerException is not null)
+    {
+      ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
+      throw;
+    }
+
+    if (failure is not null)
+    {
+      ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+    if (exitCode != 0)
+    {
+      throw new InvalidOperationException(
+        "Repository WinForms message-loop harness returned non-zero exit code.");
+    }
+    return result ?? throw new InvalidOperationException(
+      "Issue #146 WinForms message-loop acceptance returned no snapshot.");
+  }
+
   private static object RunOnWinFormsSta(Func<object> action)
   {
     object? result = null;
@@ -273,8 +320,6 @@ internal static class Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
       try
       {
         ApplicationConfiguration.Initialize();
-        SynchronizationContext.SetSynchronizationContext(
-          new WindowsFormsSynchronizationContext());
         result = action();
       }
       catch (Exception exception)
@@ -288,14 +333,14 @@ internal static class Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
     })
     {
       IsBackground = true,
-      Name = "Issue #146 Windows.Media acceptance STA"
+      Name = "Issue #146 Windows.Media fail-closed STA"
     };
     thread.SetApartmentState(ApartmentState.STA);
     thread.Start();
     if (!completed.Wait(TimeSpan.FromMinutes(2)))
     {
       throw new TimeoutException(
-        "Issue #146 Windows.Media acceptance STA exceeded two minutes.");
+        "Issue #146 Windows.Media fail-closed STA exceeded two minutes.");
     }
     thread.Join();
     if (failure is not null)
@@ -303,7 +348,7 @@ internal static class Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
       ExceptionDispatchInfo.Capture(failure).Throw();
     }
     return result ?? throw new InvalidOperationException(
-      "Issue #146 Windows.Media acceptance probe returned no result.");
+      "Issue #146 Windows.Media fail-closed probe returned no result.");
   }
 
   private static void Require(bool condition, string message)
