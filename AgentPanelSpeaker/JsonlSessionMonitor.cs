@@ -18,8 +18,8 @@ namespace AgentPanelSpeaker;
 /// </param>
 /// <param name="PollInterval">File polling interval.</param>
 /// <param name="PreindexedHistory">
-/// Existing history for the selected session.  When supplied, monitoring
-/// begins at the file end without reparsing or republishing old history.
+/// Existing history for the selected session. When supplied, it must belong to
+/// the monitor's current prepared-history generation.
 /// </param>
 internal sealed record MonitorSettings(
   AgentSource RequestedSource,
@@ -42,9 +42,12 @@ internal sealed class JsonlSessionMonitor : IDisposable
     TimeSpan.FromSeconds(1);
 
   private readonly object _sync = new();
+  private readonly object _historyPreparationGate = new();
   private readonly CanonicalSessionExtractor _canonicalExtractor = new();
   private CancellationTokenSource? _cancellation;
   private Thread? _thread;
+  private HistoryPreparation? _historyPreparation;
+  private long _historyPreparationGeneration;
   private bool _disposed;
 
   /// <summary>
@@ -117,6 +120,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
         "The polling interval must be positive.");
     }
 
+    HistoryPreparation? startupPreparation;
     lock (_sync)
     {
       if (_thread is not null)
@@ -125,9 +129,10 @@ internal sealed class JsonlSessionMonitor : IDisposable
           "The JSONL monitor is already running.");
       }
 
+      startupPreparation = SelectStartupPreparation(settings);
       _cancellation = new CancellationTokenSource();
       CancellationToken token = _cancellation.Token;
-      _thread = new Thread(() => Run(settings, token))
+      _thread = new Thread(() => Run(settings, startupPreparation, token))
       {
         IsBackground = true,
         Name = "Agent panel JSONL monitor"
@@ -135,7 +140,18 @@ internal sealed class JsonlSessionMonitor : IDisposable
       _thread.Start();
     }
 
-    DiagnosticLog.Write("monitor.start_requested", settings);
+    DiagnosticLog.Write("monitor.start_requested", new
+    {
+      settings.RequestedSource,
+      settings.ExplicitPath,
+      settings.FollowLatest,
+      settings.SpeakExistingLatestTurn,
+      settings.PollInterval,
+      preindexedHistory = settings.PreindexedHistory is not null,
+      settings.IncludeRolledBackTurns,
+      settings.IncludeUserContext,
+      preparationGeneration = startupPreparation?.Generation
+    });
   }
 
   /// <summary>
@@ -191,8 +207,8 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
   /// <summary>
   /// Builds the same existing-history snapshot used by monitoring without
-  /// starting the tail thread.  The caller can load this snapshot in the
-  /// paused state so the transcript has an authoritative startup marker.
+  /// starting the tail thread. The monitor retains the preparation identity,
+  /// exact source extent, and continuation state so Start can transfer it.
   /// </summary>
   public SpeechHistorySnapshot LoadHistoryPreview(
     LocatedSession session,
@@ -201,6 +217,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
     bool includeUserContext = false)
   {
     ArgumentNullException.ThrowIfNull(session);
+    HistoryPreparation preparation;
     lock (_sync)
     {
       ObjectDisposedException.ThrowIf(_disposed, this);
@@ -209,32 +226,84 @@ internal sealed class JsonlSessionMonitor : IDisposable
         throw new InvalidOperationException(
           "A history preview cannot be built while monitoring is active.");
       }
+      preparation = new HistoryPreparation(
+        Interlocked.Increment(ref _historyPreparationGeneration),
+        session.Source,
+        Path.GetFullPath(session.Path));
+      _historyPreparation = preparation;
     }
 
-    long nextNodeId = 1;
-    long nextFragmentId = 0;
-    var recentFingerprintQueue = new Queue<string>();
-    var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
-    var preview = new Queue<string>();
-    var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
-      StringComparer.Ordinal);
-    return LoadExistingHistory(
-      session,
-      speakExistingLatestTurn,
-      ref nextNodeId,
-      ref nextFragmentId,
-      recentFingerprintQueue,
-      recentFingerprintSet,
-      preview,
-      pendingInputRequests,
-      includeRolledBackTurns,
-      includeUserContext);
+    try
+    {
+      lock (_historyPreparationGate)
+      {
+        SourceSnapshot sourceSnapshot = ReadSharedSnapshot(session.Path);
+        long nextNodeId = 1;
+        long nextFragmentId = 0;
+        var recentFingerprintQueue = new Queue<string>();
+        var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
+        var preview = new Queue<string>();
+        var pendingInputRequests = new Dictionary<string, CodexInputRequest>(
+          StringComparer.Ordinal);
+        SpeechHistorySnapshot snapshot = LoadExistingHistory(
+          session,
+          speakExistingLatestTurn,
+          ref nextNodeId,
+          ref nextFragmentId,
+          recentFingerprintQueue,
+          recentFingerprintSet,
+          preview,
+          pendingInputRequests,
+          includeRolledBackTurns,
+          includeUserContext,
+          sourceSnapshot.Lines);
+        var prepared = new PreparedHistory(
+          snapshot,
+          sourceSnapshot.Extent,
+          nextNodeId,
+          nextFragmentId,
+          recentFingerprintQueue.ToArray(),
+          preview.ToArray(),
+          new Dictionary<string, CodexInputRequest>(
+            pendingInputRequests,
+            StringComparer.Ordinal));
+        preparation.Completion.TrySetResult(prepared);
+
+        bool current;
+        lock (_sync)
+        {
+          current = ReferenceEquals(_historyPreparation, preparation);
+        }
+        DiagnosticLog.Write(
+          current
+            ? "monitor.history_preview_prepared"
+            : "monitor.history_preview_stale",
+          new
+          {
+            session.Source,
+            session.Path,
+            preparationId = preparation.Generation,
+            sourceExtent = sourceSnapshot.Extent,
+            fragmentCount = snapshot.Fragments.Count,
+            reason = current ? null : "newer preparation requested"
+          });
+        return snapshot;
+      }
+    }
+    catch (Exception exception)
+    {
+      preparation.Completion.TrySetException(exception);
+      throw;
+    }
   }
 
   /// <summary>
   /// Runs the file-tail loop.
   /// </summary>
-  private void Run(MonitorSettings settings, CancellationToken token)
+  private void Run(
+    MonitorSettings settings,
+    HistoryPreparation? startupPreparation,
+    CancellationToken token)
   {
     var recentFingerprintQueue = new Queue<string>();
     var recentFingerprintSet = new HashSet<string>(StringComparer.Ordinal);
@@ -248,37 +317,61 @@ internal sealed class JsonlSessionMonitor : IDisposable
     try
     {
       LocatedSession session = ResolveInitialSession(settings);
-      var tailReader = new JsonlTailReader(session.Path);
+      PreparedHistory? preparedHistory = ResolvePreparedHistory(
+        settings,
+        session,
+        startupPreparation);
+      var tailReader = preparedHistory is null
+        ? new JsonlTailReader(session.Path)
+        : new JsonlTailReader(session.Path, preparedHistory.SourceExtent);
       StatusChanged?.Invoke(
         $"Monitoring {session.Source}: {session.Path}");
       DiagnosticLog.Write("monitor.session_selected", session);
       SessionChanged?.Invoke(session);
 
-      if (settings.PreindexedHistory is SpeechHistorySnapshot preindexedHistory)
+      if (preparedHistory is not null)
       {
-        _canonicalExtractor.Prime(
-          session.Source,
-          ReadSharedLines(session.Path),
-          ProjectionOptions(
-            session,
-            settings.IncludeRolledBackTurns,
-            settings.IncludeUserContext));
-        nextNodeId = preindexedHistory.Fragments.Count == 0
-          ? 1
-          : preindexedHistory.Fragments.Max(fragment => fragment.NodeId) + 1;
-        nextFragmentId = preindexedHistory.Fragments.Count == 0
-          ? 0
-          : preindexedHistory.Fragments.Max(fragment => fragment.FragmentId) + 1;
+        recentFingerprintQueue = new Queue<string>(
+          preparedHistory.RecentFingerprints);
+        recentFingerprintSet = new HashSet<string>(
+          preparedHistory.RecentFingerprints,
+          StringComparer.Ordinal);
+        preview = new Queue<string>(preparedHistory.PreviewMessages);
+        pendingInputRequests = new Dictionary<string, CodexInputRequest>(
+          preparedHistory.PendingInputRequests,
+          StringComparer.Ordinal);
+        nextNodeId = preparedHistory.NextNodeId;
+        nextFragmentId = preparedHistory.NextFragmentId;
+        bool alreadyPublished = ReferenceEquals(
+          settings.PreindexedHistory,
+          preparedHistory.Snapshot);
         DiagnosticLog.Write("monitor.preindexed_history_reused", new
         {
           session.Path,
-          fragmentCount = preindexedHistory.Fragments.Count,
+          preparationId = startupPreparation!.Generation,
+          sourceExtent = preparedHistory.SourceExtent,
+          fragmentCount = preparedHistory.Snapshot.Fragments.Count,
           nextNodeId,
-          tailOffset = tailReader.Offset
+          nextFragmentId,
+          tailOffset = tailReader.Offset,
+          alreadyPublished
         });
+        if (!alreadyPublished)
+        {
+          HistoryLoaded?.Invoke(preparedHistory.Snapshot);
+          MessagesChanged?.Invoke(preview.ToArray());
+        }
       }
       else
       {
+        if (settings.PreindexedHistory is not null &&
+            !string.IsNullOrWhiteSpace(settings.ExplicitPath))
+        {
+          throw new InvalidOperationException(
+            "Preindexed history has no matching prepared-history owner for " +
+            $"'{session.Path}'.");
+        }
+
         SpeechHistorySnapshot initialHistory = LoadExistingHistory(
           session,
           settings.SpeakExistingLatestTurn,
@@ -389,6 +482,77 @@ internal sealed class JsonlSessionMonitor : IDisposable
         }
       }
     }
+  }
+
+  private HistoryPreparation? SelectStartupPreparation(MonitorSettings settings)
+  {
+    HistoryPreparation? preparation = _historyPreparation;
+    if (preparation is null || preparation.Source != settings.RequestedSource)
+    {
+      return null;
+    }
+    if (!string.IsNullOrWhiteSpace(settings.ExplicitPath) &&
+        !PathsReferToSameFile(preparation.Path, settings.ExplicitPath))
+    {
+      return null;
+    }
+    return preparation;
+  }
+
+  private PreparedHistory? ResolvePreparedHistory(
+    MonitorSettings settings,
+    LocatedSession session,
+    HistoryPreparation? preparation)
+  {
+    if (preparation is null)
+    {
+      return null;
+    }
+    if (preparation.Source != session.Source ||
+        !PathsReferToSameFile(preparation.Path, session.Path))
+    {
+      DiagnosticLog.Write("monitor.history_preview_stale", new
+      {
+        session.Source,
+        session.Path,
+        preparationId = preparation.Generation,
+        preparedPath = preparation.Path,
+        reason = "resolved startup session differs from prepared session"
+      });
+      return null;
+    }
+
+    PreparedHistory prepared = preparation.Completion.Task
+      .GetAwaiter()
+      .GetResult();
+    bool current;
+    lock (_sync)
+    {
+      current = ReferenceEquals(_historyPreparation, preparation);
+    }
+    if (!current)
+    {
+      DiagnosticLog.Write("monitor.history_preview_stale", new
+      {
+        session.Source,
+        session.Path,
+        preparationId = preparation.Generation,
+        reason = "newer preparation owns startup history"
+      });
+      return null;
+    }
+    if (settings.PreindexedHistory is not null &&
+        !ReferenceEquals(settings.PreindexedHistory, prepared.Snapshot))
+    {
+      DiagnosticLog.Write("monitor.preindexed_history_replaced", new
+      {
+        session.Source,
+        session.Path,
+        preparationId = preparation.Generation,
+        reason = "newer matching preparation superseded selected snapshot"
+      });
+    }
+    return prepared;
   }
 
   /// <summary>
@@ -858,7 +1022,7 @@ internal sealed class JsonlSessionMonitor : IDisposable
 
   /// <summary>
   /// Reconstructs one app-owned utterance from Core words while recording each
-  /// authoritative word's exact character range in that utterance.  A non-empty
+  /// authoritative word's exact character range in that utterance. A non-empty
   /// Core separator either remains exact (code) or becomes one speech space
   /// (prose); no tokenizer or visible-text search participates.
   /// </summary>
@@ -898,7 +1062,6 @@ internal sealed class JsonlSessionMonitor : IDisposable
       value.StartsWith(prefix, StringComparison.Ordinal));
     return group is null ? "untyped" : group[prefix.Length..];
   }
-
 
   /// <summary>
   /// Retains one request_user_input call until its matching output arrives.
@@ -1040,14 +1203,16 @@ internal sealed class JsonlSessionMonitor : IDisposable
     Queue<string> preview,
     IDictionary<string, CodexInputRequest> pendingInputRequests,
     bool includeRolledBackTurns,
-    bool includeUserContext)
+    bool includeUserContext,
+    IReadOnlyList<string>? sourceLines = null)
   {
     var fragments = new List<SpeechFragment>();
     EligibleHistory eligibleHistory = ReadEligibleHistory(
       session,
       pendingInputRequests,
       includeRolledBackTurns,
-      includeUserContext);
+      includeUserContext,
+      sourceLines: sourceLines);
     foreach (ExtractedNode node in eligibleHistory.Nodes)
     {
       ProcessNode(
@@ -1088,15 +1253,17 @@ internal sealed class JsonlSessionMonitor : IDisposable
     IDictionary<string, CodexInputRequest> pendingInputRequests,
     bool includeRolledBackTurns,
     bool includeUserContext,
-    DateTime? minimumTimestampUtc = null)
+    DateTime? minimumTimestampUtc = null,
+    IReadOnlyList<string>? sourceLines = null)
   {
     pendingInputRequests.Clear();
     var nodes = new List<ExtractedNode>();
     var completions = new List<TurnCompletion>();
     var backgroundWorkEvents = new List<BackgroundWorkEvent>();
+    IEnumerable<string> lines = sourceLines ?? ReadSharedLines(session.Path);
     IReadOnlyList<ExtractionResult> results = _canonicalExtractor.Load(
       session.Source,
-      ReadSharedLines(session.Path),
+      lines,
       ProjectionOptions(
         session,
         includeRolledBackTurns,
@@ -1174,6 +1341,35 @@ internal sealed class JsonlSessionMonitor : IDisposable
     IReadOnlyList<TurnCompletion> Completions,
     IReadOnlyList<BackgroundWorkEvent> BackgroundWorkEvents);
 
+  private sealed record SourceSnapshot(
+    IReadOnlyList<string> Lines,
+    long Extent);
+
+  private sealed record PreparedHistory(
+    SpeechHistorySnapshot Snapshot,
+    long SourceExtent,
+    long NextNodeId,
+    long NextFragmentId,
+    IReadOnlyList<string> RecentFingerprints,
+    IReadOnlyList<string> PreviewMessages,
+    IReadOnlyDictionary<string, CodexInputRequest> PendingInputRequests);
+
+  private sealed class HistoryPreparation
+  {
+    public HistoryPreparation(long generation, AgentSource source, string path)
+    {
+      Generation = generation;
+      Source = source;
+      Path = path;
+    }
+
+    public long Generation { get; }
+    public AgentSource Source { get; }
+    public string Path { get; }
+    public TaskCompletionSource<PreparedHistory> Completion { get; } = new(
+      TaskCreationOptions.RunContinuationsAsynchronously);
+  }
+
   /// <summary>
   /// Checks whether an ISO timestamp is at or after a UTC threshold.
   /// </summary>
@@ -1196,6 +1392,55 @@ internal sealed class JsonlSessionMonitor : IDisposable
         out DateTimeOffset parsed)
           ? parsed.ToUniversalTime()
           : null;
+  }
+
+  /// <summary>
+  /// Captures exactly one current shared-file extent and its complete line
+  /// inventory. Bytes appended after the captured extent are excluded.
+  /// </summary>
+  private static SourceSnapshot ReadSharedSnapshot(string path)
+  {
+    using var stream = new FileStream(
+      path,
+      FileMode.Open,
+      FileAccess.Read,
+      FileShare.ReadWrite | FileShare.Delete);
+    long extent = stream.Length;
+    if (extent > int.MaxValue)
+    {
+      throw new InvalidDataException(
+        $"JSONL history extent {extent} exceeds the supported snapshot size.");
+    }
+
+    var bytes = new byte[(int)extent];
+    int offset = 0;
+    while (offset < bytes.Length)
+    {
+      int read = stream.Read(bytes, offset, bytes.Length - offset);
+      if (read <= 0)
+      {
+        throw new EndOfStreamException(
+          $"JSONL file '{path}' changed while its history extent was captured.");
+      }
+      offset += read;
+    }
+
+    using var memory = new MemoryStream(bytes, writable: false);
+    using var reader = new StreamReader(
+      memory,
+      Encoding.UTF8,
+      detectEncodingFromByteOrderMarks: true,
+      bufferSize: 64 * 1024,
+      leaveOpen: false);
+    var lines = new List<string>();
+    while (reader.ReadLine() is string line)
+    {
+      if (!string.IsNullOrWhiteSpace(line))
+      {
+        lines.Add(line);
+      }
+    }
+    return new SourceSnapshot(lines, extent);
   }
 
   /// <summary>
@@ -1222,6 +1467,14 @@ internal sealed class JsonlSessionMonitor : IDisposable
         yield return line;
       }
     }
+  }
+
+  private static bool PathsReferToSameFile(string left, string right)
+  {
+    return string.Equals(
+      Path.GetFullPath(left),
+      Path.GetFullPath(right),
+      StringComparison.OrdinalIgnoreCase);
   }
 
   /// <summary>
