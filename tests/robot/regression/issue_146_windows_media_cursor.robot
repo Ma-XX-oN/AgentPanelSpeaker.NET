@@ -75,7 +75,7 @@ Recovered Owner Reaches Speech Service And Real WebView As One Word
     ${result}=    Run Process
     ...    ${TEST_PROBE}
     ...    static-method
-    ...    AgentPanelSpeaker.Issue146WindowsMediaApplicationPlaybackProbe
+    ...    AgentPanelSpeaker.Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
     ...    GetApplicationPlaybackSnapshot
     ...    []
     ...    stdout=PIPE
@@ -108,7 +108,7 @@ Windows Media Fails Closed When Exact Bookmark Ownership Is Unavailable
     ${result}=    Run Process
     ...    ${TEST_PROBE}
     ...    static-method
-    ...    AgentPanelSpeaker.Issue146WindowsMediaApplicationPlaybackProbe
+    ...    AgentPanelSpeaker.Issue146WindowsMediaApplicationPlaybackAcceptanceProbe
     ...    GetFailClosedSnapshot
     ...    []
     ...    stdout=PIPE
@@ -116,6 +116,10 @@ Windows Media Fails Closed When Exact Bookmark Ownership Is Unavailable
     Should Be Equal As Integers    ${result.rc}    0
     ...    msg=Issue #146 fail-closed playback probe failed. Error: ${result.stderr}
     ${snapshot}=    Evaluate    json.loads($result.stdout)    modules=json
+    Should Be Equal As Integers    ${snapshot}[ProviderBoundaryCount]    0
+    ...    msg=Bookmarks-disabled provider path fabricated word boundaries: ${snapshot}
+    Should Be Equal    ${snapshot}[ProviderDegradationReason]    windows_media_bookmarks_disabled
+    ...    msg=Bookmarks-disabled provider path returned the wrong degradation reason: ${snapshot}
     Should Be Equal    ${snapshot}[HighlightMode]    Fragment
     ...    msg=Unavailable exact ownership did not degrade to the whole fragment: ${snapshot}
     Should Be Equal    ${snapshot}[WordId]    ${NONE}
