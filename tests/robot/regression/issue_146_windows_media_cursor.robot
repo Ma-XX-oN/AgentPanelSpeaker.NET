@@ -57,7 +57,8 @@ Missing Windows Media Bookmark Has Exact Ordered Native Recovery
     ${snapshot}=    Evaluate    json.loads($result.stdout)    modules=json
     Should Be Equal As Integers    ${snapshot}[GeneratedMarkerCount]    ${snapshot}[ExpectedOwnerCount]
     ...    msg=Recovery evidence did not start from complete generated ownership: ${snapshot}
-    Should Be Equal As Integers    len(${snapshot}[MissingOwners])    1
+    ${missing_owner_count}=    Get Length    ${snapshot}[MissingOwners]
+    Should Be Equal As Integers    ${missing_owner_count}    1
     ...    msg=Reproduced provider omission changed unexpectedly: ${snapshot}
     Should Be Equal As Integers    ${snapshot}[MissingOwners][0]    84
     ...    msg=Expected reproduced missing owner 84: ${snapshot}
