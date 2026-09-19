@@ -23,3 +23,23 @@ Windows Media Retains Exact Word Cursor Across Reproduced Block
     ...    msg=Windows.Media degraded to whole-fragment highlighting: ${snapshot}
     Should Be True    ${snapshot}[BoundaryCount] > 1
     ...    msg=Windows.Media did not provide a moving word cursor: ${snapshot}
+
+Windows Media Metadata Diagnosis Preserves Every Generated Mark
+    ${result}=    Run Process
+    ...    ${TEST_PROBE}
+    ...    static-method
+    ...    AgentPanelSpeaker.Issue146WindowsMediaMetadataDiagnosticProbe
+    ...    GetMetadataSnapshot
+    ...    []
+    ...    stdout=PIPE
+    ...    stderr=PIPE
+    Should Be Equal As Integers    ${result.rc}    0
+    ...    msg=Issue #146 metadata diagnostic failed. Error: ${result.stderr}
+    ${snapshot}=    Evaluate    json.loads($result.stdout)    modules=json
+    FOR    ${case}    IN    @{snapshot}[Cases]
+        Should Be Equal As Integers    ${case}[GeneratedMarkCount]    ${case}[ExpectedWordCount]
+        ...    msg=Bookmark builder omitted a generated mark: ${case}
+        Should Be Equal As Integers    ${case}[DistinctGeneratedMarkCount]    ${case}[ExpectedWordCount]
+        ...    msg=Bookmark builder duplicated a generated mark: ${case}
+    END
+    Log To Console    ${result.stdout}
