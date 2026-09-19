@@ -114,9 +114,11 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
       SpeechHistorySnapshot loadedSnapshot = monitorSnapshot ??
         throw new InvalidOperationException(
           "The monitor HistoryLoaded event supplied no snapshot.");
+      SpeechHistorySnapshot preparedSnapshot = ReadPreparedSnapshot(monitor);
+      bool monitorReceivedPreparedSnapshot = ReferenceEquals(
+        loadedSnapshot,
+        preparedSnapshot);
       string latestTurnUserText = ResolveLatestTurnUserText(loadedSnapshot);
-      bool selectedHistoryPresent =
-        ReadNullableField(form, "_selectedSessionHistory") is SpeechHistorySnapshot;
 
       monitor.Stop("issue-144-regression-probe");
       Application.DoEvents();
@@ -132,7 +134,7 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
         previewWasInFlightAtPlay,
         historyLoadCount,
         preindexedReuseCount,
-        selectedHistoryPresent,
+        monitorReceivedPreparedSnapshot,
         latestTurnUserText);
     }
     finally
@@ -148,6 +150,18 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
       {
       }
     }
+  }
+
+  private static SpeechHistorySnapshot ReadPreparedSnapshot(
+    JsonlSessionMonitor monitor)
+  {
+    object preparation = ReadNullableField(monitor, "_historyPreparation") ??
+      throw new InvalidOperationException(
+        "Monitor retained no history preparation after startup.");
+    object completion = ReadProperty<object>(preparation, "Completion");
+    object task = ReadProperty<object>(completion, "Task");
+    object result = ReadProperty<object>(task, "Result");
+    return ReadProperty<SpeechHistorySnapshot>(result, "Snapshot");
   }
 
   private static void ConfigureSession(MainForm form, string path)
@@ -294,6 +308,20 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
         $"Field '{fieldName}' had an unexpected value/type.");
   }
 
+  private static T ReadProperty<T>(object target, string propertyName)
+  {
+    PropertyInfo property = target.GetType().GetProperty(
+      propertyName,
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ??
+      throw new InvalidOperationException(
+        $"Property '{propertyName}' was not found on {target.GetType().Name}.");
+    object? value = property.GetValue(target);
+    return value is T typed
+      ? typed
+      : throw new InvalidOperationException(
+        $"Property '{propertyName}' had an unexpected value/type.");
+  }
+
   private static object? ReadNullableField(object target, string fieldName)
   {
     FieldInfo field = target.GetType().GetField(
@@ -346,6 +374,6 @@ internal static class Issue144HistoryPreviewReuseRegressionProbe
     bool PreviewWasInFlightAtPlay,
     int HistoryLoadCount,
     int PreindexedReuseCount,
-    bool SelectedHistoryPresent,
+    bool MonitorReceivedPreparedSnapshot,
     string LatestTurnUserText);
 }
