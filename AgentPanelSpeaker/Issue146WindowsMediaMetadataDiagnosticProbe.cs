@@ -194,7 +194,7 @@ internal static class Issue146WindowsMediaMetadataDiagnosticProbe
   {
     MatchCollection matches = Regex.Matches(
       ssml,
-      @"<mark\b[^>]*\bname=\"aps_(\d+)\"[^>]*/>",
+      @"<mark\b[^>]*\bname=""aps_(\d+)""[^>]*/>",
       RegexOptions.CultureInvariant);
     return matches
       .Cast<Match>()
