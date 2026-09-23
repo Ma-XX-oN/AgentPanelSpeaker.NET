@@ -1,0 +1,74 @@
+{
+  "environments": [
+    {
+      "id": "windows-dotnet10-python313",
+      "runner": "windows-latest",
+      "required": true,
+      "platform": "win32",
+      "os": "Windows",
+      "runtimes": {
+        "dotnet": "10.x",
+        "python": "3.13"
+      },
+      "runtimePatterns": {
+        "dotnet": "^10\\.",
+        "python": "^3\\.13\\."
+      },
+      "probes": [
+        {
+          "name": "dotnet",
+          "command": ["dotnet", "--version"]
+        }
+      ],
+      "steps": [
+        {
+          "name": "NuGet network prerequisite",
+          "kind": "prerequisite",
+          "command": ["{python}", "scripts/check_nuget_access.py"]
+        },
+        {
+          "name": "Restore production project",
+          "kind": "setup",
+          "command": [
+            "dotnet",
+            "restore",
+            "AgentPanelSpeaker/AgentPanelSpeaker.csproj",
+            "--configfile",
+            "NuGet.Config"
+          ]
+        },
+        {
+          "name": "Release build",
+          "kind": "validation",
+          "command": [
+            "dotnet",
+            "build",
+            "AgentPanelSpeaker/AgentPanelSpeaker.csproj",
+            "-c",
+            "Release",
+            "--no-restore"
+          ]
+        },
+        {
+          "name": "Claude sub-agent transcript fixture",
+          "kind": "validation",
+          "command": ["{python}", "tools/test-subagents.py"]
+        },
+        {
+          "name": "CI contract regression",
+          "kind": "validation",
+          "command": [
+            "{python}",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-p",
+            "test_ci_contract.py"
+          ]
+        }
+      ]
+    }
+  ]
+}
