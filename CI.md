@@ -84,3 +84,15 @@ A GitHub runner/service failure is not a CI result for the source. Re-run the ex
 ## GitHub Actions boundary
 
 The workflow is orchestration only: clean checkout, runtime setup, invoking `scripts/ci_contract.py`, collecting result artifacts, and final tag publication. Test semantics live in repository files. Validation jobs have read-only repository permission; only the finalizer can write tags.
+
+The repository additionally enforces `docs/GITHUB-ACTIONS-POLICY.md` through
+`scripts/check_actions_policy.py` and `tests/test_actions_policy.py`.  Changes to
+workflow definitions or the policy checker/tests run a lightweight Linux policy
+job.  That policy-only path does **not** request the expensive Windows matrix;
+the matrix still requires a `.ci/run-ci-request` change or manual dispatch.
+
+Maintained Actions workflows must remain within the policy allow-list.  Do not
+create issue-specific or one-shot workflows that patch, repair, migrate,
+instrument, commit, or push source, tests, or documentation.  Result-tag
+publication through `scripts/ci_contract.py finalize ... --tag --push` is the
+only current main-line repository-write exception.
