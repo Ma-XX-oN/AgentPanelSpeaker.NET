@@ -1,3 +1,13 @@
+## AIConversationCore integration branch
+
+`feature/aiconversationcore-integration` migrates Claude/Codex transcript semantics to the shared `AIConversationCore` canonical model.  AgentPanelSpeaker now consumes canonical projection data for speech extraction, transcript rendering, stable source identity, search/highlight mapping, and live append/reload behaviour.
+
+Provider-specific conversation normalization is no longer implemented in AgentPanelSpeaker.  `JsonlRecordExtractor` is retained only as a lightweight Claude/Codex file-format detector for manual session selection; it does not classify conversational content.  Stable record identity is taken from canonical provenance, and the old `JsonlRecordIdentity` parser has been removed.
+
+The runtime uses one persistent Node bridge (`tools/AIConversationCore-worker.mjs`) pinned to AIConversationCore commit `134d5735b44b8d131d30d5b98a6e3a06320a113f`.  AgentPanelSpeaker-specific responsibilities remain in C#: session discovery/tailing, speech policy and SAPI playback, WebView2 presentation, search/navigation, highlighting, and UI behaviour.
+
+The pre-migration v212 parser was retained only long enough to establish and pass migration parity gates.  After those gates passed, the legacy semantic parser/parity harness was removed so future provider semantics have one owner: AIConversationCore.
+
 ## v212 stable transcript word identities and Find navigation
 
 - Assigns every transcript token one stable `WordId` when the full transcript
@@ -2142,3 +2152,29 @@ so the same artwork remains usable in dark, light, and system themes.
 - This version intentionally leaves all of the Cyotek colour editor fields
   visible so their usefulness can be evaluated before deciding whether to hide
   any of them.
+
+
+## Diagnostic input/command/state contract
+
+The structured JSONL diagnostic log is the authoritative correlation surface for
+real-machine acceptance. Every keyboard key-down/key-up and mouse button, double-click, or wheel input
+delivered to Agent Panel Speaker is recorded as `input.physical`. WinForms-owned
+input enters the shared `InputDiagnosticTracker` at the Win32 message-filter
+boundary. Wheel input consumed inside WebView2 is reported by the browser and
+enters that same tracker with `route=webview` before its scroll can change Follow
+state. A physical input keeps one `inputId` across its down/up pair; repeated
+routing observations are not recorded as separate physical presses. The log
+records key/button identity, modifiers, managed or DOM target context, and
+playback/Follow state, but does not copy the contents of editable controls.
+
+Recognized application actions are recorded separately as `input.command` and
+carry the physical input ID when available. Follow transitions are recorded as
+`follow.changed` with explicit old/new values and a source/reason. Transcript
+settings, playback-marker posting/application, and virtual-window diagnostics
+also carry Follow/window information so a regression review can distinguish
+input receipt, command interpretation, state transition, materialization, and
+observable viewport outcome.
+
+Because exact key identities are intentionally recorded for diagnostics, log
+files can contain sensitive keystroke information and should be handled as
+private diagnostic artifacts.

@@ -5,7 +5,7 @@ namespace AgentPanelSpeaker;
 /// </summary>
 internal sealed record SettingsDocument
 {
-  public const int CurrentSchemaVersion = 16;
+  public const int CurrentSchemaVersion = 18;
 
   public int SchemaVersion { get; init; } = CurrentSchemaVersion;
   public SessionSettingsDocument Session { get; init; } = new();
@@ -40,7 +40,9 @@ internal sealed record SettingsDocument
       SpokenCodeBlockTypes = settings.SpokenFencedCodeTypes,
       SpeakLatestExistingMessageOnStartup =
         settings.SpeakLastExistingEnabledMessage,
-      KeepDisplayOnWhileSpeaking = settings.KeepDisplayOnWhileSpeaking
+      KeepDisplayOnWhileSpeaking = settings.KeepDisplayOnWhileSpeaking,
+      MatchDesktopAndWindowsMediaRates =
+        settings.MatchDesktopAndWindowsMediaRates
     },
     General = new GeneralSettingsDocument
     {
@@ -88,6 +90,8 @@ internal sealed record SettingsDocument
       SpeakLastExistingEnabledMessage =
         Speech.SpeakLatestExistingMessageOnStartup,
       KeepDisplayOnWhileSpeaking = Speech.KeepDisplayOnWhileSpeaking,
+      MatchDesktopAndWindowsMediaRates =
+        Speech.MatchDesktopAndWindowsMediaRates,
       PollIntervalMilliseconds = General.PollIntervalMilliseconds,
       Theme = General.Theme,
       Transcript = Transcript ?? TranscriptSettings.Default,
@@ -120,6 +124,7 @@ internal sealed record SpeechSettingsDocument
   public string SpokenCodeBlockTypes { get; init; } = string.Empty;
   public bool SpeakLatestExistingMessageOnStartup { get; init; }
   public bool KeepDisplayOnWhileSpeaking { get; init; }
+  public bool MatchDesktopAndWindowsMediaRates { get; init; } = true;
 }
 
 internal sealed record SpeechRoleSettingsDocument

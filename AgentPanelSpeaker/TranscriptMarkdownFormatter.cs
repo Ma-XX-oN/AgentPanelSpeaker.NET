@@ -1,20 +1,27 @@
 using System.Globalization;
-using System.Security;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 
 namespace AgentPanelSpeaker;
 
 /// <summary>
-/// Converts Claude and Codex JSONL records into the human-facing Markdown
-/// transcript used by the embedded renderer.
+/// Formats AIConversationCore canonical transcript output for the WebView host.
+/// Provider semantics remain exclusively in AIConversationCore; this class adds
+/// only AgentPanelSpeaker session chrome and virtualization anchors.
 /// </summary>
 internal static partial class TranscriptMarkdownFormatter
 {
+  private static readonly AIConversationCoreClient CoreClient = new();
+
+  static TranscriptMarkdownFormatter()
+  {
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => CoreClient.Dispose();
+  }
+
   /// <summary>
-  /// Formats one complete selected session.
+  /// Formats one complete selected session from the canonical core projection.
   /// </summary>
   public static string Format(
     string path,
@@ -22,9 +29,8 @@ internal static partial class TranscriptMarkdownFormatter
     CancellationToken cancellationToken = default)
   {
     ArgumentException.ThrowIfNullOrWhiteSpace(path);
-    var records = new List<TranscriptRecord>();
-    int recordNumber = 0;
-    foreach (string line in File.ReadLines(path))
+    var jsonLines = new List<string>();
+    foreach (string line in ReadSharedLines(path))
     {
       cancellationToken.ThrowIfCancellationRequested();
       if (string.IsNullOrWhiteSpace(line))
@@ -32,274 +38,69 @@ internal static partial class TranscriptMarkdownFormatter
         continue;
       }
 
-      recordNumber++;
+      // Preserve the prior formatter's behavior of rejecting malformed
+      // non-empty JSONL records rather than silently changing the transcript.
       using JsonDocument document = JsonDocument.Parse(line);
-      records.Add(new TranscriptRecord(
-        recordNumber,
-        document.RootElement.Clone()));
+      if (document.RootElement.ValueKind != JsonValueKind.Object)
+      {
+        throw new JsonException("A transcript JSONL record must be an object.");
+      }
+      jsonLines.Add(line);
     }
 
-    return source == AgentSource.Codex
-      ? FormatCodex(path, records)
-      : FormatClaude(path, records);
-  }
-
-  private static string FormatClaude(
-    string path,
-    IReadOnlyList<TranscriptRecord> records)
-  {
-    var output = new StringBuilder();
-    AppendSessionHeader(output, path, AgentSource.Claude, records);
-    var toolResults = BuildClaudeToolResultMap(records);
-    string? lastUserText = null;
-
-    foreach (TranscriptRecord record in records)
+    if (jsonLines.Count == 0)
     {
-      JsonElement root = record.Root;
-      if (GetBoolean(root, "isSidechain") ||
-          !TryGetString(root, "type", out string type))
-      {
-        continue;
-      }
-
-      if (type == "queue-operation")
-      {
-        if (TryBuildTaskNotification(record, root,
-              out SubagentTranscript? notification) &&
-            notification is not null)
-        {
-          AppendSubagent(output, notification);
-        }
-        continue;
-      }
-
-      if (type == "attachment")
-      {
-        if (TryExtractClaudeQueuedCommandText(root, out string queuedText) &&
-            queuedText.Length != 0 && queuedText != lastUserText)
-        {
-          lastUserText = queuedText;
-          AppendHeading(output, "User", record, root);
-          output.AppendLine(QuoteMarkdown(queuedText));
-          output.AppendLine();
-        }
-        continue;
-      }
-
-      if (type == "user")
-      {
-        if (!TryGetMessageContent(root, out JsonElement content))
-        {
-          continue;
-        }
-        string userText = ExtractClaudeUserText(content);
-        if (userText.Length == 0 || userText == lastUserText)
-        {
-          continue;
-        }
-        lastUserText = userText;
-        AppendHeading(output, "User", record, root);
-        output.AppendLine(QuoteMarkdown(userText));
-        output.AppendLine();
-        continue;
-      }
-
-      if (type != "assistant" ||
-          !TryGetMessageContent(root, out JsonElement assistantContent))
-      {
-        continue;
-      }
-
-      string model = TryGetMessage(root, out JsonElement message) &&
-        TryGetString(message, "model", out string modelName)
-          ? modelName
-          : string.Empty;
-      if (model == "<synthetic>")
-      {
-        foreach (JsonElement block in EnumerateArray(assistantContent))
-        {
-          if (TryGetString(block, "type", out string blockType) &&
-              blockType == "text" &&
-              TryGetString(block, "text", out string notice) &&
-              notice.Length != 0)
-          {
-            output.AppendLine($"> *(system: {notice})*");
-            output.AppendLine();
-          }
-        }
-        continue;
-      }
-
-      var thinking = new List<string>();
-      var assistantText = new List<string>();
-      var toolDetails = new List<string>();
-      var subagents = new List<SubagentTranscript>();
-      foreach (JsonElement block in EnumerateArray(assistantContent))
-      {
-        if (!TryGetString(block, "type", out string blockType))
-        {
-          continue;
-        }
-        if (blockType == "thinking" &&
-            TryGetString(block, "thinking", out string thought) &&
-            thought.Length != 0)
-        {
-          thinking.Add(thought);
-        }
-        else if (blockType == "text" &&
-                 TryGetString(block, "text", out string text) &&
-                 text.Length != 0)
-        {
-          assistantText.Add(text);
-        }
-        else if (blockType == "tool_use")
-        {
-          string detail = RenderClaudeTool(block, toolResults);
-          if (detail.Length != 0)
-          {
-            toolDetails.Add(detail);
-          }
-          if (TryBuildSubagent(block, toolResults, record, root,
-                out SubagentTranscript? subagent) && subagent is not null)
-          {
-            subagents.Add(subagent);
-          }
-        }
-      }
-
-      if (thinking.Count != 0 || assistantText.Count != 0 ||
-          toolDetails.Count != 0)
-      {
-        AppendHeading(output, "Claude", record, root);
-        if (thinking.Count != 0 || toolDetails.Count != 0)
-        {
-          var thoughtParts = new List<string>(thinking);
-          thoughtParts.AddRange(toolDetails);
-          output.AppendLine("> <details>");
-          output.AppendLine(
-            $"> <summary>Thoughts ({thoughtParts.Count})</summary>");
-          output.AppendLine(">");
-          for (int index = 0; index < thoughtParts.Count; index++)
-          {
-            if (index != 0)
-            {
-              output.AppendLine("> ");
-              output.AppendLine("> ***");
-              output.AppendLine("> ");
-            }
-            output.AppendLine(QuoteMarkdown(thoughtParts[index]));
-          }
-          output.AppendLine(">");
-          output.AppendLine("> </details>");
-          output.AppendLine();
-        }
-
-        foreach (string text in assistantText)
-        {
-          output.AppendLine(QuoteMarkdown(text));
-          output.AppendLine();
-        }
-      }
-
-      foreach (SubagentTranscript subagent in subagents)
-      {
-        AppendSubagent(output, subagent);
-      }
+      return BuildSessionHeader(
+        path,
+        source,
+        recordCount: 0,
+        Array.Empty<JsonElement>());
     }
 
-    return output.ToString();
+    AIConversationProjection projection = CoreClient.Project(source, jsonLines);
+    cancellationToken.ThrowIfCancellationRequested();
+    string header = BuildSessionHeader(
+      path,
+      source,
+      jsonLines.Count,
+      projection.Events);
+    string canonicalMarkdown = NormalizeQuotedDetailsForMarkdig(
+      projection.Markdown);
+    string anchored = AddRecordAnchors(
+      canonicalMarkdown,
+      projection.Events,
+      cancellationToken);
+    return header + anchored;
   }
 
-  private static string FormatCodex(
-    string path,
-    IReadOnlyList<TranscriptRecord> records)
-  {
-    var output = new StringBuilder();
-    AppendSessionHeader(output, path, AgentSource.Codex, records);
-    foreach (TranscriptRecord record in records)
-    {
-      JsonElement root = record.Root;
-      if (!TryGetString(root, "type", out string type))
-      {
-        continue;
-      }
-
-      if (type == "event_msg" && TryGetProperty(root, "payload", out JsonElement payload))
-      {
-        if (!TryGetString(payload, "type", out string payloadType))
-        {
-          continue;
-        }
-        if (payloadType == "user_message" &&
-            TryGetString(payload, "message", out string userText) &&
-            userText.Length != 0)
-        {
-          AppendHeading(output, "User", record, root);
-          output.AppendLine(QuoteMarkdown(userText));
-          output.AppendLine();
-        }
-        else if (payloadType == "agent_message" &&
-                 TryGetString(payload, "message", out string agentText) &&
-                 agentText.Length != 0)
-        {
-          string phase = TryGetString(payload, "phase", out string value)
-            ? value
-            : string.Empty;
-          AppendHeading(output, "Codex", record, root);
-          if (phase == "commentary")
-          {
-            output.AppendLine("> <details>");
-            output.AppendLine("> <summary>Thoughts (1)</summary>");
-            output.AppendLine(">");
-            output.AppendLine(QuoteMarkdown(agentText));
-            output.AppendLine(">");
-            output.AppendLine("> </details>");
-          }
-          else
-          {
-            output.AppendLine(QuoteMarkdown(agentText));
-          }
-          output.AppendLine();
-        }
-      }
-      else if (type == "response_item" &&
-               TryGetProperty(root, "payload", out JsonElement item) &&
-               TryGetString(item, "type", out string itemType) &&
-               itemType == "message")
-      {
-        string role = TryGetString(item, "role", out string roleValue)
-          ? roleValue
-          : string.Empty;
-        string text = ExtractCodexMessageText(item);
-        if (text.Length != 0)
-        {
-          AppendHeading(
-            output,
-            role == "user" ? "User" : "Codex",
-            record,
-            root);
-          output.AppendLine(QuoteMarkdown(text));
-          output.AppendLine();
-        }
-      }
-    }
-    return output.ToString();
-  }
-
-  private static void AppendSessionHeader(
-    StringBuilder output,
+  /// <summary>
+  /// Adds the AgentPanelSpeaker session heading around canonical content.
+  /// </summary>
+  private static string BuildSessionHeader(
     string path,
     AgentSource source,
-    IReadOnlyList<TranscriptRecord> records)
+    int recordCount,
+    IReadOnlyList<JsonElement> events)
   {
-    DateTimeOffset? first = records
-      .Select(item => ReadTimestamp(item.Root))
-      .FirstOrDefault(value => value is not null);
-    DateTimeOffset? last = records
-      .Select(item => ReadTimestamp(item.Root))
-      .LastOrDefault(value => value is not null);
-    string title = ReadSessionTitle(records) ?? Path.GetFileNameWithoutExtension(path);
+    DateTimeOffset? first = null;
+    DateTimeOffset? last = null;
+    foreach (JsonElement eventElement in events)
+    {
+      DateTimeOffset? timestamp = ReadSourceTimestamp(eventElement);
+      if (timestamp is null)
+      {
+        continue;
+      }
+      first ??= timestamp;
+      last = timestamp;
+    }
+
     string sourceName = source == AgentSource.Codex ? "codex" : "claude";
+    string title = ReadCanonicalSessionTitle(events) ??
+      Path.GetFileNameWithoutExtension(path);
+    string fileStem = Path.GetFileNameWithoutExtension(path);
+    string shortId = fileStem[..Math.Min(8, fileStem.Length)];
+    var output = new StringBuilder();
     output.Append('[').Append(sourceName).Append(']');
     if (first is not null || last is not null)
     {
@@ -310,459 +111,46 @@ internal static partial class TranscriptMarkdownFormatter
         .Append(FormatTimestamp(last))
         .Append(']');
     }
-    output.Append(" records: ").Append(records.Count).AppendLine();
-    output.Append('(')
-      .Append(Path.GetFileNameWithoutExtension(path)[..Math.Min(
-        8,
-        Path.GetFileNameWithoutExtension(path).Length)])
-      .Append(") ")
-      .AppendLine(title);
+    output.Append(" records: ").Append(recordCount).AppendLine();
+    output.Append('(').Append(shortId).Append(") ").AppendLine(title);
     output.AppendLine();
+    return output.ToString();
   }
 
-  private static void AppendHeading(
-    StringBuilder output,
-    string speaker,
-    TranscriptRecord record,
-    JsonElement root)
+  /// <summary>
+  /// Derives the session title from the first visible canonical User message.
+  /// </summary>
+  private static string? ReadCanonicalSessionTitle(
+    IReadOnlyList<JsonElement> events)
   {
-    AppendRecordAnchor(output, record, root);
-    output.Append("## ").Append(speaker);
-    AppendRecordSuffix(output, record, root);
-    output.AppendLine();
-    output.AppendLine();
-  }
-
-  private static void AppendRecordAnchor(
-    StringBuilder output,
-    TranscriptRecord record,
-    JsonElement root)
-  {
-    string sourceId = JsonlRecordIdentity.GetSourceId(
-      TryGetString(root, "type", out string type) &&
-      type is "event_msg" or "response_item" or "session_meta"
-        ? AgentSource.Codex
-        : AgentSource.Claude,
-      root,
-      record.Number);
-    output.Append("<span class=\"record-anchor\" data-jsonl-record=\"")
-      .Append(record.Number)
-      .Append("\" data-source-id=\"")
-      .Append(HtmlEscape(sourceId))
-      .AppendLine("\"></span>");
-  }
-
-  private static void AppendRecordSuffix(
-    StringBuilder output,
-    TranscriptRecord record,
-    JsonElement root)
-  {
-    DateTimeOffset? timestamp = ReadTimestamp(root);
-    if (timestamp is not null)
+    foreach (JsonElement eventElement in events)
     {
-      output.Append(" [")
-        .Append(timestamp.Value.ToLocalTime().ToString(
-          "yyyy-MM-dd HH:mm:ss",
-          CultureInfo.InvariantCulture))
-        .Append(']');
-    }
-    output.Append(": ").Append(record.Number).Append(':');
-  }
-
-  private static Dictionary<string, string> BuildClaudeToolResultMap(
-    IReadOnlyList<TranscriptRecord> records)
-  {
-    var results = new Dictionary<string, string>(StringComparer.Ordinal);
-    foreach (TranscriptRecord record in records)
-    {
-      if (!TryGetString(record.Root, "type", out string type) ||
-          type != "user" ||
-          !TryGetMessageContent(record.Root, out JsonElement content))
+      if (GetString(eventElement, "role") != "user" ||
+          GetString(eventElement, "kind") != "message" ||
+          GetString(eventElement, "visibility") == "hidden" ||
+          !eventElement.TryGetProperty("blocks", out JsonElement blocks) ||
+          blocks.ValueKind != JsonValueKind.Array)
       {
         continue;
       }
-      foreach (JsonElement block in EnumerateArray(content))
+
+      foreach (JsonElement block in blocks.EnumerateArray())
       {
-        if (TryGetString(block, "type", out string blockType) &&
-            blockType == "tool_result" &&
-            TryGetString(block, "tool_use_id", out string id))
-        {
-          results[id] = ExtractTextContent(block, "content");
-        }
-      }
-    }
-    return results;
-  }
-
-  private static string RenderClaudeTool(
-    JsonElement block,
-    IReadOnlyDictionary<string, string> results)
-  {
-    if (!TryGetString(block, "name", out string name) || name == "Agent")
-    {
-      return string.Empty;
-    }
-    string id = TryGetString(block, "id", out string idValue)
-      ? idValue
-      : string.Empty;
-    JsonElement input = TryGetProperty(block, "input", out JsonElement value)
-      ? value
-      : default;
-    string result = id.Length != 0 && results.TryGetValue(id, out string? text)
-      ? text
-      : string.Empty;
-
-    if (name == "Bash")
-    {
-      string command = TryGetString(input, "command", out string commandValue)
-        ? commandValue
-        : string.Empty;
-      string description = TryGetString(input, "description", out string descriptionValue)
-        ? descriptionValue
-        : command.Split('\n').FirstOrDefault() ?? "command";
-      var output = new StringBuilder();
-      output.AppendLine("<details>");
-      output.Append("<summary>").Append(HtmlEscape(description)).AppendLine("</summary>");
-      output.AppendLine();
-      output.AppendLine(CodeFence(command, "bash"));
-      if (result.Length != 0)
-      {
-        output.AppendLine();
-        output.AppendLine("**OUT**");
-        output.AppendLine();
-        output.AppendLine(CodeFence(result, string.Empty));
-      }
-      output.AppendLine();
-      output.Append("</details>");
-      return output.ToString();
-    }
-
-    if (name is "Edit" or "Write" or "NotebookEdit")
-    {
-      string file = TryGetString(input, "file_path", out string filePath)
-        ? filePath
-        : TryGetString(input, "notebook_path", out string notebookPath)
-          ? notebookPath
-          : string.Empty;
-      return $"<details>\n<summary>file change</summary>\n\n" +
-        $"**{name}** `{file}`\n\n</details>";
-    }
-    return string.Empty;
-  }
-
-  private static void AppendSubagent(
-    StringBuilder output,
-    SubagentTranscript subagent)
-  {
-    AppendRecordAnchor(output, subagent.Record, subagent.Root);
-    output.Append("## Claude Sub-agent ");
-    output.Append(subagent.Id);
-    AppendRecordSuffix(output, subagent.Record, subagent.Root);
-    output.AppendLine();
-    output.AppendLine();
-    if (subagent.Description.Length != 0)
-    {
-      output.AppendLine(QuoteMarkdown(
-        $"**{subagent.Description}**"));
-      output.AppendLine();
-    }
-    output.AppendLine(QuoteMarkdown(
-      subagent.Result.Length == 0
-        ? "*(completed without output)*"
-        : subagent.Result));
-    output.AppendLine();
-  }
-
-  private static bool TryBuildTaskNotification(
-    TranscriptRecord record,
-    JsonElement root,
-    out SubagentTranscript? subagent)
-  {
-    subagent = null;
-    if (!TryGetString(root, "operation", out string operation) ||
-        !operation.Equals("enqueue", StringComparison.OrdinalIgnoreCase) ||
-        !TryGetString(root, "content", out string content) ||
-        string.IsNullOrWhiteSpace(content))
-    {
-      return false;
-    }
-
-    try
-    {
-      XDocument document = XDocument.Parse(
-        content,
-        LoadOptions.PreserveWhitespace);
-      XElement? notification = document.Root;
-      if (notification is null ||
-          notification.Name.LocalName != "task-notification" ||
-          !ElementValue(notification, "status").Equals(
-            "completed",
-            StringComparison.OrdinalIgnoreCase))
-      {
-        return false;
-      }
-
-      string taskId = ElementValue(notification, "task-id");
-      if (taskId.Length == 0)
-      {
-        return false;
-      }
-      string summary = ElementValue(notification, "summary");
-      Match descriptionMatch = TaskDescriptionRegex().Match(summary);
-      string description = descriptionMatch.Success
-        ? descriptionMatch.Groups[1].Value.Trim()
-        : summary.Trim();
-      subagent = new SubagentTranscript(
-        taskId,
-        description,
-        ElementValue(notification, "result"),
-        record,
-        root);
-      return true;
-    }
-    catch (System.Xml.XmlException)
-    {
-      return false;
-    }
-  }
-
-  private static string ElementValue(XElement parent, string localName)
-  {
-    XElement? child = parent.Elements().FirstOrDefault(
-      element => element.Name.LocalName == localName);
-    return child?.Value.Trim() ?? string.Empty;
-  }
-
-  private static bool TryBuildSubagent(
-    JsonElement block,
-    IReadOnlyDictionary<string, string> results,
-    TranscriptRecord record,
-    JsonElement root,
-    out SubagentTranscript? subagent)
-  {
-    subagent = null;
-    if (!TryGetString(block, "name", out string name) || name != "Agent")
-    {
-      return false;
-    }
-    string toolId = TryGetString(block, "id", out string idValue)
-      ? idValue
-      : "unknown";
-    JsonElement input = TryGetProperty(block, "input", out JsonElement value)
-      ? value
-      : default;
-    string description = TryGetString(input, "description", out string desc)
-      ? desc.Trim()
-      : string.Empty;
-    string rawResult = results.TryGetValue(toolId, out string? result)
-      ? result
-      : string.Empty;
-    Match idMatch = AgentIdRegex().Match(rawResult);
-    string agentId = idMatch.Success ? idMatch.Groups[1].Value : toolId;
-    string visibleResult = string.Join(
-      "\n",
-      rawResult.Split('\n').Where(line => !SubagentMetadataRegex().IsMatch(
-        line.Trim()))).Trim();
-    subagent = new SubagentTranscript(
-      agentId,
-      description,
-      visibleResult,
-      record,
-      root);
-    return true;
-  }
-
-  private static bool TryExtractClaudeQueuedCommandText(
-    JsonElement root,
-    out string text)
-  {
-    text = string.Empty;
-    if (!TryGetProperty(root, "attachment", out JsonElement attachment) ||
-        attachment.ValueKind != JsonValueKind.Object ||
-        !TryGetString(attachment, "type", out string attachmentType) ||
-        !attachmentType.Equals(
-          "queued_command",
-          StringComparison.OrdinalIgnoreCase) ||
-        !TryGetProperty(attachment, "prompt", out JsonElement prompt))
-    {
-      return false;
-    }
-
-    var parts = new List<string>();
-    if (prompt.ValueKind == JsonValueKind.String)
-    {
-      string value = StripInjectedXml(prompt.GetString() ?? string.Empty);
-      if (value.Length != 0)
-      {
-        parts.Add(value);
-      }
-    }
-    else
-    {
-      foreach (JsonElement block in EnumerateArray(prompt))
-      {
-        if (TryGetString(block, "type", out string blockType) &&
-            blockType == "text" &&
-            TryGetString(block, "text", out string value))
-        {
-          value = StripInjectedXml(value);
-          if (value.Length != 0)
-          {
-            parts.Add(value);
-          }
-        }
-      }
-    }
-
-    text = string.Join("\n\n", parts).Trim();
-    return text.Length != 0;
-  }
-
-  private static string ExtractClaudeUserText(JsonElement content)
-  {
-    var parts = new List<string>();
-    foreach (JsonElement block in EnumerateArray(content))
-    {
-      if (!TryGetString(block, "type", out string type))
-      {
-        continue;
-      }
-      if (type == "text" && TryGetString(block, "text", out string text))
-      {
-        string cleaned = StripInjectedXml(text).Trim();
-        if (cleaned.Length != 0)
-        {
-          parts.Add(cleaned);
-        }
-      }
-      else if (type == "image" &&
-               TryGetProperty(block, "source", out JsonElement source))
-      {
-        if (TryGetString(source, "type", out string sourceType) &&
-            sourceType == "url" &&
-            TryGetString(source, "url", out string url))
-        {
-          parts.Add($"![image]({url})");
-        }
-      }
-    }
-    return string.Join("\n\n", parts);
-  }
-
-  private static string ExtractCodexMessageText(JsonElement item)
-  {
-    if (!TryGetProperty(item, "content", out JsonElement content))
-    {
-      return string.Empty;
-    }
-    var parts = new List<string>();
-    foreach (JsonElement block in EnumerateArray(content))
-    {
-      if (TryGetString(block, "text", out string text) && text.Length != 0)
-      {
-        parts.Add(text);
-      }
-    }
-    return string.Join("\n\n", parts);
-  }
-
-  private static string ExtractTextContent(JsonElement parent, string name)
-  {
-    if (!TryGetProperty(parent, name, out JsonElement content))
-    {
-      return string.Empty;
-    }
-    if (content.ValueKind == JsonValueKind.String)
-    {
-      return content.GetString() ?? string.Empty;
-    }
-    var parts = new List<string>();
-    foreach (JsonElement item in EnumerateArray(content))
-    {
-      if (TryGetString(item, "text", out string text))
-      {
-        parts.Add(text);
-      }
-    }
-    return string.Join("\n", parts);
-  }
-
-  private static string QuoteMarkdown(string text)
-  {
-    return string.Join(
-      "\n",
-      text.Replace("\r\n", "\n", StringComparison.Ordinal)
-        .Replace('\r', '\n')
-        .Split('\n')
-        .Select(line => line.Length == 0 ? ">" : $"> {line}"));
-  }
-
-  private static string CodeFence(string text, string language)
-  {
-    int longest = LongestBacktickRunRegex()
-      .Matches(text)
-      .Cast<Match>()
-      .Select(match => match.Length)
-      .DefaultIfEmpty(0)
-      .Max();
-    string fence = new('`', Math.Max(3, longest + 1));
-    return $"{fence}{language}\n{text}\n{fence}";
-  }
-
-  private static string HtmlEscape(string text)
-  {
-    return SecurityElement.Escape(text) ?? string.Empty;
-  }
-
-  private static DateTimeOffset? ReadTimestamp(JsonElement root)
-  {
-    if (!TryGetString(root, "timestamp", out string timestamp) ||
-        !DateTimeOffset.TryParse(
-          timestamp,
-          CultureInfo.InvariantCulture,
-          DateTimeStyles.AssumeUniversal,
-          out DateTimeOffset value))
-    {
-      return null;
-    }
-    return value;
-  }
-
-  private static string? ReadSessionTitle(
-    IReadOnlyList<TranscriptRecord> records)
-  {
-    foreach (TranscriptRecord record in records.Reverse())
-    {
-      if (TryGetString(record.Root, "type", out string type) &&
-          type == "ai-title" &&
-          TryGetString(record.Root, "aiTitle", out string title) &&
-          !string.IsNullOrWhiteSpace(title))
-      {
-        return FirstMeaningfulLine(title);
-      }
-    }
-
-    foreach (string desiredType in new[] { "user", "assistant" })
-    {
-      foreach (TranscriptRecord record in records)
-      {
-        if (!TryGetString(record.Root, "type", out string type) ||
-            type != desiredType ||
-            !TryGetMessageContent(record.Root, out JsonElement content))
+        if (GetString(block, "type") != "text")
         {
           continue;
         }
-        foreach (JsonElement block in EnumerateArray(content))
+        string text = GetString(block, "text").Trim();
+        if (text.Length != 0)
         {
-          if (TryGetString(block, "type", out string blockType) &&
-              blockType == "text" &&
-              TryGetString(block, "text", out string text))
+          string firstLine = text.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n')
+            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?
+            .Trim() ?? string.Empty;
+          if (firstLine.Length != 0)
           {
-            string candidate = FirstMeaningfulLine(StripInjectedXml(text));
-            if (candidate.Length != 0)
-            {
-              return candidate;
-            }
+            return firstLine;
           }
         }
       }
@@ -770,24 +158,348 @@ internal static partial class TranscriptMarkdownFormatter
     return null;
   }
 
-  private static string FirstMeaningfulLine(string text)
+  /// <summary>
+  /// Rewrites AIConversationCore's blockquoted HTML-details wrapper into the
+  /// equivalent HTML container with the Claude blockquote retained inside it.
+  /// Markdig otherwise ends the raw details block before parsing the quoted
+  /// Markdown body, leaving the thoughts visibly outside the disclosure.
+  /// </summary>
+  private static string NormalizeQuotedDetailsForMarkdig(string markdown)
   {
-    foreach (string line in text.Replace("\r\n", "\n", StringComparison.Ordinal)
-               .Replace('\r', '\n')
-               .Split('\n'))
+    string normalized = markdown
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    string[] lines = normalized.Split('\n');
+    var output = new StringBuilder(normalized.Length + 64);
+    bool inQuotedDetails = false;
+
+    for (int index = 0; index < lines.Length; ++index)
     {
-      string candidate = line.Trim();
-      if (candidate.Length == 0 ||
-          Regex.IsMatch(candidate, @"^`{3,}[^`]*$") ||
-          Regex.IsMatch(candidate, @"^~{3,}[^~]*$"))
+      string line = lines[index];
+      if (!inQuotedDetails &&
+          line.StartsWith("> <details>", StringComparison.Ordinal))
+      {
+        output.AppendLine(line[2..]);
+        inQuotedDetails = true;
+        continue;
+      }
+
+      if (inQuotedDetails &&
+          line.StartsWith("> <summary>", StringComparison.Ordinal))
+      {
+        output.AppendLine(line[2..]);
+        continue;
+      }
+
+      if (inQuotedDetails &&
+          line.StartsWith("> </details>", StringComparison.Ordinal))
+      {
+        output.AppendLine(line[2..]);
+        inQuotedDetails = false;
+        continue;
+      }
+
+      if (inQuotedDetails && line == ">")
+      {
+        bool immediatelyAfterSummary = index > 0 &&
+          lines[index - 1].StartsWith("> <summary>", StringComparison.Ordinal);
+        bool immediatelyBeforeClose = index + 1 < lines.Length &&
+          lines[index + 1].StartsWith("> </details>", StringComparison.Ordinal);
+        if (immediatelyAfterSummary || immediatelyBeforeClose)
+        {
+          output.AppendLine();
+          continue;
+        }
+      }
+
+      output.AppendLine(line);
+    }
+
+    return output.ToString();
+  }
+
+  /// <summary>
+  /// Converts canonical renderer provenance comments into the hidden record
+  /// anchors used by AgentPanelSpeaker virtualization. The conversion reads
+  /// only canonical record identity/index metadata, never provider-native JSON.
+  /// </summary>
+  private static string AddRecordAnchors(
+    string markdown,
+    IReadOnlyList<JsonElement> events,
+    CancellationToken cancellationToken)
+  {
+    string provenanceComplete = EnsureVisibleMessageProvenance(
+      markdown,
+      events,
+      cancellationToken);
+    var sourceIds = new Dictionary<int, string>();
+    foreach (JsonElement eventElement in events)
+    {
+      int sourceIndex = GetInt32(eventElement, "source_index");
+      if (sourceIndex < 0 || sourceIds.ContainsKey(sourceIndex))
       {
         continue;
       }
-      return candidate.Length <= 120 ? candidate : candidate[..120];
+      string sourceId = GetString(eventElement, "source_record_id").Trim();
+      sourceIds[sourceIndex] = sourceId.Length == 0
+        ? (sourceIndex + 1).ToString(CultureInfo.InvariantCulture)
+        : sourceId;
     }
-    return string.Empty;
+
+    var emitted = new HashSet<int>();
+    var output = new StringBuilder(provenanceComplete.Length + 1024);
+    string normalized = provenanceComplete
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    foreach (string line in normalized.Split('\n'))
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      MatchCollection matches = ProvenanceCommentRegex().Matches(line);
+      string quotePrefix = MarkdownQuotePrefix(line);
+      bool emittedAnchor = false;
+      foreach (Match match in matches)
+      {
+        if (!int.TryParse(
+              match.Groups["index"].Value,
+              NumberStyles.Integer,
+              CultureInfo.InvariantCulture,
+              out int sourceIndex) ||
+            sourceIndex < 0 ||
+            !emitted.Add(sourceIndex))
+        {
+          continue;
+        }
+
+        string sourceId = match.Groups["id"].Success
+          ? match.Groups["id"].Value
+          : sourceIds.TryGetValue(sourceIndex, out string? mapped)
+            ? mapped
+            : (sourceIndex + 1).ToString(CultureInfo.InvariantCulture);
+        output.Append(quotePrefix)
+          .Append("<span class=\"record-anchor\" data-jsonl-record=\"")
+          .Append(sourceIndex + 1)
+          .Append("\" data-source-id=\"")
+          .Append(WebUtility.HtmlEncode(sourceId))
+          .AppendLine("\"></span>");
+        emittedAnchor = true;
+      }
+
+      string remainder = ProvenanceCommentRegex().Replace(line, string.Empty);
+      if (matches.Count != 0 &&
+          (string.IsNullOrWhiteSpace(remainder) || IsMarkdownQuoteOnly(remainder)))
+      {
+        if (!emittedAnchor)
+        {
+          output.AppendLine();
+        }
+        continue;
+      }
+      output.AppendLine(remainder);
+    }
+    return output.ToString();
   }
 
+  /// <summary>
+  /// Positions one provenance marker immediately before the first rendered text
+  /// owned by each visible canonical source record. AIConversationCore can group
+  /// several reasoning records in one details block and place all of their debug
+  /// comments at the summary. Those comments identify the right records but are
+  /// not content boundaries, so leaving them there makes record-scoped speech
+  /// mapping assign the grouped body to the last record only.
+  /// </summary>
+  private static string EnsureVisibleMessageProvenance(
+    string markdown,
+    IReadOnlyList<JsonElement> events,
+    CancellationToken cancellationToken)
+  {
+    var relocations = new List<(int SourceIndex, string SourceId, string FirstLine)>();
+    var positionedSourceIndices = new HashSet<int>();
+
+    foreach (JsonElement eventElement in events)
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      int sourceIndex = GetInt32(eventElement, "source_index");
+      string kind = GetString(eventElement, "kind");
+      if (sourceIndex < 0 ||
+          positionedSourceIndices.Contains(sourceIndex) ||
+          GetString(eventElement, "visibility") == "hidden" ||
+          kind is not ("message" or "commentary" or "reasoning_summary") ||
+          !TryGetFirstTextLine(eventElement, out string firstLine))
+      {
+        continue;
+      }
+
+      positionedSourceIndices.Add(sourceIndex);
+      relocations.Add((
+        sourceIndex,
+        GetString(eventElement, "source_record_id").Trim(),
+        firstLine));
+    }
+
+    if (relocations.Count == 0)
+    {
+      return markdown;
+    }
+
+    var relocationIndices = relocations
+      .Select(item => item.SourceIndex)
+      .ToHashSet();
+    string result = RemoveRelocatedProvenance(
+      markdown,
+      relocationIndices);
+
+    int searchStart = 0;
+    foreach ((int sourceIndex, string sourceId, string firstLine) in relocations)
+    {
+      cancellationToken.ThrowIfCancellationRequested();
+      int textIndex = result.IndexOf(
+        firstLine,
+        Math.Min(searchStart, result.Length),
+        StringComparison.Ordinal);
+      if (textIndex < 0)
+      {
+        textIndex = result.IndexOf(firstLine, StringComparison.Ordinal);
+      }
+      if (textIndex < 0)
+      {
+        continue;
+      }
+
+      int lineStart = result.LastIndexOf('\n', Math.Max(0, textIndex - 1));
+      lineStart = lineStart < 0 ? 0 : lineStart + 1;
+      string comment = sourceId.Length == 0
+        ? $"<!-- record_index={sourceIndex} -->"
+        : $"<!-- record_id={sourceId} record_index={sourceIndex} -->";
+      int lineEnd = result.IndexOf('\n', lineStart);
+      if (lineEnd < 0)
+      {
+        lineEnd = result.Length;
+      }
+      string quotePrefix = MarkdownQuotePrefix(result[lineStart..lineEnd]);
+      string inserted = quotePrefix + comment + "\n";
+      result = result.Insert(lineStart, inserted);
+      searchStart = textIndex + inserted.Length + firstLine.Length;
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// Removes selected renderer provenance while preserving Markdown structure.
+  /// Provenance-only quoted lines become blank lines instead of bare quote
+  /// markers, which would otherwise render as visible greater-than symbols.
+  /// </summary>
+  private static string RemoveRelocatedProvenance(
+    string markdown,
+    IReadOnlySet<int> relocationIndices)
+  {
+    string normalized = markdown
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n');
+    var output = new StringBuilder(normalized.Length);
+    foreach (string line in normalized.Split('\n'))
+    {
+      string replaced = ProvenanceCommentRegex().Replace(
+        line,
+        match => int.TryParse(
+            match.Groups["index"].Value,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out int index) && relocationIndices.Contains(index)
+          ? string.Empty
+          : match.Value);
+      output.AppendLine(IsMarkdownQuoteOnly(replaced) ? string.Empty : replaced);
+    }
+    return output.ToString();
+  }
+
+  /// <summary>
+  /// Returns the complete leading Markdown blockquote prefix for one line.
+  /// </summary>
+  private static string MarkdownQuotePrefix(string line)
+  {
+    Match match = MarkdownQuotePrefixRegex().Match(line);
+    return match.Success ? match.Value : string.Empty;
+  }
+
+  /// <summary>
+  /// Returns whether a line contains only Markdown blockquote markers/spacing.
+  /// </summary>
+  private static bool IsMarkdownQuoteOnly(string line)
+  {
+    return MarkdownQuoteOnlyRegex().IsMatch(line);
+  }
+
+  private static bool TryGetFirstTextLine(
+    JsonElement eventElement,
+    out string firstLine)
+  {
+    firstLine = string.Empty;
+    if (!eventElement.TryGetProperty("blocks", out JsonElement blocks) ||
+        blocks.ValueKind != JsonValueKind.Array)
+    {
+      return false;
+    }
+
+    foreach (JsonElement block in blocks.EnumerateArray())
+    {
+      string blockType = GetString(block, "type");
+      string text;
+      if (blockType == "text")
+      {
+        text = GetString(block, "text");
+      }
+      else if (blockType == "reasoning_summary")
+      {
+        text = GetString(block, "content");
+        if (string.IsNullOrWhiteSpace(text))
+        {
+          text = GetString(block, "summary");
+        }
+      }
+      else
+      {
+        continue;
+      }
+
+      text = text
+        .Replace("\r\n", "\n", StringComparison.Ordinal)
+        .Replace('\r', '\n');
+      firstLine = text.Split('\n')
+        .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?
+        .Trim() ?? string.Empty;
+      if (firstLine.Length != 0)
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// <summary>
+  /// Reads canonical source timestamp provenance.
+  /// </summary>
+  private static DateTimeOffset? ReadSourceTimestamp(JsonElement eventElement)
+  {
+    if (!eventElement.TryGetProperty("source", out JsonElement source) ||
+        source.ValueKind != JsonValueKind.Object ||
+        !source.TryGetProperty("timestamp", out JsonElement timestamp) ||
+        timestamp.ValueKind != JsonValueKind.String)
+    {
+      return null;
+    }
+
+    return DateTimeOffset.TryParse(
+      timestamp.GetString(),
+      CultureInfo.InvariantCulture,
+      DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+      out DateTimeOffset parsed)
+        ? parsed
+        : null;
+  }
+
+  /// <summary>
+  /// Formats one timestamp using the previous transcript header convention.
+  /// </summary>
   private static string FormatTimestamp(DateTimeOffset? timestamp)
   {
     return timestamp?.ToLocalTime().ToString(
@@ -795,90 +507,65 @@ internal static partial class TranscriptMarkdownFormatter
       CultureInfo.InvariantCulture) ?? string.Empty;
   }
 
-  private static bool TryGetMessageContent(
-    JsonElement root,
-    out JsonElement content)
+  /// <summary>
+  /// Reads one JSON string property or an empty string.
+  /// </summary>
+  private static string GetString(JsonElement element, string propertyName)
   {
-    content = default;
-    return TryGetMessage(root, out JsonElement message) &&
-      TryGetProperty(message, "content", out content) &&
-      content.ValueKind == JsonValueKind.Array;
+    return element.ValueKind == JsonValueKind.Object &&
+      element.TryGetProperty(propertyName, out JsonElement value) &&
+      value.ValueKind == JsonValueKind.String
+        ? value.GetString() ?? string.Empty
+        : string.Empty;
   }
 
-  private static bool TryGetMessage(JsonElement root, out JsonElement message)
+  /// <summary>
+  /// Reads one JSON integer property or -1.
+  /// </summary>
+  private static int GetInt32(JsonElement element, string propertyName)
   {
-    return TryGetProperty(root, "message", out message) &&
-      message.ValueKind == JsonValueKind.Object;
+    return element.ValueKind == JsonValueKind.Object &&
+      element.TryGetProperty(propertyName, out JsonElement value) &&
+      value.ValueKind == JsonValueKind.Number &&
+      value.TryGetInt32(out int result)
+        ? result
+        : -1;
   }
 
-  private static IEnumerable<JsonElement> EnumerateArray(JsonElement value)
+  /// <summary>
+  /// Reads a JSONL file while allowing the writer to keep appending/replacing it.
+  /// </summary>
+  private static IEnumerable<string> ReadSharedLines(string path)
   {
-    return value.ValueKind == JsonValueKind.Array
-      ? value.EnumerateArray()
-      : Enumerable.Empty<JsonElement>();
-  }
-
-  private static bool TryGetProperty(
-    JsonElement value,
-    string name,
-    out JsonElement property)
-  {
-    property = default;
-    return value.ValueKind == JsonValueKind.Object &&
-      value.TryGetProperty(name, out property);
-  }
-
-  private static bool TryGetString(
-    JsonElement value,
-    string name,
-    out string text)
-  {
-    text = string.Empty;
-    if (!TryGetProperty(value, name, out JsonElement property) ||
-        property.ValueKind != JsonValueKind.String)
+    using var stream = new FileStream(
+      path,
+      FileMode.Open,
+      FileAccess.Read,
+      FileShare.ReadWrite | FileShare.Delete);
+    using var reader = new StreamReader(
+      stream,
+      Encoding.UTF8,
+      detectEncodingFromByteOrderMarks: true,
+      bufferSize: 64 * 1024,
+      leaveOpen: false);
+    while (reader.ReadLine() is string line)
     {
-      return false;
+      yield return line;
     }
-    text = property.GetString() ?? string.Empty;
-    return true;
   }
-
-  private static bool GetBoolean(JsonElement value, string name)
-  {
-    return TryGetProperty(value, name, out JsonElement property) &&
-      property.ValueKind is JsonValueKind.True;
-  }
-
-  private static string StripInjectedXml(string text)
-  {
-    return InjectedXmlRegex().Replace(text, string.Empty).Trim();
-  }
-
-  private sealed record TranscriptRecord(int Number, JsonElement Root);
-
-  private sealed record SubagentTranscript(
-    string Id,
-    string Description,
-    string Result,
-    TranscriptRecord Record,
-    JsonElement Root);
-
-  [GeneratedRegex(@"(?m)^agentId:\s*([^\s]+)")]
-  private static partial Regex AgentIdRegex();
 
   [GeneratedRegex(
-    @"Agent\s+[""“](.*?)[""”]\s+came to rest",
-    RegexOptions.IgnoreCase)]
-  private static partial Regex TaskDescriptionRegex();
+    @"<!--\s*(?:record_id=(?<id>[^\s>]+)\s+)?record_index=(?<index>\d+)\s*-->",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex ProvenanceCommentRegex();
 
   [GeneratedRegex(
-    @"^(?:agentId|worktreePath|worktreeBranch|subagent_tokens|tool_uses|duration_ms):|^</?usage>",
-    RegexOptions.IgnoreCase)]
-  private static partial Regex SubagentMetadataRegex();
+    @"^(?:[ \t]*>[ \t]?)+",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex MarkdownQuotePrefixRegex();
 
-  [GeneratedRegex(@"(?s)<(?:system-reminder|local-command-caveat|command-name|command-message|command-args)>.*?</(?:system-reminder|local-command-caveat|command-name|command-message|command-args)>")]
-  private static partial Regex InjectedXmlRegex();
-
-  [GeneratedRegex("`+")]
-  private static partial Regex LongestBacktickRunRegex();
+  [GeneratedRegex(
+    @"^(?:[ \t]*>[ \t]?)+[ \t]*$",
+    RegexOptions.CultureInvariant)]
+  private static partial Regex MarkdownQuoteOnlyRegex();
 }

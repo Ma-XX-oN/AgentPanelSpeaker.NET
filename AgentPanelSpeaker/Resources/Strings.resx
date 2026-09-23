@@ -6,29 +6,46 @@
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
   <data name="Main.SaveSettings.Name" xml:space="preserve"><value>Save settings</value></data>
   <data name="Main.SaveSettings.Description" xml:space="preserve"><value>Choose which changed settings to save.</value></data>
-  <data name="Main.SaveSettings.Tooltip" xml:space="preserve"><value>Save settings</value></data>
+  <data name="Main.SaveSettings.Tooltip" xml:space="preserve"><value>Choose which changed settings to save.</value></data>
   <data name="Main.ResetDefaults.Name" xml:space="preserve"><value>Reset settings to defaults</value></data>
   <data name="Main.ResetDefaults.Description" xml:space="preserve"><value>Choose which settings to reset to their default values.</value></data>
-  <data name="Main.ResetDefaults.Tooltip" xml:space="preserve"><value>Reset settings to defaults</value></data>
+  <data name="Main.ResetDefaults.Tooltip" xml:space="preserve"><value>Choose which settings to reset to their default values.</value></data>
   <data name="Main.Hotkeys.Name" xml:space="preserve"><value>Configure hotkeys</value></data>
   <data name="Main.Hotkeys.Description" xml:space="preserve"><value>Open the keyboard shortcut settings.</value></data>
-  <data name="Main.Hotkeys.Tooltip" xml:space="preserve"><value>Configure hotkeys</value></data>
+  <data name="Main.Hotkeys.Tooltip" xml:space="preserve"><value>Open the keyboard shortcut settings.</value></data>
   <data name="Main.DiagnosticLog.Name" xml:space="preserve"><value>Open diagnostic log</value></data>
   <data name="Main.DiagnosticLog.Description" xml:space="preserve"><value>Open the application diagnostic log.</value></data>
-  <data name="Main.DiagnosticLog.Tooltip" xml:space="preserve"><value>Open diagnostic log</value></data>
+  <data name="Main.DiagnosticLog.Tooltip" xml:space="preserve"><value>Open the application diagnostic log.</value></data>
   <data name="Main.Source.Name" xml:space="preserve"><value>Session source</value></data>
+  <data name="Main.Source.Description" xml:space="preserve"><value>Choose automatic, Codex, or Claude session detection.</value></data>
   <data name="Main.SessionTitle.Name" xml:space="preserve"><value>Selected session title</value></data>
   <data name="Main.SessionPath.Name" xml:space="preserve"><value>Selected session path</value></data>
   <data name="Main.DetectLatest.Name" xml:space="preserve"><value>Detect latest session</value></data>
+  <data name="Main.DetectLatest.Description" xml:space="preserve"><value>Find and select the newest session from the chosen source.</value></data>
   <data name="Main.BrowseJsonl.Name" xml:space="preserve"><value>Browse for JSONL session</value></data>
+  <data name="Main.BrowseJsonl.Description" xml:space="preserve"><value>Choose a JSONL session file manually.</value></data>
   <data name="Main.FollowNewest.Name" xml:space="preserve"><value>Auto-follow newest session</value></data>
+  <data name="Main.FollowNewest.Description" xml:space="preserve"><value>Automatically switch to a newer session when one appears.</value></data>
   <data name="Main.PollInterval.Name" xml:space="preserve"><value>Polling interval in milliseconds</value></data>
+  <data name="Main.PollInterval.Description" xml:space="preserve"><value>Set how often AgentPanelSpeaker checks the selected session for new content.</value></data>
   <data name="Main.FencedCodeTypes.Name" xml:space="preserve"><value>Spoken fenced-code types</value></data>
-  <data name="Main.SpeakExisting.Name" xml:space="preserve"><value>Speak latest existing message on startup</value></data>
+  <data name="Main.FencedCodeTypes.Description" xml:space="preserve"><value>Choose which fenced code-block types are spoken during playback.</value></data>
+  <data name="Main.SpeakExisting.Name" xml:space="preserve"><value>Start playback from latest user prompt</value></data>
+  <data name="Main.SpeakExisting.Description" xml:space="preserve"><value>Choose whether startup playback begins at the latest user prompt or waits at the current conversation end.</value></data>
+  <data name="Main.SpeakExisting.Text" xml:space="preserve"><value>Start playback from latest user prompt</value></data>
+  <data name="Main.SpeakExisting.Tooltip" xml:space="preserve"><value>On: start at the first speakable content at or after the latest user prompt.&#10;Off: start at the current conversation end and wait for new content.</value></data>
   <data name="Main.KeepDisplayOn.Name" xml:space="preserve"><value>Keep display on while speaking</value></data>
+  <data name="Main.MatchDesktopAndWindowsMediaRates.Name" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>
+  <data name="Main.MatchDesktopAndWindowsMediaRates.Description" xml:space="preserve"><value>Calibrates Desktop/System.Speech speaking rates toward the Windows Media rate scale.</value></data>
+  <data name="Main.MatchDesktopAndWindowsMediaRates.Text" xml:space="preserve"><value>Match Desktop and Windows Media rates</value></data>
+  <data name="Main.MatchDesktopAndWindowsMediaRates.Tooltip" xml:space="preserve"><value>Desktop/System.Speech and Windows Media use different rate scales.&#10;Enable this to make their speaking rates closer; this compresses the Desktop voice&apos;s available native rate range.</value></data>
   <data name="Main.Theme.Name" xml:space="preserve"><value>Application theme</value></data>
+  <data name="Main.Theme.Description" xml:space="preserve"><value>Choose whether AgentPanelSpeaker follows the system theme or uses light or dark mode.</value></data>
   <data name="Main.Pronunciations.Name" xml:space="preserve"><value>Pronunciations</value></data>
+  <data name="Main.Pronunciations.Description" xml:space="preserve"><value>Open spell-out and IPA pronunciation rules.</value></data>
   <data name="Main.BluetoothWake.Name" xml:space="preserve"><value>Bluetooth audio wake settings</value></data>
+  <data name="Main.BluetoothWake.Description" xml:space="preserve"><value>Configure the wake audio used to keep Bluetooth devices ready for speech.</value></data>
+  <data name="Main.BluetoothWake.Tooltip" xml:space="preserve"><value>Configure the wake audio used to keep Bluetooth devices ready for speech.</value></data>
   <data name="Main.AcceptedText.Name" xml:space="preserve"><value>Accepted text preview</value></data>
   <data name="Main.ActivityLog.Name" xml:space="preserve"><value>Activity log</value></data>
   <data name="Main.DiagnosticTabs.Name" xml:space="preserve"><value>Transcript and diagnostic tabs</value></data>
