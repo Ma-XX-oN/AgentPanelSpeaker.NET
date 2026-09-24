@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "versionCommand": ["python", "scripts/workflow_version.py"],
+  "repository": {
+    "integrationBranch": "main",
+    "authoritativeRemote": "origin"
+  },
+  "environments": [
+    {
+      "id": "windows-dotnet10-python313",
+      "required": true,
+      "platform": "windows",
+      "capabilities": ["dotnet-10", "python-3.13"],
+      "validationCommand": ["python", "scripts/repoworkflow_validate.py"]
+    }
+  ]
+}

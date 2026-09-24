@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "integrationBranch": "main",
+  "branches": {
+    "issue-154-repoworkflow-adoption": {
+      "parent": "main",
+      "allowedDependencies": [],
+      "integrationTarget": "main"
+    }
+  },
+  "patterns": [
+    {
+      "pattern": "issue-*",
+      "parent": "main",
+      "allowedDependencies": []
+    }
+  ]
+}
