@@ -1,0 +1,31 @@
+name: Temporary issue 154 RepoWorkflow GREEN
+
+on:
+  push:
+    branches:
+      - tmp-issue-154-repoworkflow-green
+    paths:
+      - .github/workflows/_temporary_issue_154_repoworkflow_green.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e204141e9840762ff55280f10b65bda19132065b
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify RepoWorkflow adoption contract
+        run: python -m unittest tests/test_repoworkflow_adoption.py
+      - name: Run full repository-owned validation wrapper
+        run: python scripts/repoworkflow_validate.py
