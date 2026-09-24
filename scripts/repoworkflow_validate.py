@@ -39,16 +39,6 @@ def main() -> int:
     ["dotnet", "build", PROJECT, "-c", "Release", "--no-restore"],
     [PYTHON, "tools/test-subagents.py"],
     [PYTHON, "-m", "unittest", "tests/test_repoworkflow_adoption.py"],
-    [
-      PYTHON,
-      "-m",
-      "unittest",
-      "discover",
-      "-s",
-      "tests",
-      "-p",
-      "test_ci_contract.py",
-    ],
   ):
     if run(command, env=env) != 0:
       failures += 1

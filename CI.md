@@ -1,98 +1,58 @@
 # CI request and result contract
 
-AgentPanelSpeaker.NET uses an explicit CI request instead of running expensive validation on every development push.
+AgentPanelSpeaker.NET uses RepoWorkflow as the authoritative generic CI lifecycle engine.  Expensive hosted validation remains explicit-request gated rather than running on every development push.
 
 ## Development cycle
 
 1. Work on an issue branch using `x.y.z-issue.<issue>.<iteration>`.
-2. Make ordinary source/documentation commits without requesting hosted CI.
-3. Run focused checks locally while developing.
-4. When the candidate is ready, set `.ci/run-ci-request` to the exact authoritative development version and push that change.
-5. GitHub Actions validates the exact requested commit.
-
-The authoritative development version source is the root `VERSION` file.
-
-## Clean-clone prerequisite
-
-Full CI is valid only from a real clean clone. `scripts/ci_contract.py` fails preflight unless:
-
-- the checkout is a Git working tree;
-- an `origin` remote exists;
-- the repository is non-shallow so historical validation remains available; and
-- there are no tracked or untracked working-tree changes.
-
-GitHub checkout therefore uses `fetch-depth: 0`. Local full validation should also be run from a clean, full clone rather than an exported archive or synthetic working tree.
-
-## Local validation
-
-The same repository-owned contract used by Actions is available locally:
+2. Run focused repository checks while developing.
+3. Before terminalizing an iteration, run the shared direct path on the exact candidate:
 
 ```text
-python scripts/ci_contract.py preflight
-python scripts/ci_contract.py matrix
-python scripts/ci_contract.py run --environment windows-dotnet10-python313 --result <outside-repo-result.json>
+python RepoWorkflow/repo_workflow.py verify
 ```
 
-Store result JSON outside the repository so finalization can continue to assert a clean clone.
+4. When the exact candidate is ready for hosted validation, set `.ci/run-ci-request` to the authoritative development version and publish that same commit unchanged.
+5. The canonical GitHub adapter validates the exact requested commit and finalizes the authoritative result.
 
-The currently required environment is declared in `.ci/test-matrix.json`:
+The authoritative development version source is the root `VERSION` file.  RepoWorkflow consumer facts are declared in `.ci/repoworkflow.json`, `.ci/github.json`, and `.ci/branch-policy.json`.
 
-- Windows
-- .NET 10.x
-- Python 3.13
+## Required Windows environment
 
-The runtime records the actual OS, Python version, and .NET version. A platform or runtime mismatch makes the environment **INCOMPLETE**, not a source failure.
+The required environment is `windows-dotnet10-python313`:
 
-## Windows validation
+- Windows;
+- .NET 10, provisioned as the 10.0.x SDK family;
+- Python 3.13.
 
-The required Windows environment performs:
+The GitHub runner mapping is repository data; the canonical adapter provisions declared runtimes before invoking the repository-owned validator.
 
-1. a NuGet network prerequisite check;
+## Repository-owned Windows validation
+
+`scripts/repoworkflow_validate.py` remains the authoritative APS validation entry point.  It preserves this repository-specific sequence:
+
+1. NuGet network prerequisite check via `scripts/check_nuget_access.py`;
 2. production-project restore using `NuGet.Config`;
-3. Release build with warnings treated as errors by the project;
-4. the existing Claude sub-agent transcript fixture; and
-5. CI-contract regression tests.
+3. Release build with `--no-restore`;
+4. the Claude sub-agent transcript fixture; and
+5. RepoWorkflow adoption/invariant regression coverage.
 
-The network check is a prerequisite. If NuGet cannot be reached, validation is INCOMPLETE and no result tag is allowed. Once the prerequisite is available, restore/build/test failures are genuine repository validation results.
+A missing NuGet/network prerequisite returns the repository hook's prerequisite status so RepoWorkflow classifies the environment as **INCOMPLETE**, not a source failure.  Once prerequisites are available, restore/build/test failures are genuine repository validation failures.
 
-Future production integration tests can be added to the repository-owned matrix without moving their semantics into Actions YAML.
+The Windows runner remains capable of the repository's real WinForms, WebView2, speech, and other production integration tests.  Those tests belong in the repository-owned validation path when required; migration to RepoWorkflow does not replace them with headless approximations.
 
-## Matrix and tagging
+## Result semantics
 
-Collect result files from every required environment, then run:
+RepoWorkflow owns the universal request/version guard, clean candidate requirements, result aggregation, and immutable terminal tags:
 
-```text
-python scripts/ci_contract.py finalize --results-dir <results-directory>
-```
+- **PASS**: all required validation completed and passed; tag `v<version>`.
+- **FAIL**: all required validation completed, no required environment was incomplete, and a genuine validation gate failed; tag `v<version>-CI-FAIL`.
+- **INCOMPLETE**: a required capability, prerequisite, network service, runner, or other infrastructure requirement prevented a valid result; no terminal tag is created.
 
-`--tag` authorizes tagging only after the complete required matrix has reported for the same commit and version:
-
-```text
-python scripts/ci_contract.py finalize --results-dir <results-directory> --tag
-```
-
-`--push` additionally publishes the tag and requires `--tag`.
-
-- **PASS**: every required environment reported and passed. Tag `v<version>`.
-- **FAIL**: every required environment reported, no required environment was incomplete, and at least one genuine validation gate failed. Tag `v<version>-CI-FAIL`.
-- **INCOMPLETE**: a required result is missing or infrastructure/platform/runtime/network requirements prevented valid execution. Emit warnings and create no tag.
-
-Result tags are immutable. Once either PASS or CI-FAIL exists for an issue iteration, source changes require the next development iteration.
-
-A GitHub runner/service failure is not a CI result for the source. Re-run the existing workflow/jobs against the same commit rather than changing source or consuming another issue iteration.
+Terminal result tags consume the issue iteration.  Source changes after a terminal result require the next development iteration.
 
 ## GitHub Actions boundary
 
-The workflow is orchestration only: clean checkout, runtime setup, invoking `scripts/ci_contract.py`, collecting result artifacts, and final tag publication. Test semantics live in repository files. Validation jobs have read-only repository permission; only the finalizer can write tags.
+`.github/workflows/ci.yml` is the byte-for-byte canonical RepoWorkflow GitHub adapter.  It performs GitHub-specific checkout, runtime provisioning, result-artifact transport, and authorized tag publication.  Validation jobs are read-only; only finalization may publish the tested immutable result tag.
 
-The repository additionally enforces `docs/GITHUB-ACTIONS-POLICY.md` through
-`scripts/check_actions_policy.py` and `tests/test_actions_policy.py`.  Changes to
-workflow definitions or the policy checker/tests run a lightweight Linux policy
-job.  That policy-only path does **not** request the expensive Windows matrix;
-the matrix still requires a `.ci/run-ci-request` change or manual dispatch.
-
-Maintained Actions workflows must remain within the policy allow-list.  Do not
-create issue-specific or one-shot workflows that patch, repair, migrate,
-instrument, commit, or push source, tests, or documentation.  Result-tag
-publication through `scripts/ci_contract.py finalize ... --tag --push` is the
-only current main-line repository-write exception.
+Repository-specific validation semantics stay in checked-in APS scripts and tests rather than in Actions YAML.

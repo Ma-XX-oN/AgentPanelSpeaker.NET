@@ -1,59 +1,31 @@
 # GitHub Actions Policy
 
-GitHub Actions in AgentPanelSpeaker.NET exist to validate checked-in repository
-state and publish immutable CI result tags.  They are not a remote editor for
-production source, tests, or documentation.
+GitHub Actions in AgentPanelSpeaker.NET exist to validate checked-in repository state and publish immutable CI result tags.  They are not a remote editor for production source, tests, or documentation.
 
-## Permanent workflow set
+## Authority
 
-Maintained repository lines may contain only these workflow paths:
+RepoWorkflow owns the common GitHub Actions allow-list, write-permission, repository-mutation, request-gating, and result-tagging policy.  The repository enforces that policy with:
 
-- `.github/workflows/ci.yml` — explicit request-gated repository CI and result
-  tag publication.
-- `.github/workflows/core-integration-validation.yml` — read-only validation of
-  AgentPanelSpeaker against its pinned AIConversationCore integration contract.
-- `.github/workflows/repository-task.yml` — read-only execution of checked-in
-  repository tasks.
+```text
+python RepoWorkflow/repo_workflow.py repository-policy
+```
 
-`ci.yml` is required on the main line.  The integration and repository-task
-workflows are optional on maintained integration lineages where those
-responsibilities exist.
+The canonical main-line workflow is `.github/workflows/ci.yml`, copied byte-for-byte from the pinned RepoWorkflow GitHub adapter.  Repository-specific validation remains in APS-owned scripts and tests.
 
-Issue-specific, temporary, migration, repair, patch, RED/GREEN application,
-instrumentation, or other one-shot workflows are prohibited.  Development
-changes must be made through a normal checked-out working tree or the GitHub
-repository API/connector, not by an Action that rewrites and commits project
-files.
+## Workflow and write boundaries
 
-## Repository-write exception
+The maintained main line must not acquire issue-specific, temporary, migration, repair, patch, instrumentation, or other one-shot workflows as permanent repository machinery.  Development changes must be made through a normal working tree or repository API/connector, not by Actions that rewrite and commit source, tests, or documentation.
 
-The current main-line CI may receive `contents: write` only in its finalization
-job, and only to publish the tested result tag through:
+Validation jobs remain read-only.  The canonical finalizer is the only generic repository-write path and may write only the tested immutable result tag after RepoWorkflow has aggregated a complete authoritative result.
 
-`python scripts/ci_contract.py finalize ... --tag --push`
+Direct `git add`, source-editing `git commit`, arbitrary `git push`, or direct mutating GitHub/cURL API calls do not belong in validation workflows.
 
-The workflow must not run direct `git add`, `git commit`, or `git push` commands,
-or direct mutating GitHub/cURL API calls.  Core integration validation and
-repository-task workflows must remain read-only.
+## Repository-specific integration validation
 
-## Enforcement
+AgentPanelSpeaker's Windows validation surface remains repository-owned.  Real WinForms, WebView2, speech, Release-build, transcript-fixture, and related production integration checks can run on the Windows runner through the repository validation hook without moving their semantics into Actions YAML.
 
-`scripts/check_actions_policy.py` enforces the workflow allow-list and write
-restrictions.  `tests/test_actions_policy.py` supplies positive and negative
-regression coverage, including the actual checked-out workflow set.
+## Enforcement behaviour
 
-The permanent CI workflow is triggered by changes under `.github/workflows/**`
-and by changes to the policy checker/tests.  Its lightweight Linux policy job
-always runs for those changes.  The expensive Windows validation matrix remains
-explicitly request-gated: it proceeds only when `.ci/run-ci-request` changed in
-the push or when CI was manually dispatched.
+RepoWorkflow repository policy is deterministic and fails visibly when the maintained workflow set or write boundary violates the declared contract.  The canonical GitHub policy job runs before expensive validation; `.ci/run-ci-request` or explicit manual dispatch remains the gate for the full Windows environment.
 
-An in-repository check cannot prevent GitHub from registering or scheduling a
-brand-new unauthorized workflow from the same commit before another workflow
-reports the policy failure.  Repository rulesets/review controls are the only
-way to prevent that first scheduling event entirely.  The repository guard
-nevertheless makes accidental violations deterministic and keeps maintained
-write paths behind the policy check.
-
-Historical workflow runs are separate GitHub Actions metadata.  Purging obsolete
-run history does not rewrite Git history or change commit SHAs.
+Historical workflow-run metadata is separate from Git history.  Removing obsolete run history does not rewrite repository commits or alter the migration evidence.
