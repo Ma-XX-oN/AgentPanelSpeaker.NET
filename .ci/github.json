@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "prepareRunner": "ubuntu-latest",
+  "runners": {
+    "windows-dotnet10-python313": "windows-latest"
+  }
+}
