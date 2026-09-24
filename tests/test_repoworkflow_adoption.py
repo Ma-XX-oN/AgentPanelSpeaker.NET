@@ -47,7 +47,7 @@ class RepoWorkflowAdoptionTests(unittest.TestCase):
       "environments": [{
         "id": "windows-dotnet10-python313",
         "required": True,
-        "platform": "win32",
+        "platform": "windows",
         "capabilities": ["dotnet-10", "python-3.13"],
         "validationCommand": ["python", "scripts/repoworkflow_validate.py"],
       }],

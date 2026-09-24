@@ -153,7 +153,7 @@ class CiContractTests(unittest.TestCase):
     environment = environments[0]
     self.assertEqual("windows-dotnet10-python313", environment["id"])
     self.assertTrue(environment["required"])
-    self.assertEqual("win32", environment["platform"])
+    self.assertEqual("windows", environment["platform"])
     self.assertEqual(["dotnet-10", "python-3.13"], environment["capabilities"])
     self.assertEqual(
       "windows-latest",
