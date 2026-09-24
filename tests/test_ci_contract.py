@@ -136,18 +136,29 @@ class CiContractTests(unittest.TestCase):
       with self.assertRaises(self.ci.CiContractError):
         self.ci.create_tag(root, version, f"v{version}", sha, False)
 
-  def test_workflow_is_request_gated_and_windows_matrix_is_required(self):
+  def test_workflow_delegates_request_gate_and_windows_matrix_to_repoworkflow(self):
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    matrix = json.loads((ROOT / ".ci" / "test-matrix.json").read_text(encoding="utf-8"))
-    self.assertIn(".ci/run-ci-request", workflow)
-    self.assertNotIn("pull_request:", workflow)
-    self.assertIn("fetch-depth: 0", workflow)
+    shared = (ROOT / "RepoWorkflow" / "repo_workflow" / "github_adapter.py").read_text(encoding="utf-8")
+    config = json.loads((ROOT / ".ci" / "repoworkflow.json").read_text(encoding="utf-8"))
+    github = json.loads((ROOT / ".ci" / "github.json").read_text(encoding="utf-8"))
+
+    self.assertIn("RepoWorkflow/repo_workflow.py github-request", workflow)
+    self.assertIn("RepoWorkflow/repo_workflow.py github-matrix", workflow)
     self.assertIn("actions/setup-dotnet@v4", workflow)
-    environments = matrix["environments"]
+    self.assertIn("matrix.dotnetVersion", workflow)
+    self.assertIn(".ci/run-ci-request", shared)
+
+    environments = config["environments"]
     self.assertEqual(1, len(environments))
-    self.assertTrue(environments[0]["required"])
-    self.assertEqual("windows-latest", environments[0]["runner"])
-    self.assertEqual("win32", environments[0]["platform"])
+    environment = environments[0]
+    self.assertEqual("windows-dotnet10-python313", environment["id"])
+    self.assertTrue(environment["required"])
+    self.assertEqual("win32", environment["platform"])
+    self.assertEqual(["dotnet-10", "python-3.13"], environment["capabilities"])
+    self.assertEqual(
+      "windows-latest",
+      github["runners"]["windows-dotnet10-python313"],
+    )
 
 
 if __name__ == "__main__":
