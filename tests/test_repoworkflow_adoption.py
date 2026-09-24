@@ -101,9 +101,7 @@ class RepoWorkflowAdoptionTests(unittest.TestCase):
     self.assertIn("--no-restore", hook)
     self.assertIn("tools/test-subagents.py", hook)
     self.assertIn("tests/test_repoworkflow_adoption.py", hook)
-    self.assertIn("discover", hook)
-    self.assertIn('"-s",\n      "tests"', hook)
-    self.assertIn("test_ci_contract.py", hook)
+    self.assertNotIn("test_ci_contract.py", hook)
 
   def test_github_ci_is_canonical_repoworkflow_adapter(self) -> None:
     self.assertEqual(
@@ -114,7 +112,7 @@ class RepoWorkflowAdoptionTests(unittest.TestCase):
     self.assertIn("actions/setup-dotnet@v4", workflow)
     self.assertIn("matrix.dotnetVersion", workflow)
 
-  def test_legacy_comparison_machinery_remains_until_equivalence(self) -> None:
+  def test_superseded_generic_engine_is_absent_after_equivalence(self) -> None:
     for relative in (
       ".ci/ci-config.json",
       ".ci/test-matrix.json",
@@ -123,7 +121,20 @@ class RepoWorkflowAdoptionTests(unittest.TestCase):
       "scripts/check_actions_policy.py",
       "tests/test_actions_policy.py",
     ):
-      self.assertTrue((ROOT / relative).exists(), relative)
+      self.assertFalse((ROOT / relative).exists(), relative)
+
+    ci_doc = read_text("CI.md")
+    self.assertIn("RepoWorkflow/repo_workflow.py verify", ci_doc)
+    self.assertIn(".ci/repoworkflow.json", ci_doc)
+    self.assertIn("windows-dotnet10-python313", ci_doc)
+    self.assertNotIn("scripts/ci_contract.py", ci_doc)
+    self.assertNotIn(".ci/test-matrix.json", ci_doc)
+
+    policy_doc = read_text("docs/GITHUB-ACTIONS-POLICY.md")
+    self.assertIn("RepoWorkflow/repo_workflow.py repository-policy", policy_doc)
+    self.assertNotIn("scripts/check_actions_policy.py", policy_doc)
+    self.assertNotIn("tests/test_actions_policy.py", policy_doc)
+    self.assertNotIn("scripts/ci_contract.py", policy_doc)
 
 
 if __name__ == "__main__":
