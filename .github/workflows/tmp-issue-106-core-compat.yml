@@ -1,0 +1,199 @@
+name: Temporary #106 APS Core compatibility
+
+on:
+  push:
+    branches:
+      - tmp/issue-106-core-compat
+
+permissions:
+  contents: read
+
+env:
+  APS_SHA: f26e527c5e04382cefc5b5dc8ba9090ee70e84dc
+  OLD_CORE_SHA: fe2914613fd9defca1af1fd4724de61f316c0853
+  CORE_SHA: 6269168cee1f0b49f8d535d4e71ba0acbd232547
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Check out immutable APS baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APS_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Assert immutable APS baseline
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:APS_SHA) { throw 'Unexpected APS baseline.' }
+          $gitlink = (git ls-tree HEAD dependencies/AIConversationCore).Trim()
+          if ($gitlink -notmatch $env:OLD_CORE_SHA) { throw "Unexpected baseline Core gitlink: $gitlink" }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Project exact Core candidate into the test workspace
+        shell: pwsh
+        run: |
+          git -C dependencies/AIConversationCore fetch origin $env:CORE_SHA --depth=1
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch exact Core candidate.' }
+          git -C dependencies/AIConversationCore checkout --detach $env:CORE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to check out exact Core candidate.' }
+          $actual = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($actual -ne $env:CORE_SHA) { throw "Unexpected projected Core checkout: $actual" }
+
+          $runtime = 'tools/AIConversationCore-runtime'
+          Remove-Item -LiteralPath "$runtime/src" -Recurse -Force
+          Copy-Item -LiteralPath 'dependencies/AIConversationCore/src' -Destination "$runtime/src" -Recurse
+          [IO.File]::WriteAllText((Resolve-Path "$runtime/CORE_COMMIT"), "$env:CORE_SHA`n", [Text.UTF8Encoding]::new($false))
+
+          $pinFiles = @(
+            'tools/AIConversationCore-worker.mjs',
+            'AgentPanelSpeaker/AIConversationCoreClient.cs',
+            '.github/workflows/core-integration-validation.yml'
+          )
+          foreach ($path in $pinFiles) {
+            $resolved = Resolve-Path $path
+            $text = [IO.File]::ReadAllText($resolved)
+            if (-not $text.Contains($env:OLD_CORE_SHA)) { throw "Expected old Core pin missing from $path" }
+            $text = $text.Replace($env:OLD_CORE_SHA, $env:CORE_SHA)
+            [IO.File]::WriteAllText($resolved, $text, [Text.UTF8Encoding]::new($false))
+          }
+
+      - name: Verify projected Core authorities and runtime source
+        shell: pwsh
+        run: |
+          $actual = (git -C dependencies/AIConversationCore rev-parse HEAD).Trim()
+          if ($actual -ne $env:CORE_SHA) { throw 'Projected Core checkout does not match candidate.' }
+          $marker = (Get-Content tools/AIConversationCore-runtime/CORE_COMMIT -Raw).Trim()
+          if ($marker -ne $env:CORE_SHA) { throw 'Bundled runtime marker mismatch.' }
+          $worker = Get-Content tools/AIConversationCore-worker.mjs -Raw
+          if ($worker -notmatch [regex]::Escape("const CORE_COMMIT = '$env:CORE_SHA';")) { throw 'Worker pin mismatch.' }
+          $client = Get-Content AgentPanelSpeaker/AIConversationCoreClient.cs -Raw
+          if ($client -notmatch [regex]::Escape("`"$env:CORE_SHA`"")) { throw 'C# client pin mismatch.' }
+          $workflow = Get-Content .github/workflows/core-integration-validation.yml -Raw
+          if ($workflow -notmatch [regex]::Escape("`$expected = '$env:CORE_SHA'")) { throw 'Integration-workflow pin mismatch.' }
+          if ($worker.Contains($env:OLD_CORE_SHA) -or $client.Contains($env:OLD_CORE_SHA) -or $workflow.Contains($env:OLD_CORE_SHA)) {
+            throw 'A stale Core pin remains in a projected authority.'
+          }
+          git diff --no-index --exit-code -- dependencies/AIConversationCore/src tools/AIConversationCore-runtime/src
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled runtime source differs from exact Core candidate source.' }
+
+      - name: Install Core dependencies
+        shell: pwsh
+        run: |
+          npm ci --prefix dependencies/AIConversationCore --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Core npm ci failed.' }
+          npm ci --prefix tools/AIConversationCore-runtime --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled runtime npm ci failed.' }
+
+      - name: Run exact Core regression surface
+        shell: pwsh
+        run: |
+          npm test --prefix dependencies/AIConversationCore
+          if ($LASTEXITCODE -ne 0) { throw 'Core tests failed.' }
+          python dependencies/AIConversationCore/tests/validate-phase2-baseline.py
+          if ($LASTEXITCODE -ne 0) { throw 'Core Phase 2 validation failed.' }
+
+      - name: Build AgentPanelSpeaker
+        shell: pwsh
+        run: dotnet build AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release
+
+      - name: Verify application version consistency and runner guard
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Verify-VersionConsistency.ps1 -Executable $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Version consistency failed.' }
+          & tools/Invoke-TestSuite.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'Test-suite completion guard failed.' }
+
+      - name: Run built AgentPanelSpeaker regression suite
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\AgentPanelSpeaker.exe'
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Publish and test deployed application
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'AgentPanelSpeaker-publish'
+          dotnet publish AgentPanelSpeaker/AgentPanelSpeaker.csproj --configuration Release --output $publish
+          if ($LASTEXITCODE -ne 0) { throw 'AgentPanelSpeaker publish failed.' }
+          $exe = Join-Path $publish 'AgentPanelSpeaker.exe'
+          if (-not (Test-Path $exe)) { throw "Published application missing: $exe" }
+          & tools/Verify-VersionConsistency.ps1 -Executable $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Published version consistency failed.' }
+          & tools/Invoke-TestSuite.ps1 -Executable $exe -Suite all
+
+      - name: Verify bundled runtime from built output
+        shell: pwsh
+        run: |
+          Remove-Item Env:AI_CONVERSATION_CORE -ErrorAction SilentlyContinue
+          $outputTools = Join-Path $env:GITHUB_WORKSPACE 'AgentPanelSpeaker\bin\Release\net10.0-windows10.0.22621.0\tools'
+          $worker = Join-Path $outputTools 'AIConversationCore-worker.mjs'
+          $marker = Join-Path $outputTools 'AIConversationCore-runtime\CORE_COMMIT'
+          $package = Join-Path $outputTools 'AIConversationCore-runtime\package.json'
+          if ((Get-Content $marker -Raw).Trim() -ne $env:CORE_SHA) { throw 'Built bundled Core marker mismatch.' }
+          $corePackage = Get-Content -LiteralPath $package -Raw | ConvertFrom-Json
+          $probe = 'Bundled runtime check — café 東京 😀'
+          $record = @{ type = 'user'; uuid = 'bundled-ci'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = $probe }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($record) } | ConvertTo-Json -Depth 10 -Compress
+          $decoded = ($request | node $worker) | ConvertFrom-Json
+          if (-not $decoded.ok) { throw "Bundled worker projection failed: $($decoded.error)" }
+          if ($decoded.core_commit -ne $env:CORE_SHA) { throw "Unexpected bundled Core commit: $($decoded.core_commit)" }
+          if ($decoded.core_version -ne $corePackage.version) { throw 'Bundled Core version mismatch.' }
+          if ($decoded.projection.units[0].block.text -ne $probe) { throw 'Bundled projection corrupted Unicode text.' }
+          if ($decoded.projection.presentation.schema_version -ne 2) { throw 'Unexpected bundled presentation schema.' }
+          if ($decoded.projection.presentation.split_policy -ne 'presentation-tree') { throw 'Unexpected bundled split policy.' }
+
+      - name: Build display validation harness
+        shell: pwsh
+        run: dotnet build tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release
+
+      - name: Verify source-checkout worker pin and structured projections
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: |
+          $corePackage = Get-Content dependencies/AIConversationCore/package.json -Raw | ConvertFrom-Json
+          $decoded = ('{"operation":"ping"}' | node tools/AIConversationCore-worker.mjs) | ConvertFrom-Json
+          if (-not $decoded.ok -or $decoded.core_commit -ne $env:CORE_SHA) { throw 'Source worker pin failed.' }
+          if ($decoded.core_version -ne $corePackage.version) { throw 'Source worker version mismatch.' }
+
+          $claude = @{ type = 'user'; uuid = 'ci-user'; timestamp = '2026-09-05T00:00:00Z'; message = @{ role = 'user'; content = @(@{ type = 'text'; text = '<system-reminder>generated</system-reminder>CI projection check' }) } }
+          $request = @{ operation = 'project'; provider = 'claude'; records = @($claude) } | ConvertTo-Json -Depth 10 -Compress
+          $projection = ($request | node tools/AIConversationCore-worker.mjs) | ConvertFrom-Json
+          if (-not $projection.ok) { throw "Claude projection failed: $($projection.error)" }
+          if ($projection.projection.units.Count -ne 1 -or $projection.projection.units[0].block.text -ne 'CI projection check') { throw 'Claude projection mismatch.' }
+          if ($projection.projection.presentation.schema_version -ne 2 -or $projection.projection.presentation.split_policy -ne 'presentation-tree') { throw 'Claude presentation mismatch.' }
+
+          $userText = "context`n## My request for Codex:`nActual request"
+          $records = @(
+            @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:00Z'; payload = @{ type = 'user_message'; message = $userText } },
+            @{ type = 'event_msg'; timestamp = '2026-09-05T00:00:01Z'; payload = @{ type = 'task_complete' } }
+          )
+          $request = @{ operation = 'project'; provider = 'codex'; records = $records } | ConvertTo-Json -Depth 10 -Compress
+          $projection = ($request | node tools/AIConversationCore-worker.mjs) | ConvertFrom-Json
+          if (-not $projection.ok) { throw "Codex projection failed: $($projection.error)" }
+          $user = $projection.projection.events | Where-Object { $_.content_type -eq 'user_message' }
+          $completion = $projection.projection.events | Where-Object { $_.content_type -eq 'task_complete' }
+          if ($user.blocks[0].text -ne $userText) { throw 'Codex context was not preserved verbatim.' }
+          if ($completion.lifecycle.timestamp -ne '2026-09-05T00:00:01Z') { throw 'Codex completion timestamp mismatch.' }
+
+      - name: Validate canonical transcript display
+        shell: pwsh
+        env:
+          AI_CONVERSATION_CORE: ${{ github.workspace }}\dependencies\AIConversationCore
+        run: dotnet run --project tools/AgentPanelSpeaker.DisplayParity/AgentPanelSpeaker.DisplayParity.csproj --configuration Release --no-build -- "${{ github.workspace }}\dependencies\AIConversationCore" "${{ github.workspace }}\tools\AIConversationCore-worker.mjs"
+
+      - name: Validate projected workspace hygiene
+        shell: pwsh
+        run: git diff --check
