@@ -101,7 +101,9 @@ class RepoWorkflowAdoptionTests(unittest.TestCase):
     self.assertIn("--no-restore", hook)
     self.assertIn("tools/test-subagents.py", hook)
     self.assertIn("tests/test_repoworkflow_adoption.py", hook)
-    self.assertIn("tests/test_ci_contract.py", hook)
+    self.assertIn("discover", hook)
+    self.assertIn('"-s",\n      "tests"', hook)
+    self.assertIn("test_ci_contract.py", hook)
 
   def test_github_ci_is_canonical_repoworkflow_adapter(self) -> None:
     self.assertEqual(
