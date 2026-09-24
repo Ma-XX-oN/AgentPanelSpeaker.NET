@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 01274255be2c90ab98fc5fa81ea0e434e4e0a8c3
+          ref: e24cec0e6a8285ccae9cd98de9cb53d20d81cf7f
           fetch-depth: 0
           submodules: recursive
       - uses: actions/setup-dotnet@v4
@@ -27,6 +27,6 @@ jobs:
           python-version: '3.13'
       - name: Put exact candidate on its named issue branch locally
         shell: pwsh
-        run: git switch -C issue-154-repoworkflow-adoption 01274255be2c90ab98fc5fa81ea0e434e4e0a8c3
+        run: git switch -C issue-154-repoworkflow-adoption e24cec0e6a8285ccae9cd98de9cb53d20d81cf7f
       - name: Execute shared local authoritative path
         run: python RepoWorkflow/repo_workflow.py verify
