@@ -1,0 +1,31 @@
+name: Temporary issue 154 cleanup GREEN
+
+on:
+  push:
+    branches:
+      - tmp-issue-154-cleanup-green
+    paths:
+      - .github/workflows/_temporary_issue_154_cleanup_green.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1213923df5b896277f0a96ec942d3e8efd27ed76
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify post-equivalence cleanup contract
+        run: python -m unittest tests/test_repoworkflow_adoption.py
+      - name: Run full repository-owned Windows validation wrapper
+        run: python scripts/repoworkflow_validate.py
