@@ -1,0 +1,25 @@
+name: Temporary issue 154 RepoWorkflow RED
+
+on:
+  push:
+    branches:
+      - tmp-issue-154-repoworkflow-red
+    paths:
+      - .github/workflows/_temporary_issue_154_repoworkflow_red.yml
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2730fb3fd3ddb3aa676b3d8df9b4532ff740843f
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Execute RepoWorkflow adoption RED
+        run: python -m unittest tests/test_repoworkflow_adoption.py
