@@ -193,4 +193,4 @@ jobs:
 
       - name: Validate projected workspace hygiene
         shell: pwsh
-        run: git diff --check
+        run: git diff --check -- . ':(exclude)tools/AIConversationCore-runtime/node_modules/**'
