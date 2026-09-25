@@ -1,9 +1,9 @@
-name: Temporary #106 APS Core compatibility
+name: Temporary #106 APS Core compatibility .106.16
 
 on:
   push:
     branches:
-      - tmp/issue-106-core-compat
+      - tmp/issue-106-core-compat-16
 
 permissions:
   contents: read
@@ -11,7 +11,7 @@ permissions:
 env:
   APS_SHA: f26e527c5e04382cefc5b5dc8ba9090ee70e84dc
   OLD_CORE_SHA: fe2914613fd9defca1af1fd4724de61f316c0853
-  CORE_SHA: c6f1000690a9e988fd903b7d13c5920761184382
+  CORE_SHA: 2b1fbc2d1e292f73b3d7e2c67bc1ae4437304831
 
 jobs:
   validate:
