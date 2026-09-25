@@ -11,7 +11,7 @@ permissions:
 env:
   APS_SHA: f26e527c5e04382cefc5b5dc8ba9090ee70e84dc
   OLD_CORE_SHA: fe2914613fd9defca1af1fd4724de61f316c0853
-  CORE_SHA: 6269168cee1f0b49f8d535d4e71ba0acbd232547
+  CORE_SHA: c6f1000690a9e988fd903b7d13c5920761184382
 
 jobs:
   validate:
